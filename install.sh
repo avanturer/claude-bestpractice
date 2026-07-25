@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # founder-os installer. One command, no configuration, works in any repository.
 #
-#   curl -fsSL https://raw.githubusercontent.com/avanturer/claude-bestpractice/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/avanturer/claude-bestpractice/HEAD/install.sh | bash
 #
 # or, from a clone:
 #

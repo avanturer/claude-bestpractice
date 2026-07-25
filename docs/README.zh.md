@@ -18,7 +18,7 @@
 ---
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/avanturer/claude-bestpractice/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/avanturer/claude-bestpractice/HEAD/install.sh | bash
 ```
 
 安装到此为止。之后在任意仓库中：
@@ -184,7 +184,7 @@ make check    # lint · docs gate · slop gate · knowledge · 359 个测试 · 
 ```
 
 doctor 通过**真的去做那件坏事**来证明 gate 有效，而不是把配置读回来对一遍——
-读回配置无法察觉语义上的变化。开发过程中出现的十六个真实 bug 全都无法靠阅读代码发现，
+读回配置无法察觉语义上的变化。开发过程中出现的十七个真实 bug 全都无法靠阅读代码发现，
 只有执行才抓得到，其中包括一个死锁：evidence gate 要求一份测试产物，然后又因为会话
 产出了它而把会话拦下。
 

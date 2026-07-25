@@ -16,7 +16,8 @@ incident renews them. Both mechanisms exist; both need calendar time.
 
 ### Bugs the tests caught that reading the code did not
 
-Eleven, each of which would have shipped something that silently did nothing:
+Seventeen, each of which would have shipped something that silently did nothing — or, in the
+last case, something that wedged the session permanently:
 
 1. **Recording the hook's own pid.** A hook exits milliseconds after it runs, so every session was
    marked dead almost immediately and the next one reaped it. The board would always have been empty.
@@ -37,9 +38,24 @@ Eleven, each of which would have shipped something that silently did nothing:
     allowance and the budget stopped reflecting reality.
 11. **The injection-detector was run against joined fields**, moving every payload off column zero
     where its line-anchored pattern stopped matching — a silent detector reads as "nothing found".
+12. **A JSON key was never matched by the secret scanner**, because `"api_key": "…"` closes its quote
+    before the colon and the pattern expected the identifier to run straight into it.
+13. **`API_KEY = os.environ["API_KEY"]` was flagged as a leaked secret.** A scanner that fires on the
+    correct fix teaches the author to disable the scanner.
+14. **The compatibility-shim check flagged its own regex**, because it scanned raw lines and its
+    pattern definition looks exactly like the thing it is looking for. Now an AST identifier scan.
+15. **A test asserted the absence of a string that the success line contains** — `compat_shims=0/0`
+    matched `compat_shim`, so the assertion passed for the wrong reason and would never have failed.
+16. **The board lost its history the moment every task was done**, so finishing the work erased the
+    record that it happened.
+17. **The evidence gate and the scope-drift check deadlocked.** Finish without a test artifact and you
+    are blocked for the missing evidence; produce one and you are blocked for touching a file the task
+    did not name. There was no legal move. Found by running a whole project lifecycle end to end, not
+    by reading either check — each is correct alone.
 
-None is visible by inspection. All eleven are why the doctor proves gates by attempting the bad thing,
-and why the slop checker is run against this repository's own source.
+None is visible by inspection. All seventeen are why the doctor proves gates by attempting the bad
+thing, why the slop checker is run against this repository's own source, and why the suite includes a
+full lifecycle driven through the real gate executables rather than through library calls.
 
 ---
 

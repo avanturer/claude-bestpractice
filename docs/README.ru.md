@@ -18,7 +18,7 @@
 ---
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/avanturer/claude-bestpractice/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/avanturer/claude-bestpractice/HEAD/install.sh | bash
 ```
 
 Это вся установка. Дальше в любом репозитории:
@@ -194,7 +194,7 @@ make check    # lint · docs gate · slop gate · knowledge · 359 тестов 
 ```
 
 Доктор доказывает гейты **попыткой сделать плохое**, а не чтением конфигурации обратно —
-readback конфига не способен обнаружить изменение семантики. Шестнадцать реальных багов,
+readback конфига не способен обнаружить изменение семантики. Семнадцать реальных багов,
 найденных за разработку, были невидимы для чтения кода и пойманы только исполнением,
 включая дедлок, где evidence-гейт требовал тестовый артефакт, а затем блокировал сессию
 за то, что она его произвела.

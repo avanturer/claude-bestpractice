@@ -18,7 +18,7 @@
 ---
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/avanturer/claude-bestpractice/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/avanturer/claude-bestpractice/HEAD/install.sh | bash
 ```
 
 That is the whole setup. In any repository afterwards:
@@ -192,7 +192,7 @@ make check    # lint · docs gate · slop gate · knowledge · 359 tests · 20 d
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration
-back — config-readback cannot detect a semantics change. Sixteen real bugs during
+back — config-readback cannot detect a semantics change. Seventeen real bugs during
 development were invisible to inspection and caught only by execution, including a
 deadlock where the evidence gate demanded a test artifact and then blocked the session
 for producing it.
