@@ -527,6 +527,114 @@ def check_airlock_quarantine(repo: Path) -> Result:
     )
 
 
+def check_quiet_session_still_enforces(repo: Path) -> Result:
+    """The failure this doctor was blind to while reporting twenty green checks.
+
+    A session that goes quiet used to be reaped by any sibling, after which every gate
+    took its missing-record branch and enforced nothing for the rest of that session.
+    Nothing crashed and nothing warned, so only performing the attack detects it.
+    """
+    start_session(repo, "doctor-quiet")
+    sessions_dir = repo / ".git" / "founder-os" / "sessions"
+    for path in sessions_dir.glob("*.json"):
+        record = json.loads(path.read_text())
+        record["heartbeat_at"] = time.time() - 960
+        path.write_text(json.dumps(record))
+    start_session(repo, "doctor-sibling")
+
+    proc = run_gate(
+        "pre-tool",
+        {
+            "session_id": "doctor-quiet",
+            "hook_event_name": "PreToolUse",
+            "cwd": str(repo),
+            "tool_name": "Write",
+            "tool_input": {
+                "file_path": str(repo / "leak.py"),
+                "content": 'AWS_SECRET_ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE"\n',
+            },
+        },
+        repo,
+    )
+    try:
+        denied = json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
+    except (json.JSONDecodeError, KeyError, TypeError):
+        denied = False
+    survived = (sessions_dir / "doctor-quiet.json").exists()
+    return Result(
+        "a quiet session is not disarmed",
+        denied and survived,
+        "still refusing after 16 minutes idle"
+        if denied and survived
+        else f"record survived={survived}, credential denied={denied}",
+    )
+
+
+def check_fabricated_evidence_is_refused(repo: Path) -> Result:
+    """A file claiming the tests passed is an assertion with angle brackets."""
+    (repo / "bill.py").write_text("def total(items):\n    return sum(items) * 10\n")
+    (repo / "pytest.ini").write_text("[pytest]\n")
+    tests = repo / "tests"
+    tests.mkdir(exist_ok=True)
+    (tests / "test_bill.py").write_text(
+        "from bill import total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n"
+    )
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "break"], cwd=repo, check=True, capture_output=True)
+
+    start_session(repo, "doctor-forge")
+    (repo / "bill.py").write_text("def total(items):\n    return sum(items) * 10  # edited\n")
+    (repo / "junit.xml").write_text('<testsuite name="s" tests="9" failures="0" errors="0"/>')
+
+    proc = run_gate(
+        "evidence-gate",
+        {
+            "session_id": "doctor-forge",
+            "hook_event_name": "Stop",
+            "cwd": str(repo),
+            "stop_hook_active": False,
+        },
+        repo,
+    )
+    return Result(
+        "a fabricated test artifact is refused",
+        proc.returncode == 2,
+        "hand-written artifact rejected over a genuinely failing suite"
+        if proc.returncode == 2
+        else f"exit {proc.returncode}: a forged artifact was accepted as evidence",
+    )
+
+
+def check_outside_a_repository_is_not_a_brick(repo: Path) -> Result:
+    """Every guarantee here is repo-scoped; refusing everything elsewhere is not caution."""
+    outside = repo.parent / "not-a-repo"
+    outside.mkdir(exist_ok=True)
+    codes = {}
+    for gate, event in (
+        (
+            "pre-tool",
+            {
+                "session_id": "doctor-outside",
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Write",
+                "tool_input": {"file_path": str(outside / "a.txt"), "content": "hi"},
+            },
+        ),
+        (
+            "evidence-gate",
+            {"session_id": "doctor-outside", "hook_event_name": "Stop", "stop_hook_active": False},
+        ),
+    ):
+        event["cwd"] = str(outside)
+        codes[gate] = run_gate(gate, event, outside).returncode
+    ok = all(code == 0 for code in codes.values())
+    return Result(
+        "outside a repository nothing is blocked",
+        ok,
+        "both fail-closed gates stood down" if ok else f"blocked the session: {codes}",
+    )
+
+
 def check_review_finds_and_bounds(repo: Path) -> Result:
     """The reviewer must catch a real class and return a bounded summary."""
     start_session(repo, "doctor-review")
@@ -739,6 +847,9 @@ def main() -> int:
             check_stage_gated_rules,
             check_airlock_quarantine,
             check_review_finds_and_bounds,
+            check_quiet_session_still_enforces,
+            check_fabricated_evidence_is_refused,
+            check_outside_a_repository_is_not_a_brick,
             check_onboarding,
             check_plan_ledger,
             check_worktree_provisioning,
