@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import store
+from . import provenance, store
 from .gitctx import GitContext
 from .sessions import SessionRecord
 
@@ -47,12 +47,19 @@ def _age(seconds: float) -> str:
     return f"{int(seconds // 86400)}d ago"
 
 
-def open_items(ctx: GitContext, branch: str | None = None) -> list[dict[str, Any]]:
-    """Recent, un-closed, age-gated items for this branch.
+def open_items(
+    ctx: GitContext, branch: str | None = None, with_provenance: bool = True
+) -> list[dict[str, Any]]:
+    """Recent, un-closed, age-gated items for this branch, tagged with provenance.
 
     Append-only log: a later record with the same id supersedes an earlier one, and a
     record marked closed removes it. Nothing is ever edited in place, so parallel
     sessions never contend.
+
+    Age gating matters more than it looks. A widely-used memory plugin re-injects the
+    previous session's "next steps" with no age check at all, so a session is handed a
+    plan that may be eight months old — and under parallel sessions, handed another
+    session's plan entirely.
     """
     now = time.time()
     latest: dict[str, dict[str, Any]] = {}
@@ -73,10 +80,23 @@ def open_items(ctx: GitContext, branch: str | None = None) -> list[dict[str, Any
         out.append(rec)
 
     out.sort(key=lambda r: float(r.get("created_at", 0)), reverse=True)
-    return out[:MAX_OPEN_ITEMS]
+    out = out[:MAX_OPEN_ITEMS]
+    return provenance.annotate(ctx, out) if with_provenance else out
 
 
-def add_open_item(ctx: GitContext, item_id: str, text: str, branch: str, session_id: str) -> None:
+def add_open_item(
+    ctx: GitContext,
+    item_id: str,
+    text: str,
+    branch: str,
+    session_id: str,
+    subject_paths: list[str] | None = None,
+) -> None:
+    """Record an item, stamped with the content hashes of what it describes.
+
+    The stamp is what lets a later session tell a still-true item from one whose
+    subject has been rewritten underneath it.
+    """
     store.append_jsonl(
         store.tier_b(ctx, OPEN_ITEMS_FILE),
         {
@@ -86,6 +106,7 @@ def add_open_item(ctx: GitContext, item_id: str, text: str, branch: str, session
             "session_id": session_id,
             "created_at": time.time(),
             "closed": False,
+            "subject_paths": provenance.stamp(ctx, subject_paths or []),
         },
     )
 
@@ -98,19 +119,24 @@ def close_open_item(ctx: GitContext, item_id: str) -> None:
 
 
 def health_line(ctx: GitContext, live_count: int, reaped: int) -> str:
-    """Counts, sizes and the resolved repo key.
+    """Counts, sizes, provenance and the resolved repo key.
 
-    Not one surveyed tool prints this, which is why a dead memory system looks
-    exactly like a quiet one. It costs a single line.
+    Not one surveyed tool prints this, which is why a dead memory system looks exactly
+    like a quiet one. It costs a single line, and it is the difference between "there
+    is nothing to report" and "this stopped working three days ago".
     """
     root = store.tier_b(ctx)
     try:
         size = sum(f.stat().st_size for f in root.rglob("*") if f.is_file())
     except OSError:
         size = 0
-    items = len(open_items(ctx))
+    items = open_items(ctx)
+    counts = provenance.summarize(items)
+    stale = counts.get(provenance.SUSPECT, 0) + counts.get(provenance.GONE, 0)
+    stale_note = f", {stale} stale (suppressed)" if stale else ""
     return (
-        f"health: {live_count} live session(s), {reaped} reaped, {items} open item(s), "
+        f"health: {live_count} live session(s), {reaped} reaped, "
+        f"{counts.get(provenance.FRESH, 0)} open item(s){stale_note}, "
         f"state {size / 1024:.0f}KB at {root}"
     )
 
@@ -149,7 +175,10 @@ def render(
         lines.append("")
         lines.append("OTHER LIVE SESSIONS: none. This session is alone on the repository.")
 
-    items = open_items(ctx, branch=me.branch)
+    # Suppressed, not deleted. A claim whose subject was rewritten underneath it is
+    # usually still mostly right, and stale context is measurably worse than none —
+    # so it stops being asserted, and the count in the health line says it exists.
+    items = [i for i in open_items(ctx, branch=me.branch) if i.get("provenance") == provenance.FRESH]
     if items:
         lines.append("")
         lines.append("OPEN ITEMS on this branch:")

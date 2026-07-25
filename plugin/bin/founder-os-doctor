@@ -359,6 +359,41 @@ def check_knowledge_anchor(repo: Path) -> Result:
     )
 
 
+def check_provenance_suppression(repo: Path) -> Result:
+    """A claim whose subject was rewritten must stop being asserted."""
+    sys.path.insert(0, str(BIN.parent / "lib"))
+    from founder_os import board, provenance, sessions
+    from founder_os.gitctx import resolve
+
+    ctx = resolve(repo)
+    (repo / "parser.py").write_text("def parse():\n    pass\n")
+    board.add_open_item(ctx, "doctor-item", "fix the parser", ctx.branch, "doctor", ["parser.py"])
+
+    fresh = board.open_items(ctx, branch=ctx.branch)
+    if not any(i.get("provenance") == provenance.FRESH for i in fresh):
+        return Result("provenance suppresses stale claims", False, "a fresh claim was not fresh")
+
+    (repo / "parser.py").write_text("# rewritten entirely\n")
+    rec = sessions.SessionRecord(
+        session_id="doctor",
+        pid=os.getpid(),
+        worktree=ctx.worktree_root.as_posix(),
+        branch=ctx.branch,
+        baseline_commit=ctx.head,
+        started_at=time.time(),
+        heartbeat_at=time.time(),
+    )
+    rendered = board.render(ctx, rec, [], 0)
+    ok = "fix the parser" not in rendered and "stale (suppressed)" in rendered
+    return Result(
+        "provenance suppresses stale claims",
+        ok,
+        "rewritten subject suppressed and counted"
+        if ok
+        else "stale claim still asserted — WORSE THAN NO CONTEXT",
+    )
+
+
 def check_reap(repo: Path) -> Result:
     """A session whose process is gone must not stay on the board forever."""
     sys.path.insert(0, str(BIN.parent / "lib"))
@@ -403,6 +438,7 @@ def main() -> int:
             check_stale_artifact_rejected,
             check_checkpoint,
             check_knowledge_anchor,
+            check_provenance_suppression,
             check_reap,
         ):
             repo = make_repo(Path(tempfile.mkdtemp(prefix="founder-os-case-", dir=tmp)))

@@ -29,7 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from founder_os import hookio, redact, sessions, store  # noqa: E402
+from founder_os import hookio, provenance, redact, sessions, store  # noqa: E402
 from founder_os.gitctx import changed_files, resolve  # noqa: E402
 
 MAX_TURN_CHARS = 300
@@ -114,9 +114,15 @@ def main() -> None:
         lines.append("- (transcript unavailable or in an unrecognised format)")
 
     lines += ["", "## Files changed since baseline", ""]
-    lines.extend(f"- {p}" for p in changed[:60]) if changed else lines.append("- (none)")
-    if len(changed) > 60:
-        lines.append(f"- ... and {len(changed) - 60} more")
+    if changed:
+        # Blob hashes, not mtimes: creating a worktree or switching branches resets
+        # every mtime, and this workflow does that constantly. Content survives it.
+        for entry in provenance.stamp(ctx, changed[:60]):
+            lines.append(f"- {entry['path']} @ {entry['blob'][:12]}")
+        if len(changed) > 60:
+            lines.append(f"- ... and {len(changed) - 60} more")
+    else:
+        lines.append("- (none)")
 
     stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
     name = f"{stamp}-{(event.session_id or 'anon')[:8]}.md"

@@ -52,7 +52,7 @@ def _allow(ctx, rec: sessions.SessionRecord) -> None:
     hookio.emit_silent()
 
 
-def _give_up(ctx, rec: sessions.SessionRecord, reason: str) -> None:
+def _give_up(ctx, rec: sessions.SessionRecord, reason: str, changed: list) -> None:
     """Record an unverified finish so it survives the turn and surfaces next session."""
     store.append_jsonl(
         store.tier_b(ctx, FAILURE_MARKER),
@@ -70,6 +70,9 @@ def _give_up(ctx, rec: sessions.SessionRecord, reason: str) -> None:
         text=f"UNVERIFIED finish on {rec.branch}: {reason[:200]}",
         branch=rec.branch,
         session_id=rec.session_id,
+        # Stamped with the files this finish left unverified. Once they are rewritten,
+        # the warning is about code that no longer exists and stops being asserted.
+        subject_paths=changed[:20],
     )
 
 
@@ -123,7 +126,7 @@ def main() -> None:
     reason = "\n\n".join(problems)
 
     if attempts >= evidence.MAX_CONSECUTIVE_BLOCKS:
-        _give_up(ctx, rec, reason)
+        _give_up(ctx, rec, reason, changed)
         _bump_blocks(ctx, rec, 0)
         sys.stderr.write(
             "founder-os: finishing UNVERIFIED after "

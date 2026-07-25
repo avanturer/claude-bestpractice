@@ -3,9 +3,22 @@
 Ordered by pain × evidence, not by feature appeal. Each stage is independently useful; nothing later
 is required for anything earlier to pay off.
 
+## Where this actually stands
+
+| | |
+|---|---|
+| **Shipped** | V0 doctor harness · V1 spine (six gates, two-tier substrate, session board, hard fuses) · V2 knowledge layer with checked anchors · V2 provenance staleness · V2 file leases · V2 LLM-first documentation gate |
+| **Verified** | 219 tests · 13 doctor checks · `make check` green on Python 3.9 / 3.11 / 3.13 |
+| **Remaining** | Auto-drafting decision records from transcripts · background review on commit · the rigor engine's later stages · the production-signal airlock · the repomap |
+
+Two things were caught by tests rather than by review, and both would have broken real use: recording
+the hook's own pid marked every session dead within milliseconds so the board was always empty, and
+the plugin's own untracked state files made the gate demand a test run to justify its own bookkeeping.
+Neither is visible by reading the code.
+
 ---
 
-## V0 — Prove the ground before building on it
+## V0 — Prove the ground before building on it ✅
 
 Four days of measurement, because three claims in the design are load-bearing and were derived rather
 than observed on *this* machine.
@@ -26,7 +39,7 @@ than observed on *this* machine.
 
 ---
 
-## V1 — The spine
+## V1 — The spine ✅
 
 Three hooks and a substrate. Nothing else. This already beats the incumbent for this operating mode.
 
@@ -66,23 +79,31 @@ worktrees.
 
 ---
 
-## V2 — Understanding and provenance
+## V2 — Understanding and provenance ✅ (mostly)
 
-**4. The knowledge layer.** The four always-on files under 10,400 bytes, with `entities.yaml` as the
-centrepiece. Auto-drafted decision records from transcript correction markers, accepted with one
-keystroke. Verbatim non-goals injected at subagent start.
+**4. The knowledge layer.** ✅ Four always-on files under 10,400 bytes, with `entities.yaml` as the
+centrepiece and its `code:` anchor checked against the tree, so a rename fails validation instead of
+leaving the layer describing a ghost. Non-goals and entities injected verbatim at subagent start,
+because Explore and Plan agents inherit no project rules and there is no setting that changes that.
+**Still to do:** auto-drafting records from transcript correction markers.
 
-**5. Provenance staleness.** Every persisted claim carries `subject_paths[]` with git blob SHAs. One
-`git diff --name-only <recorded_sha>..HEAD` at SessionStart marks drifted claims SUSPECT, suppresses
-them from injection, and surfaces the count in the health line. This is the mechanism nobody ships;
-the difficulty is squash merges, rebases, force-pushes and renames.
+**5. Provenance staleness.** ✅ Every claim carries `subject_paths[]` with git **blob** hashes, not
+mtimes — creating a worktree or switching branches resets every mtime in the tree, which this
+workflow does constantly, and a content hash survives it while still catching a one-character edit.
+Drifted claims are marked SUSPECT, suppressed from injection, and counted in the health line.
+Suppressed rather than deleted: a claim whose subject moved is usually still mostly right, and a
+system that silently drops knowledge is one nobody can debug. **Still to do:** the squash-merge and
+force-push cases.
 
-**6. The LLM-first documentation standard.** Signature-versus-docstring hash gate, reference-integrity
-pass, banned derivable docstring forms, mandatory types, generated-artifact SHA validation.
+**6. The LLM-first documentation standard.** ✅ Signature-versus-docstring drift, banned derivable
+forms, narration and commented-out code, unqualified TODOs. Pure AST plus git, no model. Defaults are
+deliberately excluded from the signature hash: flagging them would fire on every tuning tweak and
+train the author to write filler. **Still to do:** reference-integrity over paths named in prose.
 
-**7. File leases with real enforcement.** Pre-tool gate on edits consulting the lease table, denying
-with the owning session's id and branch, auto-releasing at Stop, with TTL and explicit steal. Copy
-the burst-counter-and-silence-window manners so it nudges once rather than nagging.
+**7. File leases with real enforcement.** ✅ Pre-tool gate consulting the lease table, denying with
+the owning session's id and branch, released on every allow path, with TTL and takeover from a dead
+owner. **Still to do:** the burst-counter and silence-window manners so a denied session is nudged
+once rather than repeatedly.
 
 ---
 
