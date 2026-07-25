@@ -348,10 +348,12 @@ def _verify_by_running(ctx: GitContext, globs: list[str], command: list[str]) ->
         return None
 
     if code != 0:
+        record_red(ctx, command, tail)
         return Verdict(
             False,
             f"The suite FAILS on the code as it stands.\n$ {' '.join(command)}\n{tail}",
         )
+    clear_red(ctx)
 
     return _judge_green_run(ctx, globs, command, tail)
 
@@ -397,6 +399,13 @@ _OUTCOMES = re.compile(
 _DID_NOT_RUN = {"skipped", "deselected", "ignored"}
 _ZERO_RAN = re.compile(r"(?i)\b(no tests ran|collected 0 items|0 tests? (?:ran|executed))\b")
 
+# stdlib unittest reports differently from pytest — "Ran 3 tests" and "OK (skipped=3)".
+# Without these, `python -m unittest` fell through to "cannot tell" and an entirely
+# skipped stdlib suite was accepted, which is the same hole in a different runner. This
+# project's own suite is unittest, so the default path has to understand it.
+_UNITTEST_RAN = re.compile(r"^Ran (\d+) tests?\b", re.M)
+_UNITTEST_SKIPPED = re.compile(r"\bskipped=(\d+)")
+
 
 def _executed_from_output(text: str) -> int:
     """How many tests actually ran, read from the runner's own summary line.
@@ -407,6 +416,12 @@ def _executed_from_output(text: str) -> int:
     """
     if _ZERO_RAN.search(text):
         return 0
+
+    ran = _UNITTEST_RAN.search(text)
+    if ran:
+        skipped = sum(int(n) for n in _UNITTEST_SKIPPED.findall(text))
+        return max(int(ran.group(1)) - skipped, 0)
+
     outcomes = _OUTCOMES.findall(text)
     if not outcomes:
         return -1
@@ -554,3 +569,64 @@ def scope_drift(changed: list[str], task_paths: list[str], exempt: list[str]) ->
             continue
         drift.append(rel)
     return drift
+
+
+# ------------------------------------------------------------------ the red ledger
+
+RED_SUITE_FILE = "failing-suite.json"
+
+
+def record_red(ctx: GitContext, command: list[str], tail: str) -> None:
+    """Remember that the suite is red, in COMMITTED state, until it is green again.
+
+    Blocking the turn is not remembering. The block is spent the moment the agent
+    escalates past it or the founder starts a new session, and after that a red suite is
+    something nobody is tracking — which is exactly how a broken test survives for weeks
+    in a repository where nobody reads the diffs.
+
+    Tier A rather than Tier B on purpose: this has to outlive the session, be visible
+    from every worktree, and travel with the branch. `first_seen` is preserved across
+    re-observations so the board can say how long it has been broken, which is the
+    number that makes it embarrassing enough to fix.
+    """
+    path = store.tier_a(ctx, RED_SUITE_FILE)
+    previous = store.read_json(path, default={}) or {}
+    store.write_json(
+        path,
+        {
+            "command": command,
+            "first_seen": previous.get("first_seen", time.time()) if isinstance(previous, dict) else time.time(),
+            "last_seen": time.time(),
+            "branch": ctx.branch,
+            "tail": tail[-1_200:],
+        },
+        mode=0o644,
+    )
+
+
+def clear_red(ctx: GitContext) -> bool:
+    """The suite passed. Returns True when this cleared a previously recorded failure."""
+    path = store.tier_a(ctx, RED_SUITE_FILE)
+    if not path.exists():
+        return False
+    path.unlink(missing_ok=True)
+    return True
+
+
+def red(ctx: GitContext) -> dict | None:
+    got = store.read_json(store.tier_a(ctx, RED_SUITE_FILE), default=None)
+    return got if isinstance(got, dict) and got.get("command") else None
+
+
+def red_line(ctx: GitContext) -> str:
+    """One line for the board. Silent when the suite is green."""
+    entry = red(ctx)
+    if not entry:
+        return ""
+    age = max(time.time() - float(entry.get("first_seen") or time.time()), 0)
+    days, hours = int(age // 86_400), int((age % 86_400) // 3600)
+    lasted = f"{days}d" if days else f"{hours}h" if hours else "just now"
+    return (
+        f"RED SUITE on {entry.get('branch', '?')} — failing for {lasted}. "
+        f"`{' '.join(entry.get('command') or [])}` does not pass. Fix it before new work."
+    )

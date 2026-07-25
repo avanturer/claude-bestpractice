@@ -118,6 +118,18 @@ def close_open_item(ctx: GitContext, item_id: str) -> None:
     )
 
 
+def red_suite_line(ctx: GitContext) -> str:
+    """A failing suite, carried into every session until it is green.
+
+    Placed above everything else deliberately. A block only lasts the turn it fires in;
+    this is the part that means a broken test is never quietly left behind.
+    """
+    from . import evidence
+
+    line = evidence.red_line(ctx)
+    return f"\n{line}\n" if line else ""
+
+
 def health_line(ctx: GitContext, live_count: int, reaped: int) -> str:
     """Counts, sizes, provenance and the resolved repo key.
 
@@ -141,6 +153,26 @@ def health_line(ctx: GitContext, live_count: int, reaped: int) -> str:
     )
 
 
+def _sessions_block(others: list[SessionRecord], leases: dict, now: float) -> list[str]:
+    """Who else is live, what they hold, and what they are doing."""
+    if not others:
+        return ["OTHER LIVE SESSIONS: none. This session is alone on the repository."]
+
+    out = [f"OTHER LIVE SESSIONS ({len(others)}) — do not edit files they hold:"]
+    for rec in sorted(others, key=lambda r: r.heartbeat_at, reverse=True):
+        out.append(
+            f"  - {rec.session_id[:8]} on {rec.branch} "
+            f"[{Path(rec.worktree).name}] active {_age(now - rec.heartbeat_at)}"
+        )
+        out.append(f"      touched: {', '.join(rec.last_touched[:3]) or 'nothing yet'}")
+        held = leases.get(rec.session_id, [])
+        if held:
+            out.append(f"      holds: {', '.join(held[:5])}")
+        if rec.task_statement:
+            out.append(f"      task: {rec.task_statement[:120]}")
+    return out
+
+
 def render(
     ctx: GitContext,
     me: SessionRecord,
@@ -156,24 +188,16 @@ def render(
 
     lines.append(f"repo {ctx.worktree_root.name} | branch {me.branch} | baseline {me.baseline_commit[:12] or 'unborn'}")
 
-    if others:
-        lines.append("")
-        lines.append(f"OTHER LIVE SESSIONS ({len(others)}) — do not edit files they hold:")
-        for rec in sorted(others, key=lambda r: r.heartbeat_at, reverse=True):
-            held = leases.get(rec.session_id, [])
-            touched = ", ".join(rec.last_touched[:3]) or "nothing yet"
-            lines.append(
-                f"  - {rec.session_id[:8]} on {rec.branch} "
-                f"[{Path(rec.worktree).name}] active {_age(now - rec.heartbeat_at)}"
-            )
-            lines.append(f"      touched: {touched}")
-            if held:
-                lines.append(f"      holds: {', '.join(held[:5])}")
-            if rec.task_statement:
-                lines.append(f"      task: {rec.task_statement[:120]}")
-    else:
-        lines.append("")
-        lines.append("OTHER LIVE SESSIONS: none. This session is alone on the repository.")
+    # A Stop block lasts exactly the turn it fires in. This is committed state, so a
+    # broken suite follows the branch into every worktree and every future session until
+    # it is green again — which is the difference between refusing a finish and never
+    # letting the failure be forgotten.
+    red = red_suite_line(ctx)
+    if red:
+        lines.append(red.strip())
+
+    lines.append("")
+    lines.extend(_sessions_block(others, leases, now))
 
     # Suppressed, not deleted. A claim whose subject was rewritten underneath it is
     # usually still mostly right, and stale context is measurably worse than none —

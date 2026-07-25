@@ -127,7 +127,7 @@ fi
 LINK_DIR="$HOME/.local/bin"
 mkdir -p "$LINK_DIR"
 for command in founder-os founder-os-doctor founder-os-knowledge founder-os-plan \
-               founder-os-decide founder-os-ingest founder-os-reindex; do
+               founder-os-decide founder-os-ingest founder-os-reindex founder-os-ci; do
   ln -sf "$INSTALL_DIR/plugin/bin/$command" "$LINK_DIR/$command"
 done
 

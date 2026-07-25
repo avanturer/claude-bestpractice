@@ -22,6 +22,22 @@ from helpers import BIN, RepoCase
 
 SECRET = 'AWS_SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"'
 
+# Stdlib unittest, never pytest: this project forbids dependencies and its CI installs
+# none, so a fixture reaching for a third-party runner is red on every push. Discovery
+# starts at the repo root because a bare `tests/` directory is not an importable package.
+STDLIB_DISCOVER = ["-m", "unittest", "discover", "-s", ".", "-p", "test_*.py"]
+
+
+def stdlib_test(module: str, call: str, expected: str) -> str:
+    """A one-assertion unittest file, so fixtures do not each hand-roll one."""
+    return (
+        "import unittest\n\n"
+        f"from {module} import {call.split('(')[0]}\n\n\n"
+        "class T(unittest.TestCase):\n"
+        "    def test_it(self):\n"
+        f"        self.assertEqual({call}, {expected})\n"
+    )
+
 
 class DisarmCase(RepoCase):
     def start(self, session_id: str = "s1"):
@@ -47,6 +63,14 @@ class DisarmCase(RepoCase):
     def session_files(self) -> list[Path]:
         directory = self.repo / ".git" / "founder-os" / "sessions"
         return sorted(directory.glob("*.json")) if directory.is_dir() else []
+
+    def stdlib_runner(self) -> None:
+        """Pin the test command to unittest so no fixture needs a third-party runner."""
+        path = self.repo / ".claude" / "founder-os" / "config.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({"test_command": [sys.executable, *STDLIB_DISCOVER]})
+        )
 
     def backdate(self, seconds: float) -> None:
         for path in self.session_files():
@@ -103,8 +127,10 @@ class TestEvidenceIsWitnessed(DisarmCase):
 
     def project_with_a_real_break(self) -> None:
         self.write("bill.py", "def total(items):\n    return sum(items) * 10\n")
-        self.write("tests/test_bill.py", "from bill import total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n")
-        self.write("pytest.ini", "[pytest]\n")
+        self.write(
+            "test_bill.py", stdlib_test("bill", "total([1, 2])", "3")
+        )
+        self.stdlib_runner()
         self.commit()
 
     def stop(self):
@@ -129,17 +155,20 @@ class TestEvidenceIsWitnessed(DisarmCase):
         self.assertEqual(self.stop().returncode, 2, "`touch` cleared the freshness check")
 
     def test_an_honest_green_run_is_accepted(self):
-        """The gate must not merely be strict — it has to let real work through."""
+        """The gate must not merely be strict — it has to let real work through.
+
+        Stdlib unittest, not pytest: this project forbids dependencies and its CI
+        installs none, so a fixture that reaches for pytest is red on every push. The
+        suite testing a stdlib-only tool has to be stdlib-only itself.
+        """
         self.write("bill.py", "def total(items):\n    return sum(items)\n")
-        self.write("tests/test_bill.py", "from bill import total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n")
-        self.write("pytest.ini", "[pytest]\n")
+        self.write(
+            "test_bill.py", stdlib_test("bill", "total([1, 2])", "3")
+        )
+        self.stdlib_runner()
         self.commit()
         self.start()
         self.write("bill.py", "def total(items):\n    return sum(items)  # same\n")
-        subprocess.run(
-            [sys.executable, "-m", "pytest", "-q", "--junitxml=junit.xml"],
-            cwd=str(self.repo), capture_output=True, timeout=300,
-        )
         self.assertEqual(self.stop().returncode, 0, self.stop().stderr)
 
 
@@ -349,8 +378,9 @@ class TestNoCachedVerdictOutlivesItsCause(RepoCase):
 
     def project(self, expected: int) -> None:
         self.write("impl.py", f"def f():\n    return {expected}\n")
-        self.write("tests/test_impl.py", "from impl import f\n\n\ndef test_f():\n    assert f() == 2\n")
-        self.write("pytest.ini", "[pytest]\n")
+        self.write(
+            "test_impl.py", stdlib_test("impl", "f()", "2")
+        )
         self.commit()
 
     def config(self, command: list) -> None:
@@ -371,7 +401,7 @@ class TestNoCachedVerdictOutlivesItsCause(RepoCase):
         self.write("impl.py", "def f():\n    return 1  # edited\n")
         self.assertEqual(self.stop(), 0, "a permissive command should pass on its own terms")
 
-        self.config([sys.executable, "-m", "pytest", "-q"])
+        self.config([sys.executable, *STDLIB_DISCOVER])
         self.assertEqual(self.stop(), 2, "the earlier permissive pass survived the command change")
 
     def test_a_failure_clears_once_the_code_is_fixed(self):
