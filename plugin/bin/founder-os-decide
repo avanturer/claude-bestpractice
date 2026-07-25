@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""Turn a drafted decision into a record. One keystroke, not a blank page.
+
+Drafts are collected automatically from the moments a human overruled the agent — the
+only content in a session that is provably non-derivable. This command lists them and
+promotes one into `.claude/rules/decisions/`.
+
+Accepting is deliberately the one place a human is required. The layer is worth its
+tokens only if it is true; auto-accepting would pollute it, and manual authoring is
+measurably abandoned. A one-keystroke accept on a pre-filled record is the only stable
+point between those two failures.
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from founder_os import drafts, knowledge  # noqa: E402
+from founder_os.gitctx import resolve  # noqa: E402
+
+
+def slug(text: str) -> str:
+    words = re.findall(r"[A-Za-z0-9]+", text.lower())[:6]
+    return "-".join(words) or "decision"
+
+
+def cmd_list(ctx) -> int:
+    items = drafts.pending(ctx)
+    if not items:
+        print("no pending drafts")
+        return 0
+    print(f"{len(items)} pending draft(s):\n")
+    for i, item in enumerate(items, start=1):
+        print(f"  [{i}] ({item.get('marker')}) {item.get('quote', '')[:150]}")
+    print("\nAccept one with: founder-os-decide accept <n>")
+    print("Discard one with: founder-os-decide discard <n>")
+    return 0
+
+
+def cmd_accept(ctx, index: int) -> int:
+    items = drafts.pending(ctx)
+    if not 1 <= index <= len(items):
+        print(f"no draft {index}; there are {len(items)}", file=sys.stderr)
+        return 1
+
+    draft = items[index - 1]
+    number = drafts.next_number(ctx)
+    name = f"{number:04d}-{slug(draft.get('quote', ''))}.md"
+    path = ctx.worktree_root / knowledge.DECISIONS_DIR / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(drafts.render(draft, number), encoding="utf-8")
+    drafts.resolve(ctx, draft.get("quote", ""))
+
+    index_path = ctx.worktree_root / knowledge.RULES_DIR / knowledge.INDEX
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    index_path.write_text(knowledge.build_index(ctx), encoding="utf-8")
+
+    print(f"wrote {path.relative_to(ctx.worktree_root)}")
+    print("Fill in the title, Decision and Rejected sections — the quote is already in Why.")
+    return 0
+
+
+def cmd_discard(ctx, index: int) -> int:
+    items = drafts.pending(ctx)
+    if not 1 <= index <= len(items):
+        print(f"no draft {index}; there are {len(items)}", file=sys.stderr)
+        return 1
+    drafts.resolve(ctx, items[index - 1].get("quote", ""))
+    print("discarded")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Promote a drafted decision into a record.")
+    sub = parser.add_subparsers(dest="command")
+    sub.add_parser("list", help="show pending drafts (default)")
+    accept = sub.add_parser("accept", help="promote a draft into a decision record")
+    accept.add_argument("index", type=int)
+    discard = sub.add_parser("discard", help="drop a draft")
+    discard.add_argument("index", type=int)
+
+    args = parser.parse_args()
+    ctx = resolve()
+
+    if args.command == "accept":
+        return cmd_accept(ctx, args.index)
+    if args.command == "discard":
+        return cmd_discard(ctx, args.index)
+    return cmd_list(ctx)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

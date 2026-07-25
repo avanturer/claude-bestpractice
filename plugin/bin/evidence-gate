@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from founder_os import board, config, evidence, hookio, sessions, stage, store  # noqa: E402
+from founder_os import board, config, drafts, evidence, hookio, sessions, stage, store  # noqa: E402
 from founder_os.gitctx import changed_files, resolve  # noqa: E402
 
 BLOCK_COUNTER = "_consecutive_blocks"
@@ -91,6 +91,17 @@ def main() -> None:
 
     resolved_stage, _ = stage.current(ctx, cfg.stage_override)
     gates = stage.gates_for(resolved_stage)
+
+    # Harvest decision candidates from the turn's corrections. Cheap, textual, no model,
+    # and it never blocks: drafting is a convenience and its failure must cost nothing.
+    try:
+        candidates = drafts.extract(
+            drafts.user_turns(event.transcript_path), rec.branch, rec.session_id, rec.last_touched
+        )
+        if candidates:
+            drafts.record(ctx, candidates)
+    except Exception:  # noqa: BLE001 - a failed draft must never fail a turn
+        pass
 
     attempts = _blocks(rec)
     exempt = list(cfg.exempt_paths) + [".claude/founder-os/"]

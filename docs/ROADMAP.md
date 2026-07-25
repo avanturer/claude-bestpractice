@@ -5,16 +5,31 @@ is required for anything earlier to pay off.
 
 ## Where this actually stands
 
-| | |
-|---|---|
-| **Shipped** | V0 doctor harness · V1 spine (six gates, two-tier substrate, session board, hard fuses) · V2 knowledge layer with checked anchors · V2 provenance staleness · V2 file leases · V2 LLM-first documentation gate |
-| **Verified** | 219 tests · 13 doctor checks · `make check` green on Python 3.9 / 3.11 / 3.13 |
-| **Remaining** | Auto-drafting decision records from transcripts · background review on commit · the rigor engine's later stages · the production-signal airlock · the repomap |
+**Everything below is shipped.** V0, V1, V2 and V3 are implemented, wired and verified:
+**289 tests, 17 doctor checks, `make check` green on Python 3.9 / 3.11 / 3.13**, and
+`claude plugin validate --strict` passing against the installed CLI.
 
-Two things were caught by tests rather than by review, and both would have broken real use: recording
-the hook's own pid marked every session dead within milliseconds so the board was always empty, and
-the plugin's own untracked state files made the gate demand a test run to justify its own bookkeeping.
-Neither is visible by reading the code.
+What is left is not implementation — it is the two things only running the thing can produce: the
+gate-metrics file has to accumulate real fire counts before any gate can be judged worth keeping, and
+the FOLKLORE-tier rules expire on their own after ninety days unless a logged incident renews them.
+Both are designed in and both need calendar time rather than code.
+
+### Bugs the tests caught that reading the code did not
+
+Five, each of which would have shipped a gate that silently enforced nothing:
+
+1. **Recording the hook's own pid.** A hook exits milliseconds after it runs, so every session was
+   marked dead almost immediately and the next one reaped it. The board would always have been empty.
+2. **The plugin's own untracked state counted as changes**, so the gate demanded a test run to justify
+   its own bookkeeping — and a gate that fires on noise is one the agent learns to route around.
+3. **`git diff` does not show untracked files**, so the reviewer skipped exactly the files an agent
+   most often creates.
+4. **Multi-line patterns applied line by line can never match.** The swallowed-exception check — the
+   single highest-prevalence measured regression — was structurally incapable of firing.
+5. **A word boundary after a comma never matches.** `\bno,\b` silently killed the correction detector,
+   the same shape of bug as in the secret scanner earlier.
+
+None is visible by inspection. All five are why the doctor proves gates by attempting the bad thing.
 
 ---
 
@@ -107,26 +122,39 @@ once rather than repeatedly.
 
 ---
 
-## V3 — Autonomy
+## V3 — Autonomy ✅
 
-**8. Background review via async rewake** on commit, with a moving git baseline so only this turn's
-changes are reviewed, findings deduplicated on (path, category), baseline-subtracted so pre-existing
-issues are not blamed on the agent, and returning a **bounded summary plus a file path — never the
-report**. One project shipped the un-bounded version, watched every forked context inherit a growing
-report until sessions froze, and reverted with the post-mortem in the source.
+**8. Background review via async rewake.** ✅ Wired to `PreToolUse` with `if: Bash(git commit:*)` and
+`asyncRewake`, so it runs detached and wakes the agent only when there is something to say. Moving git
+baseline from `git stash create`; findings deduplicated on (path, category) rather than on text,
+because diff context drifts and exact matching lets one finding re-accumulate as new every turn;
+baseline-subtracted so rewriting a file that already had a problem is not blamed on the agent; and a
+**bounded summary plus a file path, never the report**. Deterministic, no model — no LLM-judge
+configuration across five judges and five prompt strategies beat AUROC 0.65.
 
-**9. The rigor engine.** Stage inferred from measured repo signals, mapping to which gates fire.
-Autonomous, no config, no asking.
+**9. The rigor engine.** ✅ Stage inferred from measured repo signals, ratcheting only tighter.
+Migration gating and production-promotion denial switch themselves on at traction; a bare prototype
+gets neither. The override is a typed token in the migration body, not a config flag — a flag gets set
+once and permanently disables the gate, which is how these die.
 
-**10. The production airlock.** Out-of-band ingester, sanitised fenced signal files, six mandatory
-fields, `DEGRADED` on schema failure. Nightly authorization probe from the generated route manifest;
-weekly backup restore verification under a credential the agent cannot reach.
+**10. The production airlock.** ✅ Out-of-band ingester, never an MCP tool inside a session. Every
+attacker-influenceable field fenced with a dynamically-sized fence the payload cannot close, control
+and zero-width characters stripped, secrets scrubbed, stack frames resolved to repo-relative paths,
+six required fields with `DEGRADED` naming what is missing, and `QUARANTINED` for imperative language.
+Filtering is explicitly not the defence: twelve published detection defences were bypassed at 78-93%
+under adaptive attack, while capability scoping cut attack success to about 2%.
 
-**11. The anti-evasion ratchet.** No threshold, budget, allowlist or suppression may move permissively
-without a justification trailer; newly added suppression comments are themselves ratcheted down.
-Highest-leverage single check for unsupervised multi-session work — and it must be written from
-scratch, because the tool this pattern comes from documents the requirement in a comment and does not
-machine-enforce it.
+**11. The ranked repository map.** ✅ Symbol extraction (exact via AST for Python, regex elsewhere), a
+dependency graph weighted so a symbol defined everywhere creates no edges, PageRank with dangling-node
+redistribution, personalisation toward the task's identifiers, and binary-search budget fitting.
+Content-hash cached, never mtime — creating a worktree resets every mtime and this workflow does that
+constantly. Given to subagents only once a repository exceeds forty files, because below that a
+subagent can just look.
+
+**12. Decision drafting.** ✅ The Stop gate scans the turn's user messages for correction markers — the
+moments a human overruled the agent, which is the only provably non-derivable content in a session —
+and files pre-written drafts. Accepting is one command. Nothing is auto-accepted: the layer is worth
+its tokens only if it is true.
 
 ---
 

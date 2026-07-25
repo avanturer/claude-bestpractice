@@ -21,23 +21,44 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from founder_os import hookio, knowledge  # noqa: E402
+from founder_os import hookio, knowledge, repomap  # noqa: E402
 from founder_os.gitctx import resolve  # noqa: E402
 
 # Deliberately small. This is re-paid on every spawn, and at several parallel sessions
 # it is the dominant recurring cost in the whole design.
 BRIEF_CHAR_BUDGET = 2_000
 
+# A ranked map only earns its place once orientation is genuinely hard. Below this many
+# files a subagent can just look, and paying for a map would be pure overhead.
+REPOMAP_MIN_FILES = 40
+REPOMAP_TOKEN_BUDGET = 400
+
 
 def main() -> None:
     event = hookio.read_event()
     ctx = resolve(event.cwd or os.getcwd())
 
-    brief = knowledge.subagent_brief(ctx, max_chars=BRIEF_CHAR_BUDGET)
+    parts = [knowledge.subagent_brief(ctx, max_chars=BRIEF_CHAR_BUDGET)]
+
+    # Query-biased, so each subagent gets a map of what ITS task is about rather than a
+    # generic overview. This is the one thing grep structurally cannot provide.
+    try:
+        facts = repomap.scan(ctx)
+        if len(facts) >= REPOMAP_MIN_FILES:
+            query = " ".join(
+                str(event.raw.get(key, "")) for key in ("agent_type", "description", "prompt")
+            )
+            rendered = repomap.generate(ctx, query=query, budget_tokens=REPOMAP_TOKEN_BUDGET)
+            if rendered:
+                parts.append("## Where things are\n" + rendered)
+    except Exception:  # noqa: BLE001 - a map is a hint; never fail a spawn over one
+        pass
+
+    brief = "\n\n".join(p for p in parts if p.strip())
     if not brief.strip():
         hookio.emit_silent()
 
-    hookio.emit_context("SubagentStart", brief, limit=BRIEF_CHAR_BUDGET + 500)
+    hookio.emit_context("SubagentStart", brief, limit=BRIEF_CHAR_BUDGET + 2_000)
 
 
 if __name__ == "__main__":

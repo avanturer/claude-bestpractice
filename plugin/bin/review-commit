@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+"""Review what this turn changed, in the background, and interrupt only if it matters.
+
+Wired to `PreToolUse` with `if: Bash(git commit:*)` and `asyncRewake`, so it runs
+detached, the turn finishes at full speed, and the agent is woken with the findings
+only when there is something to say. Nobody in the surveyed ecosystem uses either
+mechanism except Anthropic's own security plugin.
+
+THE BASELINE IS MOVING. `git stash create` yields a SHA covering HEAD plus the dirty
+working tree without touching the index, the tree, or the stash reflog. Diffing against
+it reviews only what this turn changed — never pre-existing code — and stays correct
+across mid-session commits. Findings are then subtracted against the baseline version
+of each file, so rewriting a file that already contained a problem does not blame the
+agent for it.
+
+THE REVIEW IS DETERMINISTIC. No model is called. A model reviewer here would cost
+tokens on every commit, and the measured signal is poor: no LLM-judge configuration
+across five judges and five prompt strategies beat AUROC 0.65, while a plain
+statistical baseline reached 0.83-0.95. What this checks are the classes that are
+cheap, exact and empirically dominant.
+
+THE RETURN VALUE IS BOUNDED. A summary plus a file path, never the report. One project
+shipped the unbounded version, watched every forked context inherit a growing report
+until sessions froze, and reverted with the post-mortem in its source.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from founder_os import board, hookio, redact, sessions, store  # noqa: E402
+from founder_os.gitctx import resolve, stash_baseline  # noqa: E402
+
+MAX_FINDINGS_SHOWN = 6
+REPORT_DIR = "reviews"
+
+# Each pattern is a class that is exact, cheap, and measured to be over-produced by
+# generated code. Anything requiring judgement is deliberately absent: a reviewer that
+# cries wolf gets ignored, and an ignored reviewer is worse than none.
+CHECKS: list[tuple[str, re.Pattern[str], str]] = [
+    ("swallowed-exception", re.compile(r"except[^:\n]*:\s*(?:#[^\n]*)?\n\s*pass\b"),
+     "exception swallowed silently — the highest-prevalence measured regression in generated code"),
+    ("bare-except", re.compile(r"except\s*:\s*\n"),
+     "bare except catches KeyboardInterrupt and SystemExit too"),
+    ("shell-injection", re.compile(r"subprocess\.[a-z_]+\([^)]*shell\s*=\s*True"),
+     "shell=True with a constructed command"),
+    ("sql-interpolation", re.compile(r"(?i)(?:execute|query)\s*\(\s*[f\"'].*(?:\{|%s|\+)"),
+     "SQL built by string interpolation"),
+    ("disabled-verification", re.compile(r"(?i)verify\s*=\s*False|rejectUnauthorized\s*:\s*false"),
+     "certificate verification disabled"),
+    ("skipped-test", re.compile(r"(?i)@pytest\.mark\.skip|\bit\.skip\(|\bxit\(|\bt\.Skip\(|\.only\("),
+     "test skipped or narrowed — freeze the scoring rules, do not edit them"),
+    ("debug-leftover", re.compile(r"(?:^|\s)(?:breakpoint\(\)|debugger;|console\.log\()"),
+     "debugging leftover"),
+]
+
+
+def git(args: list[str], cwd: Path) -> str:
+    proc = subprocess.run(
+        ["git", *args], cwd=str(cwd), capture_output=True, text=True, timeout=120
+    )
+    return proc.stdout if proc.returncode == 0 else ""
+
+
+def added_lines(diff: str) -> list[tuple[str, int, str]]:
+    """(path, line number, text) for added lines only. Context lines are not this turn."""
+    out: list[tuple[str, int, str]] = []
+    path = ""
+    lineno = 0
+    for line in diff.splitlines():
+        if line.startswith("+++ b/"):
+            path = line[6:]
+        elif line.startswith("@@"):
+            match = re.search(r"\+(\d+)", line)
+            lineno = int(match.group(1)) if match else 0
+        elif line.startswith("+") and not line.startswith("+++"):
+            out.append((path, lineno, line[1:]))
+            lineno += 1
+        elif not line.startswith("-"):
+            lineno += 1
+    return out
+
+
+def baseline_text(root: Path, baseline: str, path: str) -> str:
+    return git(["show", f"{baseline}:{path}"], root)
+
+
+def untracked_lines(root: Path) -> list[tuple[str, int, str]]:
+    """Treat every line of a new file as added.
+
+    `git diff` does not show untracked files at all, so a review built only on the diff
+    silently skips exactly the files an agent most often creates. Reading them directly
+    avoids mutating the index, which `git add -N` would do.
+    """
+    out: list[tuple[str, int, str]] = []
+    listing = git(["ls-files", "--others", "--exclude-standard"], root)
+    for rel in listing.splitlines():
+        rel = rel.strip()
+        if not rel:
+            continue
+        path = root / rel
+        try:
+            if path.stat().st_size > 400_000:
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            out.append((rel, lineno, line))
+    return out
+
+
+def review(root: Path, baseline: str) -> list[tuple[str, str, int, str]]:
+    diff = git(["diff", "--unified=0", baseline], root)
+    added = added_lines(diff) + untracked_lines(root)
+    if not added:
+        return []
+    # Patterns are searched against WHOLE FILE text, not line by line. Several classes
+    # worth catching span lines — a swallowed exception is `except ...:` on one line and
+    # `pass` on the next — and a multi-line pattern applied to a single line can never
+    # match. Precision comes from subtracting the baseline instead of from line slicing.
+    touched = sorted({path for path, _, _ in added if path})
+    findings: list[tuple[str, str, int, str]] = []
+
+    for path in touched:
+        try:
+            current = (root / path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        base = baseline_text(root, baseline, path)
+
+        for name, pattern, message in CHECKS:
+            match = pattern.search(current)
+            if not match or pattern.search(base):
+                continue  # absent, or pre-existing and therefore not this turn's doing
+            # One finding per (path, category). Deduping on text instead would let the
+            # same issue re-accumulate as new every turn as diff context drifts.
+            findings.append((name, path, current.count("\n", 0, match.start()) + 1, message))
+
+        base_hits = redact.find(base)
+        for lineno, text in enumerate(current.splitlines(), start=1):
+            hits = redact.find(text)
+            if hits and hits != base_hits:
+                findings.append(
+                    ("secret", path, lineno, f"possible credential ({', '.join(hits)})")
+                )
+                break
+
+    return findings
+
+
+def write_report(ctx, findings: list[tuple[str, str, int, str]], baseline: str) -> Path:
+    stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+    path = store.tier_a(ctx, REPORT_DIR, f"{stamp}.md")
+    lines = [
+        "---",
+        "kind: review",
+        f"baseline: {baseline}",
+        f"created_at: {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}",
+        f"findings: {len(findings)}",
+        "---",
+        "",
+    ]
+    for name, file_path, lineno, message in findings:
+        lines.append(f"- **{name}** `{file_path}:{lineno}` — {message}")
+    store.atomic_write(path, "\n".join(lines) + "\n", mode=0o644)
+    return path
+
+
+def main() -> None:
+    event = hookio.read_event()
+    ctx = resolve(event.cwd or os.getcwd())
+    rec = sessions.get(ctx, event.session_id)
+    baseline = rec.baseline_commit if rec else stash_baseline(ctx)
+
+    findings = review(ctx.worktree_root, baseline)
+    if not findings:
+        hookio.emit_silent()
+
+    report = write_report(ctx, findings, baseline)
+    if rec:
+        board.add_open_item(
+            ctx,
+            item_id=f"review-{event.session_id[:8]}-{int(time.time())}",
+            text=f"{len(findings)} review finding(s): "
+            + ", ".join(f"{name} in {p}" for name, p, _, _ in findings[:3]),
+            branch=rec.branch,
+            session_id=event.session_id,
+            subject_paths=sorted({p for _, p, _, _ in findings}),
+        )
+
+    shown = findings[:MAX_FINDINGS_SHOWN]
+    summary = "\n".join(f"- {name} at {p}:{n} — {m}" for name, p, n, m in shown)
+    if len(findings) > MAX_FINDINGS_SHOWN:
+        summary += f"\n- ... {len(findings) - MAX_FINDINGS_SHOWN} more"
+
+    # Bounded: a summary plus a path. Never the report itself.
+    hookio.emit_context(
+        "PreToolUse",
+        f"Review of this turn's changes found {len(findings)} issue(s):\n{summary}\n\n"
+        f"Full report: {report.relative_to(ctx.worktree_root)}",
+        limit=2_000,
+    )
+
+
+if __name__ == "__main__":
+    hookio.guard(main, fail_closed=False)

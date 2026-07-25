@@ -46,6 +46,15 @@
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/bin/pre-tool",
             "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/review-commit",
+            "if": "Bash(git commit:*)",
+            "timeout": 300,
+            "asyncRewake": true,
+            "rewakeMessage": "founder-os finished reviewing your commit.",
+            "statusMessage": "founder-os: reviewing"
           }
         ]
       }

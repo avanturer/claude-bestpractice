@@ -51,13 +51,13 @@ agent writes a settings file.
 
 ## Status
 
-V1 implemented and green. Python 3.9+, **standard library only** — enforced by
+**Complete and green.** Python 3.9+, **standard library only** — enforced by
 `tools/check_stdlib_only.py`, because these hooks run on every tool call and a dependency tree is
 latency, an extra failure mode, and a supply-chain surface for the component whose whole job is to be
 trustworthy.
 
 ```
-make check       # lint + docs gate + knowledge + 201 tests + 12 doctor checks + budget
+make check       # lint + docs gate + knowledge + 289 tests + 17 doctor checks + budget
 make doctor      # prove each gate fires by attempting a known-bad action
 make docs        # the LLM-first documentation gate: signature drift, derivable forms
 make knowledge   # validate the decided layer and refresh its index
@@ -67,21 +67,25 @@ make knowledge   # validate the decided layer and refresh its index
 |---|---|---|---|
 | `session-start` | SessionStart | fails open | Reaps dead sessions, registers this one, injects the board and the computed stage |
 | `prompt-capture` | UserPromptSubmit | fails open | Records the verbatim task statement. **Injects nothing** |
-| `pre-tool` | PreToolUse | **fails closed** | Tool-call ceiling, repeat-signature deny, 3-gram loop break, credential pre-write scan |
-| `subagent-brief` | SubagentStart | fails open | Hands non-goals and entities verbatim to subagents, which inherit no project rules |
-| `checkpoint` | PreCompact | fails open | Extractive checkpoint, zero model calls, secrets scrubbed |
-| `evidence-gate` | Stop | **fails closed** | Scope drift, then a fresh passing test artifact, then a clean-checkout re-run past prototype stage |
+| `pre-tool` | PreToolUse | **fails closed** | Tool-call ceiling, repeat-signature deny, 3-gram loop break, credential pre-write scan, file leases, stage-gated migration and production-promotion denial |
+| `review-commit` | PreToolUse `if: Bash(git commit:*)` | async rewake | Reviews only this turn's changes against a moving baseline; wakes the agent with a bounded summary only when there is something to say |
+| `subagent-brief` | SubagentStart | fails open | Non-goals and entities verbatim, plus a query-biased repository map, to subagents that inherit no project rules |
+| `checkpoint` | PreCompact | fails open | Extractive checkpoint, zero model calls, secrets scrubbed, paths stamped |
+| `evidence-gate` | Stop | **fails closed** | Scope drift, then a fresh passing test artifact, then a clean-checkout re-run past prototype stage. Also harvests decision drafts |
 
-Six hook entries against a budget of twelve. Always-on context cost ~107 tokens against a cap of 400.
+Seven hook entries against a budget of twelve. Always-on context cost ~107 tokens against a cap of 400.
 
 **The knowledge layer** lives at `.claude/rules/` and `.claude/domain/` — loaded by the harness
 natively, validated by us, never injected twice. `entities.yaml` carries a `code:` anchor per entity
-that is checked against the tree, so a rename fails loudly instead of leaving the layer describing a
-symbol that no longer exists. This repository dogfoods it: `make knowledge`.
+checked against the tree, so a rename fails loudly instead of leaving the layer describing a symbol
+that no longer exists. This repository dogfoods it: `make knowledge`.
 
-Not yet built: provenance staleness sweeps over persisted claims, auto-drafting decision records from
-transcripts, background review on commit, the production-signal airlock. See
-[`docs/ROADMAP.md`](docs/ROADMAP.md).
+**Provenance** stamps every persisted claim with git **blob hashes** — not mtimes, which a worktree
+checkout resets wholesale. A claim whose subject was rewritten is suppressed from injection and
+counted in the health line, never deleted.
+
+Commands: `founder-os-doctor`, `founder-os-knowledge`, `founder-os-decide`, `founder-os-ingest`,
+`founder-os-reindex`.
 
 ## Install
 
