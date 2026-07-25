@@ -1,5 +1,6 @@
 {
   "name": "founder-marketplace",
+  "description": "Enforcement, memory and parallel-session coordination for solo founders running several Claude Code sessions on one repository.",
   "owner": {
     "name": "avanturer"
   },

@@ -120,6 +120,51 @@ def check_session_start(repo: Path) -> Result:
     return Result("session-start injects a board", True, f"{len(body)} chars, fenced, health footer present")
 
 
+def check_hooks_wiring() -> Result:
+    """Every command named in hooks.json must exist and be executable.
+
+    The most common way a plugin ships enforcing nothing is a hooks file that points
+    at something absent, misnamed, or not marked executable. It fails silently: the
+    harness logs and continues, and the gate simply never runs. Three shipped plugins
+    found during research fail exactly here while their internal logic is fine.
+    """
+    import re
+
+    hooks_file = BIN.parent / "hooks" / "hooks.json"
+    if not hooks_file.exists():
+        return Result("hooks.json wiring", False, "hooks.json missing")
+
+    raw = hooks_file.read_text(encoding="utf-8")
+    stripped = re.sub(r'"\$comment[^"]*"\s*:\s*(\[[^\]]*\]|"[^"]*"),?', "", raw, flags=re.S)
+    try:
+        data = json.loads(stripped)
+    except json.JSONDecodeError as exc:
+        return Result("hooks.json wiring", False, f"not valid JSON: {exc}")
+
+    problems = []
+    count = 0
+    for event, matchers in (data.get("hooks") or {}).items():
+        for matcher in matchers:
+            for handler in matcher.get("hooks", []):
+                count += 1
+                if handler.get("type") == "http":
+                    problems.append(f"{event}: http handlers fail OPEN — never use for a gate")
+                    continue
+                command = handler.get("command", "")
+                name = command.rsplit("/", 1)[-1]
+                target = BIN / name
+                if not target.exists():
+                    problems.append(f"{event}: {name} does not exist")
+                elif not os.access(target, os.X_OK):
+                    problems.append(f"{event}: {name} is not executable")
+
+    return Result(
+        "hooks.json wiring",
+        not problems,
+        "; ".join(problems) or f"{count} handler(s), all present and executable",
+    )
+
+
 def check_fail_closed_on_garbage() -> Result:
     """A gate that cannot parse its event must block, not shrug."""
     proc = subprocess.run(
@@ -424,7 +469,7 @@ def main() -> int:
     print(f"{DIM}founder-os doctor {__version__}{OFF}")
     print(f"{DIM}Proving gates by attempting known-bad actions, not by reading config.{OFF}\n")
 
-    results = [check_environment(), check_fail_closed_on_garbage()]
+    results = [check_environment(), check_hooks_wiring(), check_fail_closed_on_garbage()]
 
     tmp = Path(tempfile.mkdtemp(prefix="founder-os-doctor-"))
     try:
