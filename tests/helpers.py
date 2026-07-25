@@ -37,6 +37,11 @@ def make_repo(parent: Path, name: str = "repo", seed: bool = True) -> Path:
     git(["init", "-q", "-b", "main"], repo)
     git(["config", "user.email", "test@founder-os"], repo)
     git(["config", "user.name", "test"], repo)
+    # Never sign fixture commits: signing reaches outside the test, and a host
+    # signing helper that is unavailable would fail every repository-backed test
+    # for a reason that has nothing to do with the code under test.
+    git(["config", "commit.gpgsign", "false"], repo)
+    git(["config", "tag.gpgsign", "false"], repo)
     if seed:
         (repo / "README.md").write_text("seed\n")
         git(["add", "-A"], repo)

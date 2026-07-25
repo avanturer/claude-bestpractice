@@ -195,6 +195,9 @@ MAX_RECEIPTS = 32
 # between "your tests fail" and "your test runner is not installed".
 NOT_EXECUTABLE = 127
 
+# Set on every child this gate spawns, and checked before spawning one.
+VERIFYING_ENV = "FOUNDER_OS_VERIFYING"
+
 
 def tree_fingerprint(ctx: GitContext, changed: list[str]) -> str:
     """What "this exact code" means, content-addressed.
@@ -235,7 +238,7 @@ def run_suite(ctx: GitContext, command: list[str], fingerprint: str) -> tuple[in
     of this gate. So the gate stops reading claims and runs the suite itself.
     """
     env = dict(os.environ)
-    env["FOUNDER_OS_VERIFYING"] = "1"
+    env[VERIFYING_ENV] = "1"
     try:
         proc = subprocess.run(
             command,
@@ -331,6 +334,13 @@ def _verify_by_running(ctx: GitContext, globs: list[str], changed: list[str], co
     turn twice does not pay for the suite twice — but the receipt is keyed on content,
     so a single edited character invalidates it.
     """
+    if os.environ.get(VERIFYING_ENV):
+        # Already inside a run this gate started. The suite must never be able to
+        # re-enter the gate that launched it: a project whose test command ends in a
+        # Stop event would otherwise recurse until something ran out of memory, and the
+        # flag was being set on every child without anything ever reading it.
+        return None
+
     fingerprint = tree_fingerprint(ctx, changed)
     receipt = receipt_for(ctx, fingerprint)
     if receipt is None:
@@ -388,7 +398,7 @@ def clean_rerun(ctx: GitContext, command: list[str]) -> Verdict:
             return Verdict(False, f"could not create verification worktree: {add.stderr.strip()}")
 
         env = dict(os.environ)
-        env["FOUNDER_OS_VERIFYING"] = "1"
+        env[VERIFYING_ENV] = "1"
         proc = subprocess.run(
             command,
             cwd=str(target),

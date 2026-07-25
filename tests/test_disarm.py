@@ -299,6 +299,34 @@ class TestConcurrentIdAllocation(RepoCase):
         self.assertEqual(len(set(ids)), 10, f"duplicate ids: {sorted(ids)}")
 
 
+class TestTheGateCannotReEnterItself(RepoCase):
+    """The gate now runs project code, so the project can point that code back at it."""
+
+    def test_a_test_command_that_fires_the_stop_gate_terminates(self):
+        script = self.repo / "selftest.sh"
+        script.write_text(
+            "#!/bin/sh\n"
+            f'echo \'{{"cwd":"{self.repo}","hook_event_name":"Stop",'
+            '"session_id":"r1","stop_hook_active":false}\' | '
+            f'{sys.executable} {BIN / "evidence-gate"}\n'
+            "exit 0\n"
+        )
+        script.chmod(0o755)
+        config_path = self.repo / ".claude" / "founder-os" / "config.json"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps({"test_command": ["./selftest.sh"]}))
+        self.write("app.py", "x = 1\n")
+        self.commit()
+
+        self.run_hook("session-start", {"session_id": "r1", "hook_event_name": "SessionStart"})
+        self.write("app.py", "x = 2\n")
+        proc = self.run_hook(
+            "evidence-gate",
+            {"session_id": "r1", "hook_event_name": "Stop", "stop_hook_active": False},
+        )
+        self.assertIn(proc.returncode, (0, 2), "the gate recursed instead of returning")
+
+
 class TestARenameActuallyFailsValidation(RepoCase):
     """The README's headline memory claim, which a substring test did not deliver."""
 
