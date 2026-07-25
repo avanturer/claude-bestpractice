@@ -262,9 +262,21 @@ def reap(ctx: GitContext, exclude: str | None = None) -> list[SessionRecord]:
         if not is_live(ctx, rec, known):
             dead.append(rec)
             _record_path(ctx, rec.session_id).unlink(missing_ok=True)
+            # The baseline goes into the reap log, not just the record. A crashed
+            # session is reaped by a sibling, and when the founder resumes it the rebuild
+            # finds no record and re-anchors at HEAD — so every commit made before the
+            # crash falls outside the diff and the Stop gate has nothing to verify.
+            # Reaping the process must not amnesty the work it already did.
             store.append_jsonl(
                 store.tier_b(ctx, REAPED_LOG),
-                {"session_id": rec.session_id, "pid": rec.pid, "reaped_at": time.time()},
+                {
+                    "session_id": rec.session_id,
+                    "pid": rec.pid,
+                    "reaped_at": time.time(),
+                    "baseline_commit": rec.baseline_commit,
+                    "task_statement": rec.task_statement,
+                    "task_paths": rec.task_paths,
+                },
             )
     if dead:
         _release_many(ctx, {r.session_id for r in dead})
@@ -279,6 +291,15 @@ def reap(ctx: GitContext, exclude: str | None = None) -> list[SessionRecord]:
             except OSError:
                 continue
     return dead
+
+
+def reaped_memory(ctx: GitContext, session_id: str) -> dict:
+    """What a reaped session knew, so resuming it does not start from a clean slate."""
+    latest: dict = {}
+    for entry in store.read_jsonl(store.tier_b(ctx, REAPED_LOG)):
+        if isinstance(entry, dict) and entry.get("session_id") == session_id:
+            latest = entry
+    return latest
 
 
 def live_sessions(ctx: GitContext, exclude: str | None = None) -> list[SessionRecord]:

@@ -337,11 +337,20 @@ class TestEvidenceGate(GateCase):
         proc = self.stop()
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
-    def test_short_circuits_when_already_continuing(self):
-        """Without this the gate loops against itself until the platform kills the turn."""
+    def test_a_continuation_still_verifies(self):
+        """stop_hook_active bounds the loop, not the check.
+
+        It used to allow unconditionally, which made the gate fire exactly ONCE per user
+        turn: block, then every later Stop in that turn passed with no verification, no
+        durable record, and leases still held against siblings. The escalation ceiling of
+        four was unreachable past one — proven in a live session.
+        """
         self.start()
-        self.write("feature.py", "x = 1\n")
-        self.assertEqual(self.stop(stop_hook_active=True).returncode, 0)
+        self.write("app.py", "x = 2\n")
+        codes = [self.stop().returncode]
+        codes += [self.stop(stop_hook_active=True).returncode for _ in range(4)]
+        self.assertEqual(codes[:4], [2, 2, 2, 2], "a continuation skipped verification")
+        self.assertEqual(codes[4], 0, "the escalation ceiling never released the turn")
 
     def test_blocks_scope_drift(self):
         self.start()

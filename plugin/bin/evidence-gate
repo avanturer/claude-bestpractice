@@ -78,11 +78,6 @@ def _give_up(ctx, rec: sessions.SessionRecord, reason: str, changed: list) -> No
 
 def main() -> None:
     event = hookio.read_event()
-
-    # Already inside a Stop-driven continuation: allow, or the gate loops on itself.
-    if event.stop_hook_active:
-        hookio.emit_silent()
-
     ctx = hookio.repo(event.cwd or os.getcwd())
     cfg = config.load(ctx)
     rec = sessions.get(ctx, event.session_id)
@@ -105,7 +100,18 @@ def main() -> None:
     except Exception:  # noqa: BLE001 - a failed draft must never fail a turn
         pass
 
+    # stop_hook_active means "this turn already blocked once". It used to allow
+    # unconditionally, which made the gate fire EXACTLY ONCE per user turn: block, then
+    # every subsequent Stop in that turn passed with no verification, no unverified
+    # record, and leases still held. Proven in a live session — the escalation ceiling of
+    # four was unreachable past one. So the flag now bounds the LOOP, not the check:
+    # verification still runs, and only the escalation ceiling can end the turn.
     attempts = _blocks(rec)
+    if event.stop_hook_active and attempts >= evidence.MAX_CONSECUTIVE_BLOCKS:
+        _give_up(ctx, rec, "continuation ceiling reached", [])
+        _bump_blocks(ctx, rec, 0)
+        sys.stderr.write("founder-os: finishing UNVERIFIED — continuation ceiling reached.\n")
+        _allow(ctx, rec)
     # The test artifact is exempt from scope drift because THIS GATE demands it. Without
     # this the two checks deadlock: finish without evidence and you are blocked for the
     # missing artifact, produce it and you are blocked for touching a file the task did

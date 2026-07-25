@@ -36,12 +36,19 @@ def build_record(ctx: GitContext, event: hookio.HookEvent) -> sessions.SessionRe
         existing.branch = ctx.branch
         return existing
 
+    # A session resumed after a crash was already reaped by a sibling, so `existing` is
+    # gone. Recover what it knew rather than starting from HEAD, which would silently
+    # place every commit it had already made outside the gate's reach.
+    remembered = sessions.reaped_memory(ctx, event.session_id)
+
     return sessions.SessionRecord(
         session_id=event.session_id or f"anon-{os.getpid()}",
         pid=sessions.owning_pid(),
         worktree=ctx.worktree_root.as_posix(),
         branch=ctx.branch,
-        baseline_commit=baseline,
+        baseline_commit=str(remembered.get("baseline_commit") or baseline),
+        task_statement=str(remembered.get("task_statement") or ""),
+        task_paths=list(remembered.get("task_paths") or []),
         started_at=now,
         heartbeat_at=now,
         model=str(event.raw.get("model") or ""),

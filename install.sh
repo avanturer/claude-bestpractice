@@ -94,14 +94,18 @@ claude plugin install "${PLUGIN}@${MARKETPLACE}" >"$LOG" 2>&1 \
 # Prove the registered COPY is the code the doctor just verified. The doctor ran against
 # the source tree; the CLI executes a pinned copy in its own cache, and a run that
 # certified one while shipping the other is worse than no check at all.
-FINGERPRINT="$("$PY" - "$INSTALL_DIR" <<'EOF'
+# Content only, never paths: the CLI stores its copy under a version directory, so
+# hashing relative paths compared `plugin/x` against `1.0.0/plugin/x` and every install
+# aborted on byte-identical trees. What matters is that the same code is there.
+FINGERPRINT="$("$PY" - "$INSTALL_DIR/plugin" <<'EOF'
 import hashlib, pathlib, sys
-root = pathlib.Path(sys.argv[1]) / "plugin"
-digest = hashlib.sha256()
-for path in sorted(p for p in root.rglob("*") if p.is_file() and "__pycache__" not in p.parts):
-    digest.update(path.relative_to(root).as_posix().encode())
-    digest.update(path.read_bytes())
-print(digest.hexdigest())
+root = pathlib.Path(sys.argv[1])
+digests = sorted(
+    hashlib.sha256(p.read_bytes()).hexdigest()
+    for p in root.rglob("*")
+    if p.is_file() and "__pycache__" not in p.parts
+)
+print(hashlib.sha256("\n".join(digests).encode()).hexdigest())
 EOF
 )"
 CACHED="$(find "$HOME/.claude/plugins" -type d -name "$PLUGIN" -print -quit 2>/dev/null || true)"
@@ -109,11 +113,12 @@ if [ -n "$CACHED" ]; then
   CACHED_FINGERPRINT="$("$PY" - "$CACHED" <<'EOF'
 import hashlib, pathlib, sys
 root = pathlib.Path(sys.argv[1])
-digest = hashlib.sha256()
-for path in sorted(p for p in root.rglob("*") if p.is_file() and "__pycache__" not in p.parts):
-    digest.update(path.relative_to(root).as_posix().encode())
-    digest.update(path.read_bytes())
-print(digest.hexdigest())
+digests = sorted(
+    hashlib.sha256(p.read_bytes()).hexdigest()
+    for p in root.rglob("*")
+    if p.is_file() and "__pycache__" not in p.parts
+)
+print(hashlib.sha256("\n".join(digests).encode()).hexdigest())
 EOF
 )"
   if [ "$FINGERPRINT" != "$CACHED_FINGERPRINT" ]; then

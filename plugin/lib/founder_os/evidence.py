@@ -185,12 +185,16 @@ def material_changes(changed: list[str], exempt: list[str]) -> list[str]:
     agent that the gate is noise.
     """
     out = []
+    byproducts = {p.rstrip("/") for p in RUN_BYPRODUCTS}
     for rel in changed:
-        parts = rel.split("/")
-        if any(
-            rel == p or rel.startswith(p.rstrip("/") + "/") or p.rstrip("/") in parts
-            for p in exempt
-        ):
+        # Prefix match for exempt PATHS; component match ONLY for the throwaway
+        # directories a test run creates. Applying the component rule to every exempt
+        # entry made `app/reports/generator.py`, `app/coverage/rules.py` and anything
+        # under a directory called docs/ or target/ invisible to the gate — a red suite
+        # in ordinary domain code finished silently green.
+        if any(rel == p or rel.startswith(p.rstrip("/") + "/") for p in exempt):
+            continue
+        if byproducts & set(rel.split("/")):
             continue
         out.append(rel)
     return out
@@ -202,8 +206,41 @@ RUN_TIMEOUT = 300
 # between "your tests fail" and "your test runner is not installed".
 NOT_EXECUTABLE = 127
 
-# Set on every child this gate spawns, and checked before spawning one.
+# Set on every child this gate spawns, and checked before spawning one. The VALUE is a
+# per-run nonce, not a flag: a bare `export FOUNDER_OS_VERIFYING=1` in a shell profile
+# would otherwise switch the whole evidence gate off for every session on the machine,
+# which is a recursion guard doubling as an off switch.
 VERIFYING_ENV = "FOUNDER_OS_VERIFYING"
+NONCE_FILE = "verifying.nonce"
+
+
+def _issue_nonce(ctx: GitContext) -> str:
+    """Mint a token for one verification run and leave it where a child can check it.
+
+    A per-process value cannot work — the child is a different process and would never
+    match, so the guard silently stops guarding and the gate recurses. A bare flag cannot
+    work either: `export FOUNDER_OS_VERIFYING=1` in a shell profile would switch the
+    evidence gate off everywhere. So the token is unguessable AND shared, and it only
+    exists on disk while a run this gate started is actually in flight.
+    """
+    nonce = hashlib.sha256(os.urandom(32)).hexdigest()[:32]
+    store.atomic_write(store.tier_b(ctx, NONCE_FILE), nonce, mode=0o600)
+    return nonce
+
+
+def _retire_nonce(ctx: GitContext) -> None:
+    store.tier_b(ctx, NONCE_FILE).unlink(missing_ok=True)
+
+
+def _inside_our_own_run(ctx: GitContext) -> bool:
+    """True only for a process this gate spawned, not for anything that set the name."""
+    seen = os.environ.get(VERIFYING_ENV, "")
+    if not seen:
+        return False
+    try:
+        return seen == store.tier_b(ctx, NONCE_FILE).read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
 
 # What running a test suite leaves behind. The gate runs the suite itself now, so
 # without this the gate creates these files and then reports them to the agent as its
@@ -224,7 +261,7 @@ def run_suite(ctx: GitContext, command: list[str]) -> tuple[int, str]:
     of this gate. So the gate stops reading claims and runs the suite itself.
     """
     env = dict(os.environ)
-    env[VERIFYING_ENV] = "1"
+    env[VERIFYING_ENV] = _issue_nonce(ctx)
     try:
         proc = subprocess.run(
             command,
@@ -240,6 +277,8 @@ def run_suite(ctx: GitContext, command: list[str]) -> tuple[int, str]:
         return -1, f"could not run the test command: {exc}"
     except subprocess.TimeoutExpired:
         return -1, f"the suite exceeded {RUN_TIMEOUT}s and was killed"
+    finally:
+        _retire_nonce(ctx)
 
     tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-25:])
     if proc.returncode == NOT_EXECUTABLE:
@@ -334,7 +373,7 @@ def _verify_by_running(ctx: GitContext, globs: list[str], command: list[str]) ->
     Running each time costs wall-clock. The cache cost correctness, which this gate has
     none to spare.
     """
-    if os.environ.get(VERIFYING_ENV):
+    if _inside_our_own_run(ctx):
         # Already inside a run this gate started. The suite must never be able to
         # re-enter the gate that launched it: a project whose test command ends in a
         # Stop event would otherwise recurse until something ran out of memory, and the
@@ -465,7 +504,7 @@ def clean_rerun(ctx: GitContext, command: list[str]) -> Verdict:
     """
     if not command:
         return Verdict(False, "No test command configured or detected for a clean re-run.")
-    if os.environ.get(VERIFYING_ENV):
+    if _inside_our_own_run(ctx):
         return Verdict(True, "already inside a verification run")
     if not ctx.head or ctx.head == "HEAD":
         # `git rev-parse HEAD` echoes the literal string on an unborn branch, so the
@@ -489,7 +528,7 @@ def clean_rerun(ctx: GitContext, command: list[str]) -> Verdict:
         _link_dependencies(ctx.worktree_root, target)
 
         env = dict(os.environ)
-        env[VERIFYING_ENV] = "1"
+        env[VERIFYING_ENV] = _issue_nonce(ctx)
         proc = subprocess.run(
             command,
             cwd=str(target),
