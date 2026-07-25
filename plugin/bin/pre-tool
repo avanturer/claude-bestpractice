@@ -119,6 +119,20 @@ def main() -> None:
                 "transcript, which .gitignore does not cover."
             )
 
+        # Claim the path. Two sessions editing one file is not a merge conflict — it is
+        # a silent overwrite where neither side knows it happened, which is the defining
+        # risk of the several-sessions-at-once operating mode.
+        if cfg.leases_enabled and touched:
+            owner = sessions.acquire_lease(ctx, event.session_id, touched[0])
+            if owner:
+                other = sessions.get(ctx, owner)
+                where = f" on branch {other.branch}" if other else ""
+                hookio.deny_tool(
+                    f"founder-os: session {owner[:8]}{where} is editing {touched[0]} right now. "
+                    "Work on something else, or coordinate before touching this file — "
+                    "whoever writes second wins silently and neither of you would notice."
+                )
+
     hookio.emit_silent()
 
 

@@ -234,6 +234,72 @@ class TestPreTool(GateCase):
         )
         self.assertEqual(proc.returncode, 2)
 
+    def edit_event(self, session_id: str, relpath: str) -> dict:
+        return {
+            "session_id": session_id,
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Edit",
+            "tool_input": {"file_path": str(self.repo / relpath), "new_string": "y = 2"},
+        }
+
+    def test_denies_a_file_another_live_session_is_editing(self):
+        """A silent overwrite is worse than a merge conflict: neither side finds out."""
+        self.start("alpha")
+        self.start("beta")
+        self.gate("pre-tool", self.edit_event("alpha", "src/shared.py"))
+
+        proc = self.gate("pre-tool", self.edit_event("beta", "src/shared.py"))
+        self.assertEqual(self.decision(proc), "deny")
+        reason = json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertIn("alpha"[:8], reason)
+
+    def test_a_session_may_keep_editing_its_own_file(self):
+        self.start("alpha")
+        for _ in range(2):
+            proc = self.gate("pre-tool", self.edit_event("alpha", "src/mine.py"))
+        self.assertIsNone(self.decision(proc))
+
+    def test_different_files_do_not_contend(self):
+        self.start("alpha")
+        self.start("beta")
+        self.gate("pre-tool", self.edit_event("alpha", "src/a.py"))
+        proc = self.gate("pre-tool", self.edit_event("beta", "src/b.py"))
+        self.assertIsNone(self.decision(proc))
+
+    def test_lease_is_released_when_the_turn_ends_cleanly(self):
+        self.start("alpha")
+        self.start("beta")
+        self.gate("pre-tool", self.edit_event("alpha", "src/shared.py"))
+
+        from founder_os import sessions
+
+        self.assertEqual(sessions.leases_held_by(self.ctx(), "alpha"), ["src/shared.py"])
+        self.stop("alpha")  # nothing changed, so the gate allows and releases
+        self.assertEqual(sessions.leases_held_by(self.ctx(), "alpha"), [])
+        self.assertIsNone(self.decision(self.gate("pre-tool", self.edit_event("beta", "src/shared.py"))))
+
+    def test_dead_session_lease_does_not_block_forever(self):
+        """One crashed session must not poison a path permanently."""
+        from founder_os import sessions
+
+        ctx = self.ctx()
+        sessions.register(
+            ctx,
+            sessions.SessionRecord(
+                session_id="ghost",
+                pid=999_999_999,
+                worktree=ctx.worktree_root.as_posix(),
+                branch=ctx.branch,
+                baseline_commit=ctx.head,
+                started_at=time.time(),
+                heartbeat_at=time.time(),
+            ),
+        )
+        sessions.acquire_lease(ctx, "ghost", "src/shared.py")
+
+        self.start("live")
+        self.assertIsNone(self.decision(self.gate("pre-tool", self.edit_event("live", "src/shared.py"))))
+
     def test_tracks_touched_files(self):
         self.start()
         self.gate(

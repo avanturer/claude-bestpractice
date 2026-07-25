@@ -51,6 +51,8 @@ class Config:
     clean_rerun: bool | None = None
     scope_drift_block: bool = True
     loop_detect: bool = True
+    leases_enabled: bool = True
+    lease_ttl_seconds: float = 1800.0
     max_tool_calls: int = 2_000
     max_repeat_signature: int = 3
     stage_override: str | None = None
@@ -65,6 +67,8 @@ class Config:
             "clean_rerun": self.clean_rerun,
             "scope_drift_block": self.scope_drift_block,
             "loop_detect": self.loop_detect,
+            "leases_enabled": self.leases_enabled,
+            "lease_ttl_seconds": self.lease_ttl_seconds,
             "max_tool_calls": self.max_tool_calls,
             "max_repeat_signature": self.max_repeat_signature,
             "stage_override": self.stage_override,

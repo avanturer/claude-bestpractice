@@ -189,6 +189,40 @@ def check_loop_denied(repo: Path) -> Result:
     )
 
 
+def check_lease_conflict_denied(repo: Path) -> Result:
+    """Two sessions on one file must not both proceed."""
+    start_session(repo, "doctor-a")
+    start_session(repo, "doctor-b")
+
+    def edit(session_id: str):
+        return run_gate(
+            "pre-tool",
+            {
+                "session_id": session_id,
+                "hook_event_name": "PreToolUse",
+                "cwd": str(repo),
+                "tool_name": "Edit",
+                "tool_input": {"file_path": str(repo / "shared.py"), "new_string": "x = 1"},
+            },
+            repo,
+        )
+
+    edit("doctor-a")
+    proc = edit("doctor-b")
+    try:
+        decision = json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        decision = None
+    ok = decision == "deny"
+    return Result(
+        "pre-tool denies a contended file",
+        ok,
+        "second session refused"
+        if ok
+        else "both sessions allowed — SILENT OVERWRITES POSSIBLE",
+    )
+
+
 def check_evidence_gate_blocks(repo: Path) -> Result:
     """The load-bearing check: a change with no test artifact must not finish."""
     start_session(repo, "doctor-evidence")
@@ -326,6 +360,7 @@ def main() -> int:
             check_session_start,
             check_secret_write_denied,
             check_loop_denied,
+            check_lease_conflict_denied,
             check_evidence_gate_blocks,
             check_evidence_gate_accepts,
             check_stale_artifact_rejected,

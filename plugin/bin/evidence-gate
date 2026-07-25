@@ -40,6 +40,18 @@ def _bump_blocks(ctx, rec: sessions.SessionRecord, value: int) -> None:
     sessions.touch(ctx, rec.session_id, tool_signatures=payload)
 
 
+def _allow(ctx, rec: sessions.SessionRecord) -> None:
+    """Let the turn end: reset the escalation counter and hand back the leases.
+
+    Releasing matters on every allow path, including the nothing-changed one. A
+    session that claimed a file and then finished without touching it would otherwise
+    hold that path against its siblings for the full TTL.
+    """
+    _bump_blocks(ctx, rec, 0)
+    sessions.release_all(ctx, rec.session_id)
+    hookio.emit_silent()
+
+
 def _give_up(ctx, rec: sessions.SessionRecord, reason: str) -> None:
     """Record an unverified finish so it survives the turn and surfaces next session."""
     store.append_jsonl(
@@ -82,8 +94,7 @@ def main() -> None:
     changed = evidence.material_changes(changed_files(ctx, rec.baseline_commit), exempt)
 
     if not changed:
-        _bump_blocks(ctx, rec, 0)
-        hookio.emit_silent()
+        _allow(ctx, rec)
 
     problems: list[str] = []
 
@@ -107,8 +118,7 @@ def main() -> None:
                 problems.append(clean.reason)
 
     if not problems:
-        _bump_blocks(ctx, rec, 0)
-        hookio.emit_silent()
+        _allow(ctx, rec)
 
     reason = "\n\n".join(problems)
 
