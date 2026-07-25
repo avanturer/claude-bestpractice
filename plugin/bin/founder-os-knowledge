@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""Manage the DECIDED layer: scaffold it, validate it, keep its index honest.
+
+`init` writes templates rather than asking questions. Roughly half of repositories
+that adopt decision records stop under five entries, and the ones that stop are the
+ones where writing a record started with a blank page. A template that is already
+mostly filled in, that an agent can complete from the conversation, is the only shape
+that survives contact with someone who is shipping.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from founder_os import knowledge  # noqa: E402
+from founder_os.gitctx import resolve  # noqa: E402
+
+PRODUCT_TEMPLATE = """# Product
+
+## What this is
+<one or two sentences. Not the tech stack — the thing a user gets.>
+
+## Who it is for
+<the specific person. "developers" is not an answer.>
+
+## Non-goals
+- <something plausible that this deliberately will not do>
+- <a second one>
+- <a third one>
+
+## Hard constraints
+- <legal, business or contractual limits that outrank any technical preference>
+
+## Current priority
+<exactly one. If there are two, one of them is not the priority.>
+"""
+
+GLOSSARY_TEMPLATE = """# Glossary
+
+One line per term: what it means, its canonical identifier, banned synonyms.
+Definitions only — a glossary that argues is a rule wearing a disguise.
+
+Example:
+Run — one execution of a pipeline. Code: `Run`. Not: job, task, execution.
+"""
+
+ENTITIES_TEMPLATE = """# The highest value-per-token file in this repository.
+# 3-12 entities. Five keys each. The `code` anchor is checked, so a rename that
+# breaks it fails validation instead of silently describing something gone.
+#
+# Example:
+# Run:
+#   what: one execution of a pipeline, from trigger to terminal state
+#   code: Run @ src/models/run.py
+#   invariants: exactly one terminal state; started_at <= finished_at
+#   depends_on: Pipeline, Trigger
+#   breaks_if_wrong: billing double-counts, and retries fan out unbounded
+"""
+
+DECISION_TEMPLATE = """---
+title: <short imperative title>
+paths: src/**
+date: <YYYY-MM-DD>
+---
+
+## Decision
+<what was chosen, in one or two sentences>
+
+## Why
+<the constraint that forced it, not the benefits of the winner>
+
+## Rejected
+- <alternative>: <why it lost — the specific reason, not "worse">
+"""
+
+
+def cmd_init(ctx, force: bool) -> int:
+    root = ctx.worktree_root
+    targets = {
+        root / knowledge.RULES_DIR / knowledge.PRODUCT: PRODUCT_TEMPLATE,
+        root / knowledge.RULES_DIR / knowledge.GLOSSARY: GLOSSARY_TEMPLATE,
+        root / knowledge.DOMAIN_DIR / knowledge.ENTITIES: ENTITIES_TEMPLATE,
+    }
+    written = []
+    for path, template in targets.items():
+        if path.exists() and not force:
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(template, encoding="utf-8")
+        written.append(path.relative_to(root).as_posix())
+
+    decisions = root / knowledge.DECISIONS_DIR
+    decisions.mkdir(parents=True, exist_ok=True)
+    example = decisions / "0001-example.md.template"
+    if not example.exists():
+        example.write_text(DECISION_TEMPLATE, encoding="utf-8")
+        written.append(example.relative_to(root).as_posix())
+
+    cmd_index(ctx)
+
+    if written:
+        print("wrote:")
+        for rel in written:
+            print(f"  {rel}")
+        print("\nFill these in from what you already know. They are loaded by the harness")
+        print("natively — this plugin validates them, it does not inject them again.")
+    else:
+        print("knowledge layer already present; pass --force to overwrite templates")
+    return 0
+
+
+def cmd_validate(ctx) -> int:
+    problems = knowledge.validate(ctx)
+    if not problems:
+        layer = knowledge.load(ctx)
+        print(
+            f"knowledge: valid — {len(layer.entities)} entities, "
+            f"{len(knowledge.decision_files(ctx))} decision(s), "
+            f"{layer.total_bytes}/{knowledge.LAYER_MAX_BYTES} bytes"
+        )
+        return 0
+    print(f"knowledge: {len(problems)} problem(s)")
+    for problem in problems:
+        print(f"  {problem}")
+    return 1
+
+
+def cmd_index(ctx) -> int:
+    path = ctx.worktree_root / knowledge.RULES_DIR / knowledge.INDEX
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(knowledge.build_index(ctx), encoding="utf-8")
+    print(f"index: {path.relative_to(ctx.worktree_root)}")
+    return 0
+
+
+def cmd_brief(ctx) -> int:
+    print(knowledge.subagent_brief(ctx) or "(knowledge layer empty)")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Manage the founder-os knowledge layer.")
+    sub = parser.add_subparsers(dest="command", required=True)
+    init = sub.add_parser("init", help="scaffold the four always-on files")
+    init.add_argument("--force", action="store_true", help="overwrite existing templates")
+    sub.add_parser("validate", help="check caps, anchors and decision records")
+    sub.add_parser("index", help="regenerate the decision index")
+    sub.add_parser("brief", help="print what a subagent would receive")
+
+    args = parser.parse_args()
+    ctx = resolve()
+
+    if args.command == "init":
+        return cmd_init(ctx, args.force)
+    if args.command == "validate":
+        return cmd_validate(ctx)
+    if args.command == "index":
+        return cmd_index(ctx)
+    return cmd_brief(ctx)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

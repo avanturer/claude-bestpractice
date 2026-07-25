@@ -57,8 +57,10 @@ latency, an extra failure mode, and a supply-chain surface for the component who
 trustworthy.
 
 ```
-make check     # lint + 147 tests + doctor + budget
-make doctor    # prove each gate fires by attempting a known-bad action
+make check       # lint + docs gate + knowledge + 201 tests + 12 doctor checks + budget
+make doctor      # prove each gate fires by attempting a known-bad action
+make docs        # the LLM-first documentation gate: signature drift, derivable forms
+make knowledge   # validate the decided layer and refresh its index
 ```
 
 | Gate | Event | Posture | Does |
@@ -66,13 +68,19 @@ make doctor    # prove each gate fires by attempting a known-bad action
 | `session-start` | SessionStart | fails open | Reaps dead sessions, registers this one, injects the board and the computed stage |
 | `prompt-capture` | UserPromptSubmit | fails open | Records the verbatim task statement. **Injects nothing** |
 | `pre-tool` | PreToolUse | **fails closed** | Tool-call ceiling, repeat-signature deny, 3-gram loop break, credential pre-write scan |
+| `subagent-brief` | SubagentStart | fails open | Hands non-goals and entities verbatim to subagents, which inherit no project rules |
 | `checkpoint` | PreCompact | fails open | Extractive checkpoint, zero model calls, secrets scrubbed |
 | `evidence-gate` | Stop | **fails closed** | Scope drift, then a fresh passing test artifact, then a clean-checkout re-run past prototype stage |
 
-Five hook entries against a budget of twelve. Always-on context cost ~107 tokens against a cap of 400.
+Six hook entries against a budget of twelve. Always-on context cost ~107 tokens against a cap of 400.
 
-Not yet built: the knowledge layer (`entities.yaml`, decision records), provenance staleness sweeps,
-file leases wired into `pre-tool`, background review, the production airlock. See
+**The knowledge layer** lives at `.claude/rules/` and `.claude/domain/` — loaded by the harness
+natively, validated by us, never injected twice. `entities.yaml` carries a `code:` anchor per entity
+that is checked against the tree, so a rename fails loudly instead of leaving the layer describing a
+symbol that no longer exists. This repository dogfoods it: `make knowledge`.
+
+Not yet built: provenance staleness sweeps over persisted claims, auto-drafting decision records from
+transcripts, background review on commit, the production-signal airlock. See
 [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Install

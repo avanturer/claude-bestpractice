@@ -322,6 +322,43 @@ def check_checkpoint(repo: Path) -> Result:
     )
 
 
+def check_knowledge_anchor(repo: Path) -> Result:
+    """A renamed symbol must break its entity anchor rather than describe a ghost."""
+    sys.path.insert(0, str(BIN.parent / "lib"))
+    from founder_os import knowledge
+    from founder_os.gitctx import resolve
+
+    (repo / "src").mkdir(exist_ok=True)
+    (repo / "src" / "models.py").write_text("class Invoice:\n    pass\n")
+    rules = repo / knowledge.RULES_DIR
+    rules.mkdir(parents=True, exist_ok=True)
+    (rules / knowledge.PRODUCT).write_text(
+        "# Product\n\n## What this is\nA thing.\n\n## Non-goals\n- Nothing else\n"
+    )
+    domain = repo / knowledge.DOMAIN_DIR
+    domain.mkdir(parents=True, exist_ok=True)
+    entity = (
+        "Invoice:\n  what: a billable document\n  code: Invoice @ src/models.py\n"
+        "  invariants: total equals line items\n  depends_on: none\n"
+        "  breaks_if_wrong: double billing\n"
+    )
+    (domain / knowledge.ENTITIES).write_text(entity * 1)
+
+    ctx = resolve(repo)
+    before = knowledge.validate(ctx)
+    if any("no longer resolves" in str(p) for p in before):
+        return Result("knowledge anchors are checked", False, "false positive on a valid anchor")
+
+    (repo / "src" / "models.py").write_text("class Bill:\n    pass\n")
+    after = knowledge.validate(ctx)
+    ok = any("no longer resolves" in str(p) for p in after)
+    return Result(
+        "knowledge anchors are checked",
+        ok,
+        "rename detected" if ok else "rename NOT detected — the layer can describe ghosts",
+    )
+
+
 def check_reap(repo: Path) -> Result:
     """A session whose process is gone must not stay on the board forever."""
     sys.path.insert(0, str(BIN.parent / "lib"))
@@ -365,6 +402,7 @@ def main() -> int:
             check_evidence_gate_accepts,
             check_stale_artifact_rejected,
             check_checkpoint,
+            check_knowledge_anchor,
             check_reap,
         ):
             repo = make_repo(Path(tempfile.mkdtemp(prefix="founder-os-case-", dir=tmp)))

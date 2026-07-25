@@ -51,6 +51,18 @@
       }
     ],
 
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/subagent-brief",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+
     "PreCompact": [
       {
         "hooks": [

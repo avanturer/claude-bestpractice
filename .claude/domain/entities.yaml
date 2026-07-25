@@ -1,0 +1,42 @@
+SessionRecord:
+  what: one live Claude Code session, its worktree, branch, task and baseline
+  code: SessionRecord @ plugin/lib/founder_os/sessions.py
+  invariants: one file per session; live requires a live pid AND a registered worktree
+  depends_on: GitContext
+  breaks_if_wrong: sessions reap each other and the board is always empty
+GitContext:
+  what: resolved repository identity — worktree root, common dir, head, branch
+  code: GitContext @ plugin/lib/founder_os/gitctx.py
+  invariants: common_dir is identical across every worktree of one clone
+  depends_on: none
+  breaks_if_wrong: siblings become invisible and every coordination guarantee is void
+Verdict:
+  what: the outcome of a verification attempt, with the reason handed to the agent
+  code: Verdict @ plugin/lib/founder_os/evidence.py
+  invariants: never ok without a parsed, fresh, passing artifact
+  depends_on: Artifact
+  breaks_if_wrong: unverified work is accepted as done and the spine is gone
+Artifact:
+  what: a machine-readable test result, the only thing accepted as evidence
+  code: Artifact @ plugin/lib/founder_os/evidence.py
+  invariants: zero collected tests is not a pass
+  depends_on: none
+  breaks_if_wrong: an empty suite becomes the cheapest way to fake green
+HookEvent:
+  what: one harness lifecycle event, parsed from stdin
+  code: HookEvent @ plugin/lib/founder_os/hookio.py
+  invariants: unparseable input raises; fail-closed gates must block on it
+  depends_on: none
+  breaks_if_wrong: gates fail open silently and enforce nothing
+Layer:
+  what: the four always-on knowledge files that the harness loads natively
+  code: Layer @ plugin/lib/founder_os/knowledge.py
+  invariants: total under 10400 bytes; every entity anchor resolves
+  depends_on: Entity
+  breaks_if_wrong: stale context binds the agent to code that no longer exists
+StageSignals:
+  what: machine-detected facts about the repository that decide which gates fire
+  code: StageSignals @ plugin/lib/founder_os/stage.py
+  invariants: the stage ratchet only ever tightens
+  depends_on: GitContext
+  breaks_if_wrong: deleting a CI file silently disables the gates it turned on

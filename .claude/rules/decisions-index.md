@@ -1,0 +1,5 @@
+# Decisions
+
+- [0001] Cross-session state lives in the git common dir — `decisions/0001-state-lives-in-the-git-common-dir.md`
+- [0002] Completion is accepted on evidence, never on assertion — `decisions/0002-evidence-not-assertion.md`
+- [0003] Inject at session start, never per turn — `decisions/0003-inject-once-not-per-turn.md`

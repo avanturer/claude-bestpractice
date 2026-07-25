@@ -1,4 +1,4 @@
-.PHONY: check test doctor lint budget docs clean help
+.PHONY: check test doctor lint budget docs knowledge clean help
 
 PY := python3
 
@@ -8,16 +8,24 @@ help:
 	@echo "make doctor  - prove each gate fires by attempting a known-bad action"
 	@echo "make lint    - syntax check and the stdlib-only constraint"
 	@echo "make docs    - the LLM-first documentation gate"
+	@echo "make knowledge - validate the decided layer and refresh its index"
 	@echo "make budget  - assert the always-on context budget is not exceeded"
 
 # One definition of done, identical in every session, with no --no-verify path.
 # Eight parallel sessions must not converge on eight notions of finished.
-check: lint docs test doctor budget
+check: lint docs knowledge test doctor budget
 	@echo ""
 	@echo "check: all green"
 
 docs:
 	@$(PY) tools/check_docstrings.py --all
+
+# Validates caps, entity anchors and decision records, then refreshes the index. The
+# anchor check is what makes a rename fail loudly instead of leaving the layer
+# describing a symbol that no longer exists.
+knowledge:
+	@$(PY) plugin/bin/founder-os-knowledge index >/dev/null
+	@$(PY) plugin/bin/founder-os-knowledge validate
 
 test:
 	@$(PY) -m unittest discover -s tests -t tests

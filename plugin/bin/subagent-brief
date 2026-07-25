@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""SubagentStart: hand a subagent the constraints it cannot inherit.
+
+Non-fork subagents inherit the project rule hierarchy — except the built-in Explore
+and Plan agents, which skip it, and there is no setting that changes that. Output
+styles and auto memory never reach any non-fork subagent at all.
+
+With several sessions each spawning Explore and Plan, a large share of all agent turns
+run with zero project rules loaded. Hooks and permission rules still apply inside them
+— enforcement inherits — but awareness does not. This closes that gap with the
+smallest possible payload.
+
+Fails open: a subagent starting without a brief is worse than one that never starts.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from founder_os import hookio, knowledge  # noqa: E402
+from founder_os.gitctx import resolve  # noqa: E402
+
+# Deliberately small. This is re-paid on every spawn, and at several parallel sessions
+# it is the dominant recurring cost in the whole design.
+BRIEF_CHAR_BUDGET = 2_000
+
+
+def main() -> None:
+    event = hookio.read_event()
+    ctx = resolve(event.cwd or os.getcwd())
+
+    brief = knowledge.subagent_brief(ctx, max_chars=BRIEF_CHAR_BUDGET)
+    if not brief.strip():
+        hookio.emit_silent()
+
+    hookio.emit_context("SubagentStart", brief, limit=BRIEF_CHAR_BUDGET + 500)
+
+
+if __name__ == "__main__":
+    hookio.guard(main, fail_closed=False)
