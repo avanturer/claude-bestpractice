@@ -1,0 +1,91 @@
+{
+  "$comment": [
+    "TEMPLATE — INERT AS SHIPPED. Read policy/README.md first.",
+    "",
+    "Every key below must be verified against YOUR installed binary before it is relied upon.",
+    "A misspelled or removed key silently does nothing, which looks identical to working.",
+    "Enable one key at a time and run the doctor after each.",
+    "",
+    "Keys are grouped by what they buy. Nothing here is a security boundary except the sandbox."
+  ],
+
+  "$1_the_sandbox_is_the_only_real_boundary": {
+    "sandbox": {
+      "enabled": true,
+      "failIfUnavailable": true,
+      "$comment": "Without failIfUnavailable a missing backend degrades to zero enforcement, silently.",
+      "allowUnsandboxedCommands": false,
+      "excludedCommands": [],
+      "$comment_excluded": "Keep empty. This array merges from every scope and cannot be locked down; hash-check the resolved list at SessionStart. Detection only.",
+      "filesystem": {
+        "allowRead": ["."],
+        "denyWrite": ["/opt/founder-os"]
+      }
+    }
+  },
+
+  "$2_self_tamper_protection": {
+    "permissions": {
+      "deny": [
+        "Edit(//etc/claude-code/**)",
+        "Edit(~/.claude/settings.json)",
+        "Edit(**/.claude/settings.json)",
+        "Edit(**/.claude/settings.local.json)",
+        "Edit(~/.claude/plugins/**)",
+        "Edit(//opt/founder-os/**)",
+        "Edit(//**/.claude/projects/**)",
+        "Read(**/.env)"
+      ],
+      "$comment_paths": "A single leading slash is NOT absolute — it anchors to the settings source. Absolute requires a double slash. Write(), NotebookEdit() and Glob() rules are accepted but never match; use Edit() and Read().",
+      "$comment_scope": "Never write a bare tool name here unless you intend to remove the tool from the model's context entirely — a bare name invalidates the prompt cache."
+    }
+  },
+
+  "$3_the_entire_interruption_budget": {
+    "permissions": {
+      "ask": [
+        "Bash(git push *)",
+        "Bash(gh pr merge *)"
+      ],
+      "$comment": "permissions.ask is the ONLY mechanism that forces a human prompt in every mode. Everything else runs silent. Keep this list short — it is the whole nag budget. Never use a bare Bash ask rule; it is substituted away when sandboxing is on and your gate silently stops prompting."
+    }
+  },
+
+  "$4_silence": {
+    "preferredNotifChannel": "notifications_disabled",
+    "spinnerTipsEnabled": false,
+    "feedbackSurveyRate": 0,
+    "$comment": "Keep the away-summary and recap enabled — they are the built-in zero-nag re-entry affordance and a competing digest would be redundant."
+  },
+
+  "$5_remove_competing_authorities": {
+    "autoMemoryEnabled": false,
+    "$comment_memory": "Keyed on the git repo, so every worktree session writes into one truncation-limited file; re-injected after compaction so it outlives our context; never loaded into subagents.",
+    "claudeMdExcludes": [
+      "~/.claude/CLAUDE.md",
+      "**/node_modules/**/CLAUDE.md"
+    ],
+    "$comment_claudemd": "All discovered CLAUDE.md files are CONCATENATED, not overridden, and contradictory rules are resolved arbitrarily. One past install of an unrelated tool can silently contradict this project everywhere on the machine.",
+    "includeGitInstructions": false,
+    "$comment_git": "Removes a system-prompt-level competitor to our worktree discipline. Does not block git — pair with the pre-tool gate."
+  },
+
+  "$6_fuses_for_unattended_work": {
+    "$comment": "Verify names and value types against your binary; several of these are documented as strings rather than booleans, and spawn-depth defaults have changed without a migration notice.",
+    "env": {
+      "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "1"
+    }
+  },
+
+  "$7_worktrees": {
+    "worktree": {
+      "baseRef": "head"
+    },
+    "$comment": "Set explicitly. The default flipped back to branching from the remote default, which silently drops unpushed commits from new worktrees."
+  },
+
+  "$8_the_enforcement_spine": {
+    "$comment": "Managed-scope hooks are the copy that survives lower-scope configuration. The plugin ships behaviour; policy ships the guarantee. Point these at root-owned scripts OUTSIDE the plugin root, which is user-writable and changes path on every update.",
+    "hooks": {}
+  }
+}

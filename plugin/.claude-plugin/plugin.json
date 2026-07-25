@@ -1,0 +1,17 @@
+{
+  "name": "founder-os",
+  "version": "0.0.0",
+  "description": "Enforcement, memory and parallel-session coordination for solo founders running several Claude Code sessions on one repository.",
+  "author": {
+    "name": "avanturer"
+  },
+  "repository": "https://github.com/avanturer/claude-bestpractice",
+  "license": "MIT",
+  "keywords": [
+    "hooks",
+    "memory",
+    "worktree",
+    "verification",
+    "parallel-sessions"
+  ]
+}

@@ -1,0 +1,63 @@
+{
+  "$comment": [
+    "V1 SKELETON — three gates, nothing else. Budget: 12 hook entries maximum across the whole",
+    "plugin; adding a thirteenth requires deleting one. See docs/ROADMAP.md.",
+    "",
+    "Every command below is a placeholder path and none of these scripts exist yet.",
+    "",
+    "PROTOCOL REMINDERS, because these are the cheap ways to ship a gate that enforces nothing:",
+    "  - Exit 2 blocks. Exit 1 is a NON-blocking error and the tool RUNS. This inverts Unix",
+    "    convention and is the highest-probability silent defect in the design.",
+    "  - Guards read the event JSON from STDIN. Do not read TOOL_NAME / TOOL_INPUT environment",
+    "    variables; they do not exist.",
+    "  - Guards are `set -euo pipefail` with `trap 'exit 2' ERR`, and exit 2 on unparseable input.",
+    "  - Never use type 'http' for a gate that must hold: non-2xx, connection failures and timeouts",
+    "    are non-blocking, i.e. they fail open.",
+    "  - The plugin root is user-writable and its path changes on every update. Guards that must not",
+    "    be tampered with live outside it; persistent state lives in the plugin data directory.",
+    "  - Claude Code overrides a Stop hook and ends the turn after 8 consecutive blocks. Escalate the",
+    "    reason, then switch to a durable failure marker."
+  ],
+
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/session-start",
+            "timeout": 20,
+            "statusMessage": "founder-os: session board"
+          }
+        ]
+      }
+    ],
+
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/checkpoint",
+            "timeout": 60,
+            "statusMessage": "founder-os: checkpoint"
+          }
+        ]
+      }
+    ],
+
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/evidence-gate",
+            "timeout": 600,
+            "statusMessage": "founder-os: verifying"
+          }
+        ]
+      }
+    ]
+  }
+}

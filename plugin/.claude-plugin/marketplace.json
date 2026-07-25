@@ -1,0 +1,14 @@
+{
+  "name": "founder-marketplace",
+  "owner": {
+    "name": "avanturer"
+  },
+  "plugins": [
+    {
+      "name": "founder-os",
+      "source": "./",
+      "description": "Enforcement, memory and parallel-session coordination for solo founders.",
+      "version": "0.0.0"
+    }
+  ]
+}

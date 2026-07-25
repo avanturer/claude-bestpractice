@@ -1,0 +1,16 @@
+# Ephemeral plugin state — Tier B lives in the git common dir, but session scratch lands here
+.claude/session/
+.claude/signals/
+.claude/telemetry/
+.claude/metrics/
+
+# Generated, never authored — every one of these carries generated_from_sha and is rebuildable
+.claude/derived/
+
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+dist/
+build/
+.DS_Store
