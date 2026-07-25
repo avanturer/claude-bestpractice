@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""The work ledger: add, claim, finish, and see what every session is doing.
+
+State lives in directories, so `git mv` is the transition and `git log` is the
+history. Nothing here needs a server, a database, or a daemon — five parallel
+sessions each write their own file and merge without conflict.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from founder_os import plan, sessions  # noqa: E402
+from founder_os.gitctx import resolve  # noqa: E402
+
+
+def cmd_add(ctx, title: str, body: str) -> int:
+    task = plan.add(ctx, title, body, branch=ctx.branch)
+    print(f"{task.id}  {task.title}")
+    print(f"  {task.path.relative_to(ctx.worktree_root)}")
+    return 0
+
+
+def cmd_list(ctx, state: str) -> int:
+    tasks = plan.load_all(ctx, state)
+    if not tasks:
+        print("plan is empty" if not state else f"nothing in {state}")
+        return 0
+
+    live = {rec.session_id for rec in sessions.live_sessions(ctx)}
+    for name in ([state] if state else list(plan.STATES)):
+        rows = [t for t in tasks if t.state == name]
+        if not rows:
+            continue
+        print(f"\n{name.upper()}")
+        for task in rows:
+            mark = ""
+            if task.owner:
+                mark = f"  [{task.owner[:8]}{'' if task.owner in live else ' — DEAD, reclaimable'}]"
+            print(f"  {task.id}  {task.title[:90]}{mark}")
+    counts = plan.summary(ctx)
+    print(f"\n{counts['next']} next · {counts['doing']} in flight · {counts['done']} done")
+    return 0
+
+
+def cmd_claim(ctx, task_id: str, session_id: str) -> int:
+    task, error = plan.claim(ctx, task_id, session_id or f"cli-{ctx.branch}", ctx.branch)
+    if error:
+        print(error, file=sys.stderr)
+        return 1
+    print(f"claimed {task.id}  {task.title}")
+    return 0
+
+
+def cmd_done(ctx, task_id: str) -> int:
+    task, error = plan.complete(ctx, task_id)
+    if error:
+        print(error, file=sys.stderr)
+        return 1
+    print(f"done {task.id}  {task.title}")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="founder-os work ledger")
+    sub = parser.add_subparsers(dest="command")
+
+    add = sub.add_parser("add", help="add a task to next")
+    add.add_argument("title")
+    add.add_argument("--body", default="")
+
+    listing = sub.add_parser("list", help="show the plan (default)")
+    listing.add_argument("--state", choices=plan.STATES, default="")
+
+    claim = sub.add_parser("claim", help="take a task and move it to doing")
+    claim.add_argument("task_id")
+    claim.add_argument("--session", default="")
+
+    done = sub.add_parser("done", help="move a task to done")
+    done.add_argument("task_id")
+
+    args = parser.parse_args()
+    ctx = resolve()
+
+    if args.command == "add":
+        return cmd_add(ctx, args.title, args.body)
+    if args.command == "claim":
+        return cmd_claim(ctx, args.task_id, args.session)
+    if args.command == "done":
+        return cmd_done(ctx, args.task_id)
+    return cmd_list(ctx, getattr(args, "state", ""))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

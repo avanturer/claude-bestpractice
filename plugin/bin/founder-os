@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+"""One command to see everything: what is known, in flight, planned and enforced.
+
+The transparency the founder asked for — "like in a big company, visible and
+sequential" — is this view. It reads only committed files and the shared coordination
+directory, so it is correct from any worktree and needs nothing running.
+"""
+
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+
+BIN = Path(__file__).resolve().parent
+sys.path.insert(0, str(BIN.parent / "lib"))
+
+from founder_os import __version__, board, drafts, knowledge, onboard, plan  # noqa: E402
+from founder_os import provenance, sessions, stage, store  # noqa: E402
+from founder_os.gitctx import resolve  # noqa: E402
+
+BOLD = "\033[1m" if sys.stdout.isatty() else ""
+DIM = "\033[2m" if sys.stdout.isatty() else ""
+OFF = "\033[0m" if sys.stdout.isatty() else ""
+
+
+def heading(text: str) -> None:
+    print(f"\n{BOLD}{text}{OFF}")
+
+
+def cmd_status(ctx) -> int:
+    resolved_stage, signals = stage.current(ctx)
+    counts = plan.summary(ctx)
+    live = sessions.live_sessions(ctx)
+    items = board.open_items(ctx)
+    prov = provenance.summarize(items)
+    layer = knowledge.load(ctx)
+    problems = knowledge.validate(ctx)
+    gaps = onboard.unanswered(ctx)
+    pending = drafts.pending(ctx)
+
+    print(f"{BOLD}founder-os {__version__}{OFF}  {ctx.worktree_root.name} @ {ctx.branch}")
+    print(f"{DIM}stage: {resolved_stage} — {'; '.join(signals.reasons[:3]) or 'no signals yet'}{OFF}")
+
+    heading("SESSIONS")
+    if live:
+        for rec in live:
+            held = sessions.leases_held_by(ctx, rec.session_id)
+            print(f"  {rec.session_id[:8]}  {rec.branch:<20} {Path(rec.worktree).name}")
+            if rec.task_statement:
+                print(f"      task: {rec.task_statement[:100]}")
+            if held:
+                print(f"      holds: {', '.join(held[:4])}")
+    else:
+        print("  none live")
+
+    heading("PLAN")
+    print(f"  {counts['doing']} in flight · {counts['next']} next · {counts['done']} done")
+    for task in plan.load_all(ctx, plan.DOING):
+        owner = f"[{task.owner[:8]}]" if task.owner else "[unclaimed]"
+        print(f"    doing  {task.id}  {task.title[:70]} {owner}")
+    for task in plan.load_all(ctx, plan.NEXT)[:5]:
+        print(f"    next   {task.id}  {task.title[:70]}")
+
+    heading("KNOWLEDGE")
+    print(
+        f"  {len(layer.entities)} entities · {len(knowledge.decision_files(ctx))} decisions · "
+        f"{layer.total_bytes}/{knowledge.LAYER_MAX_BYTES} bytes"
+    )
+    if gaps:
+        for gap in gaps:
+            print(f"  {DIM}unanswered: {gap}{OFF}")
+    for problem in problems[:5]:
+        print(f"  problem: {problem}")
+    if pending:
+        print(f"  {len(pending)} decision draft(s) waiting — `founder-os-decide list`")
+
+    heading("MEMORY HEALTH")
+    stale = prov.get(provenance.SUSPECT, 0) + prov.get(provenance.GONE, 0)
+    print(f"  {prov.get(provenance.FRESH, 0)} live claim(s), {stale} stale and suppressed")
+    print(f"  {DIM}{board.health_line(ctx, len(live), 0)}{OFF}")
+
+    heading("NEXT ACTION")
+    if gaps:
+        print("  Answer the placeholders in .claude/rules/product.md — nothing else derives them.")
+    elif problems:
+        print("  Repair the knowledge layer: `founder-os-knowledge validate`")
+    elif counts["doing"] == 0 and counts["next"] > 0:
+        print("  Claim a task: `founder-os-plan claim <id>`")
+    elif pending:
+        print("  Review drafted decisions: `founder-os-decide list`")
+    else:
+        print("  Nothing blocking. `founder-os-doctor` proves the gates still fire.")
+    print()
+    return 0
+
+
+def cmd_init(ctx, force: bool) -> int:
+    written = onboard.write(ctx, force=force)
+    print(f"{BOLD}founder-os init{OFF}  {ctx.worktree_root}")
+    if written:
+        print("\nderived from your code:")
+        for rel in written:
+            print(f"  {rel}")
+    else:
+        print("\nknowledge layer already present (use --force to regenerate)")
+
+    gaps = onboard.unanswered(ctx)
+    if gaps:
+        print("\nwaiting on you — these cannot be derived and must not be invented:")
+        for gap in gaps:
+            print(f"  {gap}")
+    print("\nThen: `founder-os status`")
+    return 0
+
+
+def cmd_doctor(_ctx) -> int:
+    return subprocess.run([sys.executable, str(BIN / "founder-os-doctor")]).returncode
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="founder-os", description="founder-os control plane")
+    sub = parser.add_subparsers(dest="command")
+    sub.add_parser("status", help="what is known, in flight, planned and enforced (default)")
+    init = sub.add_parser("init", help="derive the knowledge layer from this repository")
+    init.add_argument("--force", action="store_true")
+    sub.add_parser("doctor", help="prove every gate still fires")
+
+    args = parser.parse_args()
+    ctx = resolve()
+
+    if args.command == "init":
+        return cmd_init(ctx, args.force)
+    if args.command == "doctor":
+        return cmd_doctor(ctx)
+    return cmd_status(ctx)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

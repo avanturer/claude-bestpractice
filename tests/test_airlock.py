@@ -106,14 +106,7 @@ class TestIngest(RepoCase):
 
 class GateCase(RepoCase):
     def gate(self, name: str, event: dict) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            [sys.executable, str(BIN / name)],
-            input=json.dumps({"cwd": str(self.repo), **event}),
-            capture_output=True,
-            text=True,
-            cwd=str(self.repo),
-            timeout=120,
-        )
+        return self.run_hook(name, event)
 
     def start(self, session_id: str = "s1") -> None:
         self.gate("session-start", {"session_id": session_id, "hook_event_name": "SessionStart"})

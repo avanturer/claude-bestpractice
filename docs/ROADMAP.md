@@ -5,18 +5,18 @@ is required for anything earlier to pay off.
 
 ## Where this actually stands
 
-**Everything below is shipped.** V0, V1, V2 and V3 are implemented, wired and verified:
-**289 tests, 17 doctor checks, `make check` green on Python 3.9 / 3.11 / 3.13**, and
-`claude plugin validate --strict` passing against the installed CLI.
+**Shipped and verified.** Every item below is implemented, wired and covered:
+**345 tests, 20 doctor checks, `make check` green on Python 3.9 / 3.11 / 3.13**, and
+`claude plugin validate --strict` passing against the installed CLI. One command installs it into any
+repository, and the installer refuses to register the plugin if the doctor fails.
 
-What is left is not implementation — it is the two things only running the thing can produce: the
-gate-metrics file has to accumulate real fire counts before any gate can be judged worth keeping, and
-the FOLKLORE-tier rules expire on their own after ninety days unless a logged incident renews them.
-Both are designed in and both need calendar time rather than code.
+What remains is not code. The gate-metrics file has to accumulate real fire counts before any gate can
+be judged worth keeping, and FOLKLORE-tier rules expire on their own after ninety days unless a logged
+incident renews them. Both mechanisms exist; both need calendar time.
 
 ### Bugs the tests caught that reading the code did not
 
-Five, each of which would have shipped a gate that silently enforced nothing:
+Eleven, each of which would have shipped something that silently did nothing:
 
 1. **Recording the hook's own pid.** A hook exits milliseconds after it runs, so every session was
    marked dead almost immediately and the next one reaped it. The board would always have been empty.
@@ -26,10 +26,20 @@ Five, each of which would have shipped a gate that silently enforced nothing:
    most often creates.
 4. **Multi-line patterns applied line by line can never match.** The swallowed-exception check — the
    single highest-prevalence measured regression — was structurally incapable of firing.
-5. **A word boundary after a comma never matches.** `\bno,\b` silently killed the correction detector,
-   the same shape of bug as in the secret scanner earlier.
+5. **A word boundary after a comma never matches.** `\bno,\b` silently killed the correction detector.
+6. **The same bug in the secret scanner**, where `SYSTEM:` never matched.
+7. **The documentation gate scanned its own install directory** instead of the repository it ran in.
+8. **It also flagged `# TODO` inside string literals**, because it read raw lines instead of comment
+   tokens.
+9. **A ratchet seeded at zero can never be satisfied** by an existing codebase, so the first run has to
+   establish the baseline. Seeded at zero it would have been disabled on day one.
+10. **The ratchet skipped the empty case**, so deleting the offending code silently preserved its
+    allowance and the budget stopped reflecting reality.
+11. **The injection-detector was run against joined fields**, moving every payload off column zero
+    where its line-anchored pattern stopped matching — a silent detector reads as "nothing found".
 
-None is visible by inspection. All five are why the doctor proves gates by attempting the bad thing.
+None is visible by inspection. All eleven are why the doctor proves gates by attempting the bad thing,
+and why the slop checker is run against this repository's own source.
 
 ---
 

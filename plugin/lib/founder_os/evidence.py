@@ -116,6 +116,28 @@ def _parse_pytest_json(path: Path, mtime: float) -> Artifact | None:
     return Artifact(path, mtime, passed, total, failed, detail)
 
 
+# A gate that tells a Node project to run pytest is a gate the agent learns to ignore.
+_ARTIFACT_HINTS: list[tuple[str, str]] = [
+    ("pytest.ini", "pytest --junitxml=junit.xml"),
+    ("tox.ini", "pytest --junitxml=junit.xml"),
+    ("Cargo.toml", "cargo nextest run --profile ci   # writes target/nextest/ci/junit.xml"),
+    ("go.mod", "go test ./... 2>&1 | go-junit-report > junit.xml"),
+    ("pom.xml", "mvn -q test   # surefire writes target/surefire-reports/*.xml"),
+    ("build.gradle", "gradle test   # writes build/test-results/test/*.xml"),
+    ("Gemfile", "bundle exec rspec --format RspecJunitFormatter --out junit.xml"),
+    ("package.json", "npx vitest run --reporter=junit --outputFile=junit.xml"),
+    ("pyproject.toml", "pytest --junitxml=junit.xml"),
+]
+
+
+def artifact_hint(ctx: GitContext) -> str:
+    """How THIS project should emit a result file, inferred from what is on disk."""
+    for marker, command in _ARTIFACT_HINTS:
+        if (ctx.worktree_root / marker).exists():
+            return command
+    return "run your test suite with a JUnit XML reporter, then finish"
+
+
 def newest_source_mtime(root: Path, relpaths: list[str]) -> float:
     newest = 0.0
     for rel in relpaths:
@@ -154,8 +176,8 @@ def verify(ctx: GitContext, globs: list[str], changed: list[str]) -> Verdict:
     if not candidates:
         return Verdict(
             False,
-            "No machine-readable test artifact found. Run the test suite so it writes "
-            "one (for example `pytest --junitxml=junit.xml`), then finish. "
+            "No machine-readable test artifact found. Run the suite so it writes one:\n"
+            f"  {artifact_hint(ctx)}\n"
             "A statement that tests pass is not accepted as evidence.",
         )
 

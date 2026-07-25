@@ -1,0 +1,18 @@
+{
+  "reached_at": 1784967936.859587,
+  "signals": {
+    "commits": 7,
+    "has_auth_dep": false,
+    "has_ci": true,
+    "has_deploy_config": false,
+    "has_error_tracking": false,
+    "has_live_key_shape": false,
+    "has_migrations": false,
+    "has_payment_dep": false,
+    "has_user_table": false,
+    "reasons": [
+      "CI config present"
+    ]
+  },
+  "stage": "prototype"
+}

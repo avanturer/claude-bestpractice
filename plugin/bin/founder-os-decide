@@ -53,7 +53,7 @@ def cmd_accept(ctx, index: int) -> int:
     name = f"{number:04d}-{slug(draft.get('quote', ''))}.md"
     path = ctx.worktree_root / knowledge.DECISIONS_DIR / name
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(drafts.render(draft, number), encoding="utf-8")
+    path.write_text(drafts.render(draft), encoding="utf-8")
     drafts.resolve(ctx, draft.get("quote", ""))
 
     index_path = ctx.worktree_root / knowledge.RULES_DIR / knowledge.INDEX

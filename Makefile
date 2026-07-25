@@ -1,4 +1,4 @@
-.PHONY: check test doctor lint budget docs knowledge clean help
+.PHONY: check test doctor lint budget docs knowledge slop ratchet clean help
 
 PY := python3
 
@@ -8,14 +8,25 @@ help:
 	@echo "make doctor  - prove each gate fires by attempting a known-bad action"
 	@echo "make lint    - syntax check and the stdlib-only constraint"
 	@echo "make docs    - the LLM-first documentation gate"
+	@echo "make slop    - catch the code an LLM writes that a person would not"
+	@echo "make ratchet - lower the structural budgets to what is actually there"
 	@echo "make knowledge - validate the decided layer and refresh its index"
 	@echo "make budget  - assert the always-on context budget is not exceeded"
 
 # One definition of done, identical in every session, with no --no-verify path.
 # Eight parallel sessions must not converge on eight notions of finished.
-check: lint docs knowledge test doctor budget
+check: lint docs slop knowledge test doctor budget
 	@echo ""
 	@echo "check: all green"
+
+# Defect classes have a permanent budget of zero. Structural debt is baselined on the
+# first run and may only fall after that — a ratchet seeded at zero can never be
+# satisfied by an existing codebase and gets disabled on day one.
+slop:
+	@$(PY) tools/check_slop.py --all
+
+ratchet:
+	@$(PY) tools/check_slop.py --all --ratchet
 
 docs:
 	@$(PY) tools/check_docstrings.py --all

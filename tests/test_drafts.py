@@ -87,7 +87,7 @@ class TestInbox(RepoCase):
 
     def test_render_puts_the_quote_under_why(self):
         draft = {"quote": "we already tried that", "created_at": 0, "subject_paths": []}
-        rendered = drafts.render(draft, 1)
+        rendered = drafts.render(draft)
         self.assertIn("## Why", rendered)
         self.assertIn("> we already tried that", rendered)
         self.assertIn("## Rejected", rendered)

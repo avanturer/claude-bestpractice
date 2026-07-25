@@ -72,3 +72,46 @@ class RepoCase(unittest.TestCase):
         target = self.tmp / name
         git(["worktree", "add", "-q", "-b", name, str(target)], self.repo)
         return target
+
+    def session_record(self, session_id: str, pid: int | None = None):
+        """A session record for this case's repository."""
+        return session_record_for(self.ctx(), session_id, pid)
+
+    def run_hook(self, name: str, event: dict, env: dict | None = None):
+        """Invoke a gate exactly as the harness does: executable, event JSON on stdin."""
+        import json
+        import subprocess
+        import sys
+
+        return subprocess.run(
+            [sys.executable, str(BIN / name)],
+            input=json.dumps({"cwd": str(self.repo), **event}),
+            capture_output=True,
+            text=True,
+            cwd=str(self.repo),
+            timeout=180,
+            env=env,
+        )
+
+
+def session_record_for(ctx, session_id: str, pid: int | None = None):
+    """Build a session record for an arbitrary context.
+
+    Free function rather than a method because several tests need a record for a
+    SIBLING worktree's context, which is the whole point of the coordination layer.
+    """
+    import os
+    import time
+
+    from founder_os import sessions
+
+    now = time.time()
+    return sessions.SessionRecord(
+        session_id=session_id,
+        pid=pid if pid is not None else os.getpid(),
+        worktree=ctx.worktree_root.as_posix(),
+        branch=ctx.branch,
+        baseline_commit=ctx.head,
+        started_at=now,
+        heartbeat_at=now,
+    )

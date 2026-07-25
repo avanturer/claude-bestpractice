@@ -122,18 +122,7 @@ class TestAnnotation(RepoCase):
 
 class TestBoardIntegration(RepoCase):
     def record(self):
-        from founder_os.sessions import SessionRecord
-
-        ctx = self.ctx()
-        return SessionRecord(
-            session_id="s1",
-            pid=os.getpid(),
-            worktree=ctx.worktree_root.as_posix(),
-            branch=ctx.branch,
-            baseline_commit=ctx.head,
-            started_at=time.time(),
-            heartbeat_at=time.time(),
-        )
+        return self.session_record("s1")
 
     def test_fresh_item_appears_on_the_board(self):
         ctx = self.ctx()
@@ -161,31 +150,11 @@ class TestBoardIntegration(RepoCase):
 
 class TestCheckpointStamps(RepoCase):
     def test_checkpoint_records_blob_hashes(self):
-        subprocess.run(
-            [sys.executable, str(BIN / "session-start")],
-            input=json.dumps(
-                {"session_id": "s1", "hook_event_name": "SessionStart", "cwd": str(self.repo)}
-            ),
-            capture_output=True,
-            text=True,
-            cwd=str(self.repo),
-            timeout=60,
-        )
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
         self.write("feature.py", "x = 1\n")
-        subprocess.run(
-            [sys.executable, str(BIN / "checkpoint")],
-            input=json.dumps(
-                {
-                    "session_id": "s1",
-                    "hook_event_name": "PreCompact",
-                    "cwd": str(self.repo),
-                    "trigger": "auto",
-                }
-            ),
-            capture_output=True,
-            text=True,
-            cwd=str(self.repo),
-            timeout=60,
+        self.run_hook(
+            "checkpoint",
+            {"session_id": "s1", "hook_event_name": "PreCompact", "trigger": "auto"},
         )
         text = next((self.repo / ".claude" / "founder-os" / "checkpoints").glob("*.md")).read_text()
         self.assertIn("feature.py @ ", text)

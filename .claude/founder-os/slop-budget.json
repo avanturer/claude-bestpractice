@@ -1,0 +1,9 @@
+{
+  "compat_shims": 0,
+  "complex_functions": 19,
+  "duplicate_blocks": 0,
+  "long_functions": 5,
+  "single_caller_abstractions": 0,
+  "swallowed_exceptions": 0,
+  "unused_parameters": 0
+}

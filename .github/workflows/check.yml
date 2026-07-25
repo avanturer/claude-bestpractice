@@ -44,6 +44,15 @@ jobs:
       - name: Lint
         run: make lint
 
+      - name: Documentation gate
+        run: make docs
+
+      - name: Slop gate
+        run: make slop
+
+      - name: Knowledge layer
+        run: make knowledge
+
       - name: Tests
         run: make test
 

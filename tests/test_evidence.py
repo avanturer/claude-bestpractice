@@ -79,6 +79,19 @@ class TestVerify(RepoCase):
         self.assertFalse(verdict.ok)
         self.assertIn("not accepted as evidence", verdict.reason)
 
+    def test_the_hint_matches_the_project_stack(self):
+        """A gate that tells a Node project to run pytest is one the agent ignores."""
+        self.write("package.json", '{"scripts": {"test": "vitest run"}}')
+        self.write("feature.js", "export const x = 1\n")
+        verdict = evidence.verify(self.ctx(), ["junit.xml"], self.changed())
+        self.assertIn("vitest", verdict.reason)
+        self.assertNotIn("pytest", verdict.reason)
+
+    def test_the_hint_degrades_when_the_stack_is_unknown(self):
+        self.write("feature.txt", "hello\n")
+        verdict = evidence.verify(self.ctx(), ["junit.xml"], self.changed())
+        self.assertIn("JUnit XML reporter", verdict.reason)
+
     def test_fresh_passing_artifact_is_accepted(self):
         self.write("feature.py", "x = 1\n")
         time.sleep(0.02)

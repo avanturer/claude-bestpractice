@@ -558,6 +558,132 @@ def check_review_finds_and_bounds(repo: Path) -> Result:
     )
 
 
+def check_onboarding(repo: Path) -> Result:
+    """A repository it has never seen must be usable without anyone configuring it."""
+    (repo / "src").mkdir(exist_ok=True)
+    (repo / "src" / "models.py").write_text("class Order:\n    pass\n")
+    (repo / "src" / "api.py").write_text(
+        "from models import Order\n\n\ndef make() -> Order:\n    return Order()\n"
+    )
+    (repo / "src" / "bill.py").write_text(
+        "from models import Order\n\n\ndef charge():\n    return Order\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, str(BIN / "founder-os"), "init"],
+        capture_output=True,
+        text=True,
+        cwd=str(repo),
+        timeout=180,
+    )
+    if proc.returncode != 0:
+        return Result("onboards an unseen repository", False, proc.stderr[:200])
+
+    entities = repo / ".claude" / "domain" / "entities.yaml"
+    product = repo / ".claude" / "rules" / "product.md"
+    if not entities.exists() or not product.exists():
+        return Result("onboards an unseen repository", False, "files not written")
+
+    derived = "Order" in entities.read_text()
+    # A fabricated product description is worse than an absent one: the agent believes
+    # it. Placeholders must survive, not be filled in with a guess.
+    honest = "ANSWER THIS" in product.read_text()
+    ok = derived and honest
+    return Result(
+        "onboards an unseen repository",
+        ok,
+        "entities derived, unknowns left as questions"
+        if ok
+        else f"derived={derived} left_questions={honest}",
+    )
+
+
+def check_plan_ledger(repo: Path) -> Result:
+    """Work state must survive a crash and be reclaimable, not stuck in flight."""
+    sys.path.insert(0, str(BIN.parent / "lib"))
+    from founder_os import plan, sessions
+    from founder_os.gitctx import resolve
+
+    ctx = resolve(repo)
+    task = plan.add(ctx, "doctor task")
+    if task.state != plan.NEXT:
+        return Result("plan ledger claims and reclaims", False, "task did not land in next")
+
+    sessions.register(
+        ctx,
+        sessions.SessionRecord(
+            session_id="doctor-ghost",
+            pid=999_999_999,
+            worktree=ctx.worktree_root.as_posix(),
+            branch=ctx.branch,
+            baseline_commit=ctx.head,
+            started_at=time.time(),
+            heartbeat_at=time.time(),
+        ),
+    )
+    plan.claim(ctx, task.id, "doctor-ghost", ctx.branch)
+    if plan.find(ctx, task.id).state != plan.DOING:
+        return Result("plan ledger claims and reclaims", False, "claim did not move the task")
+
+    sessions.reap(ctx)
+    reclaimed = plan.find(ctx, task.id)
+    ok = reclaimed.state == plan.NEXT and not reclaimed.owner
+    return Result(
+        "plan ledger claims and reclaims",
+        ok,
+        "a dead session's work returns to the queue"
+        if ok
+        else "work stayed in flight after its owner died",
+    )
+
+
+def check_worktree_provisioning(repo: Path) -> Result:
+    """The worktree hook must return a path and seed trust, or hooks never run there."""
+    import tempfile as _tempfile
+
+    home = Path(_tempfile.mkdtemp(prefix="founder-os-home-"))
+    proc = subprocess.run(
+        [sys.executable, str(BIN / "worktree-create")],
+        input=json.dumps(
+            {
+                "session_id": "doctor-wt",
+                "hook_event_name": "WorktreeCreate",
+                "cwd": str(repo),
+                "branch": "doctor-feature",
+            }
+        ),
+        capture_output=True,
+        text=True,
+        cwd=str(repo),
+        timeout=60,
+        env={"HOME": str(home), "PATH": os.environ.get("PATH", "")},
+    )
+    path = proc.stdout.strip()
+    if proc.returncode != 0 or not path:
+        return Result("worktree provisioning", False, f"exit {proc.returncode}: {proc.stderr[:160]}")
+
+    config = home / ".claude.json"
+    trusted = False
+    if config.exists():
+        try:
+            data = json.loads(config.read_text())
+            trusted = any(
+                entry.get("hasTrustDialogAccepted")
+                for entry in (data.get("projects") or {}).values()
+            )
+        except (json.JSONDecodeError, AttributeError):
+            trusted = False
+
+    outside = not path.startswith(str(repo.resolve()) + "/")
+    ok = trusted and outside
+    return Result(
+        "worktree provisioning",
+        ok,
+        "path outside the tree, trust seeded at birth"
+        if ok
+        else f"outside={outside} trusted={trusted} — an untrusted worktree runs no hooks",
+    )
+
+
 def check_reap(repo: Path) -> Result:
     """A session whose process is gone must not stay on the board forever."""
     sys.path.insert(0, str(BIN.parent / "lib"))
@@ -606,6 +732,9 @@ def main() -> int:
             check_stage_gated_rules,
             check_airlock_quarantine,
             check_review_finds_and_bounds,
+            check_onboarding,
+            check_plan_ledger,
+            check_worktree_provisioning,
             check_reap,
         ):
             repo = make_repo(Path(tempfile.mkdtemp(prefix="founder-os-case-", dir=tmp)))

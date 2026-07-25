@@ -1,113 +1,148 @@
 # founder-os
 
-A personal Claude Code control plane for building startups with 3–8 parallel agent sessions on one repository.
+A control plane for building products with several Claude Code sessions running at once
+on one repository. Install it once; it works in every project after that.
 
-> **Working name.** The marketplace slug is immutable after publication — renaming breaks every
-> existing install, and a top-level `renames` map is the only migration path. Choose the final
-> name before the first publish, not after.
+```sh
+curl -fsSL https://raw.githubusercontent.com/avanturer/claude-bestpractice/main/install.sh | bash
+```
 
-## What problem this solves
+Then, in any repository:
 
-One person builds a product almost entirely through Claude Code. Several sessions run at once, in
-separate worktrees. Nobody reads the diffs. The failure modes that follow are not opinions — they
-are measured:
+```sh
+founder-os init      # derive the knowledge layer from the code that is already there
+founder-os status    # what is known, in flight, planned and enforced
+founder-os doctor    # prove every gate still fires
+```
 
-| Failure | Measured |
+Nothing else to configure. The installer refuses to register the plugin if the doctor
+fails, because gates that silently do nothing are worse than no gates.
+
+---
+
+## What it does
+
+**Memory that cannot go stale.** Three layers split by what makes each one false.
+
+| Layer | Contents | Why it cannot rot |
+|---|---|---|
+| **Derived** | Symbol map, route manifest, test results, health numbers | Regenerated from code, stamped with the commit it came from. A stale artifact is a build failure, not a confident wrong answer |
+| **Decided** | Product, non-goals, entities, glossary, decision records | Immutable. A decision is a historical fact; it is retired by a later record naming it, never by rewriting history |
+| **Ephemeral** | Session registry, leases, plan claims, allowance | Per-session, gitignored, TTL'd, reaped |
+
+Every persisted claim carries the **git blob hashes** of the code it describes — never
+mtimes, which a worktree checkout resets wholesale. A claim whose subject was rewritten
+is suppressed from injection and counted, never silently deleted.
+
+Every entity names a canonical identifier and its file. A rename **fails validation**
+rather than leaving the layer describing something that no longer exists.
+
+**Parallel sessions that see each other.** A session board injected at start: who else
+is running, on what branch and worktree, what they last touched, which files they hold.
+Editing a file another live session holds is **denied**, with the owner's id. A crashed
+session's claims are released by the reaper rather than held forever.
+
+**A work ledger.** `.claude/founder-os/plan/{next,doing,done}/` — one file per task,
+state encoded in the directory, so a transition is `git mv` and five worktrees produce
+five clean adds instead of five conflicting hunks in one JSON blob.
+
+**Completion accepted on evidence, never on assertion.** The Stop gate discards the
+agent's prose and requires a machine-readable test artifact that exists, is newer than
+the newest changed file, and passes when re-run from a clean checkout.
+
+**Code written for the next model to read.** Docstrings must carry non-derivable
+information; `Args:`/`Returns:`/`:param:` are banned because types already say it. A
+signature change with an unchanged docstring fails the commit.
+
+**Slop caught mechanically.** Swallowed exceptions, single-caller abstractions,
+compat shims with no consumers, duplicate blocks, unused parameters — permanent budget
+of zero. Complexity and length are ratcheted: baselined once, then only downward.
+
+**Rigor that scales itself.** Stage is computed from the repository, never configured,
+and the ratchet only tightens.
+
+| Signal | What turns on |
 |---|---|
-| The agent says done, the code does not work | Claude 4.5 Sonnet: **0.97** submit rate vs **0.65** test-verified resolve. Two different guard prompts moved it by **zero** |
-| The agent edits correct code it was not asked to touch | **60–90 %** of runs across four frontier models, when abstaining was the correct action |
-| Rules decay as the session grows | 0 % violation with the policy in context → **30 %** after one compaction → **78 %** after four |
-| Too many rules collapse compliance | Perfect-response rate **93.8 %** at 10 rules → **75.0 %** at 20 → **23.8 %** at 40 → **0 %** at 80 |
-| Stale context is worse than no context | Stale-only retrieval induced dead-API calls on **15/17** samples; no retrieval produced **0/17** |
+| CI plus a deploy target | Egress rules, production-signal airlock |
+| A migration creating a users table, or an auth SDK | Migration gating, production-promotion denial, per-worktree database and port |
+| A payment SDK, or a live-mode key shape | Triple-run verification for anything touching auth, money or schema |
 
-Full citations in [`docs/EVIDENCE.md`](docs/EVIDENCE.md).
+A prototype gets none of it, and additionally has back-compat shims **banned** — that
+rule disables itself once real consumers appear.
 
-## The one-sentence design
+**Zero nagging.** A failing check is a prompt for the agent, not an interruption for
+you. Denials talk to the model, which self-corrects silently.
 
-**Nothing that matters is asked of the model.** Every rule that must hold is enforced by the harness
-or by git; the model's context carries only the handful of things no program can check.
+---
 
-## Architecture in three layers
+## Commands
 
-```
-policy/    managed-settings.json   root-owned, highest precedence   → the rules that must hold
-plugin/    hooks, skills, agents   the delivery vehicle             → behaviour and UX
-repo/      git hooks, CI           binds everyone, plugin or not    → the last line of defence
-```
-
-A plugin's own `settings.json` honours only `agent` and `subagentStatusLine`, so a plugin can never
-ship policy. Anyone who builds this as "just a plugin" ships rules that evaporate the first time the
-agent writes a settings file.
-
-## Documents
-
-| Document | Contents |
+| | |
 |---|---|
-| [`docs/DESIGN.md`](docs/DESIGN.md) | Thesis, architecture, the memory model, parallel-session substrate, verification |
-| [`docs/ENFORCEMENT.md`](docs/ENFORCEMENT.md) | Binding vs advisory ladder, the ten-rule budget, bypass closures, what cannot be enforced |
-| [`docs/ECONOMICS.md`](docs/ECONOMICS.md) | Token budget, prompt-cache invariants, rate-limit admission control |
-| [`docs/EVIDENCE.md`](docs/EVIDENCE.md) | Every measured claim with its source and evidence tier |
-| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Build order: V1, V2, V3, and the explicit never-build list |
+| `founder-os status` | Everything at once: sessions, plan, knowledge, memory health, next action |
+| `founder-os init` | Derive the knowledge layer from the code |
+| `founder-os-plan` | The work ledger: `add`, `list`, `claim`, `done` |
+| `founder-os-decide` | Accept a decision drafted from your own corrections |
+| `founder-os-doctor` | Prove each gate by attempting a known-bad action |
+| `founder-os-ingest` | Sanitise production errors into fenced task files |
+| `founder-os-knowledge` | Validate the decided layer, refresh its index |
+| `founder-os-reindex` | Drop and rebuild all derived state |
 
-## Status
+Inside a session: `/founder-os:status`, `/founder-os:plan`, `/founder-os:review`.
 
-**Complete and green.** Python 3.9+, **standard library only** — enforced by
-`tools/check_stdlib_only.py`, because these hooks run on every tool call and a dependency tree is
-latency, an extra failure mode, and a supply-chain surface for the component whose whole job is to be
-trustworthy.
+---
 
-```
-make check       # lint + docs gate + knowledge + 289 tests + 17 doctor checks + budget
-make doctor      # prove each gate fires by attempting a known-bad action
-make docs        # the LLM-first documentation gate: signature drift, derivable forms
-make knowledge   # validate the decided layer and refresh its index
-```
+## The gates
 
 | Gate | Event | Posture | Does |
 |---|---|---|---|
-| `session-start` | SessionStart | fails open | Reaps dead sessions, registers this one, injects the board and the computed stage |
-| `prompt-capture` | UserPromptSubmit | fails open | Records the verbatim task statement. **Injects nothing** |
-| `pre-tool` | PreToolUse | **fails closed** | Tool-call ceiling, repeat-signature deny, 3-gram loop break, credential pre-write scan, file leases, stage-gated migration and production-promotion denial |
-| `review-commit` | PreToolUse `if: Bash(git commit:*)` | async rewake | Reviews only this turn's changes against a moving baseline; wakes the agent with a bounded summary only when there is something to say |
-| `subagent-brief` | SubagentStart | fails open | Non-goals and entities verbatim, plus a query-biased repository map, to subagents that inherit no project rules |
-| `checkpoint` | PreCompact | fails open | Extractive checkpoint, zero model calls, secrets scrubbed, paths stamped |
-| `evidence-gate` | Stop | **fails closed** | Scope drift, then a fresh passing test artifact, then a clean-checkout re-run past prototype stage. Also harvests decision drafts |
+| `setup` | Setup | fails open | Derives the knowledge layer, creates the plan, seeds the stage |
+| `session-start` | SessionStart | fails open | Reaps the dead, registers, injects the board, plan and stage |
+| `prompt-capture` | UserPromptSubmit | fails open | Records the verbatim task. **Injects nothing** |
+| `pre-tool` | PreToolUse | **fails closed** | Call ceiling, loop break, secret pre-write scan, file leases, migration and deploy gating |
+| `review-commit` | `if: Bash(git commit:*)` | async rewake | Reviews this turn's diff against a moving baseline; wakes you only when there is something to say |
+| `worktree-create` | WorktreeCreate | fails open | Names it, seeds trust, derives a private port and database |
+| `subagent-brief` | SubagentStart | fails open | Non-goals, entities and a query-biased map to agents that inherit no rules |
+| `checkpoint` | PreCompact | fails open | Extractive checkpoint, zero model calls, secrets scrubbed |
+| `evidence-gate` | Stop | **fails closed** | Scope drift, test evidence, clean re-run; harvests decision drafts |
 
-Seven hook entries against a budget of twelve. Always-on context cost ~107 tokens against a cap of 400.
+Nine hook entries against a budget of twelve. Always-on context: **~195 tokens** against
+a cap of 400 — about 0.1 % of a 200k window.
 
-**The knowledge layer** lives at `.claude/rules/` and `.claude/domain/` — loaded by the harness
-natively, validated by us, never injected twice. `entities.yaml` carries a `code:` anchor per entity
-checked against the tree, so a rename fails loudly instead of leaving the layer describing a symbol
-that no longer exists. This repository dogfoods it: `make knowledge`.
+---
 
-**Provenance** stamps every persisted claim with git **blob hashes** — not mtimes, which a worktree
-checkout resets wholesale. A claim whose subject was rewritten is suppressed from injection and
-counted in the health line, never deleted.
+## Verified
 
-Commands: `founder-os-doctor`, `founder-os-knowledge`, `founder-os-decide`, `founder-os-ingest`,
-`founder-os-reindex`.
-
-## Install
-
-```sh
-git clone <this repo> ~/founder-os
-claude plugin marketplace add ~/founder-os/plugin
-claude plugin install founder-os@founder-marketplace
+```
+make check    # lint · docs gate · slop gate · knowledge · 345 tests · 20 doctor checks · budget
 ```
 
-Plugin changes take effect in the **next** session, not the current one.
+Python 3.9+, **standard library only** — enforced, because these hooks run on every tool
+call and a dependency is latency, a failure mode and a supply-chain surface. CI on 3.9,
+3.11 and 3.13. `claude plugin validate --strict` passes against CLI 2.1.220.
 
-The plugin is the delivery vehicle. For rules that must survive the agent editing its own config, also
-install the policy layer — see [`policy/README.md`](policy/README.md), and run `make doctor` after
-every change, because config-readback cannot detect a semantics change.
+The doctor proves gates by **attempting the bad thing**, not by reading config back —
+config-readback cannot detect a semantics change, and eleven real bugs during
+development were invisible to inspection and caught only by execution.
 
-## Honest limits
+---
 
-Four things this cannot enforce, stated up front rather than discovered later:
+## What this deliberately does not do
 
-1. **Test semantics.** No matcher distinguishes a justified `skip` from a cheat.
+- **Not a memory engine.** The harness stores and loads memory. This owns curation.
+- **Not a code reviewer.** Several first-party review paths exist; pick one, integrate.
+- **Not a task manager.** The native task system is subsumed and gated, never replaced.
+- **Not for teams.** Every trade-off assumes one owner and no reviewer.
+
+## Four things it cannot enforce, stated up front
+
+1. **Test semantics.** No matcher distinguishes a justified skip from a cheat.
 2. **Taste.** No matcher distinguishes good design from bad.
-3. **`claude --bare`.** Bare mode drops managed hooks and plugin hooks alike. Nothing in-product
-   covers it — which is why the repo layer exists.
-4. **A human with sudo.** By design. The threat model is *the agent must not do this by accident*,
-   not *the owner must be prevented*.
+3. **`claude --bare`.** It drops managed and plugin hooks alike. That is why the repo
+   layer — real git hooks, CI, branch protection — exists.
+4. **A human with root.** By design.
+
+Design rationale in [`docs/DESIGN.md`](docs/DESIGN.md), the enforcement ladder in
+[`docs/ENFORCEMENT.md`](docs/ENFORCEMENT.md), the token model in
+[`docs/ECONOMICS.md`](docs/ECONOMICS.md), and every measured claim with its source in
+[`docs/EVIDENCE.md`](docs/EVIDENCE.md).

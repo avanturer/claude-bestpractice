@@ -172,6 +172,16 @@ def reap(ctx: GitContext) -> list[SessionRecord]:
             )
     if dead:
         _release_many(ctx, {r.session_id for r in dead})
+        # Claims on the work ledger are released too. Without this a crashed session
+        # leaves its task marked in-flight forever, which is the state every surveyed
+        # tool leaves behind and the reason their boards stop being believed.
+        from . import plan
+
+        for record in dead:
+            try:
+                plan.release(ctx, record.session_id)
+            except OSError:
+                continue
     return dead
 
 

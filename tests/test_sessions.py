@@ -2,26 +2,15 @@
 
 from __future__ import annotations
 
-import os
 import time
 import unittest
 
-from helpers import RepoCase
+from helpers import RepoCase, session_record_for
 
 from founder_os import sessions, store
 
 
-def record(ctx, session_id: str, pid: int | None = None) -> sessions.SessionRecord:
-    now = time.time()
-    return sessions.SessionRecord(
-        session_id=session_id,
-        pid=pid if pid is not None else os.getpid(),
-        worktree=ctx.worktree_root.as_posix(),
-        branch=ctx.branch,
-        baseline_commit=ctx.head,
-        started_at=now,
-        heartbeat_at=now,
-    )
+record = session_record_for
 
 
 class TestRegistry(RepoCase):

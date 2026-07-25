@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+"""WorktreeCreate: own the worktree lifecycle. Replaces default git behaviour.
+
+The hook prints the absolute path on stdout and ANY non-zero exit fails creation, so
+this is a hard veto rather than a suggestion. Zero plugins in the surveyed ecosystem
+use it — across 2,269 community plugins, sixteen even mention worktrees.
+
+Three things happen here that nothing else can do:
+
+1. NAMING BOUND TO WORK. The path is derived from the task or branch, outside the
+   repository, so worktrees never pollute the working tree and never collide.
+
+2. TRUST PRE-SEEDED. In an untrusted worktree every project `permissions.allow` entry
+   is silently ignored, plugin hooks never run and the status line never runs — and in
+   headless mode prompting means auto-denial. It fails safe and looks exactly like a
+   model failure. Pre-seeding trust at birth is the only way to avoid that.
+
+3. PER-WORKTREE DATABASE AND PORT. Worktrees isolate files but share the database
+   daemon, ports and caches. Two sessions running the same dev server on the same port
+   is a confusing failure that looks like a code bug.
+
+Fails OPEN on anything unexpected: refusing to create a worktree because a nicety broke
+would block the founder's whole workflow, and the gates that matter run inside the
+worktree anyway.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from founder_os import hookio, store  # noqa: E402
+from founder_os.gitctx import resolve  # noqa: E402
+
+PORT_BASE = 41000
+PORT_RANGE = 900
+
+
+def derive_port(worktree_path: str) -> int:
+    digest = hashlib.sha256(worktree_path.encode()).hexdigest()
+    return PORT_BASE + (int(digest[:8], 16) % PORT_RANGE)
+
+
+def derive_db_name(repo_name: str, branch: str) -> str:
+    safe = re.sub(r"[^a-z0-9_]", "_", f"{repo_name}_{branch}".lower())
+    return safe[:60] or "founder_os_dev"
+
+
+def trust_worktree(path: str) -> bool:
+    """Mark the new worktree trusted so project settings and hooks actually load."""
+    config = Path.home() / ".claude.json"
+    try:
+        data = json.loads(config.read_text(encoding="utf-8")) if config.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+
+    projects = data.setdefault("projects", {})
+    if not isinstance(projects, dict):
+        return False
+    entry = projects.setdefault(path, {})
+    if not isinstance(entry, dict):
+        return False
+    entry["hasTrustDialogAccepted"] = True
+
+    try:
+        store.atomic_write(config, json.dumps(data, indent=2), mode=0o600)
+    except OSError:
+        return False
+    return True
+
+
+def main() -> None:
+    event = hookio.read_event()
+    ctx = resolve(event.cwd or os.getcwd())
+
+    requested = str(event.raw.get("path") or event.raw.get("worktreePath") or "")
+    branch = str(event.raw.get("branch") or event.raw.get("ref") or "").strip() or "work"
+    slug = re.sub(r"[^A-Za-z0-9._-]", "-", branch)[:60]
+
+    if requested:
+        target = Path(requested)
+    else:
+        # Outside the repository by construction: a worktree inside the working tree
+        # shows up in every status, every glob and every scan the sibling sessions run.
+        target = ctx.worktree_root.parent / "wt" / f"{ctx.worktree_root.name}-{slug}"
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    absolute = str(target.resolve())
+
+    trusted = trust_worktree(absolute)
+    port = derive_port(absolute)
+    db = derive_db_name(ctx.worktree_root.name, slug)
+
+    store.write_json(
+        store.tier_b(ctx, "worktrees", f"{slug}.json"),
+        {
+            "path": absolute,
+            "branch": branch,
+            "port": port,
+            "database": db,
+            "trusted": trusted,
+        },
+    )
+
+    # The harness takes the path from stdout. Everything else is a side effect.
+    sys.stdout.write(absolute)
+    sys.stdout.flush()
+    raise SystemExit(0)
+
+
+if __name__ == "__main__":
+    hookio.guard(main, fail_closed=False)

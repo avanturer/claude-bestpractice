@@ -12,6 +12,33 @@
   ],
 
   "hooks": {
+    "Setup": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/setup",
+            "timeout": 120,
+            "once": true,
+            "statusMessage": "founder-os: deriving project knowledge"
+          }
+        ]
+      }
+    ],
+
+    "WorktreeCreate": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/worktree-create",
+            "timeout": 60,
+            "statusMessage": "founder-os: provisioning worktree"
+          }
+        ]
+      }
+    ],
+
     "SessionStart": [
       {
         "matcher": "startup|resume|clear|compact",

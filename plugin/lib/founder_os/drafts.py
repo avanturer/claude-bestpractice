@@ -178,7 +178,7 @@ def resolve(ctx: GitContext, quote: str) -> None:
     )
 
 
-def render(draft: dict, number: int) -> str:
+def render(draft: dict) -> str:
     """A record that is already most of the way written.
 
     The quote goes in verbatim under Why, because the founder's own words are the part

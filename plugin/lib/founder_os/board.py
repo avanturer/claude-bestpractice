@@ -185,6 +185,13 @@ def render(
         for item in items:
             lines.append(f"  - [{item['id'][:8]}] {item.get('text', '')[:160]}")
 
+    from . import plan
+
+    ledger = plan.render_for_board(ctx)
+    if ledger:
+        lines.append("")
+        lines.append(ledger)
+
     footer = health_line(ctx, len(others) + 1, reaped)
 
     body = "\n".join(lines)
