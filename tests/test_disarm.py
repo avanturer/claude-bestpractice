@@ -299,6 +299,90 @@ class TestConcurrentIdAllocation(RepoCase):
         self.assertEqual(len(set(ids)), 10, f"duplicate ids: {sorted(ids)}")
 
 
+class TestBashIsAWriteTool(DisarmCase):
+    """Agents write files with heredocs and redirects, not only with the Write tool."""
+
+    def bash(self, command: str, session_id: str = "s1") -> bool:
+        proc = self.run_hook(
+            "pre-tool",
+            {
+                "session_id": session_id,
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Bash",
+                "tool_input": {"command": command},
+            },
+        )
+        try:
+            return json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
+        except (json.JSONDecodeError, KeyError, TypeError):
+            return False
+
+    def test_a_credential_written_by_shell_is_refused(self):
+        self.start()
+        for command in (
+            f'cat > .env <<EOF\n{SECRET}\nEOF',
+            f'echo \'{SECRET}\' >> conf.py',
+            f'tee k.py <<< \'{SECRET}\'',
+        ):
+            with self.subTest(command=command[:24]):
+                self.assertTrue(self.bash(command), "a shell write carried a credential through")
+
+    def test_a_shell_write_respects_another_session_s_lease(self):
+        self.write("app.py", "x = 1\n")
+        self.commit()
+        self.start("s1")
+        self.run_hook(
+            "pre-tool",
+            {
+                "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Write",
+                "tool_input": {"file_path": str(self.repo / "app.py"), "content": "x = 2\n"},
+            },
+        )
+        self.start("s2")
+        for command in ("sed -i 's/x/y/' app.py", "cat > app.py <<EOF\nclobbered\nEOF", "echo hi > app.py"):
+            with self.subTest(command=command[:20]):
+                self.assertTrue(self.bash(command, "s2"), "a shell write silently overwrote a held file")
+
+
+class TestNoCachedVerdictOutlivesItsCause(RepoCase):
+    """The result cache was the richest source of defects in the gate. There is none."""
+
+    def project(self, expected: int) -> None:
+        self.write("impl.py", f"def f():\n    return {expected}\n")
+        self.write("tests/test_impl.py", "from impl import f\n\n\ndef test_f():\n    assert f() == 2\n")
+        self.write("pytest.ini", "[pytest]\n")
+        self.commit()
+
+    def config(self, command: list) -> None:
+        path = self.repo / ".claude" / "founder-os" / "config.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"test_command": command}))
+
+    def stop(self) -> int:
+        return self.run_hook(
+            "evidence-gate",
+            {"session_id": "s1", "hook_event_name": "Stop", "stop_hook_active": False},
+        ).returncode
+
+    def test_a_permissive_command_does_not_certify_the_tree_forever(self):
+        self.project(expected=1)
+        self.config(["true"])
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
+        self.write("impl.py", "def f():\n    return 1  # edited\n")
+        self.assertEqual(self.stop(), 0, "a permissive command should pass on its own terms")
+
+        self.config([sys.executable, "-m", "pytest", "-q"])
+        self.assertEqual(self.stop(), 2, "the earlier permissive pass survived the command change")
+
+    def test_a_failure_clears_once_the_code_is_fixed(self):
+        self.project(expected=2)
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
+        self.write("impl.py", "def f():\n    return 99\n")
+        self.assertEqual(self.stop(), 2)
+        self.write("impl.py", "def f():\n    return 2\n")
+        self.assertEqual(self.stop(), 0, "a stale failure outlived the fix")
+
+
 class TestTheGateCannotReEnterItself(RepoCase):
     """The gate now runs project code, so the project can point that code back at it."""
 

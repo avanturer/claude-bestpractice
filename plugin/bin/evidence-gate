@@ -114,6 +114,7 @@ def main() -> None:
         list(cfg.exempt_paths)
         + [".claude/founder-os/", ".claude/"]
         + [g.split("/")[0] if "/" in g else g for g in cfg.artifact_globs]
+        + list(evidence.RUN_BYPRODUCTS)
     )
     changed = evidence.material_changes(changed_files(ctx, rec.baseline_commit), exempt)
 

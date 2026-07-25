@@ -5,7 +5,7 @@
 **Память, координация и принуждение для разработки продукта в нескольких параллельных сессиях Claude Code.**
 
 [![version](https://img.shields.io/badge/version-1.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-395%20passing-2ea44f)](#проверено)
+[![tests](https://img.shields.io/badge/tests-400%20passing-2ea44f)](#проверено)
 [![doctor](https://img.shields.io/badge/doctor-23%20checks-2ea44f)](#проверено)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#требования)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#требования)
@@ -201,7 +201,7 @@ Stop-гейт **выбрасывает прозу агента** и сам за�
 ## Проверено
 
 ```
-make check    # lint · docs gate · slop gate · knowledge · 395 тестов · 23 проверки доктора · budget
+make check    # lint · docs gate · slop gate · knowledge · 400 тестов · 23 проверки доктора · budget
 ```
 
 Доктор доказывает гейты **попыткой сделать плохое**, а не чтением конфигурации обратно —

@@ -21,10 +21,9 @@ Why this shape and not a smarter one:
 * False success collapses from ~45-76% to 3% in the one benchmark domain where the
   environment verifies state independently. Same models. The verifier is the variable.
 
-Re-running is skipped only when a receipt from this gate already covers the identical
-tree, and "identical" means blob hashes of the changed files rather than their mtimes.
-Content-addressed both because `touch` must not buy a pass and because creating a
-worktree resets every mtime in the tree, which this workflow does constantly.
+The suite runs whenever there is material change. There is deliberately no result
+cache: one was tried, and every way of keying it turned out to be a way of answering
+"the tests pass" without the tests having passed.
 """
 
 from __future__ import annotations
@@ -48,7 +47,7 @@ from .gitctx import GitContext, changed_files
 # The platform overrides the hook after 8, so escalating past that just burns turns.
 MAX_CONSECUTIVE_BLOCKS = 4
 
-CLEAN_RERUN_TIMEOUT = 900
+CLEAN_RERUN_TIMEOUT = 300
 
 
 @dataclass
@@ -187,15 +186,17 @@ def material_changes(changed: list[str], exempt: list[str]) -> list[str]:
     """
     out = []
     for rel in changed:
-        if any(rel == p or rel.startswith(p.rstrip("/") + "/") for p in exempt):
+        parts = rel.split("/")
+        if any(
+            rel == p or rel.startswith(p.rstrip("/") + "/") or p.rstrip("/") in parts
+            for p in exempt
+        ):
             continue
         out.append(rel)
     return out
 
 
-RECEIPTS_FILE = "test-receipts.json"
-RUN_TIMEOUT = 900
-MAX_RECEIPTS = 32
+RUN_TIMEOUT = 300
 
 # POSIX shells report "command not found" this way, and it is the difference
 # between "your tests fail" and "your test runner is not installed".
@@ -204,38 +205,17 @@ NOT_EXECUTABLE = 127
 # Set on every child this gate spawns, and checked before spawning one.
 VERIFYING_ENV = "FOUNDER_OS_VERIFYING"
 
-
-def tree_fingerprint(ctx: GitContext, changed: list[str]) -> str:
-    """What "this exact code" means, content-addressed.
-
-    Blob hashes of the working copies, not mtimes: `touch` must not change the answer,
-    and a worktree checkout — which resets every mtime in the tree — must not either.
-    """
-    hashes = provenance.hash_paths(ctx, sorted(changed))
-    material = "\n".join(f"{rel}:{hashes.get(rel, 'gone')}" for rel in sorted(changed))
-    return hashlib.sha256(f"{ctx.head}\n{material}".encode()).hexdigest()[:32]
+# What running a test suite leaves behind. The gate runs the suite itself now, so
+# without this the gate creates these files and then reports them to the agent as its
+# own scope drift on the next Stop — turning genuinely green work into a durable
+# UNVERIFIED record for a mess the gate made.
+RUN_BYPRODUCTS = (
+    "__pycache__/", ".pytest_cache/", ".mypy_cache/", ".ruff_cache/", ".tox/",
+    ".coverage", "htmlcov/", ".nyc_output/", "coverage/", ".gradle/",
+)
 
 
-def _receipts(ctx: GitContext) -> dict:
-    raw = store.read_json(store.tier_b(ctx, RECEIPTS_FILE), default={}) or {}
-    return raw if isinstance(raw, dict) else {}
-
-
-def record_receipt(ctx: GitContext, fingerprint: str, command: list[str], exit_code: int) -> None:
-    """Remember that WE ran the suite, on exactly this code, and what it returned."""
-    table = _receipts(ctx)
-    table[fingerprint] = {"command": command, "exit": exit_code, "at": time.time()}
-    for key in sorted(table, key=lambda k: table[k].get("at", 0))[:-MAX_RECEIPTS]:
-        table.pop(key, None)
-    store.write_json(store.tier_b(ctx, RECEIPTS_FILE), table)
-
-
-def receipt_for(ctx: GitContext, fingerprint: str) -> dict | None:
-    got = _receipts(ctx).get(fingerprint)
-    return got if isinstance(got, dict) else None
-
-
-def run_suite(ctx: GitContext, command: list[str], fingerprint: str) -> tuple[int, str]:
+def run_suite(ctx: GitContext, command: list[str]) -> tuple[int, str]:
     """Run the tests and record what happened. The gate's own execution IS the evidence.
 
     Everything else is forgeable. A JUnit file proves only that a file exists saying the
@@ -267,7 +247,6 @@ def run_suite(ctx: GitContext, command: list[str], fingerprint: str) -> tuple[in
         # vitest is not installed — the suite did not fail, it never ran, and calling
         # that a test failure sends the agent hunting for a bug that is not there.
         return -1, tail
-    record_receipt(ctx, fingerprint, command, proc.returncode)
     return proc.returncode, tail
 
 
@@ -283,7 +262,7 @@ def verify(ctx: GitContext, globs: list[str], changed: list[str], command: list[
         return Verdict(True, "no changes to verify")
 
     if command:
-        bound = _verify_by_running(ctx, globs, changed, command)
+        bound = _verify_by_running(ctx, globs, command)
         if bound is not None:
             return bound
 
@@ -341,12 +320,19 @@ def _verify_by_reading(ctx: GitContext, globs: list[str], changed: list[str]) ->
     )
 
 
-def _verify_by_running(ctx: GitContext, globs: list[str], changed: list[str], command: list[str]) -> Verdict | None:
+def _verify_by_running(ctx: GitContext, globs: list[str], command: list[str]) -> Verdict | None:
     """Witness the suite. Returns None to fall back to reading an artifact.
 
-    Re-running is skipped when a receipt already covers this exact tree, so finishing a
-    turn twice does not pay for the suite twice — but the receipt is keyed on content,
-    so a single edited character invalidates it.
+    The suite is run every time there is something material to verify. An earlier version
+    cached the result against a hash of the changed files, and that cache was the single
+    richest source of defects in this file: it was shared across worktrees on different
+    commits, blind to gitignored state, keyed without the test command so one permissive
+    run certified the tree forever, unable to clear a cached failure after the
+    environment was fixed, and it hashed a path list that could exceed ARG_MAX. Every one
+    of those is a way to answer "the tests pass" without the tests having passed.
+
+    Running each time costs wall-clock. The cache cost correctness, which this gate has
+    none to spare.
     """
     if os.environ.get(VERIFYING_ENV):
         # Already inside a run this gate started. The suite must never be able to
@@ -355,16 +341,11 @@ def _verify_by_running(ctx: GitContext, globs: list[str], changed: list[str], co
         # flag was being set on every child without anything ever reading it.
         return None
 
-    fingerprint = tree_fingerprint(ctx, changed)
-    receipt = receipt_for(ctx, fingerprint)
-    if receipt is None:
-        code, tail = run_suite(ctx, command, fingerprint)
-        if code == -1:
-            # Cannot witness. Say so and fall back rather than wedging the session:
-            # an unrunnable command is a setup problem, not evidence of a bug.
-            return None
-    else:
-        code, tail = int(receipt.get("exit", 1)), "(from this gate's earlier run on identical code)"
+    code, tail = run_suite(ctx, command)
+    if code == -1:
+        # Cannot witness. Say so and fall back rather than wedging the session:
+        # an unrunnable command is a setup problem, not evidence of a bug.
+        return None
 
     if code != 0:
         return Verdict(
@@ -433,6 +414,32 @@ def _executed_from_output(text: str) -> int:
     return sum(int(n) for n, word in outcomes if word not in _DID_NOT_RUN)
 
 
+# Installed dependencies are gitignored by every ecosystem, so a clean checkout has
+# none of them and the suite fails on imports rather than on the code. That made the
+# re-run report "the suite passes in your working tree but FAILS on the committed tree"
+# for every dependency-managed project — a false failure that no amount of correct work
+# could clear, which is worse than not running it at all.
+_DEPENDENCY_DIRS = (
+    "node_modules", ".venv", "venv", "vendor", ".bundle", "target/debug", "target/release",
+)
+
+
+def _link_dependencies(source: Path, target: Path) -> None:
+    """Point the throwaway checkout at the real dependency trees. Read-only in practice."""
+    for rel in _DEPENDENCY_DIRS:
+        origin = source / rel
+        if not origin.is_dir():
+            continue
+        link = target / rel
+        if link.exists():
+            continue
+        try:
+            link.parent.mkdir(parents=True, exist_ok=True)
+            link.symlink_to(origin, target_is_directory=True)
+        except OSError:
+            continue
+
+
 def clean_rerun(ctx: GitContext, command: list[str]) -> Verdict:
     """Tier 2: run the suite against the COMMITTED tree, in a throwaway worktree.
 
@@ -443,7 +450,12 @@ def clean_rerun(ctx: GitContext, command: list[str]) -> Verdict:
     """
     if not command:
         return Verdict(False, "No test command configured or detected for a clean re-run.")
-    if not ctx.head:
+    if os.environ.get(VERIFYING_ENV):
+        return Verdict(True, "already inside a verification run")
+    if not ctx.head or ctx.head == "HEAD":
+        # `git rev-parse HEAD` echoes the literal string on an unborn branch, so the
+        # guard below never fired and the re-run tried to check out a commit that does
+        # not exist — breaking Stop on every zero-commit repository past prototype.
         return Verdict(True, "unborn branch: nothing committed to re-run")
 
     tmp = Path(tempfile.mkdtemp(prefix="founder-os-verify-"))
@@ -458,6 +470,8 @@ def clean_rerun(ctx: GitContext, command: list[str]) -> Verdict:
         )
         if add.returncode != 0:
             return Verdict(False, f"could not create verification worktree: {add.stderr.strip()}")
+
+        _link_dependencies(ctx.worktree_root, target)
 
         env = dict(os.environ)
         env[VERIFYING_ENV] = "1"
