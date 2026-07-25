@@ -54,7 +54,7 @@ def main() -> None:
     ctx = hookio.repo(event.cwd or os.getcwd())
 
     store.ensure_dir(store.tier_b(ctx))
-    reaped = sessions.reap(ctx)
+    reaped = sessions.reap(ctx, exclude=event.session_id)
 
     me = build_record(ctx, event)
     sessions.register(ctx, me)

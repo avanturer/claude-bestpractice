@@ -32,6 +32,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -67,6 +68,11 @@ class Verdict:
     ok: bool
     reason: str
     artifact: Artifact | None = None
+    # Allowed, but the gate could not witness a run — no runner is detectable, so the
+    # only thing available was an artifact, and an artifact is forgeable. Neither block
+    # (the founder could never finish) nor pretend (that is what "no enforcement" looks
+    # like): let the turn end and put it on the permanent record.
+    unverified: bool = False
 
 
 def find_artifacts(root: Path, globs: list[str]) -> list[Path]:
@@ -281,6 +287,11 @@ def verify(ctx: GitContext, globs: list[str], changed: list[str], command: list[
         if bound is not None:
             return bound
 
+    return _verify_by_reading(ctx, globs, changed)
+
+
+def _verify_by_reading(ctx: GitContext, globs: list[str], changed: list[str]) -> Verdict:
+    """Fall back to reading an artifact. Weaker, and the verdict says so."""
     candidates = find_artifacts(ctx.worktree_root, globs)
     if not candidates:
         return Verdict(
@@ -321,9 +332,12 @@ def verify(ctx: GitContext, globs: list[str], changed: list[str], command: list[
 
     return Verdict(
         True,
-        f"{artifact.path.name}: {artifact.detail} (UNBOUND — no test command is "
-        "configured, so this artifact was read, not witnessed)",
+        f"{artifact.path.name}: {artifact.detail} — UNBOUND. No test command could be run "
+        "here, so this artifact was read, not witnessed, and a hand-written one is "
+        "indistinguishable from a real one. Set `test_command` in "
+        ".claude/founder-os/config.json to make finishing verifiable.",
         artifact,
+        unverified=True,
     )
 
 
@@ -358,17 +372,65 @@ def _verify_by_running(ctx: GitContext, globs: list[str], changed: list[str], co
             f"The suite FAILS on the code as it stands.\n$ {' '.join(command)}\n{tail}",
         )
 
-    artifact = None
-    for path in find_artifacts(ctx.worktree_root, globs):
+    return _judge_green_run(ctx, globs, command, tail)
+
+
+def _first_artifact(root: Path, globs: list[str]) -> Artifact | None:
+    for path in find_artifacts(root, globs):
         artifact = parse_artifact(path)
         if artifact:
-            break
-    if artifact and not artifact.passed:
-        return Verdict(False, f"{artifact.path.name}: {artifact.detail}.", artifact)
+            return artifact
+    return None
+
+
+def _judge_green_run(ctx: GitContext, globs: list[str], command: list[str], tail: str) -> Verdict:
+    """The runner exited 0. Decide whether anything was actually asserted."""
+    artifact = _first_artifact(ctx.worktree_root, globs)
     if artifact:
+        if not artifact.passed:
+            return Verdict(False, f"{artifact.path.name}: {artifact.detail}.", artifact)
         artifact.bound = True
-        return Verdict(True, f"suite run by the gate: exit 0; {artifact.path.name}: {artifact.detail}", artifact)
+        return Verdict(
+            True, f"suite run by the gate: exit 0; {artifact.path.name}: {artifact.detail}", artifact
+        )
+
+    # Exit zero is not "the tests passed", it is "the runner had no complaints" — and a
+    # runner has no complaints about a suite in which every test was skipped. pytest
+    # exits 0 on `1 skipped`, which made the skip accounting above dead code on the
+    # default path: an implementation that raised NotImplementedError finished green.
+    if _executed_from_output(tail) == 0:
+        return Verdict(
+            False,
+            "The suite exited 0 but EXECUTED NOTHING — every test was skipped, or none was "
+            f"collected.\n$ {' '.join(command)}\n{tail}\n"
+            "A run that asserts nothing is not evidence. Make the tests runnable here, or "
+            f"emit a machine-readable report: {artifact_hint(ctx)}",
+        )
     return Verdict(True, f"suite run by the gate: exit 0 ({' '.join(command)})")
+
+
+# "1 passed", "3 failed, 2 passed in 0.1s", "1 skipped in 0.01s", "no tests ran".
+_OUTCOMES = re.compile(
+    r"(?<![\w.])(\d+)\s+(passed|failed|errors?|xpassed|xfailed|skipped|deselected|ignored)\b"
+)
+_DID_NOT_RUN = {"skipped", "deselected", "ignored"}
+_ZERO_RAN = re.compile(r"(?i)\b(no tests ran|collected 0 items|0 tests? (?:ran|executed))\b")
+
+
+def _executed_from_output(text: str) -> int:
+    """How many tests actually ran, read from the runner's own summary line.
+
+    Returns -1 for "cannot tell", which the caller treats as ran. Refusing every runner
+    whose output we do not recognise would block most projects on their first turn, and
+    a wrong refusal is how a gate gets uninstalled. The artifact path stays strict.
+    """
+    if _ZERO_RAN.search(text):
+        return 0
+    outcomes = _OUTCOMES.findall(text)
+    if not outcomes:
+        return -1
+    # `1 skipped` alone means the runner was happy and nothing was asserted.
+    return sum(int(n) for n, word in outcomes if word not in _DID_NOT_RUN)
 
 
 def clean_rerun(ctx: GitContext, command: list[str]) -> Verdict:

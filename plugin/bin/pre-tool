@@ -63,11 +63,44 @@ def signature(event: hookio.HookEvent) -> str:
 
 def proposed_content(event: hookio.HookEvent) -> str:
     ti = event.tool_input
-    parts = [str(ti.get(k, "")) for k in ("content", "new_string", "new_str")]
+    parts = [str(ti.get(k, "")) for k in ("content", "new_string", "new_str", "command")]
     edits = ti.get("edits")
     if isinstance(edits, list):
         parts.extend(str(e.get("new_string", "")) for e in edits if isinstance(e, dict))
     return "\n".join(p for p in parts if p)
+
+
+# `> f`, `>> f`, `tee f`, `sed -i … f`, `cat … > f`. Deliberately generous: a path this
+# misses costs a missed lease, and a path it invents costs one spurious claim on a file
+# nobody else wanted.
+BASH_WRITE_TARGETS = re.compile(r"(?:>>?\s*|\btee\s+(?:-a\s+)?)(?P<path>[\"']?[\w./@+-]+[\"']?)")
+
+# `sed -i` writes its LAST argument; everything before it is the script, which looks
+# path-shaped enough (`s/x/y/`) to fool a single pattern.
+SED_IN_PLACE = re.compile(r"\bsed\s+(?:-\S+\s+|'[^']*'\s+|\"[^\"]*\"\s+)*(?P<path>[\w./@+-]+)")
+
+
+def bash_write_targets(command: str, root: Path) -> list[str]:
+    """Repo-relative paths a shell command appears to write.
+
+    Deliberately generous. A path this misses is a missed lease and a missed scan; a
+    path it invents is one spurious claim on a file nobody else wanted.
+    """
+    out: list[str] = []
+    matches = list(BASH_WRITE_TARGETS.finditer(command))
+    if "sed" in command and " -i" in command:
+        matches += list(SED_IN_PLACE.finditer(command))
+    for match in matches:
+        raw = match.group("path").strip("\"'")
+        if not raw or raw.startswith("/dev/"):
+            continue
+        try:
+            rel = str((root / raw).resolve().relative_to(root))
+        except (ValueError, OSError):
+            continue
+        if rel not in out:
+            out.append(rel)
+    return out
 
 
 def main() -> None:
@@ -100,6 +133,9 @@ def main() -> None:
             target = str(Path(target).resolve().relative_to(ctx.worktree_root))
         except ValueError:
             pass
+    elif event.tool_name == "Bash":
+        shell_targets = bash_write_targets(str(ti.get("command", "")), ctx.worktree_root)
+        target = shell_targets[0] if shell_targets else ""
 
     # Counters and history are recorded now, because a denied attempt is still an
     # attempt and loop detection depends on seeing it. `last_touched` is NOT: it feeds
@@ -153,7 +189,12 @@ def main() -> None:
                         f"include the literal token {OVERRIDE} in a comment to accept the loss."
                     )
 
-    if event.tool_name in WRITE_TOOLS:
+    if event.tool_name in WRITE_TOOLS or event.tool_name == "Bash":
+        # Bash is a write tool. An agent writes files with heredocs, `>`, `tee` and
+        # `sed -i` constantly, and scanning only the structured write tools left the
+        # credential check and the leases wide open to the most common way files get
+        # written: `cat > .env <<EOF` carried a live key straight past a gate whose
+        # whole purpose is to stop that, silently, while the doctor reported 23/23.
         content = proposed_content(event)
         hits = redact.find(content)
         if hits:

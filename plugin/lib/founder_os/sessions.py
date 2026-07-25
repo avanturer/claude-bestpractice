@@ -161,9 +161,28 @@ def load_all(ctx: GitContext) -> list[SessionRecord]:
 
 def register(ctx: GitContext, rec: SessionRecord) -> None:
     rec.heartbeat_at = time.time()
-    if not rec.pid_fingerprint:
-        rec.pid_fingerprint = pid_fingerprint(rec.pid)
+    # Always re-stamp: a resume rewrites `pid` to the new CLI process, and keeping the
+    # previous process's start time made is_live read its own record as a recycled pid —
+    # positive evidence of death for a session that had just started.
+    rec.pid_fingerprint = pid_fingerprint(rec.pid) or rec.pid_fingerprint
     store.write_json(_record_path(ctx, rec.session_id), rec.to_dict())
+
+
+def branch_point(ctx: GitContext) -> str:
+    """Where this branch diverged from the trunk, or HEAD when there is no trunk.
+
+    Used only when the real baseline is unrecoverable. Everything since the branch point
+    is treated as this session's work, which is deliberately too much: an over-wide diff
+    asks for evidence that was already earned, while a too-narrow one lets unverified
+    work through silently.
+    """
+    from .gitctx import _run
+
+    for trunk in ("origin/HEAD", "origin/main", "origin/master", "main", "master"):
+        base = _run(["merge-base", "HEAD", trunk], ctx.worktree_root, check=False)
+        if base and base != ctx.head:
+            return base
+    return ctx.head
 
 
 def adopt(ctx: GitContext, session_id: str) -> SessionRecord:
@@ -171,17 +190,21 @@ def adopt(ctx: GitContext, session_id: str) -> SessionRecord:
 
     A gate that finds no record has two options and only one of them is defensible.
     Allowing means a deleted file silently switches off the secret scan, the leases and
-    the evidence gate — enforcement you can remove with `rm`. So the gate rebuilds a
-    minimal record instead and carries on; the fields it cannot recover (the baseline,
-    the task statement) only degrade the review and the drift check, which is a far
-    smaller loss than enforcing nothing.
+    the evidence gate — enforcement you can remove with `rm`.
+
+    The baseline is where this gets subtle. Anchoring at HEAD looks natural and is
+    exactly wrong: every commit the session already made then falls outside the diff, the
+    evidence gate is handed an empty change list, and it allows the turn over a red
+    suite. So the fallback is the branch point, which over-reports rather than
+    under-reports — and for a fail-closed gate, demanding evidence for slightly too much
+    is the survivable direction.
     """
     rec = SessionRecord(
         session_id=session_id or f"anon-{owning_pid()}",
         pid=owning_pid(),
         worktree=ctx.worktree_root.as_posix(),
         branch=ctx.branch,
-        baseline_commit=ctx.head,
+        baseline_commit=branch_point(ctx),
         started_at=time.time(),
         heartbeat_at=time.time(),
     )
@@ -221,7 +244,7 @@ def unregister(ctx: GitContext, session_id: str) -> None:
     release_all(ctx, session_id)
 
 
-def reap(ctx: GitContext) -> list[SessionRecord]:
+def reap(ctx: GitContext, exclude: str | None = None) -> list[SessionRecord]:
     """Remove dead sessions and release their leases. Returns what was reaped.
 
     Without this, every tool in the surveyed field leaves a crashed session marked
@@ -230,6 +253,12 @@ def reap(ctx: GitContext) -> list[SessionRecord]:
     known = {p.as_posix() for p in worktree_paths(ctx)}
     dead: list[SessionRecord] = []
     for rec in load_all(ctx):
+        # The session firing SessionStart right now is alive by definition, and
+        # reaping it here destroyed its baseline: the rebuild found no record and
+        # re-derived from HEAD, so every commit already made fell outside the diff
+        # and the Stop gate saw nothing to verify. An ordinary resume disarmed it.
+        if rec.session_id == exclude:
+            continue
         if not is_live(ctx, rec, known):
             dead.append(rec)
             _record_path(ctx, rec.session_id).unlink(missing_ok=True)

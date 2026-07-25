@@ -96,16 +96,22 @@ def changed_files(ctx: GitContext, since: str | None = None) -> list[str]:
     Includes untracked files: an agent that creates a file and never stages it has
     still changed the working tree, and the scope-drift check must see it.
     """
+    # -c core.quotePath=false, or git C-quotes any path outside ASCII: `src/é.py` comes
+    # back as `"src/\303\251.py"`, which then matches no file on disk. Every downstream
+    # check reads that as "deleted" and stops applying — so a failing suite passed the
+    # gate purely because a filename had an accent in it. An ASCII control proved the
+    # quoting was the cause rather than the test.
+    quiet = ["-c", "core.quotePath=false"]
     out: set[str] = set()
     if since:
-        diff = _run(["diff", "--name-only", f"{since}..HEAD"], ctx.worktree_root, check=False)
+        diff = _run(quiet + ["diff", "--name-only", f"{since}..HEAD"], ctx.worktree_root, check=False)
         out.update(p for p in diff.splitlines() if p)
 
     for args in (["diff", "--name-only", "HEAD"], ["diff", "--name-only", "--cached"]):
-        out.update(p for p in _run(args, ctx.worktree_root, check=False).splitlines() if p)
+        out.update(p for p in _run(quiet + args, ctx.worktree_root, check=False).splitlines() if p)
 
     untracked = _run(
-        ["ls-files", "--others", "--exclude-standard"], ctx.worktree_root, check=False
+        quiet + ["ls-files", "--others", "--exclude-standard"], ctx.worktree_root, check=False
     )
     out.update(p for p in untracked.splitlines() if p)
     return sorted(out)

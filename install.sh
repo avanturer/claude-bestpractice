@@ -58,11 +58,15 @@ chmod +x "$INSTALL_DIR"/plugin/bin/* 2>/dev/null || true
 # The gates are proven by attempting known-bad actions BEFORE anything is registered.
 # Installing a plugin whose gates silently do nothing is worse than not installing it.
 bold "verifying"
-if ! "$PY" "$INSTALL_DIR/plugin/bin/founder-os-doctor" >/tmp/founder-os-doctor.log 2>&1; then
-  cat /tmp/founder-os-doctor.log
+# mktemp, not a fixed /tmp path: a predictable name that an attacker (or a stale
+# symlink) already created is followed by the redirect, truncating whatever it points at.
+DOCTOR_LOG="$(mktemp -t founder-os-doctor.XXXXXX)"
+trap 'rm -f "$DOCTOR_LOG" "${LOG:-}"' EXIT
+if ! "$PY" "$INSTALL_DIR/plugin/bin/founder-os-doctor" >"$DOCTOR_LOG" 2>&1; then
+  cat "$DOCTOR_LOG"
   die "the doctor failed — refusing to install gates that do not fire"
 fi
-dim "$(tail -1 /tmp/founder-os-doctor.log)"
+dim "$(tail -1 "$DOCTOR_LOG")"
 
 # ---------------------------------------------------------------------- register
 # The CLI installs a COPY into its own plugin cache, pinned to a commit. So a second run
@@ -75,24 +79,47 @@ if ! claude plugin marketplace add "$INSTALL_DIR/plugin" >/dev/null 2>&1; then
     || dim "marketplace already registered"
 fi
 
-if claude plugin list 2>/dev/null | grep -q "^${PLUGIN}@${MARKETPLACE}"; then
-  dim "updating the installed copy"
-  claude plugin update "${PLUGIN}@${MARKETPLACE}" >/tmp/founder-os-register.log 2>&1 \
-    || { cat /tmp/founder-os-register.log; die "could not update the installed plugin"; }
-else
-  claude plugin install "${PLUGIN}@${MARKETPLACE}" >/tmp/founder-os-register.log 2>&1 \
-    || { cat /tmp/founder-os-register.log; die "could not install the plugin"; }
+# `claude plugin list` indents and bullets its entries, so a "^name@" grep never matched
+# and the upgrade branch was dead. Match anywhere on the line.
+# `update` is also a no-op when the version string has not changed, which is exactly the
+# case during development — so uninstall and reinstall, which does refresh the cache.
+LOG="$(mktemp -t founder-os-register.XXXXXX)"
+if claude plugin list 2>/dev/null | grep -q "${PLUGIN}@${MARKETPLACE}"; then
+  dim "refreshing the installed copy"
+  claude plugin uninstall "${PLUGIN}@${MARKETPLACE}" >"$LOG" 2>&1 || true
 fi
+claude plugin install "${PLUGIN}@${MARKETPLACE}" >"$LOG" 2>&1 \
+  || { cat "$LOG"; die "could not install the plugin"; }
 
-# Prove the registered COPY is the code we just verified, rather than trusting the
-# CLI's exit status. The doctor above ran against the source tree, not the cache.
-INSTALLED_VERSION="$("$PY" - "$INSTALL_DIR" <<'EOF'
-import json, pathlib, sys
-print(json.loads((pathlib.Path(sys.argv[1]) / "plugin/.claude-plugin/plugin.json").read_text())["version"])
+# Prove the registered COPY is the code the doctor just verified. The doctor ran against
+# the source tree; the CLI executes a pinned copy in its own cache, and a run that
+# certified one while shipping the other is worse than no check at all.
+FINGERPRINT="$("$PY" - "$INSTALL_DIR" <<'EOF'
+import hashlib, pathlib, sys
+root = pathlib.Path(sys.argv[1]) / "plugin"
+digest = hashlib.sha256()
+for path in sorted(p for p in root.rglob("*") if p.is_file() and "__pycache__" not in p.parts):
+    digest.update(path.relative_to(root).as_posix().encode())
+    digest.update(path.read_bytes())
+print(digest.hexdigest())
 EOF
 )"
-if ! claude plugin list 2>/dev/null | grep -q "$INSTALLED_VERSION"; then
-  dim "warning: the CLI does not report version $INSTALLED_VERSION — run 'claude plugin list'"
+CACHED="$(find "$HOME/.claude/plugins" -type d -name "$PLUGIN" -print -quit 2>/dev/null || true)"
+if [ -n "$CACHED" ]; then
+  CACHED_FINGERPRINT="$("$PY" - "$CACHED" <<'EOF'
+import hashlib, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+digest = hashlib.sha256()
+for path in sorted(p for p in root.rglob("*") if p.is_file() and "__pycache__" not in p.parts):
+    digest.update(path.relative_to(root).as_posix().encode())
+    digest.update(path.read_bytes())
+print(digest.hexdigest())
+EOF
+)"
+  if [ "$FINGERPRINT" != "$CACHED_FINGERPRINT" ]; then
+    die "the registered copy at $CACHED is NOT the code just verified. Run: claude plugin uninstall ${PLUGIN}@${MARKETPLACE} && $0"
+  fi
+  dim "registered copy matches the verified source"
 fi
 
 # The plugin's bin/ is on the Bash tool's PATH inside a session automatically. This
