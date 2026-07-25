@@ -1,77 +1,152 @@
+<div align="center">
+
 # founder-os
 
-A control plane for building products with several Claude Code sessions running at once
-on one repository. Install it once; it works in every project after that.
+**Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
+
+[![version](https://img.shields.io/badge/version-1.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-359%20passing-2ea44f)](#verified)
+[![doctor](https://img.shields.io/badge/doctor-20%20checks-2ea44f)](#verified)
+[![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
+[![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
+[![license](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
+
+**English** · [Русский](docs/README.ru.md) · [中文](docs/README.zh.md)
+
+</div>
+
+---
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/avanturer/claude-bestpractice/main/install.sh | bash
 ```
 
-Then, in any repository:
+That is the whole setup. In any repository afterwards:
 
 ```sh
-founder-os init      # derive the knowledge layer from the code that is already there
-founder-os status    # what is known, in flight, planned and enforced
-founder-os doctor    # prove every gate still fires
+founder-os init      # derive what it can from your code; ask you for what it cannot
+founder-os status    # everything at once
 ```
 
-Nothing else to configure. The installer refuses to register the plugin if the doctor
-fails, because gates that silently do nothing are worse than no gates.
+The installer runs the doctor **before** registering anything and refuses to install if
+any gate fails to fire. Gates that silently do nothing are worse than no gates.
 
 ---
 
-## What it does
+## The problem
 
-**Memory that cannot go stale.** Three layers split by what makes each one false.
+You build a product almost entirely through Claude. Three to eight sessions run at once,
+in separate worktrees. You read almost none of the diffs. What goes wrong is measured,
+not speculative:
 
-| Layer | Contents | Why it cannot rot |
+| | |
+|---|---|
+| The agent says done, the code does not work | **0.97** submit rate against **0.65** test-verified resolve. Two different guard prompts moved it by **zero** |
+| It edits correct code it was never asked to touch | **60–90 %** of runs across four frontier models, when abstaining was correct |
+| Rules decay as the session grows | 0 % violation → **30 %** after one compaction → **78 %** after four |
+| Too many rules collapse compliance | **93.8 %** perfect at 10 rules → **75 %** at 20 → **23.8 %** at 40 → **0 %** at 80 |
+| Stale context is worse than none | Stale-only retrieval produced dead-API calls on **15/17** samples; no retrieval produced **0/17** |
+
+Sources for every figure in [`docs/EVIDENCE.md`](docs/EVIDENCE.md).
+
+## The design in one sentence
+
+**Nothing that matters is asked of the model.** Every rule that must hold is enforced by
+the harness or by git; the model's context carries only the handful of things no program
+can check.
+
+---
+
+## What you get
+
+### Memory that cannot rot
+
+Three layers, split by *what makes each one false*.
+
+| Layer | Contents | Why it stays true |
 |---|---|---|
-| **Derived** | Symbol map, route manifest, test results, health numbers | Regenerated from code, stamped with the commit it came from. A stale artifact is a build failure, not a confident wrong answer |
-| **Decided** | Product, non-goals, entities, glossary, decision records | Immutable. A decision is a historical fact; it is retired by a later record naming it, never by rewriting history |
-| **Ephemeral** | Session registry, leases, plan claims, allowance | Per-session, gitignored, TTL'd, reaped |
+| **Derived** | Symbol map, test results, health numbers | Regenerated from code and stamped with its source commit. A stale artifact is a build failure, not a confident wrong answer |
+| **Decided** | Product, non-goals, entities, glossary, decisions | Immutable. A decision is a historical fact — retired by a later record naming it, never by rewriting history |
+| **Ephemeral** | Sessions, leases, claims, allowance | Per-session, gitignored, TTL'd, reaped |
 
-Every persisted claim carries the **git blob hashes** of the code it describes — never
-mtimes, which a worktree checkout resets wholesale. A claim whose subject was rewritten
-is suppressed from injection and counted, never silently deleted.
+Every claim carries the **git blob hashes** of the code it describes — never mtimes,
+which a worktree checkout resets wholesale. When a subject is rewritten, the claim is
+suppressed and counted, never silently deleted.
 
 Every entity names a canonical identifier and its file. A rename **fails validation**
-rather than leaving the layer describing something that no longer exists.
+rather than leaving your memory describing something that no longer exists.
 
-**Parallel sessions that see each other.** A session board injected at start: who else
-is running, on what branch and worktree, what they last touched, which files they hold.
-Editing a file another live session holds is **denied**, with the owner's id. A crashed
-session's claims are released by the reaper rather than held forever.
+### Sessions that see each other
 
-**A work ledger.** `.claude/founder-os/plan/{next,doing,done}/` — one file per task,
-state encoded in the directory, so a transition is `git mv` and five worktrees produce
-five clean adds instead of five conflicting hunks in one JSON blob.
+```
+OTHER LIVE SESSIONS (2) — do not edit files they hold:
+  - a3f81c22 on feat/export  [ledger-export]  active 40s ago
+      touched: src/billing.js, src/csv.js
+      holds: src/billing.js
+      task: Add CSV export to src/billing.js
 
-**Completion accepted on evidence, never on assertion.** The Stop gate discards the
-agent's prose and requires a machine-readable test artifact that exists, is newer than
-the newest changed file, and passes when re-run from a clean checkout.
+IN FLIGHT:
+  - 0004 Fix rounding in invoice totals  [b7d29e01]
+NEXT:
+  - 0005 Add client search
+(12 done)
 
-**Code written for the next model to read.** Docstrings must carry non-derivable
-information; `Args:`/`Returns:`/`:param:` are banned because types already say it. A
-signature change with an unchanged docstring fails the commit.
+health: 3 live session(s), 1 reaped, 4 open item(s), 1 stale (suppressed)
+```
 
-**Slop caught mechanically.** Swallowed exceptions, single-caller abstractions,
-compat shims with no consumers, duplicate blocks, unused parameters — permanent budget
-of zero. Complexity and length are ratcheted: baselined once, then only downward.
+Editing a file another live session holds is **denied**, naming the owner. A crashed
+session's leases and claims are released by the reaper instead of held forever.
 
-**Rigor that scales itself.** Stage is computed from the repository, never configured,
-and the ratchet only tightens.
+### A work ledger that merges
 
-| Signal | What turns on |
+`.claude/founder-os/plan/{next,doing,done}/` — one file per task, state encoded in the
+directory, so a transition is `git mv`. Five worktrees produce five clean adds instead of
+five conflicting hunks in one JSON blob. Ids allocate against every sibling worktree,
+because worktrees share the namespace before their files are ever committed.
+
+### Completion accepted on evidence
+
+The Stop gate **discards the agent's prose** and requires a machine-readable test
+artifact that exists, is newer than the newest changed file, and passes when re-run from
+a clean checkout of the committed tree.
+
+It also escalates rather than wedging: after four blocked attempts it records an
+unverified finish and lets the turn end, because a gate that blocks a founder's workflow
+forever is a gate that gets uninstalled.
+
+### Code written for the next model to read
+
+Docstrings must carry non-derivable information. `Args:` / `Returns:` / `:param:` are
+banned outright — types already say it. A signature change with an unchanged docstring
+**fails the commit**.
+
+> If you are about to write a comment describing what a value is, write a type instead.
+
+### Slop caught mechanically
+
+Swallowed exceptions, single-caller abstractions, compat shims with no consumers,
+duplicate blocks, unused parameters — **permanent budget of zero**. Complexity and
+length are ratcheted: baselined once, then only downward.
+
+### Rigor that scales itself
+
+Stage is computed from the repository, never configured, and the ratchet only tightens.
+
+| Signal detected | What switches on |
 |---|---|
 | CI plus a deploy target | Egress rules, production-signal airlock |
 | A migration creating a users table, or an auth SDK | Migration gating, production-promotion denial, per-worktree database and port |
 | A payment SDK, or a live-mode key shape | Triple-run verification for anything touching auth, money or schema |
 
-A prototype gets none of it, and additionally has back-compat shims **banned** — that
-rule disables itself once real consumers appear.
+A prototype gets none of it — and additionally has back-compat shims **banned**, a rule
+that disables itself the moment real consumers appear.
 
-**Zero nagging.** A failing check is a prompt for the agent, not an interruption for
-you. Denials talk to the model, which self-corrects silently.
+### It takes over what fights it
+
+`founder-os adopt` finds other tools contesting the events this owns, quarantines their
+hook entries into a labelled block with a backup, and tells you exactly which competing
+plugins to disable. Reversible with `--restore`. It never deletes another tool's
+configuration silently.
 
 ---
 
@@ -79,62 +154,74 @@ you. Denials talk to the model, which self-corrects silently.
 
 | | |
 |---|---|
-| `founder-os status` | Everything at once: sessions, plan, knowledge, memory health, next action |
-| `founder-os init` | Derive the knowledge layer from the code |
+| `founder-os status` | Sessions, plan, knowledge, memory health, conflicts, next action |
+| `founder-os init` | Derive the knowledge layer from your code |
+| `founder-os adopt` | Take over events another tool is contesting |
+| `founder-os doctor` | Prove each gate by attempting a known-bad action |
 | `founder-os-plan` | The work ledger: `add`, `list`, `claim`, `done` |
 | `founder-os-decide` | Accept a decision drafted from your own corrections |
-| `founder-os-doctor` | Prove each gate by attempting a known-bad action |
 | `founder-os-ingest` | Sanitise production errors into fenced task files |
 | `founder-os-knowledge` | Validate the decided layer, refresh its index |
-| `founder-os-reindex` | Drop and rebuild all derived state |
+| `founder-os-reindex` | Drop and rebuild everything derived |
 
-Inside a session: `/founder-os:status`, `/founder-os:plan`, `/founder-os:review`.
-
----
+In a session: `/founder-os:status` · `/founder-os:plan` · `/founder-os:review`
 
 ## The gates
 
 | Gate | Event | Posture | Does |
 |---|---|---|---|
 | `setup` | Setup | fails open | Derives the knowledge layer, creates the plan, seeds the stage |
-| `session-start` | SessionStart | fails open | Reaps the dead, registers, injects the board, plan and stage |
+| `session-start` | SessionStart | fails open | Reaps the dead, registers, injects board + plan + stage |
 | `prompt-capture` | UserPromptSubmit | fails open | Records the verbatim task. **Injects nothing** |
-| `pre-tool` | PreToolUse | **fails closed** | Call ceiling, loop break, secret pre-write scan, file leases, migration and deploy gating |
-| `review-commit` | `if: Bash(git commit:*)` | async rewake | Reviews this turn's diff against a moving baseline; wakes you only when there is something to say |
+| `pre-tool` | PreToolUse | **fails closed** | Call ceiling, loop break, secret pre-write scan, leases, migration and deploy gating |
+| `review-commit` | `if: Bash(git commit:*)` | async rewake | Reviews this turn's diff; wakes you only when there is something to say |
 | `worktree-create` | WorktreeCreate | fails open | Names it, seeds trust, derives a private port and database |
 | `subagent-brief` | SubagentStart | fails open | Non-goals, entities and a query-biased map to agents that inherit no rules |
 | `checkpoint` | PreCompact | fails open | Extractive checkpoint, zero model calls, secrets scrubbed |
 | `evidence-gate` | Stop | **fails closed** | Scope drift, test evidence, clean re-run; harvests decision drafts |
 
-Nine hook entries against a budget of twelve. Always-on context: **~195 tokens** against
-a cap of 400 — about 0.1 % of a 200k window.
+Nine entries against a self-imposed budget of twelve. Always-on context **~195 tokens**
+against a cap of 400 — roughly 0.1 % of a 200k window.
 
 ---
 
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · knowledge · 345 tests · 20 doctor checks · budget
+make check    # lint · docs gate · slop gate · knowledge · 359 tests · 20 doctor checks · budget
 ```
 
-Python 3.9+, **standard library only** — enforced, because these hooks run on every tool
-call and a dependency is latency, a failure mode and a supply-chain surface. CI on 3.9,
-3.11 and 3.13. `claude plugin validate --strict` passes against CLI 2.1.220.
+The doctor proves gates by **attempting the bad thing**, not by reading configuration
+back — config-readback cannot detect a semantics change. Sixteen real bugs during
+development were invisible to inspection and caught only by execution, including a
+deadlock where the evidence gate demanded a test artifact and then blocked the session
+for producing it.
 
-The doctor proves gates by **attempting the bad thing**, not by reading config back —
-config-readback cannot detect a semantics change, and eleven real bugs during
-development were invisible to inspection and caught only by execution.
+The suite includes a full project lifecycle driven entirely through the real gate
+executables: onboarding an unseen repository, planning, a leaked credential, a scope
+violation, a failing suite, a green finish, and a second session reading the history.
+
+## Requirements
+
+Python 3.9+ and git. **No other dependency, by constraint** — these hooks run on every
+tool call, so a dependency tree is latency, an extra failure mode and a supply-chain
+surface for the component whose whole job is to be trustworthy. Enforced in CI.
+
+Tested on Python 3.9, 3.11 and 3.13. `claude plugin validate --strict` passes against
+Claude Code 2.1.220.
 
 ---
 
-## What this deliberately does not do
+## What this deliberately is not
 
 - **Not a memory engine.** The harness stores and loads memory. This owns curation.
-- **Not a code reviewer.** Several first-party review paths exist; pick one, integrate.
+- **Not a code reviewer.** Several first-party review paths exist; pick one and integrate.
 - **Not a task manager.** The native task system is subsumed and gated, never replaced.
 - **Not for teams.** Every trade-off assumes one owner and no reviewer.
 
-## Four things it cannot enforce, stated up front
+## Four things it cannot enforce
+
+Stated up front, because the default in this category is false assurance.
 
 1. **Test semantics.** No matcher distinguishes a justified skip from a cheat.
 2. **Taste.** No matcher distinguishes good design from bad.
@@ -142,7 +229,16 @@ development were invisible to inspection and caught only by execution.
    layer — real git hooks, CI, branch protection — exists.
 4. **A human with root.** By design.
 
-Design rationale in [`docs/DESIGN.md`](docs/DESIGN.md), the enforcement ladder in
-[`docs/ENFORCEMENT.md`](docs/ENFORCEMENT.md), the token model in
-[`docs/ECONOMICS.md`](docs/ECONOMICS.md), and every measured claim with its source in
-[`docs/EVIDENCE.md`](docs/EVIDENCE.md).
+---
+
+## Documentation
+
+| | |
+|---|---|
+| [`docs/DESIGN.md`](docs/DESIGN.md) | Thesis, architecture, memory model, substrate, verification |
+| [`docs/ENFORCEMENT.md`](docs/ENFORCEMENT.md) | Binding vs advisory, the ten-rule budget, what cannot hold |
+| [`docs/ECONOMICS.md`](docs/ECONOMICS.md) | Token budget, prompt-cache invariants, rate-limit admission control |
+| [`docs/EVIDENCE.md`](docs/EVIDENCE.md) | Every measured claim with its source and evidence tier |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | What shipped, and the bugs that only execution found |
+
+MIT.

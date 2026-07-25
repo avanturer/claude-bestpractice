@@ -9,7 +9,7 @@
       "name": "founder-os",
       "source": "./",
       "description": "Enforcement, memory and parallel-session coordination for solo founders.",
-      "version": "0.0.0"
+      "version": "1.0.0"
     }
   ]
 }

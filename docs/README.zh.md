@@ -1,0 +1,235 @@
+<div align="center">
+
+# founder-os
+
+**为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
+
+[![version](https://img.shields.io/badge/version-1.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-359%20passing-2ea44f)](#已验证)
+[![doctor](https://img.shields.io/badge/doctor-20%20checks-2ea44f)](#已验证)
+[![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
+[![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#运行要求)
+[![license](https://img.shields.io/badge/license-MIT-lightgrey)](../LICENSE)
+
+[English](../README.md) · [Русский](README.ru.md) · **中文**
+
+</div>
+
+---
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/avanturer/claude-bestpractice/main/install.sh | bash
+```
+
+安装到此为止。之后在任意仓库中：
+
+```sh
+founder-os init      # 能从代码推导的自动推导，推导不出的才来问你
+founder-os status    # 一次看全
+```
+
+安装器在注册任何东西**之前**先跑 doctor，只要有一个 gate 没有真正触发就拒绝安装。
+悄无声息什么都不做的 gate，比没有 gate 更糟。
+
+---
+
+## 问题
+
+你几乎完全通过 Claude 来构建产品。三到八个会话同时运行在各自的 worktree 里，
+而你几乎不看 diff。出错的地方是被测量出来的，不是猜的：
+
+| | |
+|---|---|
+| 智能体说"完成了"，代码却跑不通 | 提交率 **0.97**，而测试验证通过率只有 **0.65**。两种不同的防护提示词让这个差距移动了 **零** |
+| 去改它根本没被要求碰的正确代码 | 在四个前沿模型上有 **60–90 %** 的运行如此，而正确做法是不动手 |
+| 会话越长，规则越失效 | 违规率 0 % → 一次压缩后 **30 %** → 四次压缩后 **78 %** |
+| 规则太多反而全面崩塌 | 10 条规则时 **93.8 %** 完全遵守 → 20 条降到 **75 %** → 40 条 **23.8 %** → 80 条 **0 %** |
+| 过期的上下文比没有上下文更糟 | 仅用过期检索时，**15/17** 个样本产生了调用已废弃 API 的代码；完全不检索则是 **0/17** |
+
+每个数字的来源见 [`EVIDENCE.md`](EVIDENCE.md)。
+
+## 一句话设计原则
+
+**凡是重要的，都不去"请求"模型。** 每一条必须成立的规则都由 harness 或 git 强制执行；
+模型的上下文里只留下少数程序无法检查的东西。
+
+---
+
+## 你会得到什么
+
+### 不会腐烂的记忆
+
+三层结构，按*各自会因为什么而变成假的*来划分。
+
+| 层 | 内容 | 为什么它保持为真 |
+|---|---|---|
+| **Derived（推导层）** | 符号图、测试结果、健康指标 | 从代码重新生成，并盖上来源 commit 的戳。过期的产物是一次构建失败，而不是一个自信的错误答案 |
+| **Decided（已决层）** | 产品、非目标、实体、术语表、决策 | 不可变。一条决策是历史事实——只能由后来一条点名它的记录作废，绝不通过改写历史 |
+| **Ephemeral（临时层）** | 会话、租约、认领、配额 | 按会话隔离，进 gitignore，带 TTL，会被回收 |
+
+每一条断言都携带它所描述代码的 **git blob 哈希**——绝不用 mtime，因为 worktree 检出会把
+mtime 整体重置。当断言的对象被改写时，该断言会被抑制并计数，而不是被悄悄删除。
+
+每个实体都写明其规范标识符和所在文件。一次重命名会**让校验失败**，而不是留下一份
+描述着已不存在之物的记忆。
+
+### 会话彼此可见
+
+```
+OTHER LIVE SESSIONS (2) — do not edit files they hold:
+  - a3f81c22 on feat/export  [ledger-export]  active 40s ago
+      touched: src/billing.js, src/csv.js
+      holds: src/billing.js
+      task: Add CSV export to src/billing.js
+
+IN FLIGHT:
+  - 0004 Fix rounding in invoice totals  [b7d29e01]
+NEXT:
+  - 0005 Add client search
+(12 done)
+
+health: 3 live session(s), 1 reaped, 4 open item(s), 1 stale (suppressed)
+```
+
+去编辑另一个存活会话正持有的文件会被**拒绝**，并指名持有者。崩溃会话的租约和认领由
+回收器释放，而不是永远挂着。
+
+### 能够合并的工作台账
+
+`.claude/founder-os/plan/{next,doing,done}/` —— 一个任务一个文件，状态由目录编码，
+所以状态转移就是一次 `git mv`。五个 worktree 产生五次干净的新增，而不是同一个 JSON
+里五段互相冲突的 hunk。ID 的分配会参照所有兄弟 worktree，因为 worktree 在文件被提交
+之前就已经共享同一个命名空间。
+
+### 完成必须凭证据
+
+Stop gate **丢弃智能体的自述文字**，要求一份机器可读的测试产物：它必须存在、比最新被
+改动的文件更新，并且在从已提交树的干净检出中重跑时通过。
+
+它也会升级而不是把人卡死：连续四次被拦截之后，它记录一次"未经验证的完成"并放行该轮，
+因为一个永远挡住创始人工作流的 gate，就是一个会被卸载的 gate。
+
+### 写给下一个模型读的代码
+
+文档字符串必须承载无法从代码推导的信息。`Args:` / `Returns:` / `:param:` 被直接禁止——
+类型已经说明了这些。签名变了而文档字符串没变，**提交会失败**。
+
+> 如果你正准备写一句注释来说明某个值是什么，那就改写一个类型。
+
+### 机械地抓住垃圾代码
+
+吞掉的异常、只有一个调用方的抽象、没有消费者的兼容层、重复代码块、未使用的参数——
+**永久预算为零**。复杂度和长度走棘轮：只设一次基线，此后只降不升。
+
+### 严格程度自动伸缩
+
+阶段由仓库自身推算得出，从不配置，并且棘轮只会收紧。
+
+| 检测到的信号 | 随之启用 |
+|---|---|
+| CI 加上一个部署目标 | 出网规则、生产信号隔离闸 |
+| 创建 users 表的迁移，或一个认证 SDK | 迁移管控、拒绝生产环境提升、每个 worktree 独立数据库与端口 |
+| 支付 SDK，或 live 模式的密钥形态 | 凡是触及认证、金钱或数据结构的改动，一律三次运行验证 |
+
+原型阶段一个都不会启用——并且额外**禁止**向后兼容层，这条规则会在真正出现消费者的
+那一刻自行关闭。
+
+### 它会接管与它冲突的东西
+
+`founder-os adopt` 会找出争抢本插件所拥有事件的其他工具，把它们的 hook 条目移入一个
+带标记的区块并留下备份，然后明确告诉你该禁用哪些竞争插件。可用 `--restore` 撤销。
+它绝不会悄悄删除别的工具的配置。
+
+---
+
+## 命令
+
+| | |
+|---|---|
+| `founder-os status` | 会话、计划、知识、记忆健康度、冲突、下一步动作 |
+| `founder-os init` | 从你的代码推导出知识层 |
+| `founder-os adopt` | 接管被其他工具争抢的事件 |
+| `founder-os doctor` | 通过尝试一个已知的坏动作来证明每个 gate 有效 |
+| `founder-os-plan` | 工作台账：`add`、`list`、`claim`、`done` |
+| `founder-os-decide` | 采纳一条由你自己的纠正草拟出的决策 |
+| `founder-os-ingest` | 把生产环境错误净化成带围栏的任务文件 |
+| `founder-os-knowledge` | 校验已决层，刷新其索引 |
+| `founder-os-reindex` | 丢弃并重建所有推导内容 |
+
+在会话中：`/founder-os:status` · `/founder-os:plan` · `/founder-os:review`
+
+## 各个 Gate
+
+| Gate | 事件 | 失败姿态 | 作用 |
+|---|---|---|---|
+| `setup` | Setup | 失败放行 | 推导知识层，创建计划，播种阶段 |
+| `session-start` | SessionStart | 失败放行 | 回收死会话，注册自身，注入看板 + 计划 + 阶段 |
+| `prompt-capture` | UserPromptSubmit | 失败放行 | 逐字记录任务。**不注入任何东西** |
+| `pre-tool` | PreToolUse | **失败拦截** | 调用上限、循环打断、写入前密钥扫描、租约、迁移与部署管控 |
+| `review-commit` | `if: Bash(git commit:*)` | 异步唤醒 | 审查本轮的 diff；只在确实有话要说时才叫醒你 |
+| `worktree-create` | WorktreeCreate | 失败放行 | 命名、播种信任、推导私有端口与数据库 |
+| `subagent-brief` | SubagentStart | 失败放行 | 把非目标、实体和按查询偏置的代码图交给不继承任何规则的子智能体 |
+| `checkpoint` | PreCompact | 失败放行 | 抽取式检查点，零模型调用，密钥已清洗 |
+| `evidence-gate` | Stop | **失败拦截** | 范围漂移、测试证据、干净重跑；顺带收割决策草稿 |
+
+九个条目，自设上限是十二个。常驻上下文 **约 195 tokens**，上限 400 ——
+大约是 200k 窗口的 0.1 %。
+
+---
+
+## 已验证
+
+```
+make check    # lint · docs gate · slop gate · knowledge · 359 个测试 · 20 项 doctor 检查 · budget
+```
+
+doctor 通过**真的去做那件坏事**来证明 gate 有效，而不是把配置读回来对一遍——
+读回配置无法察觉语义上的变化。开发过程中出现的十六个真实 bug 全都无法靠阅读代码发现，
+只有执行才抓得到，其中包括一个死锁：evidence gate 要求一份测试产物，然后又因为会话
+产出了它而把会话拦下。
+
+测试套件包含一整条项目生命周期，全程通过真实的 gate 可执行文件驱动：接管一个从未见过
+的仓库、做计划、泄露一个凭据、一次范围越界、一次测试失败、一次绿色收尾，以及第二个
+会话读取这段历史。
+
+## 运行要求
+
+Python 3.9+ 和 git。**没有任何其他依赖，这是硬约束**——这些 hook 在每一次工具调用时
+都会运行，所以依赖树意味着延迟、额外的失败模式，以及一个供应链攻击面，而这个组件的
+全部职责恰恰就是可信。此约束在 CI 中强制执行。
+
+已在 Python 3.9、3.11 和 3.13 上测试。`claude plugin validate --strict` 在
+Claude Code 2.1.220 上通过。
+
+---
+
+## 它刻意不是什么
+
+- **不是记忆引擎。** harness 负责存取记忆，本插件负责策展。
+- **不是代码审查器。** 已有多条一方审查路径；选一条并集成即可。
+- **不是任务管理器。** 原生任务系统被纳入并加以管控，而不是被替换。
+- **不面向团队。** 每一个取舍都假定只有一个所有者、没有审查者。
+
+## 它无法强制的四件事
+
+先说清楚，因为这个领域的默认状态是虚假的安全感。
+
+1. **测试语义。** 没有任何匹配器能区分正当的 skip 和作弊。
+2. **品味。** 没有任何匹配器能区分好设计和坏设计。
+3. **`claude --bare`。** 它会同时丢弃 managed hook 和插件 hook。这正是仓库层——
+   真正的 git hook、CI、分支保护——存在的理由。
+4. **拥有 root 的人。** 这是设计使然。
+
+---
+
+## 文档
+
+| | |
+|---|---|
+| [`DESIGN.md`](DESIGN.md) | 论点、架构、记忆模型、存储基底、验证方式 |
+| [`ENFORCEMENT.md`](ENFORCEMENT.md) | 强制 vs 建议、十条规则的预算、哪些约束根本立不住 |
+| [`ECONOMICS.md`](ECONOMICS.md) | token 预算、prompt cache 不变式、限流下的准入控制 |
+| [`EVIDENCE.md`](EVIDENCE.md) | 每一条量化断言及其来源与证据等级 |
+| [`ROADMAP.md`](ROADMAP.md) | 已交付的内容，以及只有执行才发现的那些 bug |
+
+MIT。

@@ -259,7 +259,8 @@ def render_for_board(ctx: GitContext, limit: int = 4) -> str:
     """
     doing = load_all(ctx, DOING)
     upcoming = load_all(ctx, NEXT)[:limit]
-    if not doing and not upcoming:
+    done = summary(ctx)[DONE]
+    if not doing and not upcoming and not done:
         return ""
 
     lines: list[str] = []
@@ -272,7 +273,8 @@ def render_for_board(ctx: GitContext, limit: int = 4) -> str:
         lines.append("NEXT:")
         for task in upcoming:
             lines.append(f"  - {task.id} {task.title[:80]}")
-    done = summary(ctx)[DONE]
     if done:
+        # Shown even when nothing is in flight. A board that goes blank the moment work
+        # finishes throws away the answer to "what has already been done here".
         lines.append(f"({done} done)")
     return "\n".join(lines)

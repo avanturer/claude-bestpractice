@@ -104,7 +104,15 @@ def main() -> None:
         pass
 
     attempts = _blocks(rec)
-    exempt = list(cfg.exempt_paths) + [".claude/founder-os/"]
+    # The test artifact is exempt from scope drift because THIS GATE demands it. Without
+    # this the two checks deadlock: finish without evidence and you are blocked for the
+    # missing artifact, produce it and you are blocked for touching a file the task did
+    # not name. Found by running a whole project lifecycle end to end, not by reading.
+    exempt = (
+        list(cfg.exempt_paths)
+        + [".claude/founder-os/", ".claude/"]
+        + [g.split("/")[0] if "/" in g else g for g in cfg.artifact_globs]
+    )
     changed = evidence.material_changes(changed_files(ctx, rec.baseline_commit), exempt)
 
     if not changed:

@@ -90,42 +90,47 @@ def detect(ctx: GitContext) -> Findings:
         "test" in fact.path.lower() or "spec" in fact.path.lower() for fact in facts
     )
 
-    if facts:
-        graph = repomap.build_graph(facts)
-        ranks = repomap.pagerank(graph)
-        by_path = {fact.path: fact for fact in facts}
-
-        # Count how often each defined name is referenced anywhere. Structural
-        # centrality beats naming heuristics: the types everything else touches are the
-        # ones an agent must not misunderstand.
-        references: dict[str, int] = {}
-        for fact in facts:
-            for name in fact.references:
-                references[name] = references.get(name, 0) + 1
-
-        candidates: list[tuple[float, str, str]] = []
-        for path in sorted(ranks, key=lambda p: ranks[p], reverse=True):
-            fact = by_path.get(path)
-            if not fact:
-                continue
-            for name in sorted(fact.defines):
-                if not _TYPE_NAME.match(name) or len(name) < 3:
-                    continue
-                hits = references.get(name, 0)
-                if hits < MIN_ENTITY_REFERENCES:
-                    continue
-                candidates.append((ranks[path] * hits, name, path))
-
-        seen: set[str] = set()
-        for _score, name, path in sorted(candidates, reverse=True):
-            if name in seen:
-                continue
-            seen.add(name)
-            found.entities.append((name, path))
-            if len(found.entities) >= MAX_ENTITIES:
-                break
-
+    found.entities = rank_entities(facts)
     return found
+
+
+def rank_entities(facts: list) -> list[tuple[str, str]]:
+    """The types an agent must not misunderstand, by structural centrality.
+
+    Score is the file's PageRank times how often the name is referenced elsewhere.
+    Naming heuristics would pick whatever sounds domain-ish; this picks what the rest of
+    the codebase actually depends on, which is the thing that breaks when it is wrong.
+    """
+    if not facts:
+        return []
+
+    ranks = repomap.pagerank(repomap.build_graph(facts))
+    by_path = {fact.path: fact for fact in facts}
+
+    references: dict[str, int] = {}
+    for fact in facts:
+        for name in fact.references:
+            references[name] = references.get(name, 0) + 1
+
+    candidates: list[tuple[float, str, str]] = []
+    for path, rank in ranks.items():
+        fact = by_path.get(path)
+        if not fact:
+            continue
+        for name in sorted(fact.defines):
+            hits = references.get(name, 0)
+            if _TYPE_NAME.match(name) and len(name) >= 3 and hits >= MIN_ENTITY_REFERENCES:
+                candidates.append((rank * hits, name, path))
+
+    picked: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for _score, name, path in sorted(candidates, reverse=True):
+        if name not in seen:
+            seen.add(name)
+            picked.append((name, path))
+        if len(picked) >= MAX_ENTITIES:
+            break
+    return picked
 
 
 def render_entities(ctx: GitContext, found: Findings) -> str:

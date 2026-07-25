@@ -90,25 +90,22 @@ def main() -> None:
     counts[sig] = counts.get(sig, 0) + 1
     calls = rec.tool_calls + 1
 
-    touched = list(rec.last_touched)
     ti = event.tool_input
+    target = ""
     if event.tool_name in WRITE_TOOLS and ti.get("file_path"):
-        rel = str(ti["file_path"])
+        target = str(ti["file_path"])
         try:
-            rel = str(Path(rel).resolve().relative_to(ctx.worktree_root))
+            target = str(Path(target).resolve().relative_to(ctx.worktree_root))
         except ValueError:
             pass
-        touched = ([rel] + [t for t in touched if t != rel])[:12]
 
+    # Counters and history are recorded now, because a denied attempt is still an
+    # attempt and loop detection depends on seeing it. `last_touched` is NOT: it feeds
+    # the session board and the review baseline, and a write we refused never happened.
     payload = dict(counts)
     payload["_history"] = history
-    sessions.touch(
-        ctx,
-        event.session_id,
-        tool_calls=calls,
-        tool_signatures=payload,
-        last_touched=touched,
-    )
+    sessions.touch(ctx, event.session_id, tool_calls=calls, tool_signatures=payload)
+    touched = ([target] + [t for t in rec.last_touched if t != target])[:12] if target else []
 
     if calls > cfg.max_tool_calls:
         hookio.deny_tool(
@@ -178,6 +175,11 @@ def main() -> None:
                     "Work on something else, or coordinate before touching this file — "
                     "whoever writes second wins silently and neither of you would notice."
                 )
+
+    # Reached only when every gate allowed the call, so this records what was actually
+    # written rather than what was attempted.
+    if touched:
+        sessions.touch(ctx, event.session_id, last_touched=touched)
 
     hookio.emit_silent()
 

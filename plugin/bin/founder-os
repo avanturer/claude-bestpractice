@@ -9,6 +9,7 @@ directory, so it is correct from any worktree and needs nothing running.
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -16,8 +17,8 @@ from pathlib import Path
 BIN = Path(__file__).resolve().parent
 sys.path.insert(0, str(BIN.parent / "lib"))
 
-from founder_os import __version__, board, drafts, knowledge, onboard, plan  # noqa: E402
-from founder_os import provenance, sessions, stage, store  # noqa: E402
+from founder_os import __version__, board, conflicts, drafts, knowledge, onboard  # noqa: E402
+from founder_os import plan, provenance, sessions, stage  # noqa: E402
 from founder_os.gitctx import resolve  # noqa: E402
 
 BOLD = "\033[1m" if sys.stdout.isatty() else ""
@@ -81,8 +82,17 @@ def cmd_status(ctx) -> int:
     print(f"  {prov.get(provenance.FRESH, 0)} live claim(s), {stale} stale and suppressed")
     print(f"  {DIM}{board.health_line(ctx, len(live), 0)}{OFF}")
 
+    found = conflicts.detect(ctx)
+    if found:
+        heading("CONFLICTS")
+        for conflict in found[:6]:
+            print(f"  {conflict}")
+        print(f"  {DIM}`founder-os adopt` neutralises what can be neutralised{OFF}")
+
     heading("NEXT ACTION")
-    if gaps:
+    if found and any(c.action == "quarantine" for c in found):
+        print("  Another tool contests an event we own: `founder-os adopt`")
+    elif gaps:
         print("  Answer the placeholders in .claude/rules/product.md — nothing else derives them.")
     elif problems:
         print("  Repair the knowledge layer: `founder-os-knowledge validate`")
@@ -119,6 +129,48 @@ def cmd_doctor(_ctx) -> int:
     return subprocess.run([sys.executable, str(BIN / "founder-os-doctor")]).returncode
 
 
+def cmd_adopt(ctx, dry_run: bool, restore: bool) -> int:
+    """Take over the events we own from whatever else is contesting them.
+
+    Contradictory instruction is the failure this exists to prevent, and the harness
+    resolves a contradiction by picking one arbitrarily. Quarantine, never delete:
+    another tool's configuration may be load-bearing for something unrelated, and a
+    plugin that silently removes it is one that gets uninstalled in anger.
+    """
+    if restore:
+        count = conflicts.restore_quarantined(ctx)
+        print(f"restored {count} quarantined hook entr{'y' if count == 1 else 'ies'}")
+        return 0
+
+    found = conflicts.detect(ctx)
+    print(conflicts.render(found))
+    if not found:
+        return 0
+
+    if dry_run:
+        print("\ndry run: nothing changed")
+        return 0
+
+    moved, backups = conflicts.quarantine_loose_hooks(ctx)
+    if moved:
+        print(f"\nquarantined {moved} contesting hook entr{'y' if moved == 1 else 'ies'}")
+        for backup in backups:
+            print(f"  backup: {backup}")
+        print("  undo with `founder-os adopt --restore`")
+
+    excludes = conflicts.exclusion_settings(found)
+    if excludes:
+        print("\nAdd to ~/.claude/settings.json so these stop being concatenated:")
+        print("  " + json.dumps(excludes))
+
+    plugins = [c for c in found if c.kind == "competing-plugin"]
+    if plugins:
+        print("\nA plugin cannot disable another plugin — no such field exists. Run:")
+        for conflict in plugins:
+            print(f"  claude plugin disable {conflict.where}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="founder-os", description="founder-os control plane")
     sub = parser.add_subparsers(dest="command")
@@ -126,6 +178,9 @@ def main() -> int:
     init = sub.add_parser("init", help="derive the knowledge layer from this repository")
     init.add_argument("--force", action="store_true")
     sub.add_parser("doctor", help="prove every gate still fires")
+    adopt = sub.add_parser("adopt", help="take over events another tool is contesting")
+    adopt.add_argument("--dry-run", action="store_true", help="report without changing anything")
+    adopt.add_argument("--restore", action="store_true", help="undo a previous adopt")
 
     args = parser.parse_args()
     ctx = resolve()
@@ -134,6 +189,8 @@ def main() -> int:
         return cmd_init(ctx, args.force)
     if args.command == "doctor":
         return cmd_doctor(ctx)
+    if args.command == "adopt":
+        return cmd_adopt(ctx, args.dry_run, args.restore)
     return cmd_status(ctx)
 
 
