@@ -19,7 +19,7 @@ sys.path.insert(0, str(BIN.parent / "lib"))
 
 from founder_os import __version__, board, conflicts, drafts, knowledge, onboard  # noqa: E402
 from founder_os import plan, provenance, sessions, stage  # noqa: E402
-from founder_os.gitctx import resolve  # noqa: E402
+from founder_os.gitctx import resolve_for_cli  # noqa: E402
 
 BOLD = "\033[1m" if sys.stdout.isatty() else ""
 DIM = "\033[2m" if sys.stdout.isatty() else ""
@@ -183,7 +183,7 @@ def main() -> int:
     adopt.add_argument("--restore", action="store_true", help="undo a previous adopt")
 
     args = parser.parse_args()
-    ctx = resolve()
+    ctx = resolve_for_cli()
 
     if args.command == "init":
         return cmd_init(ctx, args.force)

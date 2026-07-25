@@ -19,7 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
 from founder_os import sessions, stage, store  # noqa: E402
-from founder_os.gitctx import resolve  # noqa: E402
+from founder_os.gitctx import resolve_for_cli  # noqa: E402
 
 
 def main() -> int:
@@ -27,7 +27,7 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="report without deleting")
     args = parser.parse_args()
 
-    ctx = resolve()
+    ctx = resolve_for_cli()
     root = store.tier_b(ctx)
 
     before = sessions.load_all(ctx)

@@ -5,7 +5,7 @@
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
 [![version](https://img.shields.io/badge/version-1.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-359%20passing-2ea44f)](#已验证)
+[![tests](https://img.shields.io/badge/tests-395%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-20%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#运行要求)
@@ -92,7 +92,10 @@ health: 3 live session(s), 1 reaped, 4 open item(s), 1 stale (suppressed)
 ```
 
 去编辑另一个存活会话正持有的文件会被**拒绝**，并指名持有者。崩溃会话的租约和认领由
-回收器释放，而不是永远挂着。
+回收器释放——就在持有它们的那个 worktree 里——而不是永远挂在"进行中"。
+
+安静下来的会话**不会**被当成死亡。按沉默回收意味着：创始人思考十五分钟回来，会话里
+所有 gate 都已经不再强制任何东西。现在判定死亡需要进程真的消失，或其 pid 被复用。
 
 ### 能够合并的工作台账
 
@@ -103,8 +106,12 @@ health: 3 live session(s), 1 reaped, 4 open item(s), 1 stale (suppressed)
 
 ### 完成必须凭证据
 
-Stop gate **丢弃智能体的自述文字**，要求一份机器可读的测试产物：它必须存在、比最新被
-改动的文件更新，并且在从已提交树的干净检出中重跑时通过。
+Stop gate **丢弃智能体的自述文字**，自己去运行你的测试套件，并以它亲自观察到的退出码
+作为证据。一份声称测试通过的文件只是带尖括号的自述：手写的、别的项目的、以及仅仅
+`touch junit.xml`，这三种都击穿过本 gate 早期那个"读产物"的版本。
+
+在原型之后的阶段，它还会针对已提交树的干净检出再跑一次，用来抓"我这儿是绿的、别处是
+红的"那一类问题——某个未提交的文件，或某个本地环境变量。
 
 它也会升级而不是把人卡死：连续四次被拦截之后，它记录一次"未经验证的完成"并放行该轮，
 因为一个永远挡住创始人工作流的 gate，就是一个会被卸载的 gate。
@@ -180,7 +187,7 @@ Stop gate **丢弃智能体的自述文字**，要求一份机器可读的测试
 ## 已验证
 
 ```
-make check    # lint · docs gate · slop gate · knowledge · 359 个测试 · 20 项 doctor 检查 · budget
+make check    # lint · docs gate · slop gate · knowledge · 395 个测试 · 20 项 doctor 检查 · budget
 ```
 
 doctor 通过**真的去做那件坏事**来证明 gate 有效，而不是把配置读回来对一遍——

@@ -248,13 +248,35 @@ def complete(ctx: GitContext, task_id: str) -> tuple[Task | None, str]:
 
 
 def release(ctx: GitContext, session_id: str) -> int:
-    """Return every task this session held to `next`. Called by the reaper."""
+    """Return every task this session held to `next`, in whichever worktree holds it.
+
+    The reaper runs in a surviving session's worktree, but a dead session's task file
+    lives in ITS worktree — and scanning only the local ledger, as this used to, left
+    the work of every crashed sibling marked in flight forever. That is precisely the
+    stuck-board failure the ledger exists to avoid, and the several-worktrees-at-once
+    case is the normal one here rather than the exception.
+    """
     released = 0
-    for task in load_all(ctx, DOING):
-        if task.owner == session_id:
-            _move(ctx, task, NEXT)
-            released += 1
+    for root in sibling_worktrees(ctx) or [ctx.worktree_root]:
+        directory = root / store.TIER_A_DIRNAME / PLAN_DIR / DOING
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.glob("[0-9][0-9][0-9][0-9]-*.md")):
+            task = _load(path, DOING)
+            if task and task.owner == session_id:
+                _move_to(path, root / store.TIER_A_DIRNAME / PLAN_DIR / NEXT, task)
+                released += 1
     return released
+
+
+def _move_to(path: Path, target_dir: Path, task: Task) -> None:
+    """Rename a task file within the worktree that owns it, not the caller's."""
+    store.ensure_dir(target_dir)
+    meta, body = _frontmatter(path.read_text(encoding="utf-8"))
+    updated = _render(task.id, meta.get("title", task.title), NEXT, "", meta.get("branch", ""), body)
+    store.atomic_write(target_dir / path.name, updated, mode=0o644)
+    if target_dir / path.name != path:
+        path.unlink(missing_ok=True)
 
 
 def summary(ctx: GitContext) -> dict[str, int]:

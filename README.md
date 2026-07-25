@@ -5,7 +5,7 @@
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
 [![version](https://img.shields.io/badge/version-1.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-359%20passing-2ea44f)](#verified)
+[![tests](https://img.shields.io/badge/tests-395%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-20%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
@@ -95,7 +95,12 @@ health: 3 live session(s), 1 reaped, 4 open item(s), 1 stale (suppressed)
 ```
 
 Editing a file another live session holds is **denied**, naming the owner. A crashed
-session's leases and claims are released by the reaper instead of held forever.
+session's leases and claims are released by the reaper — in whichever worktree holds
+them — instead of staying in flight forever.
+
+A session that goes quiet is **not** treated as dead. Reaping on silence meant a founder
+who thought for fifteen minutes came back to a session whose every gate had stopped
+enforcing, so death now requires the process to be gone or its pid recycled.
 
 ### A work ledger that merges
 
@@ -106,9 +111,14 @@ because worktrees share the namespace before their files are ever committed.
 
 ### Completion accepted on evidence
 
-The Stop gate **discards the agent's prose** and requires a machine-readable test
-artifact that exists, is newer than the newest changed file, and passes when re-run from
-a clean checkout of the committed tree.
+The Stop gate **discards the agent's prose** and runs your test suite itself, treating
+its own observed exit code as the evidence. A file claiming the tests passed is an
+assertion with angle brackets: a hand-written one, one from another project, and `touch
+junit.xml` all defeated an earlier artifact-reading version of this gate.
+
+Past prototype stage it additionally re-runs against a clean checkout of the committed
+tree, which catches the green-here-red-there class — an uncommitted file, a local
+environment variable.
 
 It also escalates rather than wedging: after four blocked attempts it records an
 unverified finish and lets the turn end, because a gate that blocks a founder's workflow
@@ -188,7 +198,7 @@ against a cap of 400 — roughly 0.1 % of a 200k window.
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · knowledge · 359 tests · 20 doctor checks · budget
+make check    # lint · docs gate · slop gate · knowledge · 395 tests · 20 doctor checks · budget
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration

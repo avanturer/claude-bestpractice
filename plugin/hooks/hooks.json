@@ -1,6 +1,6 @@
 {
   "$comment": [
-    "Five entries. Budget is 12 across the whole plugin; a thirteenth requires deleting one.",
+    "Nine entries across eight events. Budget is 12 for the whole plugin; a thirteenth requires deleting one.",
     "",
     "PROTOCOL, because these are the cheap ways to ship a gate that enforces nothing:",
     "  - Exit 2 blocks. Exit 1 is a NON-blocking error and the tool RUNS.",

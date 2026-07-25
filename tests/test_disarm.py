@@ -299,5 +299,109 @@ class TestConcurrentIdAllocation(RepoCase):
         self.assertEqual(len(set(ids)), 10, f"duplicate ids: {sorted(ids)}")
 
 
+class TestARenameActuallyFailsValidation(RepoCase):
+    """The README's headline memory claim, which a substring test did not deliver."""
+
+    def test_a_rename_that_keeps_the_old_name_as_a_substring_is_caught(self):
+        from founder_os import knowledge
+
+        self.write("models.py", "class PurchaseOrder:\n    pass\n")
+        self.assertFalse(
+            knowledge.anchor_resolves(self.ctx(), "Order @ models.py"),
+            "`Order` resolved against its own replacement `PurchaseOrder`",
+        )
+
+    def test_the_symbol_still_being_there_resolves(self):
+        from founder_os import knowledge
+
+        self.write("models.py", "class Order:\n    pass\n")
+        self.assertTrue(knowledge.anchor_resolves(self.ctx(), "Order @ models.py"))
+
+
+class TestTheDecisionIndexKeepsTheNewest(RepoCase):
+    def test_truncation_drops_the_oldest_not_the_newest(self):
+        from founder_os import knowledge
+
+        for i in range(1, 26):
+            self.write(
+                f".claude/rules/decisions/{i:04d}-decision-{i}.md",
+                f"---\ntitle: Decision {i}\n---\n\n## Decision\nx\n",
+            )
+        index = knowledge.build_index(self.ctx())
+        self.assertIn("[0025]", index, "the newest decision was dropped")
+        self.assertNotIn("[0001]", index, "the oldest was kept over the newest")
+
+        claimed = int(index.split("... ")[1].split(" older")[0])
+        listed = index.count("— `decisions/")
+        self.assertEqual(claimed + listed, 25, "the dropped count does not add up")
+
+
+class TestTheReaperReachesOtherWorktrees(RepoCase):
+    def test_a_dead_sibling_s_claim_returns_to_the_queue(self):
+        """The reaper runs in a surviving worktree; the dead session's file is not there."""
+        from founder_os import plan
+        from founder_os.gitctx import resolve
+
+        ctx = self.ctx()
+        task = plan.add(ctx, "ship the thing")
+        plan.claim(ctx, task.id, "ghost", "feat/x")
+
+        other = self.repo.parent / "sibling"
+        subprocess.run(
+            ["git", "worktree", "add", "--detach", "--quiet", str(other)],
+            cwd=str(self.repo), capture_output=True, timeout=120, check=True,
+        )
+        released = plan.release(resolve(other), "ghost")
+        self.assertEqual(released, 1, "a dead sibling's task stayed in flight forever")
+        self.assertEqual(plan.find(ctx, task.id).state, plan.NEXT)
+
+
+class TestTheQuarantineBackupIsNotWorldReadable(RepoCase):
+    def test_a_backup_of_local_settings_keeps_its_secrets_private(self):
+        from founder_os import conflicts
+
+        self.write(
+            ".claude/settings.local.json",
+            json.dumps(
+                {
+                    "env": {"MY_API_TOKEN": "sk-live-not-a-real-secret"},
+                    "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "other-tool"}]}]},
+                }
+            ),
+        )
+        moved, backups = conflicts.quarantine_loose_hooks(self.ctx())
+        self.assertTrue(moved and backups)
+        backup = self.repo / ".claude" / backups[0]
+        self.assertEqual(backup.stat().st_mode & 0o077, 0, "the backup is readable by others")
+
+
+class TestCLIsOutsideARepositorySaySoPlainly(unittest.TestCase):
+    """A traceback reads as a crash in the tool; this is an ordinary situation."""
+
+    CLIS = {
+        "founder-os": ["status"],
+        "founder-os-plan": ["list"],
+        "founder-os-knowledge": ["validate"],
+        "founder-os-reindex": [],
+        "founder-os-decide": ["list"],
+    }
+
+    def run_cli(self, name: str, args: list) -> subprocess.CompletedProcess:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            return subprocess.run(
+                [sys.executable, str(BIN / name), *args],
+                capture_output=True, text=True, cwd=tmp, timeout=120,
+            )
+
+    def test_no_traceback(self):
+        for name, args in self.CLIS.items():
+            with self.subTest(cli=name):
+                proc = self.run_cli(name, args)
+                self.assertNotIn("Traceback", proc.stderr, f"{name} dumped a traceback")
+                self.assertIn("git repository", proc.stderr + proc.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -122,6 +122,19 @@ def stash_baseline(ctx: GitContext) -> str:
     return sha or ctx.head
 
 
+def resolve_for_cli(cwd: Path | str | None = None) -> GitContext:
+    """Resolve, or exit with a sentence instead of a stack trace.
+
+    Being outside a repository is an ordinary thing to do — every command here is
+    repo-scoped, and a traceback reads as "this tool is broken" rather than "you are in
+    the wrong directory".
+    """
+    try:
+        return resolve(cwd)
+    except GitError as exc:
+        raise SystemExit(f"founder-os: {exc}\nRun this inside a git repository.")
+
+
 def blob_sha(ctx: GitContext, relpath: str) -> str | None:
     """Content hash of a tracked file, for provenance stamping.
 

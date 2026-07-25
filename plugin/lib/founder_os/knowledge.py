@@ -155,9 +155,14 @@ def anchor_resolves(ctx: GitContext, code: str) -> bool:
         return False
     if not identifier:
         return True
+    # Whole-word, not substring. `Order` was satisfied by `OrderLine`, `WorkOrder` and
+    # `reorder`, so renaming `Order` to `PurchaseOrder` left the anchor resolving
+    # against its own replacement and the headline promise — a rename fails validation
+    # — was false for exactly the renames people actually perform.
+    word = re.compile(rf"\b{re.escape(identifier)}\b")
     if target.is_dir():
-        return any(identifier in _read(p) for p in target.rglob("*") if p.is_file())
-    return identifier in _read(target)
+        return any(word.search(_read(p)) for p in target.rglob("*") if p.is_file())
+    return bool(word.search(_read(target)))
 
 
 def validate(ctx: GitContext) -> list[Problem]:
@@ -301,14 +306,21 @@ def build_index(ctx: GitContext) -> str:
             superseded.add(meta["supersedes"].strip())
         entries.append((number, title, path.name))
 
-    for number, title, filename in entries:
-        if number in superseded:
-            continue  # retired by a later record; never deleted, just not indexed
-        lines.append(f"- [{number}] {title} — `decisions/{filename}`")
+    live = [e for e in entries if e[0] not in superseded]
 
-    if len(lines) > INDEX_MAX_LINES:
-        keep = INDEX_MAX_LINES - 1
-        lines = lines[:keep] + [f"- ... {len(entries) - (keep - 2)} older, see `decisions/`"]
+    # Newest first when it has to be cut. Decision files sort oldest-first, so taking a
+    # prefix kept the oldest records and dropped the most recent ones — then called the
+    # discarded half "older". The index therefore hid exactly the decisions most likely
+    # to still be in force, which is the opposite of what it is for.
+    shown, dropped = live, 0
+    room = INDEX_MAX_LINES - len(lines) - 1
+    if len(live) > room:
+        shown, dropped = live[-room:], len(live) - room
+
+    for number, title, filename in shown:
+        lines.append(f"- [{number}] {title} — `decisions/{filename}`")
+    if dropped:
+        lines.append(f"- ... {dropped} older, see `decisions/`")
     return "\n".join(lines) + "\n"
 
 

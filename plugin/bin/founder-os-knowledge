@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
 from founder_os import knowledge  # noqa: E402
-from founder_os.gitctx import resolve  # noqa: E402
+from founder_os.gitctx import resolve_for_cli  # noqa: E402
 
 PRODUCT_TEMPLATE = """# Product
 
@@ -152,7 +152,7 @@ def main() -> int:
     sub.add_parser("brief", help="print what a subagent would receive")
 
     args = parser.parse_args()
-    ctx = resolve()
+    ctx = resolve_for_cli()
 
     if args.command == "init":
         return cmd_init(ctx, args.force)

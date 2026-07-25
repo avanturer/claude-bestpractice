@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
 from founder_os import plan, sessions  # noqa: E402
-from founder_os.gitctx import resolve  # noqa: E402
+from founder_os.gitctx import resolve_for_cli  # noqa: E402
 
 
 def cmd_add(ctx, title: str, body: str) -> int:
@@ -84,7 +84,7 @@ def main() -> int:
     done.add_argument("task_id")
 
     args = parser.parse_args()
-    ctx = resolve()
+    ctx = resolve_for_cli()
 
     if args.command == "add":
         return cmd_add(ctx, args.title, args.body)

@@ -210,8 +210,11 @@ def quarantine_loose_hooks(ctx: GitContext) -> tuple[int, list[str]]:
         if not moved:
             continue
 
+        # 0600, not 0644. settings.local.json is where personal tokens live, and the
+        # backup is a NEW file no standard .gitignore covers — so a world-readable copy
+        # of someone's credentials appears next to it, ready for the next `git add -A`.
         backup = path.with_suffix(path.suffix + ".founder-os.bak")
-        store.atomic_write(backup, json.dumps(data, indent=2), mode=0o644)
+        store.atomic_write(backup, json.dumps(data, indent=2), mode=0o600)
         backups.append(backup.name)
 
         data["hooks"] = remaining
