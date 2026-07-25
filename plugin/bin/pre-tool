@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""PreToolUse: the fuses. Counters, loop detection, secret pre-write scan, leases.
+
+Fails CLOSED. This gate's entire value is refusing things; a crash that silently
+allows is the failure mode that makes a security plugin decorative.
+
+Denials are returned as `permissionDecision: deny` with a reason rather than exit 2.
+That talks to the model, which self-corrects silently — the founder is never
+interrupted. Reserve exit 2 for a gate whose failure must be loud.
+
+Never reads TOOL_NAME or TOOL_INPUT from the environment. Those variables do not
+exist; shipped plugins that read them enforce nothing.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from founder_os import config, evidence, hookio, redact, sessions  # noqa: E402
+from founder_os.gitctx import resolve  # noqa: E402
+
+WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
+SIGNATURE_HISTORY = 64
+
+
+def signature(event: hookio.HookEvent) -> str:
+    """Identify a repeated action without keying on volatile detail.
+
+    Includes the target path so editing two different files is not mistaken for a
+    loop, and excludes free-form content so a retry with a one-character change is not
+    mistaken for progress.
+    """
+    ti = event.tool_input
+    target = ti.get("file_path") or ti.get("path") or ti.get("command") or ""
+    return f"{event.tool_name}:{str(target)[:160]}"
+
+
+def proposed_content(event: hookio.HookEvent) -> str:
+    ti = event.tool_input
+    parts = [str(ti.get(k, "")) for k in ("content", "new_string", "new_str")]
+    edits = ti.get("edits")
+    if isinstance(edits, list):
+        parts.extend(str(e.get("new_string", "")) for e in edits if isinstance(e, dict))
+    return "\n".join(p for p in parts if p)
+
+
+def main() -> None:
+    event = hookio.read_event()
+    ctx = resolve(event.cwd or os.getcwd())
+    cfg = config.load(ctx)
+
+    rec = sessions.get(ctx, event.session_id)
+    if rec is None:
+        # No registered session means SessionStart never ran. Allow, because refusing
+        # every tool call in a session we simply failed to observe would brick it.
+        hookio.emit_silent()
+
+    sig = signature(event)
+    history = list(rec.tool_signatures.get("_history", [])) if isinstance(rec.tool_signatures.get("_history"), list) else []
+    history.append(sig)
+    history = history[-SIGNATURE_HISTORY:]
+
+    counts = {k: v for k, v in rec.tool_signatures.items() if k != "_history" and isinstance(v, int)}
+    counts[sig] = counts.get(sig, 0) + 1
+    calls = rec.tool_calls + 1
+
+    touched = list(rec.last_touched)
+    ti = event.tool_input
+    if event.tool_name in WRITE_TOOLS and ti.get("file_path"):
+        rel = str(ti["file_path"])
+        try:
+            rel = str(Path(rel).resolve().relative_to(ctx.worktree_root))
+        except ValueError:
+            pass
+        touched = ([rel] + [t for t in touched if t != rel])[:12]
+
+    payload = dict(counts)
+    payload["_history"] = history
+    sessions.touch(
+        ctx,
+        event.session_id,
+        tool_calls=calls,
+        tool_signatures=payload,
+        last_touched=touched,
+    )
+
+    if calls > cfg.max_tool_calls:
+        hookio.deny_tool(
+            f"founder-os: this session has made {calls} tool calls, past the ceiling of "
+            f"{cfg.max_tool_calls}. Stop and summarise what is done and what remains."
+        )
+
+    if counts[sig] > cfg.max_repeat_signature:
+        hookio.deny_tool(
+            f"founder-os: `{sig}` has now been attempted {counts[sig]} times. Repeating it "
+            "is not making progress. Change approach, or state plainly that you are stuck."
+        )
+
+    if cfg.loop_detect:
+        loop = evidence.detect_loop(history)
+        if loop:
+            hookio.deny_tool(
+                f"founder-os: detected a repeating cycle: {loop}. Break out of it — try a "
+                "different approach or report the blocker."
+            )
+
+    if event.tool_name in WRITE_TOOLS:
+        content = proposed_content(event)
+        hits = redact.find(content)
+        if hits:
+            hookio.deny_tool(
+                f"founder-os: refusing this write — it contains what looks like a credential "
+                f"({', '.join(hits)}). Put it in an environment variable and reference it. "
+                "Post-hoc cleanup does not work: the value is already on disk and in the "
+                "transcript, which .gitignore does not cover."
+            )
+
+    hookio.emit_silent()
+
+
+if __name__ == "__main__":
+    hookio.guard(main, fail_closed=True)

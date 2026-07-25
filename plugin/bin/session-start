@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+"""SessionStart: reap the dead, register this session, inject the board.
+
+Fails OPEN. A crash here means no context, which is recoverable. Blocking a session
+from starting because a coordination nicety broke would be worse than the problem.
+
+Matcher must include `compact` and `resume`: rules re-injected verbatim after a
+compaction restore compliance to 0% violation, and compaction is the single largest
+destroyer of in-context rules (0% -> 30% after one round, 78% after four).
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from founder_os import board, config, hookio, sessions, stage, store  # noqa: E402
+from founder_os.gitctx import GitContext, resolve, stash_baseline  # noqa: E402
+
+
+def build_record(ctx: GitContext, event: hookio.HookEvent) -> sessions.SessionRecord:
+    existing = sessions.get(ctx, event.session_id)
+    now = time.time()
+    baseline = stash_baseline(ctx)
+
+    if existing:
+        # A resume or post-compaction restart keeps its identity, its task statement
+        # and its baseline. Re-deriving the baseline here would silently move the
+        # review anchor and make the diff since "start of work" wrong.
+        existing.heartbeat_at = now
+        existing.pid = sessions.owning_pid()
+        existing.branch = ctx.branch
+        return existing
+
+    return sessions.SessionRecord(
+        session_id=event.session_id or f"anon-{os.getpid()}",
+        pid=sessions.owning_pid(),
+        worktree=ctx.worktree_root.as_posix(),
+        branch=ctx.branch,
+        baseline_commit=baseline,
+        started_at=now,
+        heartbeat_at=now,
+        model=str(event.raw.get("model") or ""),
+        effort=str((event.raw.get("effort") or {}).get("level", "") if isinstance(event.raw.get("effort"), dict) else ""),
+    )
+
+
+def main() -> None:
+    event = hookio.read_event()
+    ctx = resolve(event.cwd or os.getcwd())
+
+    store.ensure_dir(store.tier_b(ctx))
+    reaped = sessions.reap(ctx)
+
+    me = build_record(ctx, event)
+    sessions.register(ctx, me)
+
+    others = sessions.live_sessions(ctx, exclude=me.session_id)
+    leases = {rec.session_id: sessions.leases_held_by(ctx, rec.session_id) for rec in others}
+
+    resolved_stage, _signals = stage.current(ctx, config.load(ctx).stage_override)
+
+    body = board.render(ctx, me, others, len(reaped), leases)
+    body += f"\nstage: {resolved_stage} (computed from the repository, not configured)"
+
+    hookio.emit_context("SessionStart", body)
+
+
+if __name__ == "__main__":
+    hookio.guard(main, fail_closed=False)

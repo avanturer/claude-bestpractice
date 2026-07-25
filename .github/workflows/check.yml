@@ -1,0 +1,54 @@
+name: check
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+# The repo layer binds everyone, including a session running without the plugin.
+# That is the point of running the same gates here that run locally.
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.9 is the declared floor. Testing only the newest version is how a floor
+        # quietly stops being true.
+        python-version: ["3.9", "3.11", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The substrate is defined in terms of git's own behaviour — the common
+          # directory, worktree registration, blob hashes. A shallow clone changes
+          # those answers, so the tests would be exercising a different git.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Identify git
+        run: |
+          git config --global user.email "ci@founder-os"
+          git config --global user.name "ci"
+          git config --global init.defaultBranch main
+
+      - name: No dependencies to install
+        run: |
+          echo "stdlib only by constraint — enforced by tools/check_stdlib_only.py"
+          python -c "import sys; print(sys.version)"
+
+      - name: Lint
+        run: make lint
+
+      - name: Tests
+        run: make test
+
+      - name: Doctor
+        run: make doctor
+
+      - name: Budget
+        run: make budget

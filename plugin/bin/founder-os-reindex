@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+"""Drop and rebuild Tier B.
+
+Tier B is derived state: the session registry, leases, open items, caches. It must
+always be safe to delete, and that path must be exercised rather than assumed —
+every store that cannot be rebuilt eventually becomes a store nobody dares touch.
+
+Live sessions are re-registered from nothing but their own next heartbeat, so the
+worst outcome of running this mid-flight is a board that looks empty for one turn.
+Open items live in Tier A once accepted, so nothing durable is lost.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from founder_os import sessions, stage, store  # noqa: E402
+from founder_os.gitctx import resolve  # noqa: E402
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Rebuild founder-os derived state.")
+    parser.add_argument("--dry-run", action="store_true", help="report without deleting")
+    args = parser.parse_args()
+
+    ctx = resolve()
+    root = store.tier_b(ctx)
+
+    before = sessions.load_all(ctx)
+    size = sum(f.stat().st_size for f in root.rglob("*") if f.is_file()) if root.exists() else 0
+
+    print(f"repo:    {ctx.worktree_root}")
+    print(f"tier b:  {root}")
+    print(f"holding: {len(before)} session record(s), {size / 1024:.0f}KB")
+
+    if args.dry_run:
+        print("\ndry run: nothing removed")
+        return 0
+
+    store.purge_tier_b(ctx)
+    store.ensure_dir(root)
+
+    resolved, signals = stage.current(ctx)
+    print("\nrebuilt.")
+    print(f"stage:   {resolved}")
+    for reason in signals.reasons[:6]:
+        print(f"         - {reason}")
+    print("\nLive sessions re-register on their next hook. Nothing durable was lost:")
+    print("Tier A (checkpoints, decisions, config, stage) is committed and untouched.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+"""PreCompact: persist what the window is about to destroy. Zero model calls.
+
+Compaction is the largest measured destroyer of in-context state, and micro-compaction
+never fires this event at all. So the rule is architectural: persist at WRITE time,
+never at compact time, and treat this hook as a flush rather than a save point.
+
+Exactly one surveyed tool registers PreCompact. The rest re-inject after the window
+has already collapsed, which recovers nothing.
+
+Extraction is deliberately cheap — no summarisation, no model. A stateful model
+reducer in front of a durable queue is a trap: you persist the fragments and lose the
+reducer state, and the leading memory plugin bills up to ~8k input tokens per tool
+call for the privilege.
+
+TRANSCRIPT HANDLING: the transcript format is documented as internal and changing
+between releases, so it is used only as optional enrichment. Everything load-bearing
+comes from our own session record. If the transcript cannot be read or its shape
+changed, the checkpoint is still written — just thinner.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from founder_os import hookio, redact, sessions, store  # noqa: E402
+from founder_os.gitctx import changed_files, resolve  # noqa: E402
+
+MAX_TURN_CHARS = 300
+MAX_TURNS = 3
+
+
+def read_user_turns(transcript_path: str) -> list[str]:
+    """Best-effort extraction of recent user turns. Never raises."""
+    if not transcript_path:
+        return []
+    try:
+        text = Path(transcript_path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+
+    turns: list[str] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(rec, dict) or rec.get("type") != "user":
+            continue
+        if rec.get("isSidechain"):
+            continue
+        message = rec.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, str):
+            body = content
+        elif isinstance(content, list):
+            body = " ".join(
+                str(part.get("text", ""))
+                for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
+        else:
+            continue
+        body = body.strip()
+        if body:
+            turns.append(body)
+    return turns
+
+
+def main() -> None:
+    event = hookio.read_event()
+    ctx = resolve(event.cwd or os.getcwd())
+    rec = sessions.get(ctx, event.session_id)
+
+    turns = read_user_turns(event.transcript_path)
+    opening = turns[0] if turns else (rec.task_statement if rec else "")
+    recent = turns[-MAX_TURNS:] if turns else []
+
+    changed = changed_files(ctx, rec.baseline_commit if rec else None)
+
+    lines = [
+        "---",
+        f"kind: checkpoint",
+        f"session_id: {event.session_id}",
+        f"trigger: {event.raw.get('trigger', 'unknown')}",
+        f"created_at: {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}",
+        f"repository: {ctx.worktree_root.name}",
+        f"branch: {ctx.branch}",
+        f"git_sha: {ctx.head}",
+        f"baseline_commit: {rec.baseline_commit if rec else ''}",
+        f"capture: extractive",
+        "---",
+        "",
+        "## Opening request",
+        "",
+        redact.scrub(redact.strip_control(opening))[:MAX_TURN_CHARS] or "(not captured)",
+        "",
+        "## Recent turns",
+        "",
+    ]
+    if recent:
+        for turn in recent:
+            lines.append(f"- {redact.scrub(redact.strip_control(turn))[:MAX_TURN_CHARS]}")
+    else:
+        lines.append("- (transcript unavailable or in an unrecognised format)")
+
+    lines += ["", "## Files changed since baseline", ""]
+    lines.extend(f"- {p}" for p in changed[:60]) if changed else lines.append("- (none)")
+    if len(changed) > 60:
+        lines.append(f"- ... and {len(changed) - 60} more")
+
+    stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+    name = f"{stamp}-{(event.session_id or 'anon')[:8]}.md"
+    path = store.tier_a(ctx, "checkpoints", name)
+    store.atomic_write(path, "\n".join(lines) + "\n", mode=0o644)
+
+    hookio.emit_silent()
+
+
+if __name__ == "__main__":
+    hookio.guard(main, fail_closed=False)

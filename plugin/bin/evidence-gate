@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+"""Stop: the spine. Completion is accepted on evidence, never on assertion.
+
+Order matters. Scope drift is checked first because it is free and because a session
+that edited files it was never asked to touch has a problem no passing suite excuses.
+
+Escalation: the platform overrides a Stop hook after 8 consecutive blocks, so blocking
+forever just burns turns and ends the turn anyway. After MAX_CONSECUTIVE_BLOCKS we
+stop blocking and write a durable failure marker instead — the next session reads it
+at start. A gate that wedges a founder's workflow gets uninstalled, and an uninstalled
+gate enforces nothing.
+
+Fails CLOSED: a crash blocks. If verification cannot run, "done" has not been earned.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from founder_os import board, config, evidence, hookio, sessions, stage, store  # noqa: E402
+from founder_os.gitctx import changed_files, resolve  # noqa: E402
+
+BLOCK_COUNTER = "_consecutive_blocks"
+FAILURE_MARKER = "unverified.jsonl"
+
+
+def _blocks(rec: sessions.SessionRecord) -> int:
+    value = rec.tool_signatures.get(BLOCK_COUNTER)
+    return value if isinstance(value, int) else 0
+
+
+def _bump_blocks(ctx, rec: sessions.SessionRecord, value: int) -> None:
+    payload = dict(rec.tool_signatures)
+    payload[BLOCK_COUNTER] = value
+    sessions.touch(ctx, rec.session_id, tool_signatures=payload)
+
+
+def _give_up(ctx, rec: sessions.SessionRecord, reason: str) -> None:
+    """Record an unverified finish so it survives the turn and surfaces next session."""
+    store.append_jsonl(
+        store.tier_b(ctx, FAILURE_MARKER),
+        {
+            "session_id": rec.session_id,
+            "branch": rec.branch,
+            "baseline_commit": rec.baseline_commit,
+            "reason": reason,
+            "recorded_at": time.time(),
+        },
+    )
+    board.add_open_item(
+        ctx,
+        item_id=f"unverified-{rec.session_id[:8]}-{int(time.time())}",
+        text=f"UNVERIFIED finish on {rec.branch}: {reason[:200]}",
+        branch=rec.branch,
+        session_id=rec.session_id,
+    )
+
+
+def main() -> None:
+    event = hookio.read_event()
+
+    # Already inside a Stop-driven continuation: allow, or the gate loops on itself.
+    if event.stop_hook_active:
+        hookio.emit_silent()
+
+    ctx = resolve(event.cwd or os.getcwd())
+    cfg = config.load(ctx)
+    rec = sessions.get(ctx, event.session_id)
+    if rec is None:
+        hookio.emit_silent()
+
+    resolved_stage, _ = stage.current(ctx, cfg.stage_override)
+    gates = stage.gates_for(resolved_stage)
+
+    attempts = _blocks(rec)
+    exempt = list(cfg.exempt_paths) + [".claude/founder-os/"]
+    changed = evidence.material_changes(changed_files(ctx, rec.baseline_commit), exempt)
+
+    if not changed:
+        _bump_blocks(ctx, rec, 0)
+        hookio.emit_silent()
+
+    problems: list[str] = []
+
+    if cfg.scope_drift_block and gates["scope_drift"]:
+        drift = evidence.scope_drift(changed, rec.task_paths, exempt)
+        if drift:
+            shown = ", ".join(drift[:8]) + (f" (+{len(drift) - 8} more)" if len(drift) > 8 else "")
+            problems.append(
+                f"Scope drift: {shown} were modified but the task did not mention them.\n"
+                f"Task was: {rec.task_statement[:200]}\n"
+                "Revert what is out of scope, or state why it was necessary."
+            )
+
+    if gates["evidence_gate"]:
+        verdict = evidence.verify(ctx, cfg.artifact_globs, changed)
+        if not verdict.ok:
+            problems.append(verdict.reason)
+        elif gates["clean_rerun"] and (cfg.clean_rerun is not False):
+            clean = evidence.clean_rerun(ctx, cfg.test_command)
+            if not clean.ok:
+                problems.append(clean.reason)
+
+    if not problems:
+        _bump_blocks(ctx, rec, 0)
+        hookio.emit_silent()
+
+    reason = "\n\n".join(problems)
+
+    if attempts >= evidence.MAX_CONSECUTIVE_BLOCKS:
+        _give_up(ctx, rec, reason)
+        _bump_blocks(ctx, rec, 0)
+        sys.stderr.write(
+            "founder-os: finishing UNVERIFIED after "
+            f"{attempts} blocked attempts. Recorded for the next session.\n"
+        )
+        hookio.emit_silent()
+
+    _bump_blocks(ctx, rec, attempts + 1)
+    hookio.block(
+        f"founder-os [{attempts + 1}/{evidence.MAX_CONSECUTIVE_BLOCKS}] — not done yet.\n\n"
+        f"{reason}\n\n"
+        "Your description of what you did is not evidence and was not read."
+    )
+
+
+if __name__ == "__main__":
+    hookio.guard(main, fail_closed=True)

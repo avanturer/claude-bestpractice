@@ -51,8 +51,43 @@ agent writes a settings file.
 
 ## Status
 
-Design complete, implementation not started. Nothing in `plugin/` or `policy/` is functional yet —
-the manifests are structural placeholders that encode the decisions in the documents above.
+V1 implemented and green. Python 3.9+, **standard library only** — enforced by
+`tools/check_stdlib_only.py`, because these hooks run on every tool call and a dependency tree is
+latency, an extra failure mode, and a supply-chain surface for the component whose whole job is to be
+trustworthy.
+
+```
+make check     # lint + 147 tests + doctor + budget
+make doctor    # prove each gate fires by attempting a known-bad action
+```
+
+| Gate | Event | Posture | Does |
+|---|---|---|---|
+| `session-start` | SessionStart | fails open | Reaps dead sessions, registers this one, injects the board and the computed stage |
+| `prompt-capture` | UserPromptSubmit | fails open | Records the verbatim task statement. **Injects nothing** |
+| `pre-tool` | PreToolUse | **fails closed** | Tool-call ceiling, repeat-signature deny, 3-gram loop break, credential pre-write scan |
+| `checkpoint` | PreCompact | fails open | Extractive checkpoint, zero model calls, secrets scrubbed |
+| `evidence-gate` | Stop | **fails closed** | Scope drift, then a fresh passing test artifact, then a clean-checkout re-run past prototype stage |
+
+Five hook entries against a budget of twelve. Always-on context cost ~107 tokens against a cap of 400.
+
+Not yet built: the knowledge layer (`entities.yaml`, decision records), provenance staleness sweeps,
+file leases wired into `pre-tool`, background review, the production airlock. See
+[`docs/ROADMAP.md`](docs/ROADMAP.md).
+
+## Install
+
+```sh
+git clone <this repo> ~/founder-os
+claude plugin marketplace add ~/founder-os/plugin
+claude plugin install founder-os@founder-marketplace
+```
+
+Plugin changes take effect in the **next** session, not the current one.
+
+The plugin is the delivery vehicle. For rules that must survive the agent editing its own config, also
+install the policy layer — see [`policy/README.md`](policy/README.md), and run `make doctor` after
+every change, because config-readback cannot detect a semantics change.
 
 ## Honest limits
 

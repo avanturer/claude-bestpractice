@@ -1,22 +1,14 @@
 {
   "$comment": [
-    "V1 SKELETON — three gates, nothing else. Budget: 12 hook entries maximum across the whole",
-    "plugin; adding a thirteenth requires deleting one. See docs/ROADMAP.md.",
+    "Five entries. Budget is 12 across the whole plugin; a thirteenth requires deleting one.",
     "",
-    "Every command below is a placeholder path and none of these scripts exist yet.",
+    "PROTOCOL, because these are the cheap ways to ship a gate that enforces nothing:",
+    "  - Exit 2 blocks. Exit 1 is a NON-blocking error and the tool RUNS.",
+    "  - The event arrives on STDIN as JSON. TOOL_NAME / TOOL_INPUT env vars do not exist.",
+    "  - type 'http' fails OPEN on non-2xx, timeout and connection error. Never use it for a gate.",
     "",
-    "PROTOCOL REMINDERS, because these are the cheap ways to ship a gate that enforces nothing:",
-    "  - Exit 2 blocks. Exit 1 is a NON-blocking error and the tool RUNS. This inverts Unix",
-    "    convention and is the highest-probability silent defect in the design.",
-    "  - Guards read the event JSON from STDIN. Do not read TOOL_NAME / TOOL_INPUT environment",
-    "    variables; they do not exist.",
-    "  - Guards are `set -euo pipefail` with `trap 'exit 2' ERR`, and exit 2 on unparseable input.",
-    "  - Never use type 'http' for a gate that must hold: non-2xx, connection failures and timeouts",
-    "    are non-blocking, i.e. they fail open.",
-    "  - The plugin root is user-writable and its path changes on every update. Guards that must not",
-    "    be tampered with live outside it; persistent state lives in the plugin data directory.",
-    "  - Claude Code overrides a Stop hook and ends the turn after 8 consecutive blocks. Escalate the",
-    "    reason, then switch to a durable failure marker."
+    "Verify with `plugin/bin/founder-os-doctor`, which proves each gate by attempting a",
+    "known-bad action rather than reading this file back."
   ],
 
   "hooks": {
@@ -27,8 +19,33 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/bin/session-start",
-            "timeout": 20,
+            "timeout": 30,
             "statusMessage": "founder-os: session board"
+          }
+        ]
+      }
+    ],
+
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/prompt-capture",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/pre-tool",
+            "timeout": 15
           }
         ]
       }
@@ -53,7 +70,7 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/bin/evidence-gate",
-            "timeout": 600,
+            "timeout": 900,
             "statusMessage": "founder-os: verifying"
           }
         ]

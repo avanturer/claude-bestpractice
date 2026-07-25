@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+"""UserPromptSubmit: capture the task statement. Inject nothing.
+
+Emitting context here would be the single most expensive mistake available to this
+plugin. A per-turn block is written into cache each turn and re-read on every later
+turn — O(T^2) against O(T) for a session-start block. Measured in base-input
+equivalents for a 1,000-token block: 6,000 once versus 164,000 per-turn at 41 turns.
+So this hook writes to disk and returns silence.
+
+What it captures is the verbatim first prompt, which is the anchor for the scope-drift
+check. Verbatim matters: the one measured decomposition method that paraphrased
+forward scored 41% worse by collapsing exactly the constraints that carry weight.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from founder_os import hookio, sessions  # noqa: E402
+from founder_os.gitctx import resolve  # noqa: E402
+
+MAX_TASK_CHARS = 600
+
+# Path-shaped tokens: an explicit separator, or a bare filename with an extension.
+_PATH = re.compile(r"[A-Za-z0-9_./\-]*[/][A-Za-z0-9_./\-]+|\b[A-Za-z0-9_\-]+\.[A-Za-z0-9]{1,6}\b")
+_NOISE = {"e.g.", "i.e.", "etc.", "vs."}
+
+
+def extract_paths(text: str, root: Path) -> list[str]:
+    """Paths the task actually refers to.
+
+    Only tokens that resolve to something on disk, or name a directory, are kept. A
+    prompt mentioning `README.md` in passing should not widen the allowed blast radius
+    to the whole repository, and a token that matches nothing is almost always prose.
+    """
+    found: list[str] = []
+    for raw in _PATH.findall(text):
+        token = raw.strip(".,;:()[]\"'`")
+        if not token or token in _NOISE or len(token) < 3:
+            continue
+        candidate = root / token
+        if candidate.exists():
+            found.append(token.rstrip("/"))
+            continue
+        parent = candidate.parent
+        if parent != root and parent.is_dir():
+            found.append(token.rstrip("/"))
+    return sorted(set(found))
+
+
+def main() -> None:
+    event = hookio.read_event()
+    ctx = resolve(event.cwd or os.getcwd())
+
+    rec = sessions.get(ctx, event.session_id)
+    if rec is None:
+        hookio.emit_silent()
+
+    prompt = (event.prompt or "").strip()
+    if prompt and not rec.task_statement:
+        sessions.touch(
+            ctx,
+            event.session_id,
+            task_statement=prompt[:MAX_TASK_CHARS],
+            task_paths=extract_paths(prompt, ctx.worktree_root),
+        )
+    else:
+        sessions.touch(ctx, event.session_id)
+
+    hookio.emit_silent()
+
+
+if __name__ == "__main__":
+    hookio.guard(main, fail_closed=False)
