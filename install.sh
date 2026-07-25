@@ -65,11 +65,35 @@ fi
 dim "$(tail -1 /tmp/founder-os-doctor.log)"
 
 # ---------------------------------------------------------------------- register
+# The CLI installs a COPY into its own plugin cache, pinned to a commit. So a second run
+# over new source used to leave the old gates running while the doctor certified the new
+# ones and the script printed "installed" — an update mechanism that updated nothing.
+# `update` is what refreshes the cache; `install` on an existing plugin is a no-op.
 bold "registering"
-claude plugin marketplace add "$INSTALL_DIR/plugin" >/dev/null 2>&1 \
-  || dim "marketplace already registered"
-claude plugin install "${PLUGIN}@${MARKETPLACE}" >/dev/null 2>&1 \
-  || dim "plugin already installed"
+if ! claude plugin marketplace add "$INSTALL_DIR/plugin" >/dev/null 2>&1; then
+  claude plugin marketplace update "$MARKETPLACE" >/dev/null 2>&1 \
+    || dim "marketplace already registered"
+fi
+
+if claude plugin list 2>/dev/null | grep -q "^${PLUGIN}@${MARKETPLACE}"; then
+  dim "updating the installed copy"
+  claude plugin update "${PLUGIN}@${MARKETPLACE}" >/tmp/founder-os-register.log 2>&1 \
+    || { cat /tmp/founder-os-register.log; die "could not update the installed plugin"; }
+else
+  claude plugin install "${PLUGIN}@${MARKETPLACE}" >/tmp/founder-os-register.log 2>&1 \
+    || { cat /tmp/founder-os-register.log; die "could not install the plugin"; }
+fi
+
+# Prove the registered COPY is the code we just verified, rather than trusting the
+# CLI's exit status. The doctor above ran against the source tree, not the cache.
+INSTALLED_VERSION="$("$PY" - "$INSTALL_DIR" <<'EOF'
+import json, pathlib, sys
+print(json.loads((pathlib.Path(sys.argv[1]) / "plugin/.claude-plugin/plugin.json").read_text())["version"])
+EOF
+)"
+if ! claude plugin list 2>/dev/null | grep -q "$INSTALLED_VERSION"; then
+  dim "warning: the CLI does not report version $INSTALLED_VERSION — run 'claude plugin list'"
+fi
 
 # The plugin's bin/ is on the Bash tool's PATH inside a session automatically. This
 # symlink is only so the commands also work in the founder's own terminal.

@@ -83,11 +83,13 @@ def main() -> None:
     if event.stop_hook_active:
         hookio.emit_silent()
 
-    ctx = resolve(event.cwd or os.getcwd())
+    ctx = hookio.repo(event.cwd or os.getcwd())
     cfg = config.load(ctx)
     rec = sessions.get(ctx, event.session_id)
     if rec is None:
-        hookio.emit_silent()
+        # Re-register rather than allow. A missing record used to mean "finish freely",
+        # which made the whole evidence requirement removable with `rm`.
+        rec = sessions.adopt(ctx, event.session_id)
 
     resolved_stage, _ = stage.current(ctx, cfg.stage_override)
     gates = stage.gates_for(resolved_stage)
@@ -131,7 +133,7 @@ def main() -> None:
             )
 
     if gates["evidence_gate"]:
-        verdict = evidence.verify(ctx, cfg.artifact_globs, changed)
+        verdict = evidence.verify(ctx, cfg.artifact_globs, changed, cfg.test_command)
         if not verdict.ok:
             problems.append(verdict.reason)
         elif gates["clean_rerun"] and (cfg.clean_rerun is not False):

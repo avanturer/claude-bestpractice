@@ -116,17 +116,123 @@ def _make_has_test(root: Path) -> bool:
     return any(line.startswith("test:") for line in text.splitlines())
 
 
+# The type each key must end up as. Kept beside the dataclass rather than derived from
+# its annotations, because `str | None` and `list[str]` do not survive introspection on
+# 3.9 with postponed evaluation, and a schema that only works on new Pythons is worse
+# than one written out.
+_EXPECTED: dict[str, type] = {
+    "test_command": list,
+    "artifact_globs": list,
+    "clean_rerun": bool,
+    "scope_drift_block": bool,
+    "loop_detect": bool,
+    "leases_enabled": bool,
+    "lease_ttl_seconds": float,
+    "max_tool_calls": int,
+    "max_repeat_signature": int,
+    "stage_override": str,
+    "exempt_paths": list,
+}
+
+_BOOL_WORDS = {"true": True, "false": False, "yes": True, "no": False, "1": True, "0": False}
+
+
+def coerce(key: str, value: Any) -> tuple[Any, str]:
+    """Force a hand-edited value into the shape the code expects, or reject it.
+
+    Returns (value, complaint); an empty complaint means it was accepted. This file is
+    edited by a human in a text editor, so the realistic inputs are `"false"` for false,
+    `"2000"` for a number, and a bare string where a list belongs. Every one of those
+    used to be copied raw onto the dataclass. `"false"` is truthy, so a founder who
+    switched leases off still had them on; `"2000"` reached an int comparison inside a
+    fail-closed gate and turned one typo into "every tool call in this repository is
+    blocked" for every session.
+    """
+    want = _EXPECTED.get(key)
+    if want is None:
+        return value, f"unknown key {key!r}"
+    coerced = _COERCERS[want](value)
+    return (coerced, "") if coerced is not None else (None, f"{key}: expected {_NAMES[want]}, got {value!r}")
+
+
+def _as_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return _BOOL_WORDS.get(value.strip().lower())
+    return None
+
+
+def _as_number(value: Any) -> float | None:
+    # `isinstance(True, int)` is True in Python, so booleans are excluded explicitly:
+    # `"max_tool_calls": true` is a mistake, not a request for a ceiling of one.
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+def _as_int(value: Any) -> int | None:
+    number = _as_number(value)
+    return None if number is None else int(number)
+
+
+def _as_list(value: Any) -> list[str] | None:
+    if isinstance(value, list):
+        return [str(v) for v in value]
+    # A bare string iterates as characters, so `"exempt_paths": "docs/"` silently became
+    # five single-letter path prefixes that matched most of the tree.
+    return value.split() if isinstance(value, str) else None
+
+
+def _as_text(value: Any) -> str | None:
+    return str(value) if isinstance(value, (str, int, float)) else None
+
+
+_COERCERS = {bool: _as_bool, float: _as_number, int: _as_int, list: _as_list, str: _as_text}
+_NAMES = {bool: "true or false", float: "a number", int: "a whole number", list: "a list", str: "text"}
+
+
 def load(ctx: GitContext) -> Config:
+    """Read the config, repairing what can be repaired and ignoring what cannot.
+
+    A bad value falls back to the default; it never propagates into a gate. Use
+    `load_checked` where the complaints should be shown to a human.
+    """
+    cfg, _complaints = load_checked(ctx)
+    return cfg
+
+
+def load_checked(ctx: GitContext) -> tuple[Config, list[str]]:
     raw = store.read_json(store.tier_a(ctx, CONFIG_NAME), default={}) or {}
+    complaints: list[str] = []
     if not isinstance(raw, dict):
         raw = {}
+        complaints.append(f"{CONFIG_NAME} is not a JSON object; every value defaulted")
+
     cfg = Config()
-    for key in cfg.to_dict():
-        if key in raw and raw[key] is not None:
-            setattr(cfg, key, raw[key])
+    known = cfg.to_dict()
+    for key, value in raw.items():
+        if key not in known:
+            complaints.append(f"unknown key {key!r} ignored")
+            continue
+        if value is None:
+            continue
+        coerced, complaint = coerce(key, value)
+        if complaint:
+            complaints.append(f"{complaint} — using the default {known[key]!r}")
+            continue
+        setattr(cfg, key, coerced)
+
+    if cfg.stage_override is not None and cfg.stage_override not in ("prototype", "traction", "revenue"):
+        complaints.append(f"stage_override {cfg.stage_override!r} is not a known stage; ignored")
+        cfg.stage_override = None
+
     if not cfg.test_command:
         cfg.test_command = detect_test_command(ctx.worktree_root)
-    return cfg
+    return cfg, complaints
 
 
 def save(ctx: GitContext, cfg: Config) -> Path:

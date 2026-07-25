@@ -25,7 +25,7 @@ from founder_os.gitctx import resolve  # noqa: E402
 
 def main() -> None:
     event = hookio.read_event()
-    ctx = resolve(event.cwd or os.getcwd())
+    ctx = hookio.repo(event.cwd or os.getcwd())
 
     store.ensure_dir(store.tier_b(ctx))
     for state in plan.STATES:

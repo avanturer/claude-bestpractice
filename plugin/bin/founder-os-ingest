@@ -47,6 +47,11 @@ QUARANTINED = "QUARANTINED"
 REQUIRED = ("fingerprint", "type", "message", "frames", "release", "count")
 
 
+def _ident(value: str) -> str:
+    """Reduce attacker-controlled text to something that cannot leave its line."""
+    return re.sub(r"[^A-Za-z0-9_.:-]", "_", str(value))[:80] or "unknown"
+
+
 def fence(body: str) -> str:
     """A fence one backtick longer than anything inside it, so the payload cannot close it."""
     longest = max((len(m) for m in re.findall(r"`+", body)), default=0)
@@ -113,7 +118,11 @@ def render(signal: dict, status: str, missing: list[str]) -> str:
         "---",
         "kind: production-signal",
         f"status: {status}",
-        f"fingerprint: {signal['fingerprint']}",
+        # Squashed to an identifier shape, not merely escaped. This is the ONE
+        # attacker-controlled value rendered outside the fence and above the
+        # untrusted-data banner, so a newline in it lands arbitrary text where the
+        # reader has been told the content is trustworthy. Same squash as the filename.
+        f"fingerprint: {_ident(signal['fingerprint'])}",
         f"ingested_at: {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}",
         "---",
         "",
@@ -157,7 +166,7 @@ def ingest(ctx, raw_items: list[dict]) -> list[Path]:
         else:
             status = ACTIVE
 
-        name = re.sub(r"[^A-Za-z0-9_-]", "_", signal["fingerprint"] or str(time.time()))[:60]
+        name = _ident(signal["fingerprint"] or str(time.time()))[:60]
         path = out_dir / f"{name}.md"
         store.atomic_write(path, render(signal, status, missing), mode=0o644)
         written.append(path)

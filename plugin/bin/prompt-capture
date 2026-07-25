@@ -55,11 +55,11 @@ def extract_paths(text: str, root: Path) -> list[str]:
 
 def main() -> None:
     event = hookio.read_event()
-    ctx = resolve(event.cwd or os.getcwd())
+    ctx = hookio.repo(event.cwd or os.getcwd())
 
     rec = sessions.get(ctx, event.session_id)
     if rec is None:
-        hookio.emit_silent()
+        rec = sessions.adopt(ctx, event.session_id)
 
     prompt = (event.prompt or "").strip()
     if prompt and not rec.task_statement:

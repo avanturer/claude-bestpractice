@@ -198,15 +198,19 @@ class TestReviewCommit(GateCase):
         )
 
     def context(self, proc) -> str:
-        try:
-            return json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
-        except (json.JSONDecodeError, KeyError, TypeError):
-            return ""
+        """What the model will actually receive.
+
+        stderr on exit 2, NOT stdout. This gate runs asyncRewake, and that path wakes
+        the model only on a non-zero exit while discarding stdout — so asserting on
+        `additionalContext`, as this test used to, passed against a channel the harness
+        throws away. Every finding was computed and then silently dropped.
+        """
+        return proc.stderr if proc.returncode == 2 else ""
 
     def test_clean_diff_says_nothing(self):
         self.start()
         self.write("ok.py", "def f() -> int:\n    return 1\n")
-        self.assertNotIn("additionalContext", self.review().stdout)
+        self.assertEqual(self.review().returncode, 0, "a clean diff must not wake the model")
 
     def test_flags_a_swallowed_exception(self):
         self.start()

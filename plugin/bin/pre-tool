@@ -72,14 +72,16 @@ def proposed_content(event: hookio.HookEvent) -> str:
 
 def main() -> None:
     event = hookio.read_event()
-    ctx = resolve(event.cwd or os.getcwd())
+    ctx = hookio.repo(event.cwd or os.getcwd())
     cfg = config.load(ctx)
 
     rec = sessions.get(ctx, event.session_id)
     if rec is None:
-        # No registered session means SessionStart never ran. Allow, because refusing
-        # every tool call in a session we simply failed to observe would brick it.
-        hookio.emit_silent()
+        # No record means SessionStart never ran, or something deleted it. Re-register
+        # and keep enforcing. Allowing here — the previous behaviour — made every gate
+        # in this file switch off for any session whose record went missing, so the
+        # secret scan and the leases could be disabled with `rm`.
+        rec = sessions.adopt(ctx, event.session_id)
 
     sig = signature(event)
     history = list(rec.tool_signatures.get("_history", [])) if isinstance(rec.tool_signatures.get("_history"), list) else []
@@ -166,7 +168,9 @@ def main() -> None:
         # a silent overwrite where neither side knows it happened, which is the defining
         # risk of the several-sessions-at-once operating mode.
         if cfg.leases_enabled and touched:
-            owner = sessions.acquire_lease(ctx, event.session_id, touched[0])
+            owner = sessions.acquire_lease(
+                ctx, event.session_id, touched[0], ttl=cfg.lease_ttl_seconds
+            )
             if owner:
                 other = sessions.get(ctx, owner)
                 where = f" on branch {other.branch}" if other else ""

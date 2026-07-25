@@ -38,6 +38,16 @@ class HookInputError(ValueError):
     """The event payload could not be parsed. Always fail closed on this."""
 
 
+class NotApplicable(Exception):
+    """There is nothing here to govern. Distinct from a gate that broke.
+
+    Raised where the preconditions for enforcing anything are simply absent — chiefly
+    a working directory outside any git repository. Fail-closed gates let this through,
+    because refusing every action in a directory the plugin has no opinion about is not
+    caution, it is a broken editor.
+    """
+
+
 @dataclass(frozen=True)
 class HookEvent:
     raw: dict[str, Any]
@@ -170,6 +180,20 @@ def deny_tool(reason: str) -> NoReturn:
     raise SystemExit(OK)
 
 
+def repo(cwd: Any) -> Any:
+    """Resolve the repository, or declare this event out of scope.
+
+    Every gate starts with this, so the "not a repository" case is decided in one place
+    rather than nine.
+    """
+    from .gitctx import GitError, resolve
+
+    try:
+        return resolve(cwd)
+    except GitError as exc:
+        raise NotApplicable(str(exc)) from exc
+
+
 def guard(main: Any, *, fail_closed: bool) -> NoReturn:
     """Run a gate body with the correct failure posture.
 
@@ -184,6 +208,12 @@ def guard(main: Any, *, fail_closed: bool) -> NoReturn:
         main()
     except SystemExit:
         raise
+    except NotApplicable:
+        # Every guarantee here is defined in terms of a repository — diffs, baselines,
+        # blob hashes, worktrees. Outside one there is nothing to enforce, and treating
+        # that as a gate failure meant the first session opened in ~/notes refused every
+        # Write, Edit and Bash call forever. Absent is not the same as broken.
+        emit_silent()
     except HookInputError as exc:
         if fail_closed:
             block(f"founder-os: {exc}. Refusing to proceed without a parseable event.")

@@ -78,7 +78,7 @@ def read_user_turns(transcript_path: str) -> list[str]:
 
 def main() -> None:
     event = hookio.read_event()
-    ctx = resolve(event.cwd or os.getcwd())
+    ctx = hookio.repo(event.cwd or os.getcwd())
     rec = sessions.get(ctx, event.session_id)
 
     turns = read_user_turns(event.transcript_path)

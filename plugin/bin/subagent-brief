@@ -36,7 +36,7 @@ REPOMAP_TOKEN_BUDGET = 400
 
 def main() -> None:
     event = hookio.read_event()
-    ctx = resolve(event.cwd or os.getcwd())
+    ctx = hookio.repo(event.cwd or os.getcwd())
 
     parts = [knowledge.subagent_brief(ctx, max_chars=BRIEF_CHAR_BUDGET)]
 

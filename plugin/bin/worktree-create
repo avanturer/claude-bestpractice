@@ -79,7 +79,7 @@ def trust_worktree(path: str) -> bool:
 
 def main() -> None:
     event = hookio.read_event()
-    ctx = resolve(event.cwd or os.getcwd())
+    ctx = hookio.repo(event.cwd or os.getcwd())
 
     requested = str(event.raw.get("path") or event.raw.get("worktreePath") or "")
     branch = str(event.raw.get("branch") or event.raw.get("ref") or "").strip() or "work"

@@ -1,7 +1,14 @@
 """The evidence gate — the spine of the plugin.
 
-The agent's prose is discarded. Completion is accepted only on a machine-readable
-artifact that exists, is newer than the newest changed file, and reports passing.
+The agent's prose is discarded. Completion is accepted only when the gate has itself
+run the test suite against the code as it stands and seen it exit zero.
+
+An earlier version accepted a machine-readable artifact that was newer than the newest
+changed file. Three attacks broke it, and none needed an adversary: a hand-written
+four-line JUnit file was accepted over a committed, genuinely failing test; an artifact
+from a different project in 2019 was accepted; and `touch junit.xml` cleared the
+freshness check on stale evidence. A file asserting that tests passed is prose with
+angle brackets. So the gate stops reading assertions and runs the thing.
 
 Why this shape and not a smarter one:
 
@@ -14,22 +21,26 @@ Why this shape and not a smarter one:
 * False success collapses from ~45-76% to 3% in the one benchmark domain where the
   environment verifies state independently. Same models. The verifier is the variable.
 
-Freshness is mtime-based *against the diff*, which is the one place mtime is the
-correct clock: the question is "was this artifact produced after the code changed",
-and both sides are local filesystem events.
+Re-running is skipped only when a receipt from this gate already covers the identical
+tree, and "identical" means blob hashes of the changed files rather than their mtimes.
+Content-addressed both because `touch` must not buy a pass and because creating a
+worktree resets every mtime in the tree, which this workflow does constantly.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
 import subprocess
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import provenance, store
 from .gitctx import GitContext, changed_files
 
 # Consecutive Stop blocks before we stop blocking and leave a durable marker instead.
@@ -47,6 +58,8 @@ class Artifact:
     total: int
     failed: int
     detail: str
+    skipped: int = 0
+    bound: bool = False
 
 
 @dataclass
@@ -87,16 +100,26 @@ def _parse_junit(path: Path, mtime: float) -> Artifact | None:
     if not suites and root.tag != "testsuites":
         return None
 
-    total = failed = 0
+    total = failed = skipped = 0
     for suite in suites or [root]:
         total += int(suite.get("tests", 0) or 0)
         failed += int(suite.get("failures", 0) or 0) + int(suite.get("errors", 0) or 0)
+        skipped += int(suite.get("skipped", 0) or 0)
 
-    # Zero collected tests is not a pass. A suite that ran nothing is the cheapest way
-    # to make a gate green, and it is indistinguishable from success in the raw counts.
-    passed = total > 0 and failed == 0
-    detail = f"{total - failed}/{total} passed" if total else "no tests collected"
-    return Artifact(path, mtime, passed, total, failed, detail)
+    # Zero EXECUTED tests is not a pass. Collected-minus-skipped, not collected: one
+    # `skipif` on a missing DATABASE_URL turns a whole suite into "2/2 passed" over a
+    # run that asserted nothing, and that is an ordinary accident rather than an attack.
+    executed = max(total - skipped, 0)
+    passed = executed > 0 and failed == 0
+    detail = _detail(executed, failed, skipped)
+    return Artifact(path, mtime, passed, total, failed, detail, skipped)
+
+
+def _detail(executed: int, failed: int, skipped: int) -> str:
+    if not executed:
+        return f"no tests executed ({skipped} skipped)" if skipped else "no tests collected"
+    out = f"{executed - failed}/{executed} passed"
+    return f"{out}, {skipped} skipped" if skipped else out
 
 
 def _parse_pytest_json(path: Path, mtime: float) -> Artifact | None:
@@ -111,9 +134,10 @@ def _parse_pytest_json(path: Path, mtime: float) -> Artifact | None:
         return None
     total = int(summary.get("total") or summary.get("collected") or 0)
     failed = int(summary.get("failed", 0)) + int(summary.get("error", 0))
-    passed = total > 0 and failed == 0 and data.get("exitcode", 0) == 0
-    detail = f"{total - failed}/{total} passed"
-    return Artifact(path, mtime, passed, total, failed, detail)
+    skipped = int(summary.get("skipped", 0)) + int(summary.get("deselected", 0))
+    executed = max(total - skipped, 0)
+    passed = executed > 0 and failed == 0 and data.get("exitcode", 0) == 0
+    return Artifact(path, mtime, passed, total, failed, _detail(executed, failed, skipped), skipped)
 
 
 # A gate that tells a Node project to run pytest is a gate the agent learns to ignore.
@@ -163,14 +187,96 @@ def material_changes(changed: list[str], exempt: list[str]) -> list[str]:
     return out
 
 
-def verify(ctx: GitContext, globs: list[str], changed: list[str]) -> Verdict:
-    """Tier 1: a fresh, passing, machine-readable artifact must exist.
+RECEIPTS_FILE = "test-receipts.json"
+RUN_TIMEOUT = 900
+MAX_RECEIPTS = 32
+
+# POSIX shells report "command not found" this way, and it is the difference
+# between "your tests fail" and "your test runner is not installed".
+NOT_EXECUTABLE = 127
+
+
+def tree_fingerprint(ctx: GitContext, changed: list[str]) -> str:
+    """What "this exact code" means, content-addressed.
+
+    Blob hashes of the working copies, not mtimes: `touch` must not change the answer,
+    and a worktree checkout — which resets every mtime in the tree — must not either.
+    """
+    hashes = provenance.hash_paths(ctx, sorted(changed))
+    material = "\n".join(f"{rel}:{hashes.get(rel, 'gone')}" for rel in sorted(changed))
+    return hashlib.sha256(f"{ctx.head}\n{material}".encode()).hexdigest()[:32]
+
+
+def _receipts(ctx: GitContext) -> dict:
+    raw = store.read_json(store.tier_b(ctx, RECEIPTS_FILE), default={}) or {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def record_receipt(ctx: GitContext, fingerprint: str, command: list[str], exit_code: int) -> None:
+    """Remember that WE ran the suite, on exactly this code, and what it returned."""
+    table = _receipts(ctx)
+    table[fingerprint] = {"command": command, "exit": exit_code, "at": time.time()}
+    for key in sorted(table, key=lambda k: table[k].get("at", 0))[:-MAX_RECEIPTS]:
+        table.pop(key, None)
+    store.write_json(store.tier_b(ctx, RECEIPTS_FILE), table)
+
+
+def receipt_for(ctx: GitContext, fingerprint: str) -> dict | None:
+    got = _receipts(ctx).get(fingerprint)
+    return got if isinstance(got, dict) else None
+
+
+def run_suite(ctx: GitContext, command: list[str], fingerprint: str) -> tuple[int, str]:
+    """Run the tests and record what happened. The gate's own execution IS the evidence.
+
+    Everything else is forgeable. A JUnit file proves only that a file exists saying the
+    tests passed — writing one by hand takes four lines, and `touch` defeats any
+    freshness check based on mtime. Both were demonstrated against the previous version
+    of this gate. So the gate stops reading claims and runs the suite itself.
+    """
+    env = dict(os.environ)
+    env["FOUNDER_OS_VERIFYING"] = "1"
+    try:
+        proc = subprocess.run(
+            command,
+            cwd=str(ctx.worktree_root),
+            capture_output=True,
+            text=True,
+            timeout=RUN_TIMEOUT,
+            env=env,
+        )
+    except FileNotFoundError:
+        return -1, f"test command not found: {command[0]}"
+    except OSError as exc:
+        return -1, f"could not run the test command: {exc}"
+    except subprocess.TimeoutExpired:
+        return -1, f"the suite exceeded {RUN_TIMEOUT}s and was killed"
+
+    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-25:])
+    if proc.returncode == NOT_EXECUTABLE:
+        # The shell's "command not found". `npm test` exists and exits 127 because
+        # vitest is not installed — the suite did not fail, it never ran, and calling
+        # that a test failure sends the agent hunting for a bug that is not there.
+        return -1, tail
+    record_receipt(ctx, fingerprint, command, proc.returncode)
+    return proc.returncode, tail
+
+
+def verify(ctx: GitContext, globs: list[str], changed: list[str], command: list[str] | None = None) -> Verdict:
+    """Tier 1: the suite must have actually run, here, on this code, and passed.
 
     `changed` is passed in rather than recomputed so the caller decides what counts as
-    material, and so one git invocation serves the whole gate.
+    material, and so one git invocation serves the whole gate. `command` is what turns
+    a claim into evidence — without it the gate can only read an artifact, and an
+    artifact on its own is unbound.
     """
     if not changed:
         return Verdict(True, "no changes to verify")
+
+    if command:
+        bound = _verify_by_running(ctx, globs, changed, command)
+        if bound is not None:
+            return bound
 
     candidates = find_artifacts(ctx.worktree_root, globs)
     if not candidates:
@@ -210,7 +316,49 @@ def verify(ctx: GitContext, globs: list[str], changed: list[str]) -> Verdict:
             artifact,
         )
 
-    return Verdict(True, f"{artifact.path.name}: {artifact.detail}", artifact)
+    return Verdict(
+        True,
+        f"{artifact.path.name}: {artifact.detail} (UNBOUND — no test command is "
+        "configured, so this artifact was read, not witnessed)",
+        artifact,
+    )
+
+
+def _verify_by_running(ctx: GitContext, globs: list[str], changed: list[str], command: list[str]) -> Verdict | None:
+    """Witness the suite. Returns None to fall back to reading an artifact.
+
+    Re-running is skipped when a receipt already covers this exact tree, so finishing a
+    turn twice does not pay for the suite twice — but the receipt is keyed on content,
+    so a single edited character invalidates it.
+    """
+    fingerprint = tree_fingerprint(ctx, changed)
+    receipt = receipt_for(ctx, fingerprint)
+    if receipt is None:
+        code, tail = run_suite(ctx, command, fingerprint)
+        if code == -1:
+            # Cannot witness. Say so and fall back rather than wedging the session:
+            # an unrunnable command is a setup problem, not evidence of a bug.
+            return None
+    else:
+        code, tail = int(receipt.get("exit", 1)), "(from this gate's earlier run on identical code)"
+
+    if code != 0:
+        return Verdict(
+            False,
+            f"The suite FAILS on the code as it stands.\n$ {' '.join(command)}\n{tail}",
+        )
+
+    artifact = None
+    for path in find_artifacts(ctx.worktree_root, globs):
+        artifact = parse_artifact(path)
+        if artifact:
+            break
+    if artifact and not artifact.passed:
+        return Verdict(False, f"{artifact.path.name}: {artifact.detail}.", artifact)
+    if artifact:
+        artifact.bound = True
+        return Verdict(True, f"suite run by the gate: exit 0; {artifact.path.name}: {artifact.detail}", artifact)
+    return Verdict(True, f"suite run by the gate: exit 0 ({' '.join(command)})")
 
 
 def clean_rerun(ctx: GitContext, command: list[str]) -> Verdict:
@@ -260,6 +408,12 @@ def clean_rerun(ctx: GitContext, command: list[str]) -> Verdict:
         return Verdict(True, "clean-checkout re-run passed")
     except subprocess.TimeoutExpired:
         return Verdict(False, f"clean re-run exceeded {CLEAN_RERUN_TIMEOUT}s and was killed")
+    except OSError as exc:
+        # A missing or unexecutable runner used to escape as an exception, straight past
+        # the gate's escalation counter and into the fail-closed handler. That wedged the
+        # session permanently: every Stop returned exit 2, the counter never advanced, and
+        # the four-strikes release could never fire. A setup problem must be reportable.
+        return Verdict(False, f"could not run the clean re-run ({exc}). Check the test command.")
     finally:
         subprocess.run(
             ["git", "worktree", "remove", "--force", str(target)],

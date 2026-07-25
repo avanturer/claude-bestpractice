@@ -4,9 +4,18 @@ One file per session, never a shared mutable index. That is the whole concurrenc
 story: N sessions produce N distinct writes and never contend. The only shared
 mutable structure is the lease table, and it is guarded.
 
-Liveness is two-part: the pid must be alive AND the worktree must still be
-registered with git. A pid check alone reports a dead session as live the moment the
-OS reuses its pid, and a session whose worktree was removed is dead regardless.
+Liveness needs POSITIVE evidence of death, never mere silence. An earlier version
+declared a session dead once its heartbeat went quiet for fifteen minutes, and that
+was the single worst defect this plugin has had: a founder who thinks for a quarter of
+an hour comes back to a session whose record a sibling has deleted, after which every
+gate takes the missing-record branch and enforces nothing for the rest of its life.
+Secrets written, untested work accepted, and no signal anywhere. Silence is what a
+working session looks like while a human reads.
+
+So death is: the process is gone, or the pid was recycled by a different process, or
+the worktree is no longer registered with git. A quiet heartbeat is grounds for death
+only past a ceiling far longer than any think, and only as a backstop against records
+that outlived a reboot.
 """
 
 from __future__ import annotations
@@ -20,9 +29,15 @@ from typing import Any
 from . import store
 from .gitctx import GitContext, worktree_paths
 
-# A session that has not touched its record in this long is presumed dead. Hooks fire
-# on every tool call, so a live session refreshes far more often than this.
+# Older than this and the board stops calling the session active. It is a DISPLAY
+# threshold: a quiet session is still enforcing, and reaping on it is what broke the
+# gates. Death is decided by the process, not by the clock.
 HEARTBEAT_STALE_SECONDS = 900.0
+
+# The backstop for a record that outlived the process it describes — a hard reboot
+# reuses pids from 1 and can hand a stale record a live, unrelated pid. Long enough
+# that no amount of thinking, lunch, or an overnight pause reaches it.
+HEARTBEAT_DEAD_SECONDS = 36 * 3600.0
 
 SESSIONS_DIR = "sessions"
 
@@ -52,6 +67,7 @@ class SessionRecord:
     baseline_commit: str
     started_at: float
     heartbeat_at: float
+    pid_fingerprint: str = ""
     task_statement: str = ""
     task_paths: list[str] = field(default_factory=list)
     model: str = ""
@@ -92,10 +108,31 @@ def pid_alive(pid: int) -> bool:
     return True
 
 
+def pid_fingerprint(pid: int) -> str:
+    """Tell a still-running process apart from a stranger wearing its pid.
+
+    Boot-relative start time, which no two processes on one boot can share for the same
+    pid. Empty where the kernel does not expose it, and an empty fingerprint is never
+    treated as a mismatch — an unsupported platform must not start reaping live work.
+    """
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as handle:
+            # The comm field can itself contain ')', so split from the right.
+            fields = handle.read().rsplit(b")", 1)[1].split()
+        return fields[19].decode("ascii")
+    except (OSError, IndexError, UnicodeDecodeError):
+        return ""
+
+
 def is_live(ctx: GitContext, rec: SessionRecord, known_worktrees: set[str] | None = None) -> bool:
-    if (time.time() - rec.heartbeat_at) > HEARTBEAT_STALE_SECONDS:
-        return False
     if not pid_alive(rec.pid):
+        return False
+    # Only a POSITIVE mismatch kills. Both sides empty means we cannot tell, and "cannot
+    # tell" must resolve to live, because the cost of a wrong reap is a disarmed session.
+    current = pid_fingerprint(rec.pid)
+    if rec.pid_fingerprint and current and current != rec.pid_fingerprint:
+        return False
+    if (time.time() - rec.heartbeat_at) > HEARTBEAT_DEAD_SECONDS:
         return False
     if known_worktrees is None:
         known_worktrees = {p.as_posix() for p in worktree_paths(ctx)}
@@ -103,6 +140,11 @@ def is_live(ctx: GitContext, rec: SessionRecord, known_worktrees: set[str] | Non
     if known_worktrees and rec.worktree not in known_worktrees:
         return False
     return True
+
+
+def is_idle(rec: SessionRecord) -> bool:
+    """Quiet for a while. Cosmetic — the board dims it; nothing is enforced differently."""
+    return (time.time() - rec.heartbeat_at) > HEARTBEAT_STALE_SECONDS
 
 
 def load_all(ctx: GitContext) -> list[SessionRecord]:
@@ -119,7 +161,32 @@ def load_all(ctx: GitContext) -> list[SessionRecord]:
 
 def register(ctx: GitContext, rec: SessionRecord) -> None:
     rec.heartbeat_at = time.time()
+    if not rec.pid_fingerprint:
+        rec.pid_fingerprint = pid_fingerprint(rec.pid)
     store.write_json(_record_path(ctx, rec.session_id), rec.to_dict())
+
+
+def adopt(ctx: GitContext, session_id: str) -> SessionRecord:
+    """Re-register a session whose record is missing, and keep enforcing.
+
+    A gate that finds no record has two options and only one of them is defensible.
+    Allowing means a deleted file silently switches off the secret scan, the leases and
+    the evidence gate — enforcement you can remove with `rm`. So the gate rebuilds a
+    minimal record instead and carries on; the fields it cannot recover (the baseline,
+    the task statement) only degrade the review and the drift check, which is a far
+    smaller loss than enforcing nothing.
+    """
+    rec = SessionRecord(
+        session_id=session_id or f"anon-{owning_pid()}",
+        pid=owning_pid(),
+        worktree=ctx.worktree_root.as_posix(),
+        branch=ctx.branch,
+        baseline_commit=ctx.head,
+        started_at=time.time(),
+        heartbeat_at=time.time(),
+    )
+    register(ctx, rec)
+    return rec
 
 
 def get(ctx: GitContext, session_id: str) -> SessionRecord | None:

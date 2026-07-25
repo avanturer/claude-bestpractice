@@ -152,8 +152,13 @@ class TestFullLifecycle(Scenario):
             "evidence-gate", session_id="s1", hook_event_name="Stop", stop_hook_active=False
         )
         self.assertEqual(blocked.returncode, 2)
+        # `npm test` is configured but vitest is not installed in the fixture, so the
+        # gate cannot witness a run and falls back to demanding an artifact. Both the
+        # unrunnable case and the no-artifact case must block, and neither may claim the
+        # tests failed — a missing runner is a setup problem, not a red suite.
         self.assertIn("not accepted as evidence", blocked.stderr)
         self.assertIn("vitest", blocked.stderr, "the hint must match this project's stack")
+        self.assertNotIn("The suite FAILS", blocked.stderr)
 
         self.write("junit.xml", JUNIT_FAIL)
         still = self.hook(

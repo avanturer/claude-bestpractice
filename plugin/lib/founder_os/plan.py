@@ -169,10 +169,23 @@ def _render(task_id: str, title: str, state: str, owner: str, branch: str, body:
     return "\n".join(lines)
 
 
+ALLOC_LOCK = "plan-alloc.lock"
+
+
 def add(ctx: GitContext, title: str, body: str = "", branch: str = "") -> Task:
-    task_id = next_id(ctx)
-    path = plan_dir(ctx, NEXT) / f"{task_id}-{slug(title)}.md"
-    store.atomic_write(path, _render(task_id, title, NEXT, "", branch, body), mode=0o644)
+    """Allocate an id and create the task under one lock.
+
+    Scanning for the highest id and then writing the file is a read-modify-write, and
+    eight sessions doing it at once is the operating mode this plugin is for. Unlocked,
+    concurrent adds hand the same number to several tasks; the duplicates then merge
+    cleanly, because one file per task is exactly what does not conflict — and after
+    that `claim 0007` and `done 0007` silently act on whichever one `find` reaches
+    first. The lock is held across both steps or it buys nothing.
+    """
+    with store.file_lock(store.tier_b(ctx, ALLOC_LOCK)):
+        task_id = next_id(ctx)
+        path = plan_dir(ctx, NEXT) / f"{task_id}-{slug(title)}.md"
+        store.atomic_write(path, _render(task_id, title, NEXT, "", branch, body), mode=0o644)
     return _load(path, NEXT)
 
 

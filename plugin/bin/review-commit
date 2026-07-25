@@ -176,7 +176,7 @@ def write_report(ctx, findings: list[tuple[str, str, int, str]], baseline: str) 
 
 def main() -> None:
     event = hookio.read_event()
-    ctx = resolve(event.cwd or os.getcwd())
+    ctx = hookio.repo(event.cwd or os.getcwd())
     rec = sessions.get(ctx, event.session_id)
     baseline = rec.baseline_commit if rec else stash_baseline(ctx)
 
@@ -201,12 +201,14 @@ def main() -> None:
     if len(findings) > MAX_FINDINGS_SHOWN:
         summary += f"\n- ... {len(findings) - MAX_FINDINGS_SHOWN} more"
 
-    # Bounded: a summary plus a path. Never the report itself.
-    hookio.emit_context(
-        "PreToolUse",
+    # Exit 2, not additionalContext. This hook is wired asyncRewake, and that path
+    # wakes the model ONLY on a non-zero exit — stdout is read for a rewake summary and
+    # otherwise discarded, so every finding this gate produced was being computed,
+    # written to a report, and then dropped on the floor. Bounded to a summary plus a
+    # path either way: the report itself never enters the context.
+    hookio.block(
         f"Review of this turn's changes found {len(findings)} issue(s):\n{summary}\n\n"
-        f"Full report: {report.relative_to(ctx.worktree_root)}",
-        limit=2_000,
+        f"Full report: {report.relative_to(ctx.worktree_root)}"
     )
 
 

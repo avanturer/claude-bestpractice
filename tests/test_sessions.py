@@ -57,11 +57,41 @@ class TestLiveness(RepoCase):
         rec = record(ctx, "dead", pid=999_999_999)
         self.assertFalse(sessions.is_live(ctx, rec))
 
-    def test_stale_heartbeat_is_not_live(self):
+    def test_a_quiet_session_is_still_live(self):
+        """Silence is what a working session looks like while a human reads.
+
+        Reaping on a quiet heartbeat was the worst defect this plugin has had: the
+        record was deleted out from under a running session, and every gate then took
+        its missing-record branch and enforced nothing for the rest of that session.
+        """
         ctx = self.ctx()
-        rec = record(ctx, "old")
+        rec = record(ctx, "thinking")
         rec.heartbeat_at = time.time() - (sessions.HEARTBEAT_STALE_SECONDS + 60)
+        self.assertTrue(sessions.is_live(ctx, rec))
+        self.assertTrue(sessions.is_idle(rec), "the board should still dim it")
+
+    def test_a_record_older_than_the_hard_ceiling_is_dead(self):
+        """The backstop against a record that outlived a reboot."""
+        ctx = self.ctx()
+        rec = record(ctx, "ancient")
+        rec.heartbeat_at = time.time() - (sessions.HEARTBEAT_DEAD_SECONDS + 60)
         self.assertFalse(sessions.is_live(ctx, rec))
+
+    def test_a_recycled_pid_is_not_the_same_session(self):
+        """A live pid proves nothing if it belongs to a different process now."""
+        ctx = self.ctx()
+        rec = record(ctx, "recycled")
+        rec.pid_fingerprint = "999999999"
+        if not sessions.pid_fingerprint(rec.pid):
+            self.skipTest("kernel does not expose process start times")
+        self.assertFalse(sessions.is_live(ctx, rec))
+
+    def test_an_unknown_fingerprint_never_reaps(self):
+        """Cannot-tell must resolve to live; the cost of a wrong reap is a dead gate."""
+        ctx = self.ctx()
+        rec = record(ctx, "unknown")
+        rec.pid_fingerprint = ""
+        self.assertTrue(sessions.is_live(ctx, rec))
 
     def test_unregistered_worktree_is_not_live(self):
         """A live pid is not enough: the worktree must still exist."""

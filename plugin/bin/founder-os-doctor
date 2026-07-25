@@ -544,15 +544,22 @@ def check_review_finds_and_bounds(repo: Path) -> Result:
         },
         repo,
     )
-    try:
-        body = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
-    except (json.JSONDecodeError, KeyError, TypeError):
-        return Result("review catches and stays bounded", False, "reviewer said nothing")
+    # The EXIT CODE is the assertion, because asyncRewake wakes the model only on a
+    # non-zero exit and discards stdout. Checking stdout instead — what this did — is
+    # how a gate can compute perfect findings and deliver none of them while the doctor
+    # reports it healthy.
+    body = proc.stderr
+    if proc.returncode != 2:
+        return Result(
+            "review catches and stays bounded",
+            False,
+            f"exit {proc.returncode}: asyncRewake delivers nothing unless the exit is 2",
+        )
     ok = "swallowed-exception" in body and len(body) <= 2_500 and "Full report:" in body
     return Result(
         "review catches and stays bounded",
         ok,
-        f"found the class, returned {len(body)} chars plus a path"
+        f"woke on exit 2 with {len(body)} chars plus a path"
         if ok
         else f"body={len(body)} chars, content unexpected",
     )

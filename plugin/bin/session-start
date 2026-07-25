@@ -51,7 +51,7 @@ def build_record(ctx: GitContext, event: hookio.HookEvent) -> sessions.SessionRe
 
 def main() -> None:
     event = hookio.read_event()
-    ctx = resolve(event.cwd or os.getcwd())
+    ctx = hookio.repo(event.cwd or os.getcwd())
 
     store.ensure_dir(store.tier_b(ctx))
     reaped = sessions.reap(ctx)
