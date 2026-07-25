@@ -5,7 +5,7 @@
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
 [![version](https://img.shields.io/badge/version-1.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-400%20passing-2ea44f)](#verified)
+[![tests](https://img.shields.io/badge/tests-403%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-23%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
@@ -198,7 +198,7 @@ against a cap of 400 — roughly 0.1 % of a 200k window.
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · knowledge · 400 tests · 23 doctor checks · budget
+make check    # lint · docs gate · slop gate · knowledge · 403 tests · 23 doctor checks · budget
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration

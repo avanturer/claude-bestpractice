@@ -226,6 +226,15 @@ def load_checked(ctx: GitContext) -> tuple[Config, list[str]]:
             continue
         setattr(cfg, key, coerced)
 
+    # A glob's CONTENTS matter, not just its type. `Path.glob` raises on an absolute or
+    # empty pattern, and that exception reached a fail-closed gate: one plausible typo in
+    # a documented key blocked every tool call in the repository for every session.
+    usable = [g for g in cfg.artifact_globs if g and not g.startswith(("/", "~"))]
+    if len(usable) != len(cfg.artifact_globs):
+        dropped = [g for g in cfg.artifact_globs if g not in usable]
+        complaints.append(f"artifact_globs must be relative and non-empty; dropped {dropped}")
+        cfg.artifact_globs = usable or list(DEFAULT_ARTIFACT_GLOBS)
+
     if cfg.stage_override is not None and cfg.stage_override not in ("prototype", "traction", "revenue"):
         complaints.append(f"stage_override {cfg.stage_override!r} is not a known stage; ignored")
         cfg.stage_override = None

@@ -141,7 +141,20 @@ def main() -> None:
 
     unverified_reason = ""
     if gates["evidence_gate"]:
-        verdict = evidence.verify(ctx, cfg.artifact_globs, changed, cfg.test_command)
+        try:
+            verdict = evidence.verify(ctx, cfg.artifact_globs, changed, cfg.test_command)
+        except Exception as exc:  # noqa: BLE001 - deliberate: see below
+            # A crash inside verification used to escape into hookio.guard, which blocks
+            # WITHOUT touching the escalation counter — so one bad glob in config.json
+            # ("artifact_globs": ["/tmp/junit.xml"]) blocked every Stop, in every session,
+            # in that repository, forever. Failing closed is right; failing closed with a
+            # frozen counter is a wedge, and a wedged founder uninstalls the plugin.
+            verdict = evidence.Verdict(
+                False,
+                f"founder-os could not verify this turn: {type(exc).__name__}: {exc}\n"
+                "This is a fault in the gate or its configuration, not in your work. "
+                "Check .claude/founder-os/config.json.",
+            )
         if not verdict.ok:
             problems.append(verdict.reason)
         elif verdict.unverified:

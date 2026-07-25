@@ -328,6 +328,71 @@ class TestConcurrentIdAllocation(RepoCase):
         self.assertEqual(len(set(ids)), 10, f"duplicate ids: {sorted(ids)}")
 
 
+class TestNothingCanWedgeTheGate(RepoCase):
+    """Failing closed is right. Failing closed with a frozen counter is a wedge."""
+
+    def stop(self) -> int:
+        return self.run_hook(
+            "evidence-gate",
+            {"session_id": "w", "hook_event_name": "Stop", "stop_hook_active": False},
+        ).returncode
+
+    def test_a_config_typo_still_escalates(self):
+        self.write("a.py", "x = 1\n")
+        self.commit()
+        self.run_hook("session-start", {"session_id": "w", "hook_event_name": "SessionStart"})
+        self.write("a.py", "x = 2\n")
+        for broken in ({"artifact_globs": ["/tmp/junit.xml"]}, {"artifact_globs": [""]}):
+            with self.subTest(config=broken):
+                path = self.repo / ".claude" / "founder-os" / "config.json"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(broken))
+                codes = [self.stop() for _ in range(6)]
+                self.assertIn(0, codes, f"a config typo wedged every Stop forever: {codes}")
+
+
+class TestAStaleArtifactCannotSpeakForThisRun(DisarmCase):
+    """The run is the evidence; a file is at most its detail, and only if this run wrote it."""
+
+    def green_project(self) -> None:
+        self.write("impl.py", "def f():\n    return 2\n")
+        self.write("test_impl.py", stdlib_test("impl", "f()", "2"))
+        self.stdlib_runner()
+        self.commit()
+
+    def stop(self) -> subprocess.CompletedProcess:
+        return self.run_hook(
+            "evidence-gate",
+            {"session_id": "s1", "hook_event_name": "Stop", "stop_hook_active": False},
+        )
+
+    def test_a_foreign_failing_artifact_does_not_block_a_green_run(self):
+        self.green_project()
+        self.start()
+        self.write("impl.py", "def f():\n    return 2  # touched\n")
+        self.write(
+            "junit.xml",
+            '<testsuite name="com.othercorp.Legacy" tests="44" failures="7" errors="0"/>',
+        )
+        self.assertEqual(self.stop().returncode, 0, "a stranger's artifact blocked an honest pass")
+
+    def test_a_foreign_artifact_does_not_satisfy_the_executed_check(self):
+        """A four-line file from another project used to prove tests ran here."""
+        self.write("impl.py", "def f():\n    raise NotImplementedError\n")
+        self.write(
+            "test_impl.py",
+            "import os\nimport unittest\n\n\n"
+            "@unittest.skipUnless(os.environ.get('DATABASE_URL'), 'no db')\n"
+            "class T(unittest.TestCase):\n    def test_it(self):\n        pass\n",
+        )
+        self.stdlib_runner()
+        self.commit()
+        self.start()
+        self.write("impl.py", "def f():\n    raise NotImplementedError  # edited\n")
+        self.write("junit.xml", '<testsuite name="elsewhere" tests="42" failures="0" errors="0"/>')
+        self.assertEqual(self.stop().returncode, 2, "a foreign artifact stood in for a real run")
+
+
 class TestBashIsAWriteTool(DisarmCase):
     """Agents write files with heredocs and redirects, not only with the Write tool."""
 

@@ -270,6 +270,7 @@ def run_suite(ctx: GitContext, command: list[str]) -> tuple[int, str]:
             text=True,
             timeout=RUN_TIMEOUT,
             env=env,
+            start_new_session=True,
         )
     except FileNotFoundError:
         return -1, f"test command not found: {command[0]}"
@@ -380,6 +381,7 @@ def _verify_by_running(ctx: GitContext, globs: list[str], command: list[str]) ->
         # flag was being set on every child without anything ever reading it.
         return None
 
+    started = time.time()
     code, tail = run_suite(ctx, command)
     if code == -1:
         # Cannot witness. Say so and fall back rather than wedging the session:
@@ -394,7 +396,7 @@ def _verify_by_running(ctx: GitContext, globs: list[str], command: list[str]) ->
         )
     clear_red(ctx)
 
-    return _judge_green_run(ctx, globs, command, tail)
+    return _judge_green_run(ctx, globs, command, tail, started)
 
 
 def _first_artifact(root: Path, globs: list[str]) -> Artifact | None:
@@ -405,9 +407,19 @@ def _first_artifact(root: Path, globs: list[str]) -> Artifact | None:
     return None
 
 
-def _judge_green_run(ctx: GitContext, globs: list[str], command: list[str], tail: str) -> Verdict:
-    """The runner exited 0. Decide whether anything was actually asserted."""
+def _judge_green_run(
+    ctx: GitContext, globs: list[str], command: list[str], tail: str, started: float
+) -> Verdict:
+    """The runner exited 0. Decide whether anything was actually asserted.
+
+    Only an artifact this run wrote is consulted. Anything older is a different run's
+    claim about different code: a year-old four-line file from another project satisfied
+    the executed>0 check, and a stale FAILING artifact blocked a suite that had just
+    genuinely passed. The run is the evidence; the file is at most its detail.
+    """
     artifact = _first_artifact(ctx.worktree_root, globs)
+    if artifact and artifact.mtime < started:
+        artifact = None
     if artifact:
         if not artifact.passed:
             return Verdict(False, f"{artifact.path.name}: {artifact.detail}.", artifact)
@@ -468,30 +480,22 @@ def _executed_from_output(text: str) -> int:
     return sum(int(n) for n, word in outcomes if word not in _DID_NOT_RUN)
 
 
-# Installed dependencies are gitignored by every ecosystem, so a clean checkout has
-# none of them and the suite fails on imports rather than on the code. That made the
-# re-run report "the suite passes in your working tree but FAILS on the committed tree"
-# for every dependency-managed project — a false failure that no amount of correct work
-# could clear, which is worse than not running it at all.
-_DEPENDENCY_DIRS = (
-    "node_modules", ".venv", "venv", "vendor", ".bundle", "target/debug", "target/release",
+# Installed dependencies are gitignored by every ecosystem, so a clean checkout has none
+# of them and the suite fails on imports rather than on the code. Symlinking the real
+# ones in was the obvious fix and the wrong one: a suite that writes anything —
+# node_modules/.cache, a compiled artifact, a lockfile touch — then writes through the
+# link into the founder's actual dependency tree. A verification step is not allowed to
+# mutate the thing it is verifying.
+#
+# So the missing-dependency case is detected and reported as INCONCLUSIVE instead. A
+# re-run that cannot import the project proves nothing about the committed tree, and
+# reporting it as a failure is worse than not running it: it is a red result no correct
+# work can clear.
+_MISSING_DEPENDENCY = re.compile(
+    r"(?i)(ModuleNotFoundError|ImportError: No module named|Cannot find module|"
+    r"cannot find package|error: could not find|command not found|"
+    r"no such file or directory: '?(?:node|npm|npx|cargo|go|bundle))"
 )
-
-
-def _link_dependencies(source: Path, target: Path) -> None:
-    """Point the throwaway checkout at the real dependency trees. Read-only in practice."""
-    for rel in _DEPENDENCY_DIRS:
-        origin = source / rel
-        if not origin.is_dir():
-            continue
-        link = target / rel
-        if link.exists():
-            continue
-        try:
-            link.parent.mkdir(parents=True, exist_ok=True)
-            link.symlink_to(origin, target_is_directory=True)
-        except OSError:
-            continue
 
 
 def clean_rerun(ctx: GitContext, command: list[str]) -> Verdict:
@@ -525,8 +529,6 @@ def clean_rerun(ctx: GitContext, command: list[str]) -> Verdict:
         if add.returncode != 0:
             return Verdict(False, f"could not create verification worktree: {add.stderr.strip()}")
 
-        _link_dependencies(ctx.worktree_root, target)
-
         env = dict(os.environ)
         env[VERIFYING_ENV] = _issue_nonce(ctx)
         proc = subprocess.run(
@@ -538,12 +540,18 @@ def clean_rerun(ctx: GitContext, command: list[str]) -> Verdict:
             env=env,
         )
         if proc.returncode != 0:
-            tail = (proc.stdout + proc.stderr).strip().splitlines()[-25:]
+            tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-25:])
+            if _MISSING_DEPENDENCY.search(tail):
+                return Verdict(
+                    True,
+                    "clean re-run skipped: the committed tree has no installed dependencies, "
+                    "so this says nothing about the code",
+                )
             return Verdict(
                 False,
                 "The suite passes in your working tree but FAILS on the committed tree. "
                 "Something you rely on is uncommitted, ignored, or local.\n"
-                f"$ {' '.join(command)}\n" + "\n".join(tail),
+                f"$ {' '.join(command)}\n" + tail,
             )
         return Verdict(True, "clean-checkout re-run passed")
     except subprocess.TimeoutExpired:
