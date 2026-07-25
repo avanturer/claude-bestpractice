@@ -5,8 +5,8 @@
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
 [![version](https://img.shields.io/badge/version-1.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-403%20passing-2ea44f)](#已验证)
-[![doctor](https://img.shields.io/badge/doctor-23%20checks-2ea44f)](#已验证)
+[![tests](https://img.shields.io/badge/tests-421%20passing-2ea44f)](#已验证)
+[![doctor](https://img.shields.io/badge/doctor-24%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#运行要求)
 [![license](https://img.shields.io/badge/license-MIT-lightgrey)](../LICENSE)
@@ -141,6 +141,27 @@ Stop gate **丢弃智能体的自述文字**，自己去运行你的测试套件
 原型阶段一个都不会启用——并且额外**禁止**向后兼容层，这条规则会在真正出现消费者的
 那一刻自行关闭。
 
+### 检查在本地跑，不花别人的机时
+
+`founder-os init` 会装上一个 **pre-push 钩子**，在任何东西离开这台机器之前先跑你自己的
+`make check`——仓库没有的话就跑 doctor。免费，而且时机对：它拦下这次 push，而不是事后
+给你发一封邮件。
+
+之所以把它设为默认，是因为托管机时是计费的，而这种工作方式消耗它的速度和一个小团队一样：
+三到八个会话整天在推送，账单却只有一份。
+
+随附的 GitHub Actions 工作流**由一个仓库变量把守**，在你主动开启之前不花一分钱：
+
+```sh
+founder-os-ci status     # 什么在哪里跑
+founder-os-ci github     # 打开托管 CI（通过 gh 设置该变量）
+founder-os-ci off        # 移除 pre-push 钩子
+```
+
+两者可以并存：pre-push 钩子只约束装了它的机器，所以一个别人也会推送的仓库仍然需要托管
+运行。想单次绕过就用 `git push --no-verify`——那是一个有痕迹的、刻意的动作，而被悄悄跳过
+的托管运行没有痕迹。
+
 ### 它会接管与它冲突的东西
 
 `founder-os adopt` 会找出争抢本插件所拥有事件的其他工具，把它们的 hook 条目移入一个
@@ -162,6 +183,7 @@ Stop gate **丢弃智能体的自述文字**，自己去运行你的测试套件
 | `founder-os-ingest` | 把生产环境错误净化成带围栏的任务文件 |
 | `founder-os-knowledge` | 校验已决层，刷新其索引 |
 | `founder-os-reindex` | 丢弃并重建所有推导内容 |
+| `founder-os-ci` | 检查在哪里跑：默认本地 pre-push，托管 CI 按需开启 |
 
 在会话中：`/founder-os:status` · `/founder-os:plan` · `/founder-os:review`
 
@@ -187,7 +209,7 @@ Stop gate **丢弃智能体的自述文字**，自己去运行你的测试套件
 ## 已验证
 
 ```
-make check    # lint · docs gate · slop gate · knowledge · 403 个测试 · 23 项 doctor 检查 · budget
+make check    # lint · docs gate · slop gate · knowledge · 421 个测试 · 24 项 doctor 检查 · budget
 ```
 
 doctor 通过**真的去做那件坏事**来证明 gate 有效，而不是把配置读回来对一遍——

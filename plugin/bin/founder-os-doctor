@@ -529,6 +529,53 @@ def check_airlock_quarantine(repo: Path) -> Result:
     )
 
 
+def check_pushes_are_checked(repo: Path) -> Result:
+    """Prove the pre-push gate by attempting a push that should be refused.
+
+    Reading the hook file back would pass on a hook that is not executable, points at a
+    hooks directory git is not using, or exits 0 regardless — all of which look exactly
+    like a working gate until the day something red gets pushed.
+    """
+    sys.path.insert(0, str(BIN.parent / "lib"))
+    from founder_os import ci
+    from founder_os.gitctx import resolve
+
+    ctx = resolve(repo)
+    installed, note = ci.install(ctx)
+    if not installed and not ci.installed(ctx):
+        return Result("a red check blocks a push", False, note)
+
+    (repo / "Makefile").write_text("check:\n\t@echo 'doctor: deliberately red'; exit 1\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "red"], cwd=repo, check=True, capture_output=True)
+
+    bare = repo.parent / "doctor-remote.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True, capture_output=True)
+    subprocess.run(["git", "remote", "add", "doctor", str(bare)], cwd=repo, capture_output=True)
+    branch = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo, capture_output=True, text=True
+    ).stdout.strip()
+    push = subprocess.run(
+        ["git", "push", "doctor", branch], cwd=repo, capture_output=True, text=True, timeout=180
+    )
+    refused = push.returncode != 0
+
+    bypass = subprocess.run(
+        ["git", "push", "--no-verify", "doctor", branch],
+        cwd=repo, capture_output=True, text=True, timeout=180,
+    )
+    escapable = bypass.returncode == 0
+
+    ok = refused and escapable
+    return Result(
+        "a red check blocks a push",
+        ok,
+        "refused the push, and --no-verify still works"
+        if ok
+        else f"refused={refused} (must be True), --no-verify worked={escapable} (must be True)",
+    )
+
+
 def check_quiet_session_still_enforces(repo: Path) -> Result:
     """The failure this doctor was blind to while reporting twenty green checks.
 
@@ -850,6 +897,7 @@ def main() -> int:
             check_airlock_quarantine,
             check_review_finds_and_bounds,
             check_quiet_session_still_enforces,
+            check_pushes_are_checked,
             check_fabricated_evidence_is_refused,
             check_outside_a_repository_is_not_a_brick,
             check_onboarding,

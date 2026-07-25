@@ -5,8 +5,8 @@
 **Память, координация и принуждение для разработки продукта в нескольких параллельных сессиях Claude Code.**
 
 [![version](https://img.shields.io/badge/version-1.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-403%20passing-2ea44f)](#проверено)
-[![doctor](https://img.shields.io/badge/doctor-23%20checks-2ea44f)](#проверено)
+[![tests](https://img.shields.io/badge/tests-421%20passing-2ea44f)](#проверено)
+[![doctor](https://img.shields.io/badge/doctor-24%20checks-2ea44f)](#проверено)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#требования)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#требования)
 [![license](https://img.shields.io/badge/license-MIT-lightgrey)](../LICENSE)
@@ -154,6 +154,29 @@ Stop-гейт **выбрасывает прозу агента** и сам за�
 Прототип не получает ничего из этого — и вдобавок ему **запрещены** back-compat
 прослойки: правило само отключается в момент появления реальных потребителей.
 
+### Проверки выполняются локально, а не на чужом счётчике
+
+`founder-os init` ставит **pre-push хук**, который прогоняет ваш собственный
+`make check` — или доктора, если своих проверок нет — до того, как что-либо покинет
+машину. Бесплатно и вовремя, чтобы остановить push, а не прислать письмо постфактум.
+
+Это дефолт, потому что hosted-минуты платные, а этот режим работы тратит их как целая
+команда: три–восемь сессий пушат весь день, счёт один.
+
+Поставляемый workflow GitHub Actions **закрыт переменной репозитория** и не стоит ничего,
+пока вы его не включите:
+
+```sh
+founder-os-ci status     # что где выполняется
+founder-os-ci github     # включить hosted CI (ставит переменную через gh)
+founder-os-ci off        # снять pre-push хук
+```
+
+Одно другому не мешает: pre-push хук обязывает только те машины, где он установлен,
+поэтому репозиторию, куда пушат другие, hosted-прогон всё равно нужен. Разовый обход —
+`git push --no-verify`: это осознанное действие, оставляющее след, в отличие от молча
+пропущенного hosted-прогона.
+
 ### Он забирает под себя то, что ему мешает
 
 `founder-os adopt` находит другие инструменты, оспаривающие события, которыми владеет
@@ -176,6 +199,7 @@ Stop-гейт **выбрасывает прозу агента** и сам за�
 | `founder-os-ingest` | Санировать продовые ошибки в файлы задач с фенсингом |
 | `founder-os-knowledge` | Валидировать слой decided, обновить его индекс |
 | `founder-os-reindex` | Снести и пересобрать всё выводимое |
+| `founder-os-ci` | Где выполняются проверки: локально перед push по умолчанию, hosted CI по желанию |
 
 В сессии: `/founder-os:status` · `/founder-os:plan` · `/founder-os:review`
 
@@ -201,7 +225,7 @@ Stop-гейт **выбрасывает прозу агента** и сам за�
 ## Проверено
 
 ```
-make check    # lint · docs gate · slop gate · knowledge · 403 теста · 23 проверки доктора · budget
+make check    # lint · docs gate · slop gate · knowledge · 421 тест · 24 проверки доктора · budget
 ```
 
 Доктор доказывает гейты **попыткой сделать плохое**, а не чтением конфигурации обратно —

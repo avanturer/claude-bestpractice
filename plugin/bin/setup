@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from founder_os import hookio, onboard, plan, stage, store  # noqa: E402
+from founder_os import ci, hookio, onboard, plan, stage, store  # noqa: E402
 from founder_os.gitctx import resolve  # noqa: E402
 
 
@@ -35,7 +35,17 @@ def main() -> None:
     resolved, _ = stage.current(ctx)
     gaps = onboard.unanswered(ctx)
 
+    # Local checks are the DEFAULT, installed here rather than offered. An opt-in check
+    # that nobody opted into is the same as no check, and hosted minutes are a metered
+    # budget that three to eight parallel sessions spend like a small team.
+    hook_installed, hook_note = ci.install(ctx)
+
     lines = [f"founder-os is set up. Detected stage: {resolved}."]
+    if hook_installed:
+        lines.append(
+            "Checks now run locally before every push (`founder-os-ci status` to see, "
+            "`founder-os-ci github` to add hosted CI)."
+        )
     if written:
         lines.append("Derived from your code: " + ", ".join(written))
     if gaps:

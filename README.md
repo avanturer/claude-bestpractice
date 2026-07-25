@@ -5,8 +5,8 @@
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
 [![version](https://img.shields.io/badge/version-1.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-403%20passing-2ea44f)](#verified)
-[![doctor](https://img.shields.io/badge/doctor-23%20checks-2ea44f)](#verified)
+[![tests](https://img.shields.io/badge/tests-421%20passing-2ea44f)](#verified)
+[![doctor](https://img.shields.io/badge/doctor-24%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
 [![license](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
@@ -151,6 +151,29 @@ Stage is computed from the repository, never configured, and the ratchet only ti
 A prototype gets none of it — and additionally has back-compat shims **banned**, a rule
 that disables itself the moment real consumers appear.
 
+### Checks run locally, not on someone's meter
+
+`founder-os init` installs a **pre-push hook** that runs your own `make check` — or the
+doctor, in a repository that has none — before anything leaves the machine. Free, and in
+time to stop the push rather than to email you about it afterwards.
+
+That is the default because hosted minutes are metered and this operating mode spends
+them like a small team: three to eight sessions pushing all day, billed to one account.
+
+The shipped GitHub Actions workflow is **gated behind a repository variable**, so it
+costs nothing until you ask for it:
+
+```sh
+founder-os-ci status     # what runs where
+founder-os-ci github     # switch hosted CI on (sets the variable via gh)
+founder-os-ci off        # remove the pre-push hook
+```
+
+Both can run at once — a pre-push hook only binds machines that installed it, so a
+repository other people push to still wants the hosted run. Bypass once with
+`git push --no-verify`; that is deliberate and leaves a record, which a silently skipped
+hosted run does not.
+
 ### It takes over what fights it
 
 `founder-os adopt` finds other tools contesting the events this owns, quarantines their
@@ -173,6 +196,7 @@ configuration silently.
 | `founder-os-ingest` | Sanitise production errors into fenced task files |
 | `founder-os-knowledge` | Validate the decided layer, refresh its index |
 | `founder-os-reindex` | Drop and rebuild everything derived |
+| `founder-os-ci` | Where the checks run: local pre-push by default, hosted CI opt-in |
 
 In a session: `/founder-os:status` · `/founder-os:plan` · `/founder-os:review`
 
@@ -198,7 +222,7 @@ against a cap of 400 — roughly 0.1 % of a 200k window.
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · knowledge · 403 tests · 23 doctor checks · budget
+make check    # lint · docs gate · slop gate · knowledge · 421 tests · 24 doctor checks · budget
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration
