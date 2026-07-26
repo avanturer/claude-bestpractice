@@ -68,6 +68,7 @@ class Config:
     require_worktree: bool = True
     block_unfinished_work: bool = True
     compare_dependencies: bool = True
+    commit_conventions: bool = True
     autonomy: str = "vibecode"
     protect_trunk: bool = True
     stage_override: str | None = None
@@ -89,6 +90,7 @@ class Config:
             "require_worktree": self.require_worktree,
             "block_unfinished_work": self.block_unfinished_work,
             "compare_dependencies": self.compare_dependencies,
+            "commit_conventions": self.commit_conventions,
             "autonomy": self.autonomy,
             "protect_trunk": self.protect_trunk,
             "stage_override": self.stage_override,
@@ -153,6 +155,7 @@ _EXPECTED: dict[str, type] = {
     "require_worktree": bool,
     "block_unfinished_work": bool,
     "compare_dependencies": bool,
+    "commit_conventions": bool,
     "autonomy": str,
     "protect_trunk": bool,
     "stage_override": str,

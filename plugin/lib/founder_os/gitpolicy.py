@@ -14,12 +14,17 @@ notices.
 because a branch is what makes work revertible as a unit and mergeable as a unit. Commit
 straight onto main and the only way to undo a bad afternoon is to pick commits apart.
 
-Both refuse with the exact command that fixes them. A rule that only says no teaches the
-agent to route around it; a rule that says "run this instead" gets followed.
+Then two more that are cheap and that nobody enforces on themselves: a commit message
+has to describe the change rather than the act of committing, and merge conflict markers
+must never reach a file.
+
+Every refusal here carries the exact command or edit that fixes it. A rule that only says
+no teaches the agent to route around it; a rule that says "do this instead" gets followed.
 """
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -116,3 +121,82 @@ def worktree_paths_in_use(ctx: GitContext) -> dict[str, str]:
         elif line.startswith("branch ") and path:
             out[line.split("/")[-1]] = path
     return out
+
+
+# ------------------------------------------------------------------ commit messages
+
+# Messages that describe the act of committing rather than the change. Every one of
+# these is what gets typed when the author has stopped thinking about the reader.
+_EMPTY_MESSAGES = {
+    "wip", "fix", "fixes", "fixed", "update", "updates", "updated", "changes", "change",
+    "stuff", "misc", "cleanup", "clean up", "refactor", "tweak", "tweaks", "minor",
+    "temp", "test", "asdf", ".", "..", "commit", "small fix", "quick fix", "final",
+}
+
+# Conventional Commits, which is the established convention rather than a preference:
+# it is machine-readable, drives changelog and version tooling, and its scope names the
+# subsystem a future session needs to find.
+CONVENTIONAL = re.compile(
+    r"^(?:build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(?:\([\w./-]+\))?!?: .{6,}"
+)
+
+MIN_SUBJECT_CHARS = 15
+MAX_SUBJECT_CHARS = 72
+
+# `-m`, `--message=`, and combined short flags like `-qm` — all of which are ordinary,
+# and the last of which a naive `-m` pattern misses entirely, so the check silently
+# passes on exactly the commits someone typed in a hurry.
+COMMIT_MESSAGE = re.compile(
+    r"""git\s+commit\b[^\n]*?(?:-[a-zA-Z]*m|--message=?)\s*(?P<q>["'])(?P<message>.*?)(?P=q)""",
+    re.S,
+)
+
+CONFLICT_MARKERS = re.compile(r"(?m)^(?:<{7}|={7}|>{7})(?:\s|$)")
+
+
+def commit_message(command: str) -> str:
+    """The message out of a `git commit -m` command line, or empty if there is none."""
+    match = COMMIT_MESSAGE.search(command)
+    return match.group("message") if match else ""
+
+
+def message_complaint(message: str, conventional: bool = True) -> str:
+    """Why this message fails a reader six months from now. Empty when it is fine.
+
+    The audience is not a reviewer — there is none. It is the next session, which will
+    `git log` this file to work out why it looks the way it does. "fix" answers nothing.
+    """
+    subject = message.strip().splitlines()[0].strip() if message.strip() else ""
+    if not subject:
+        return "the commit message is empty"
+    if subject.lower().rstrip(".!") in _EMPTY_MESSAGES:
+        return (
+            f"{subject!r} describes committing, not the change. The next session will read "
+            "this to work out why the code looks the way it does."
+        )
+    if len(subject) < MIN_SUBJECT_CHARS:
+        return f"{subject!r} is {len(subject)} characters; say what changed and why"
+    if len(subject) > MAX_SUBJECT_CHARS and "\n" not in message.strip():
+        return (
+            f"the subject is {len(subject)} characters. Keep it under {MAX_SUBJECT_CHARS} "
+            "and put the detail in a body after a blank line."
+        )
+    if conventional and not CONVENTIONAL.match(subject):
+        return (
+            f"{subject!r} is not a conventional commit. Use `type(scope): summary` — "
+            "feat, fix, docs, refactor, perf, test, build, ci, chore. It is machine-readable, "
+            "drives changelogs and versioning, and its scope names the subsystem."
+        )
+    return ""
+
+
+def conflict_complaint(content: str) -> str:
+    """Unresolved merge markers, which compile in almost no language and ship in many."""
+    if not CONFLICT_MARKERS.search(content):
+        return ""
+    return (
+        "This content still contains merge conflict markers (<<<<<<<, =======, >>>>>>>). "
+        "Resolve the conflict by choosing or combining the two sides, then delete the "
+        "markers — committing them replaces working code with something that parses in "
+        "almost no language."
+    )

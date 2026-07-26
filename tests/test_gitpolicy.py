@@ -14,6 +14,15 @@ import unittest
 from helpers import RepoCase, git
 
 
+def _verdict(proc) -> tuple[str, str]:
+    """(decision, reason) out of a pre-tool response, defaulting to allow."""
+    try:
+        out = json.loads(proc.stdout)["hookSpecificOutput"]
+        return out.get("permissionDecision", "allow"), out.get("permissionDecisionReason", "")
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return "allow", ""
+
+
 class PolicyCase(RepoCase):
     relax_git_policy = False
 
@@ -35,11 +44,7 @@ class PolicyCase(RepoCase):
             },
             cwd=target,
         )
-        try:
-            out = json.loads(proc.stdout)["hookSpecificOutput"]
-            return out.get("permissionDecision", "allow"), out.get("permissionDecisionReason", "")
-        except (json.JSONDecodeError, KeyError, TypeError):
-            return "allow", ""
+        return _verdict(proc)
 
     def worktree(self, branch: str):
         target = self.repo.parent / f"wt-{branch.replace('/', '-')}"
@@ -163,3 +168,77 @@ class TestTrunkDetection(PolicyCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCommitMessages(PolicyCase):
+    """The reader is not a reviewer. It is the next session running `git log`."""
+
+    relax_git_policy = True
+
+    def commit(self, command: str) -> tuple[str, str]:
+        proc = self.run_hook(
+            "pre-tool",
+            {
+                "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+                "tool_input": {"command": command},
+            },
+        )
+        return _verdict(proc)
+
+    def test_a_message_describing_the_act_of_committing_is_refused(self):
+        for message in ("wip", "fix", "update", "stuff", "cleanup"):
+            with self.subTest(message=message):
+                decision, reason = self.commit(f'git commit -m "{message}"')
+                self.assertEqual(decision, "deny")
+                self.assertIn("describes committing", reason)
+
+    def test_a_message_that_says_almost_nothing_is_refused_too(self):
+        """`.` and `x` are not in the junk list and must not slip through on that."""
+        for message in (".", "x", "ok"):
+            with self.subTest(message=message):
+                self.assertEqual(self.commit(f'git commit -m "{message}"')[0], "deny")
+
+    def test_combined_short_flags_are_parsed(self):
+        """`-qm` is ordinary, and a naive `-m` pattern misses exactly the hurried commits."""
+        self.assertEqual(self.commit('git commit -qm "wip"')[0], "deny")
+
+    def test_a_conventional_message_is_allowed(self):
+        decision, _ = self.commit(
+            'git commit -m "feat(billing): charge in minor units to avoid float cents"'
+        )
+        self.assertEqual(decision, "allow")
+
+    def test_a_prose_message_is_pointed_at_the_convention(self):
+        decision, reason = self.commit('git commit -m "made some changes to the thing"')
+        self.assertEqual(decision, "deny")
+        self.assertIn("conventional commit", reason)
+
+    def test_it_can_be_switched_off(self):
+        self.configure(commit_conventions=False)
+        self.assertEqual(self.commit('git commit -m "wip"')[0], "allow")
+
+    def test_a_commit_without_m_is_not_second_guessed(self):
+        """`git commit` opening an editor carries no message to judge."""
+        self.assertEqual(self.commit("git commit")[0], "allow")
+
+
+class TestConflictMarkers(PolicyCase):
+    relax_git_policy = True
+
+    def test_writing_unresolved_markers_is_refused(self):
+        proc = self.run_hook(
+            "pre-tool",
+            {
+                "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Write",
+                "tool_input": {
+                    "file_path": str(self.repo / "m.py"),
+                    "content": "a\n<<<<<<< HEAD\nx\n=======\ny\n>>>>>>> other\n",
+                },
+            },
+        )
+        self.assertIn("conflict marker", proc.stdout)
+
+    def test_ordinary_content_with_equals_signs_is_fine(self):
+        from founder_os import gitpolicy
+
+        self.assertEqual(gitpolicy.conflict_complaint("x = 1\nsep = '=' * 40\n"), "")

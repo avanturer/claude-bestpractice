@@ -174,6 +174,23 @@ def main() -> None:
     resolved_stage, _ = stage.current(ctx, cfg.stage_override)
     gates = stage.gates_for(resolved_stage)
 
+    if event.tool_name == "Bash" and cfg.commit_conventions:
+        message = gitpolicy.commit_message(str(ti.get("command", "")))
+        if message:
+            complaint = gitpolicy.message_complaint(message)
+            if complaint:
+                hookio.deny_tool(
+                    f"founder-os: {complaint}\n"
+                    "The reader is not a reviewer — there is none. It is the next session, "
+                    "running `git log` on this file to work out why it looks the way it does.\n"
+                    "Set `commit_conventions: false` in .claude/founder-os/config.json to stop checking."
+                )
+
+    if event.tool_name in WRITE_TOOLS or event.tool_name == "Bash":
+        conflicted = gitpolicy.conflict_complaint(proposed_content(event))
+        if conflicted:
+            hookio.deny_tool(f"founder-os: {conflicted}")
+
     if gates["migration_gate"]:
         if event.tool_name == "Bash":
             command = str(ti.get("command", ""))
