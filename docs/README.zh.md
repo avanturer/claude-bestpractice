@@ -5,7 +5,7 @@
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
 [![version](https://img.shields.io/badge/version-1.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-484%20passing-2ea44f)](#已验证)
+[![tests](https://img.shields.io/badge/tests-487%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-25%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#运行要求)
@@ -183,6 +183,8 @@ founder-os-ci off        # 移除 pre-push 钩子
 | `founder-os-knowledge` | 校验已决层，刷新其索引 |
 | `founder-os-reindex` | 丢弃并重建所有推导内容 |
 | `founder-os-ci` | 检查在哪里跑：默认本地 pre-push，托管 CI 按需开启 |
+| `founder-os-attempt` | 死路台账：试过什么、为什么没成 |
+| `founder-os-options` | 把决策记成一次按指标打分的方案比较 |
 
 在会话中：`/founder-os:status` · `/founder-os:plan` · `/founder-os:review`
 
@@ -208,7 +210,7 @@ founder-os-ci off        # 移除 pre-push 钩子
 ## 已验证
 
 ```
-make check    # lint · docs gate · slop gate · knowledge · 484 个测试 · 25 项 doctor 检查 · budget
+make check    # lint · docs gate · slop gate · knowledge · 487 个测试 · 25 项 doctor 检查 · budget
 ```
 
 doctor 通过**真的去做那件坏事**来证明 gate 有效，而不是把配置读回来对一遍——

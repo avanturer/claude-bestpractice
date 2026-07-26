@@ -113,5 +113,52 @@ class TestTranslationsStayInStep(unittest.TestCase):
                 )
 
 
+
+class TestSkills(unittest.TestCase):
+    """Skills are loaded on demand, so they cost nothing until they are relevant."""
+
+    SKILLS = REPO_ROOT / "plugin" / "skills"
+
+    def frontmatter(self, path: Path) -> dict:
+        text = path.read_text(encoding="utf-8")
+        self.assertTrue(text.startswith("---"), f"{path.name} has no frontmatter")
+        block = text.split("---", 2)[1]
+        return dict(
+            (k.strip(), v.strip())
+            for k, _, v in (line.partition(":") for line in block.splitlines())
+            if k.strip()
+        )
+
+    def test_every_skill_declares_a_name_and_a_trigger(self):
+        """A description that does not say WHEN to use it never gets invoked."""
+        found = list(self.SKILLS.glob("*/SKILL.md"))
+        self.assertGreaterEqual(len(found), 3)
+        for path in found:
+            with self.subTest(skill=path.parent.name):
+                meta = self.frontmatter(path)
+                self.assertEqual(meta.get("name"), path.parent.name)
+                description = meta.get("description", "").lower()
+                self.assertTrue(
+                    any(trigger in description for trigger in ("use when", "use at", "use whenever")),
+                    f"{path.parent.name}: the description never says WHEN to use it, "
+                    "so it will never be invoked",
+                )
+
+    def test_none_of_them_is_always_on(self):
+        """The always-on budget is 400 tokens; a skill loaded eagerly would blow it."""
+        hooks = (REPO_ROOT / "plugin" / "hooks" / "hooks.json").read_text(encoding="utf-8")
+        for path in self.SKILLS.glob("*/SKILL.md"):
+            self.assertNotIn(path.parent.name, hooks, f"{path.parent.name} is wired to an event")
+
+    def test_they_are_specific_enough_to_act_on(self):
+        """"Make it modern" is not actionable and produces the same page every time."""
+        landing = (self.SKILLS / "landing-not-slop" / "SKILL.md").read_text(encoding="utf-8")
+        for concrete in ("gradient", "375px", "4.5:1", "prefers-reduced-motion"):
+            self.assertIn(concrete, landing)
+
+        defaults = (self.SKILLS / "founder-defaults" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("[enforced]", defaults, "the defaults must say which are binding")
+
+
 if __name__ == "__main__":
     unittest.main()

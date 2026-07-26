@@ -5,7 +5,7 @@
 **Память, координация и принуждение для разработки продукта в нескольких параллельных сессиях Claude Code.**
 
 [![version](https://img.shields.io/badge/version-1.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-484%20passing-2ea44f)](#проверено)
+[![tests](https://img.shields.io/badge/tests-487%20passing-2ea44f)](#проверено)
 [![doctor](https://img.shields.io/badge/doctor-25%20checks-2ea44f)](#проверено)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#требования)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#требования)
@@ -199,6 +199,8 @@ founder-os-ci off        # снять pre-push хук
 | `founder-os-knowledge` | Валидировать слой decided, обновить его индекс |
 | `founder-os-reindex` | Снести и пересобрать всё выводимое |
 | `founder-os-ci` | Где выполняются проверки: локально перед push по умолчанию, hosted CI по желанию |
+| `founder-os-attempt` | Журнал тупиков: что пробовали и почему не вышло |
+| `founder-os-options` | Записать решение как сравнение вариантов по метрикам |
 
 В сессии: `/founder-os:status` · `/founder-os:plan` · `/founder-os:review`
 
@@ -224,7 +226,7 @@ founder-os-ci off        # снять pre-push хук
 ## Проверено
 
 ```
-make check    # lint · docs gate · slop gate · knowledge · 484 теста · 25 проверок доктора · budget
+make check    # lint · docs gate · slop gate · knowledge · 487 тестов · 25 проверок доктора · budget
 ```
 
 Доктор доказывает гейты **попыткой сделать плохое**, а не чтением конфигурации обратно —

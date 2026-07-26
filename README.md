@@ -5,7 +5,7 @@
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
 [![version](https://img.shields.io/badge/version-1.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-484%20passing-2ea44f)](#verified)
+[![tests](https://img.shields.io/badge/tests-487%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-25%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
@@ -196,6 +196,8 @@ configuration silently.
 | `founder-os-knowledge` | Validate the decided layer, refresh its index |
 | `founder-os-reindex` | Drop and rebuild everything derived |
 | `founder-os-ci` | Where the checks run: local pre-push by default, hosted CI opt-in |
+| `founder-os-attempt` | The dead-end ledger: what was tried, and why it failed |
+| `founder-os-options` | Record a decision as a scored comparison of alternatives |
 
 In a session: `/founder-os:status` · `/founder-os:plan` · `/founder-os:review`
 
@@ -221,7 +223,7 @@ against a cap of 400 — roughly 0.1 % of a 200k window.
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · knowledge · 484 tests · 25 doctor checks · budget
+make check    # lint · docs gate · slop gate · knowledge · 487 tests · 25 doctor checks · budget
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration

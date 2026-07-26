@@ -1,6 +1,6 @@
 ---
 name: llm-first-code
-description: Write comments, docstrings and types for a model reader rather than a human one. Use when writing or reviewing any function, module or docstring, or when asked about comment style.
+description: Write comments, docstrings and types for a model reader, not a human one. Use when writing or reviewing any function, module or docstring.
 ---
 
 # LLM-first code
