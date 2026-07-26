@@ -234,7 +234,27 @@ class TestGuardedJson(RepoCase):
         store.write_json(store.tier_b(ctx, "deep", "x.json"), {"a": 1})
         self.assertTrue(store.tier_b(ctx).exists())
         store.purge_tier_b(ctx)
-        self.assertFalse(store.tier_b(ctx).exists())
+        self.assertFalse(store.tier_b(ctx, "deep").exists())
+
+    def test_purge_keeps_the_records_that_cannot_be_rebuilt(self):
+        """Tier B is described as entirely derived, and some of it records EVENTS.
+
+        A finish that could not be proved, a decision drafted and not yet accepted: no
+        amount of rescanning the repository brings an event back. `rmtree` took them, and
+        `founder-os reindex` printed "Nothing durable was lost" over the top of it.
+        """
+        ctx = self.ctx()
+        store.write_json(store.tier_b(ctx, "derived.json"), {"cache": True})
+        for name in store.CARRIED:
+            store.append_jsonl(store.tier_b(ctx, name), {"kept": name})
+
+        store.purge_tier_b(ctx)
+
+        self.assertFalse(store.tier_b(ctx, "derived.json").exists())
+        for name in store.CARRIED:
+            self.assertEqual(
+                store.read_jsonl(store.tier_b(ctx, name)), [{"kept": name}], name
+            )
 
 
 if __name__ == "__main__":

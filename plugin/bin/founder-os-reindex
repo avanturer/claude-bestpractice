@@ -41,6 +41,8 @@ def main() -> int:
         print("\ndry run: nothing removed")
         return 0
 
+    carried = [name for name in store.CARRIED if (root / name).is_file()]
+
     store.purge_tier_b(ctx)
     store.ensure_dir(root)
 
@@ -49,8 +51,14 @@ def main() -> int:
     print(f"stage:   {resolved}")
     for reason in signals.reasons[:6]:
         print(f"         - {reason}")
-    print("\nLive sessions re-register on their next hook. Nothing durable was lost:")
-    print("Tier A (checkpoints, decisions, config, stage) is committed and untouched.")
+
+    print("\nLive sessions re-register on their next hook.")
+    print("Tier A (checkpoints, decisions, plan, attempts, config, stage) is committed and untouched.")
+    if carried:
+        # Named, not merely preserved. "Nothing durable was lost" used to be printed over
+        # the top of deleting every one of these, and a claim that specific is the kind a
+        # founder stops checking.
+        print(f"Kept, because nothing can rebuild them: {', '.join(carried)}")
     return 0
 
 

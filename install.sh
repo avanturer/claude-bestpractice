@@ -23,16 +23,22 @@ die()  { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 command -v git >/dev/null 2>&1 || die "git is required"
 command -v claude >/dev/null 2>&1 || die "the claude CLI is required — see https://code.claude.com"
 
+# python3 only. Every executable in plugin/bin/ carries `#!/usr/bin/env python3`, so a
+# machine where only `python` exists would pass this check and then have every single
+# gate fail to launch — installed, reported working, enforcing nothing.
 PY=""
-for candidate in python3 python; do
-  if command -v "$candidate" >/dev/null 2>&1; then
-    if "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then
-      PY="$candidate"
-      break
-    fi
+if command -v python3 >/dev/null 2>&1 &&
+   python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then
+  PY=python3
+fi
+if [ -z "$PY" ]; then
+  if command -v python >/dev/null 2>&1; then
+    die "found \`python\` but not \`python3\`. Every gate here is launched by \`env python3\`,
+  so they would install and then never run. Install python3, or symlink it:
+    ln -s \"\$(command -v python)\" ~/.local/bin/python3"
   fi
-done
-[ -n "$PY" ] || die "python 3.9 or newer is required (no other dependency is)"
+  die "python 3.9 or newer is required (no other dependency is)"
+fi
 
 bold "founder-os"
 dim  "python: $($PY --version 2>&1) · claude: $(claude --version 2>&1 | head -1)"
@@ -40,9 +46,17 @@ dim  "python: $($PY --version 2>&1) · claude: $(claude --version 2>&1 | head -1
 # ---------------------------------------------------------------- fetch or update
 if [ -d "$INSTALL_DIR/.git" ]; then
   dim "updating $INSTALL_DIR"
-  git -C "$INSTALL_DIR" fetch --quiet origin
-  git -C "$INSTALL_DIR" reset --quiet --hard origin/HEAD 2>/dev/null \
-    || git -C "$INSTALL_DIR" pull --quiet --ff-only
+  # Unguarded under `set -e`, an offline machine aborted the whole installer with a raw
+  # git error and exit 128 — on a re-run whose only purpose was to re-register a copy
+  # that was already on disk and perfectly usable. Being unable to reach the network is
+  # not a reason to refuse to install what has already been downloaded.
+  if git -C "$INSTALL_DIR" fetch --quiet origin 2>/dev/null; then
+    git -C "$INSTALL_DIR" reset --quiet --hard origin/HEAD 2>/dev/null \
+      || git -C "$INSTALL_DIR" pull --quiet --ff-only 2>/dev/null \
+      || dim "could not fast-forward; installing the checkout as it stands"
+  else
+    dim "offline or origin unreachable — installing the copy already here"
+  fi
 elif [ -f "$(dirname "$0")/plugin/.claude-plugin/plugin.json" ]; then
   # Running from a clone: install in place rather than fetching a second copy.
   INSTALL_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -108,7 +122,23 @@ digests = sorted(
 print(hashlib.sha256("\n".join(digests).encode()).hexdigest())
 EOF
 )"
-CACHED="$(find "$HOME/.claude/plugins" -type d -name "$PLUGIN" -print -quit 2>/dev/null || true)"
+# NEWEST copy, not the first one `find` happens to walk into. The CLI keeps a directory
+# per version, so after a single version bump the cache holds both — and `-print -quit`
+# returned whichever the filesystem listed first, usually the OLD one. Its contents no
+# longer matched the source the doctor had just verified, so the script aborted with "the
+# registered copy is NOT the code just verified" and printed a remedy that does not help:
+# uninstalling removes only the current version's directory and leaves the stale sibling,
+# so the next run finds it again and aborts again. Every version bump bricked the
+# installer permanently, and the only escape was deleting the cache by hand.
+CACHED="$(
+  find "$HOME/.claude/plugins" -type d -name "$PLUGIN" -printf '%T@ %p\n' 2>/dev/null \
+    | sort -rn | head -1 | cut -d' ' -f2-
+)"
+# BSD find has no -printf. Fall back to the old behaviour there rather than skipping the
+# check: one copy is the common case, and a first-match check beats no check at all.
+if [ -z "$CACHED" ]; then
+  CACHED="$(find "$HOME/.claude/plugins" -type d -name "$PLUGIN" -print 2>/dev/null | tail -1 || true)"
+fi
 if [ -n "$CACHED" ]; then
   CACHED_FINGERPRINT="$("$PY" - "$CACHED" <<'EOF'
 import hashlib, pathlib, sys
@@ -122,7 +152,14 @@ print(hashlib.sha256("\n".join(digests).encode()).hexdigest())
 EOF
 )"
   if [ "$FINGERPRINT" != "$CACHED_FINGERPRINT" ]; then
-    die "the registered copy at $CACHED is NOT the code just verified. Run: claude plugin uninstall ${PLUGIN}@${MARKETPLACE} && $0"
+    # The remedy has to actually work. `claude plugin uninstall` removes the current
+    # version's directory and leaves every older sibling behind, so telling the founder
+    # to run it left them in the same state on the next attempt, forever.
+    die "the registered copy at $CACHED is NOT the code just verified.
+  Clear the stale cache and retry:
+    claude plugin uninstall ${PLUGIN}@${MARKETPLACE}
+    rm -rf \"\$HOME/.claude/plugins/cache/${PLUGIN}\" \"\$HOME/.claude/plugins/marketplaces/${MARKETPLACE}\"
+    $0"
   fi
   dim "registered copy matches the verified source"
 fi

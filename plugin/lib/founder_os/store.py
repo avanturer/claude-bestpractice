@@ -305,10 +305,38 @@ def guarded_json(
         write_json(path, box[0])
 
 
+# Tier B is DESCRIBED as entirely derived, and four of its files are not. These record
+# events — a finish that could not be proved, a suite observed failing, a decision the
+# agent drafted and nobody has accepted yet — and no amount of rescanning the repository
+# brings an event back. Purging them was silent, permanent, and `founder-os reindex`
+# printed "Nothing durable was lost" over the top of it.
+#
+# Keeping the list here rather than in the command: the destruction lives here, so the
+# exception has to as well, or the next caller of `purge_tier_b` repeats the bug.
+CARRIED = (
+    "open-items.jsonl",       # board.OPEN_ITEMS_FILE — including UNVERIFIED warnings
+    "decision-inbox.jsonl",   # drafts.INBOX_FILE — drafted, not yet accepted
+    "unverified.jsonl",       # the evidence gate's record of a finish it could not prove
+)
+# `failing-suite.json` is deliberately absent: the red ledger is Tier A, committed, and
+# this function never reaches it.
+
+
 def purge_tier_b(ctx: GitContext) -> None:
-    """Drop all derived coordination state. Tier B must always be rebuildable."""
+    """Drop derived coordination state, keeping the records that cannot be rebuilt.
+
+    Everything else here IS derivable — session records re-register on the next hook, the
+    repomap cache rescans, the stage signals re-probe, locks are meaningless once the
+    holders are gone. Those are what this is for.
+    """
     import shutil
 
     root = tier_b(ctx)
-    if root.exists():
-        shutil.rmtree(root)
+    if not root.exists():
+        return
+
+    kept = {name: (root / name).read_bytes() for name in CARRIED if (root / name).is_file()}
+    shutil.rmtree(root)
+    ensure_dir(root)
+    for name, blob in kept.items():
+        atomic_write(root / name, blob.decode("utf-8", "surrogateescape"))

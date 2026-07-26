@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 
-from helpers import REPO_ROOT
+from helpers import BIN, REPO_ROOT, RepoCase, session_record_for
 
 READMES = ("README.md", "docs/README.ru.md", "docs/README.zh.md")
 
@@ -192,3 +194,55 @@ class TestItInstallsTheShortestWay(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReindexKeepsWhatItCannotRebuild(RepoCase):
+    """Tier B is described as entirely derived, and four of its files record EVENTS.
+
+    A finish that could not be proved, a suite observed failing, a decision drafted and
+    not yet accepted: no amount of rescanning the repository brings an event back. Purging
+    them was silent and permanent, and the command printed "Nothing durable was lost".
+    """
+
+    def seed(self) -> None:
+        from founder_os import board, store
+
+        ctx = self.ctx()
+        board.add_open_item(
+            ctx, item_id="u-1", text="UNVERIFIED finish on main", branch="main", session_id="s1"
+        )
+        store.append_jsonl(store.tier_b(ctx, "unverified.jsonl"), {"branch": "main"})
+        store.append_jsonl(store.tier_b(ctx, "decision-inbox.jsonl"), {"title": "use postgres"})
+
+    def test_the_records_survive(self):
+        from founder_os import board, store
+
+        self.seed()
+        store.purge_tier_b(self.ctx())
+
+        ctx = self.ctx()
+        self.assertEqual(len(board.open_items(ctx, branch="main")), 1)
+        self.assertEqual(len(store.read_jsonl(store.tier_b(ctx, "unverified.jsonl"))), 1)
+        self.assertEqual(len(store.read_jsonl(store.tier_b(ctx, "decision-inbox.jsonl"))), 1)
+
+    def test_the_genuinely_derived_state_is_still_dropped(self):
+        """Otherwise this is not a rebuild, it is a no-op with extra steps."""
+        from founder_os import sessions, store
+
+        ctx = self.ctx()
+        sessions.register(ctx, session_record_for(ctx, "s1"))
+        self.seed()
+        store.purge_tier_b(self.ctx())
+        self.assertEqual(sessions.load_all(self.ctx()), [])
+
+    def test_the_command_names_what_it_kept(self):
+        """"Nothing durable was lost" was printed over deleting every one of them, and a
+        claim that specific is the kind a founder stops checking."""
+        self.seed()
+        proc = subprocess.run(
+            [sys.executable, str(BIN / "founder-os-reindex")],
+            cwd=str(self.repo), capture_output=True, text=True, timeout=120,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("Kept, because nothing can rebuild them", proc.stdout)
+        self.assertIn("unverified.jsonl", proc.stdout)
