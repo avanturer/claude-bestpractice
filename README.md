@@ -5,10 +5,11 @@
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
 [![version](https://img.shields.io/badge/version-1.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-525%20passing-2ea44f)](#verified)
+[![tests](https://img.shields.io/badge/tests-540%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-25%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
+[![context](https://img.shields.io/badge/always--on%20context-332%20tokens-blue)](#context-cost)
 [![license](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
 
 **English** · [Русский](docs/README.ru.md) · [中文](docs/README.zh.md)
@@ -250,6 +251,20 @@ surface for the component whose whole job is to be trustworthy. Enforced in CI.
 
 Tested on Python 3.9, 3.11 and 3.13. `claude plugin validate --strict` passes against
 Claude Code 2.1.220.
+
+### Context cost
+
+Claude Code's `/plugin` panel shows what a plugin adds to your context window every
+turn, which makes this a number you can compare rather than a claim you have to take.
+
+founder-os holds **~332 tokens** of always-on context across four components, against a
+self-imposed ceiling of 400. `make check` fails the build if it goes over, and the
+ceiling has been held by trimming descriptions rather than by raising it — twice.
+
+Everything else the plugin knows is loaded on demand: skills only when their trigger
+fires, the board only at session start, the work ledger only when asked for. The budget
+exists because the cost is itemised in your own usage view while the benefit is
+counterfactual and invisible, which is a trade a founder should get to audit.
 
 ---
 

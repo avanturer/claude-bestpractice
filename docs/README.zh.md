@@ -5,10 +5,11 @@
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
 [![version](https://img.shields.io/badge/version-1.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-525%20passing-2ea44f)](#已验证)
+[![tests](https://img.shields.io/badge/tests-540%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-25%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#运行要求)
+[![context](https://img.shields.io/badge/常驻上下文-332%20tokens-blue)](#运行要求)
 [![license](https://img.shields.io/badge/license-MIT-lightgrey)](../LICENSE)
 
 [English](../README.md) · [Русский](README.ru.md) · **中文**
