@@ -252,6 +252,26 @@ surface for the component whose whole job is to be trustworthy. Enforced in CI.
 Tested on Python 3.9, 3.11 and 3.13. `claude plugin validate --strict` passes against
 Claude Code 2.1.220.
 
+### What appears in your repository, and what to do with it
+
+Two directories, and the difference matters:
+
+**`.claude/founder-os/` — commit this.** Tasks, decisions, dead ends, the stage marker.
+It is deliberately inside your repository because it must travel with the branch: a
+decision taken on `feat/billing` is about `feat/billing`, and a task list that does not
+follow a branch switch is worse than none. One file per item, so five worktrees produce
+five clean adds rather than five conflicting hunks in one blob. Nothing in it varies
+between runs, so it does not turn up as a diff every time a gate fires.
+
+**`.git/founder-os/` — ignore it, git already does.** Live sessions, leases, the
+loop counter, the test receipt. It lives in the git common directory because that is the
+only path shared by every worktree of one clone, invisible to git, surviving branch
+switches, and dying with the clone. It is entirely rebuildable: `founder-os reindex`
+regenerates it from the committed half, and that path is tested rather than assumed.
+
+You never edit either by hand. If you want the whole thing gone, delete both directories
+and uninstall the plugin — nothing else on your machine is touched.
+
 ### Context cost
 
 Claude Code's `/plugin` panel shows what a plugin adds to your context window every
