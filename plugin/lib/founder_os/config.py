@@ -72,8 +72,21 @@ class Config:
     autonomy: str = "vibecode"
     protect_trunk: bool = True
     stage_override: str | None = None
+    # Test directories are exempt because THIS PLUGIN demands the test. Without them the
+    # scope-drift check and the evidence gate deadlock on the most ordinary task there is:
+    # "fix the discount handling in src/billing.py" — the agent fixes it, writes the test
+    # the Stop gate requires, and is blocked for touching a file the task did not name.
+    # Four blocks, then an UNVERIFIED finish, then a permanent `outcome: failed` attempt
+    # filed against work that was correct, tested and green. On a first task, unprompted.
+    #
+    # An earlier round exempted the ARTIFACT (junit.xml) and not the test SOURCE that
+    # produces it, which is why the README already boasts of fixing this deadlock while
+    # the deadlock was still there.
     exempt_paths: list[str] = field(
-        default_factory=lambda: [".claude/", "docs/", "README.md", "CHANGELOG.md"]
+        default_factory=lambda: [
+            ".claude/", "docs/", "README.md", "CHANGELOG.md",
+            "tests/", "test/", "spec/", "__tests__/",
+        ]
     )
 
     def to_dict(self) -> dict[str, Any]:

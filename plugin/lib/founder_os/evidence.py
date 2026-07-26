@@ -38,7 +38,7 @@ import tempfile
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from . import provenance, store
 from .gitctx import GitContext, changed_files
@@ -177,38 +177,45 @@ def newest_source_mtime(root: Path, relpaths: list[str]) -> float:
     return newest
 
 
-def material_changes(changed: list[str], exempt: list[str]) -> list[str]:
+def _is_exempt(rel: str, exempt: list[str], globs: list[str], byproducts: set[str]) -> bool:
+    """Whether one changed path can be ignored. Three rules, each earned by a defect.
+
+    PREFIX for exempt paths, and never a component match: applying the component rule to
+    every exempt entry made `app/reports/generator.py` and anything under a directory
+    called docs/ or target/ invisible, so a red suite in ordinary domain code finished
+    silently green.
+
+    A byproduct directory never hides SOURCE. `coverage/` is a report directory in most
+    repositories and a package in some, `reports/` is a service in plenty, and only the
+    extension separates them — a coverage report is not written in Python. The rule leans
+    the safe way: a stray source file inside a real byproduct directory costs one
+    unnecessary suite run, while the reverse never runs the suite at all.
+
+    The artifact this gate demands is matched AS A GLOB. The caller used to truncate
+    `reports/**/*.xml` to `reports` and pass it as a prefix, which exempted every file
+    under reports/ — so a repository whose source lived there had that service made
+    invisible and Stop exited 0 over a real regression.
+    """
+    if any(rel == p or rel.startswith(p.rstrip("/") + "/") for p in exempt):
+        return True
+    if byproducts & set(rel.split("/")) and not rel.endswith(SOURCE_SUFFIXES):
+        return True
+    return any(PurePosixPath(rel).match(pattern) for pattern in globs)
+
+
+def material_changes(
+    changed: list[str], exempt: list[str], artifact_globs: list[str] | None = None
+) -> list[str]:
     """Drop paths that cannot break anything.
 
     The plugin's own state files land in the working tree untracked, so without this
     the gate demands a test run to justify its own bookkeeping — which trains the
     agent that the gate is noise.
     """
-    out = []
     byproducts = {p.rstrip("/") for p in RUN_BYPRODUCTS}
-    for rel in changed:
-        # Prefix match for exempt PATHS; component match ONLY for the throwaway
-        # directories a test run creates. Applying the component rule to every exempt
-        # entry made `app/reports/generator.py`, `app/coverage/rules.py` and anything
-        # under a directory called docs/ or target/ invisible to the gate — a red suite
-        # in ordinary domain code finished silently green.
-        if any(rel == p or rel.startswith(p.rstrip("/") + "/") for p in exempt):
-            continue
-        # ...and a byproduct directory never hides SOURCE. `coverage/` is a report
-        # directory in most repositories and a Python package in some, `reports/` is a
-        # service in plenty, and the component rule could not tell them apart: every
-        # `.py` under any directory named coverage, htmlcov, .tox or .gradle anywhere in
-        # the tree was invisible to the gate, so a red suite in that code was never run
-        # at all and the finish went green. Deciding by extension is what separates the
-        # two, because a coverage report is not written in Python.
-        #
-        # The cost of being wrong here is asymmetric and the rule leans the safe way:
-        # a stray source file inside a real byproduct directory makes the gate run the
-        # suite once it did not need to, while the reverse never runs it at all.
-        if byproducts & set(rel.split("/")) and not rel.endswith(SOURCE_SUFFIXES):
-            continue
-        out.append(rel)
-    return out
+    globs = list(artifact_globs or ())
+    return [rel for rel in changed if not _is_exempt(rel, exempt, globs, byproducts)]
+
 
 
 RUN_TIMEOUT = 300
@@ -415,10 +422,16 @@ def _verify_by_running(ctx: GitContext, globs: list[str], command: list[str]) ->
             False,
             f"The suite FAILS on the code as it stands.\n$ {' '.join(command)}\n{tail}",
         )
-    clear_red(ctx)
-    record_green(ctx, command)
-
-    return _judge_green_run(ctx, globs, command, tail, started)
+    # Judge FIRST, record after. Exit 0 is not the verdict — a suite where every test
+    # skipped, or one whose runner printed "1 failed" behind a swallowed status, both
+    # arrive here with code 0. Writing the green record before asking those questions
+    # meant the two most common fake greens each cleared the red ledger on their way to
+    # being refused, so the refusal was correct and the state it left behind was a lie.
+    verdict = _judge_green_run(ctx, globs, command, tail, started)
+    if verdict.ok and not verdict.unverified:
+        clear_red(ctx, command)
+        record_green(ctx, command)
+    return verdict
 
 
 def _first_artifact(root: Path, globs: list[str]) -> Artifact | None:
@@ -548,6 +561,82 @@ _MISSING_DEPENDENCY = re.compile(
 )
 
 
+# The module name inside an import failure, across the runners this plugin detects.
+_UNRESOLVED = re.compile(
+    r"(?i)(?:ModuleNotFoundError: No module named ['\"]([\w.]+)|"
+    r"ImportError: No module named ['\"]?([\w.]+)|"
+    r"Cannot find module ['\"]([^'\"]+))"
+)
+
+
+def _uncommitted_local_modules(ctx: GitContext, tail: str) -> list[str]:
+    """Of the modules the committed tree could not import, which are your own uncommitted files.
+
+    The discriminator the exemption was missing. `pandas` missing from a bare checkout is
+    a dependency problem and says nothing; `src/helper.py` missing is the regression the
+    clean re-run exists to catch, and both arrive as ModuleNotFoundError.
+    """
+    from .gitctx import _run
+
+    names: set[str] = set()
+    for match in _UNRESOLVED.finditer(tail):
+        name = next((g for g in match.groups() if g), "")
+        if name:
+            names.add(name.split(".")[0].strip("./"))
+    if not names:
+        return []
+
+    untracked = _run(
+        ["-c", "core.quotePath=false", "ls-files", "--others", "--exclude-standard"],
+        ctx.worktree_root, check=False,
+    ).splitlines()
+    out = []
+    for rel in untracked:
+        stem = PurePosixPath(rel).stem
+        if stem in names or PurePosixPath(rel).parts[:1] and PurePosixPath(rel).parts[0] in names:
+            out.append(rel)
+    return sorted(set(out))[:6]
+
+
+def _judge_clean_failure(ctx: GitContext, command: list[str], tail: str) -> Verdict:
+    """Why the committed tree failed: your missing file, their missing package, or a bug.
+
+    All three arrive as a non-zero exit and the first two both look like
+    ModuleNotFoundError, which is why the exemption used to swallow the finding: an
+    uncommitted `src/helper.py` — the literal example the README gives for why this check
+    exists — disabled the check that exists for it, silently, with a reassuring message.
+    """
+    if not _MISSING_DEPENDENCY.search(tail):
+        return Verdict(
+            False,
+            "The suite passes in your working tree but FAILS on the committed tree. "
+            "Something you rely on is uncommitted, ignored, or local.\n"
+            f"$ {' '.join(command)}\n" + tail,
+        )
+
+    yours = _uncommitted_local_modules(ctx, tail)
+    if yours:
+        it_is = "it is" if len(yours) == 1 else "they are"
+        return Verdict(
+            False,
+            "The suite passes in your working tree but the committed tree cannot even "
+            f"import {', '.join(yours)} — {it_is} not committed. Anyone who clones this "
+            "gets a broken build.\n"
+            f"  git add {' '.join(yours)}\n"
+            f"$ {' '.join(command)}\n" + tail,
+        )
+
+    # A genuine missing dependency proves nothing either way, so it is recorded as
+    # unverified rather than counted as a pass. A plain True here let "we could not
+    # check" read as "we checked and it was fine".
+    return Verdict(
+        True,
+        "clean re-run skipped: the committed tree has no installed dependencies, "
+        "so this says nothing about the code",
+        unverified=True,
+    )
+
+
 def clean_rerun(ctx: GitContext, command: list[str]) -> Verdict:
     """Tier 2: run the suite against the COMMITTED tree, in a throwaway worktree.
 
@@ -593,18 +682,7 @@ def clean_rerun(ctx: GitContext, command: list[str]) -> Verdict:
         )
         if proc.returncode != 0:
             tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-25:])
-            if _MISSING_DEPENDENCY.search(tail):
-                return Verdict(
-                    True,
-                    "clean re-run skipped: the committed tree has no installed dependencies, "
-                    "so this says nothing about the code",
-                )
-            return Verdict(
-                False,
-                "The suite passes in your working tree but FAILS on the committed tree. "
-                "Something you rely on is uncommitted, ignored, or local.\n"
-                f"$ {' '.join(command)}\n" + tail,
-            )
+            return _judge_clean_failure(ctx, command, tail)
         return Verdict(True, "clean-checkout re-run passed")
     except subprocess.TimeoutExpired:
         return Verdict(False, f"clean re-run exceeded {CLEAN_RERUN_TIMEOUT}s and was killed")
@@ -726,12 +804,28 @@ def last_green(ctx: GitContext) -> dict | None:
     return got if isinstance(got, dict) and got.get("command") else None
 
 
-def clear_red(ctx: GitContext) -> bool:
-    """The suite passed. Returns True when this cleared a previously recorded failure."""
-    path = store.tier_a(ctx, RED_SUITE_FILE)
-    if not path.exists():
+def clear_red(ctx: GitContext, command: list[str] | None = None) -> bool:
+    """A green run clears the red record only when it is the SAME run that went red.
+
+    Returns True when a previously recorded failure was cleared.
+
+    A different command passing says nothing about the one that failed, and the gap is
+    not hypothetical — it needs no evasion to open. An agent adds a `Makefile` with a
+    `test:` target scoped to the test it just wrote; `detect_test_command` prefers
+    Makefiles, so the gate switches to `make test`; that narrower command passes;
+    `failing-suite.json` is deleted, `last-green.json` is written, every sibling board
+    drops its RED SUITE line and `founder-os ship` reports "Tests: green (observed by the
+    gate)" — while the command that actually failed still fails.
+
+    That is worse than missing the regression. The plugin manufactures positive evidence
+    for it and destroys the record that contradicted it, for a founder who reads no code.
+    """
+    entry = red(ctx)
+    if not entry:
         return False
-    path.unlink(missing_ok=True)
+    if command is not None and list(entry.get("command") or []) != list(command):
+        return False
+    store.tier_a(ctx, RED_SUITE_FILE).unlink(missing_ok=True)
     return True
 
 

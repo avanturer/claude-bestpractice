@@ -66,7 +66,13 @@ def _give_up(ctx, rec: sessions.SessionRecord, reason: str, changed: list) -> No
             why=f"Finished without proof. {reason[:600]}",
             paths=changed,
             outcome=attempts.FAILED,
-            branch=rec.branch,
+            # `ctx.branch`, not `rec.branch` — the same fix the delivery marker below
+            # already carries. The record's branch is where the session STARTED, and the
+            # worktree rule pushes the agent to branch mid-session, so a dead end filed
+            # against `main` is filed against a branch that never held the work. It is
+            # then surfaced to sessions that cannot act on it and hidden from the one
+            # that can.
+            branch=ctx.branch or rec.branch,
             session_id=rec.session_id,
         )
 
@@ -142,10 +148,31 @@ def main() -> None:
     exempt = (
         list(cfg.exempt_paths)
         + [".claude/founder-os/", ".claude/"]
-        + [g.split("/")[0] if "/" in g else g for g in cfg.artifact_globs]
         + list(evidence.RUN_BYPRODUCTS)
     )
-    changed = evidence.material_changes(changed_files(ctx, rec.baseline_commit), exempt)
+    # Artifact globs are matched AS GLOBS. Truncating `reports/**/*.xml` to `reports`
+    # exempted every file under reports/ — so a repository whose source lives in
+    # `reports/api/` had its whole service made invisible: `changed` came back empty, the
+    # suite was never run, and Stop exited 0 in silence over a genuine regression. Same
+    # for `target/` and `test-results/`, which are ordinary directory names.
+    everything = changed_files(ctx, rec.baseline_commit)
+    changed = evidence.material_changes(everything, exempt, artifact_globs=cfg.artifact_globs)
+
+    # A HEURISTIC must never be the reason a change list became empty. The explicit path
+    # exemptions are a deliberate statement that these files cannot break anything — a
+    # turn that only touched `.claude/` genuinely needs no test run, and demanding one for
+    # the gate's own bookkeeping is what teaches the agent the gate is noise.
+    #
+    # The glob and byproduct rules are guesses about directory names, and a wrong guess
+    # there hides real source. So when they are what emptied the list, run the suite:
+    # "I cannot tell what changed" must resolve to checking, never to certifying.
+    if not changed:
+        by_path = [
+            rel for rel in everything
+            if not any(rel == p or rel.startswith(p.rstrip("/") + "/") for p in exempt)
+        ]
+        if by_path:
+            changed = by_path
 
     if not changed:
         _allow(ctx, rec)
