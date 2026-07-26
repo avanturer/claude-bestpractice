@@ -30,7 +30,20 @@ claude plugin install founder-os@founder-os
 curl -fsSL https://raw.githubusercontent.com/avanturer/claude-bestpractice/HEAD/install.sh | bash
 ```
 
-Это вся установка. Дальше в любом репозитории:
+Это не одно и то же, и разница видна в первый же день:
+
+|  | `claude plugin install` | `install.sh` |
+|---|---|---|
+| Гейты работают в сессии | да | да |
+| `founder-os` **в вашем терминале** | нет | да (симлинки в `~/.local/bin`) |
+| Доктор прогоняется до регистрации | нет | да |
+
+Claude Code сам добавляет `bin/` плагина в PATH инструмента Bash, поэтому на пути через
+маркетплейс команды ниже работают **внутри сессии** и дают `command not found` в вашей
+оболочке. Это важно знать, потому что именно `founder-os init` ставит pre-push гейт:
+пропустите его — и гейт выключен, пока `claude plugin list` показывает `✓ enabled`.
+
+Дальше в любом репозитории — из терминала или попросив Claude их выполнить:
 
 ```sh
 founder-os init      # вывести из вашего кода то, что выводится; спросить про остальное

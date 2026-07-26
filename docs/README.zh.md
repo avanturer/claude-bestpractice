@@ -29,7 +29,20 @@ claude plugin install founder-os@founder-os
 curl -fsSL https://raw.githubusercontent.com/avanturer/claude-bestpractice/HEAD/install.sh | bash
 ```
 
-安装到此为止。之后在任意仓库中：
+这两条路径并不等价，差别在你使用的第一天就会遇到：
+
+|  | `claude plugin install` | `install.sh` |
+|---|---|---|
+| gate 在会话中生效 | 是 | 是 |
+| `founder-os` 在**你自己的终端**里可用 | 否 | 是（软链到 `~/.local/bin`）|
+| 注册前先跑 doctor | 否 | 是 |
+
+Claude Code 会自动把插件的 `bin/` 加进 Bash 工具的 PATH，所以走 marketplace 路径时，
+下面这些命令在**会话内**可用，在你自己的 shell 里则是 `command not found`。这一点很重要，
+因为 pre-push gate 正是由 `founder-os init` 安装的：跳过它，gate 就是关着的，而
+`claude plugin list` 依然显示 `✓ enabled`。
+
+之后在任意仓库中——在终端里运行，或者让 Claude 替你运行：
 
 ```sh
 founder-os init      # 能从代码推导的自动推导，推导不出的才来问你

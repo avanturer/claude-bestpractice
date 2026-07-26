@@ -29,7 +29,20 @@ Or, to have the gates proven on your machine **before** anything is registered:
 curl -fsSL https://raw.githubusercontent.com/avanturer/claude-bestpractice/HEAD/install.sh | bash
 ```
 
-That is the whole setup. In any repository afterwards:
+The two are not equivalent, and the difference matters on your first day:
+
+|  | `claude plugin install` | `install.sh` |
+|---|---|---|
+| Gates fire in a session | yes | yes |
+| `founder-os` in **your own terminal** | no | yes (symlinks into `~/.local/bin`) |
+| Doctor run before anything is registered | no | yes |
+
+Claude Code puts the plugin's `bin/` on the Bash tool's PATH automatically, so on the
+marketplace path the commands below work **inside a session** and are `command not found`
+in your shell. That is worth knowing because `founder-os init` is what installs the
+pre-push gate: skip it and the gate is off while `claude plugin list` says `✓ enabled`.
+
+In any repository afterwards — from your terminal, or by asking Claude to run them:
 
 ```sh
 founder-os init      # derive what it can from your code; ask you for what it cannot
