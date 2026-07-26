@@ -36,7 +36,7 @@ class TestVersionAgreement(unittest.TestCase):
         plugin = json.loads(read("plugin/.claude-plugin/plugin.json"))
         self.assertEqual(plugin["version"], version)
 
-        market = json.loads(read("plugin/.claude-plugin/marketplace.json"))
+        market = json.loads(read(".claude-plugin/marketplace.json"))
         entries = [p for p in market["plugins"] if p["name"] == plugin["name"]]
         self.assertEqual(len(entries), 1, "plugin listed zero or twice in the marketplace")
         self.assertEqual(entries[0]["version"], version)
@@ -158,6 +158,36 @@ class TestSkills(unittest.TestCase):
 
         defaults = (self.SKILLS / "founder-defaults" / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn("[enforced]", defaults, "the defaults must say which are binding")
+
+
+class TestItInstallsTheShortestWay(unittest.TestCase):
+    """`claude plugin marketplace add <owner>/<repo>` is the shareable install.
+
+    The CLI clones the repository and looks for `.claude-plugin/marketplace.json` at its
+    ROOT. With the manifest one directory down the shorthand fails outright, which is the
+    difference between a plugin someone can pass to a friend in one line and one that
+    needs a paragraph of instructions.
+    """
+
+    def test_the_marketplace_manifest_is_at_the_repository_root(self):
+        self.assertTrue((REPO_ROOT / ".claude-plugin" / "marketplace.json").is_file())
+
+    def test_there_is_exactly_one_marketplace_manifest(self):
+        """Two of them means the installer and the shorthand register different ids."""
+        found = [p for p in REPO_ROOT.rglob(".claude-plugin/marketplace.json")
+                 if ".git" not in p.parts]
+        self.assertEqual(len(found), 1, f"found {[str(p) for p in found]}")
+
+    def test_the_plugin_source_resolves(self):
+        market = json.loads(read(".claude-plugin/marketplace.json"))
+        for entry in market["plugins"]:
+            target = (REPO_ROOT / entry["source"] / ".claude-plugin" / "plugin.json")
+            self.assertTrue(target.is_file(), f"{entry['source']} has no plugin manifest")
+
+    def test_the_installer_registers_that_marketplace(self):
+        installer = read("install.sh")
+        market = json.loads(read(".claude-plugin/marketplace.json"))
+        self.assertIn(f'MARKETPLACE="{market["name"]}"', installer)
 
 
 if __name__ == "__main__":

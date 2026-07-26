@@ -13,7 +13,7 @@ set -euo pipefail
 
 REPO_URL="${FOUNDER_OS_REPO:-https://github.com/avanturer/claude-bestpractice.git}"
 INSTALL_DIR="${FOUNDER_OS_DIR:-$HOME/.founder-os}"
-MARKETPLACE="founder-marketplace"
+MARKETPLACE="founder-os"
 PLUGIN="founder-os"
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -74,7 +74,7 @@ dim "$(tail -1 "$DOCTOR_LOG")"
 # ones and the script printed "installed" — an update mechanism that updated nothing.
 # `update` is what refreshes the cache; `install` on an existing plugin is a no-op.
 bold "registering"
-if ! claude plugin marketplace add "$INSTALL_DIR/plugin" >/dev/null 2>&1; then
+if ! claude plugin marketplace add "$INSTALL_DIR" >/dev/null 2>&1; then
   claude plugin marketplace update "$MARKETPLACE" >/dev/null 2>&1 \
     || dim "marketplace already registered"
 fi
