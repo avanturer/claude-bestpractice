@@ -18,13 +18,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from founder_os import attempts  # noqa: E402
+from founder_os import attempts, hookio  # noqa: E402
 from founder_os.gitctx import resolve_for_cli  # noqa: E402
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Record and read failed approaches.")
-    sub = parser.add_subparsers(dest="command")
+    # required=True, or argparse leaves `command` as None, the branch below falls
+    # through, and the next line reads a field that was never populated — a
+    # traceback where a shipped command should print its usage.
+    sub = parser.add_subparsers(dest="command", required=True)
 
     add = sub.add_parser("add", help="file an approach that did not work")
     add.add_argument("title")
@@ -64,4 +67,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(hookio.run_cli(main))

@@ -51,6 +51,9 @@ class Task:
     created_at: str = ""
     updated_at: str = ""
     body: str = ""
+    # Empty when the task file is in THIS checkout. The sibling's directory name
+    # otherwise, so the board can say where the work actually is.
+    worktree: str = ""
 
     @property
     def number(self) -> int:
@@ -95,17 +98,59 @@ def _load(path: Path, state: str) -> Task | None:
 
 
 def load_all(ctx: GitContext, state: str = "") -> list[Task]:
+    """Every task on this clone, not just this checkout.
+
+    Tier A lives inside the working tree, so each worktree carries its own copy on its
+    own branch — which meant the ledger was per-worktree in a product whose whole premise
+    is three to eight worktrees at once. A sibling's in-flight task was invisible and
+    unclaimable: `founder-os plan` in one worktree listed one task, the other listed a
+    different one, `claim` on a sibling's id said "no task 0002", and the board promised
+    coordination while showing none of it. `next_id` already allocated across siblings,
+    so the ids were consistent and only the reading was not.
+
+    Deduplicated by FILENAME, keeping the most ADVANCED state. The same task exists in
+    several worktrees whenever one branched from another, and the honest answer to "is
+    anyone on 0002" is yes if any copy anywhere says doing.
+
+    By filename and not by id, because ids genuinely collide across branches: `next_id`
+    allocates against concurrent worktrees, not against a branch cut yesterday, so two
+    unrelated tasks created on two branches from the same base are both 0002. Merging
+    those branches is clean — different slugs, different filenames — and deduping by id
+    would silently drop one of two real tasks on every such merge.
+    """
     states = [state] if state else list(STATES)
-    tasks: list[Task] = []
+    best: dict[str, Task] = {}
+    for root in sibling_worktrees(ctx) or [ctx.worktree_root]:
+        label = "" if root.resolve() == ctx.worktree_root.resolve() else root.name
+        for task in _tasks_under(root, states, label):
+            previous = best.get(task.path.name)
+            if previous is None or _rank(task) > _rank(previous):
+                best[task.path.name] = task
+    return sorted(best.values(), key=lambda t: (STATES.index(t.state), t.id, t.title))
+
+
+def _tasks_under(root: Path, states: list[str], label: str) -> list[Task]:
+    """Every task file in one checkout, tagged with which checkout it came from."""
+    out: list[Task] = []
     for name in states:
-        directory = plan_dir(ctx, name)
+        directory = root / store.TIER_A_DIRNAME / PLAN_DIR / name
         if not directory.is_dir():
             continue
         for path in sorted(directory.glob("[0-9][0-9][0-9][0-9]-*.md")):
             task = _load(path, name)
             if task:
-                tasks.append(task)
-    return tasks
+                task.worktree = label
+                out.append(task)
+    return out
+
+
+# doing outranks next outranks done: what is in flight is what a session must not
+# collide with, and a local copy wins a tie so a claim acts on a file we own.
+_ADVANCEMENT = {DOING: 3, NEXT: 2, DONE: 1}
+
+
+def _rank(task: Task) -> tuple[int, int]:
+    return (_ADVANCEMENT.get(task.state, 0), 0 if task.worktree else 1)
 
 
 def sibling_worktrees(ctx: GitContext) -> list[Path]:
@@ -196,9 +241,15 @@ def find(ctx: GitContext, task_id: str) -> Task | None:
     return None
 
 
-def _move(ctx: GitContext, task: Task, state: str, owner: str = "", branch: str = "") -> Task:
-    """A state transition is a rename. Git records it as a rename, which merges cleanly."""
-    target_dir = plan_dir(ctx, state)
+def _move(task: Task, state: str, owner: str = "", branch: str = "") -> Task:
+    """A state transition is a rename. Git records it as a rename, which merges cleanly.
+
+    The rename happens where the FILE is, not where the caller is. Now that the ledger
+    reads across siblings, `plan_dir(ctx, ...)` would have written the moved copy into
+    this worktree while leaving the original in place — two files, one id, both claiming
+    to be the truth, and the sibling still showing it unclaimed.
+    """
+    target_dir = task.path.parent.parent / state
     store.ensure_dir(target_dir)
     target = target_dir / task.path.name
 
@@ -215,7 +266,10 @@ def _move(ctx: GitContext, task: Task, state: str, owner: str = "", branch: str 
     store.atomic_write(target, updated, mode=0o644)
     if target != task.path:
         task.path.unlink(missing_ok=True)
-    return _load(target, state)
+    moved = _load(target, state)
+    if moved:
+        moved.worktree = task.worktree
+    return moved
 
 
 def claim(ctx: GitContext, task_id: str, session_id: str, branch: str) -> tuple[Task | None, str]:
@@ -237,14 +291,14 @@ def claim(ctx: GitContext, task_id: str, session_id: str, branch: str) -> tuple[
         if holder and sessions.is_live(ctx, holder):
             return None, f"task {task.id} is held by live session {task.owner[:8]}"
 
-    return _move(ctx, task, DOING, owner=session_id, branch=branch), ""
+    return _move(task, DOING, owner=session_id, branch=branch), ""
 
 
 def complete(ctx: GitContext, task_id: str) -> tuple[Task | None, str]:
     task = find(ctx, task_id)
     if task is None:
         return None, f"no task {task_id}"
-    return _move(ctx, task, DONE), ""
+    return _move(task, DONE), ""
 
 
 def release(ctx: GitContext, session_id: str) -> int:

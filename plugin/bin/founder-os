@@ -17,7 +17,7 @@ from pathlib import Path
 BIN = Path(__file__).resolve().parent
 sys.path.insert(0, str(BIN.parent / "lib"))
 
-from founder_os import __version__, board, ci, conflicts, delivery, drafts, knowledge, onboard  # noqa: E402
+from founder_os import __version__, board, ci, conflicts, delivery, drafts, hookio, knowledge, onboard  # noqa: E402
 from founder_os import plan, provenance, sessions, stage  # noqa: E402
 from founder_os.gitctx import resolve_for_cli  # noqa: E402
 
@@ -203,4 +203,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(hookio.run_cli(main))

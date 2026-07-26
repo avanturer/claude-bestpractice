@@ -32,6 +32,9 @@ ATTEMPTS_DIR = "attempts"
 MAX_TITLE_CHARS = 120
 MAX_BODY_CHARS = 1_200
 MAX_SHOWN = 3
+# Fewer when unfiltered, because unfiltered costs tokens against a lower chance of
+# being about the task in hand. Two is enough to say "this repository has history".
+RECENT_SHOWN = 2
 
 FAILED = "failed"
 ABANDONED = "abandoned"
@@ -189,14 +192,41 @@ def relevant(ctx: GitContext, paths: list[str], limit: int = MAX_SHOWN) -> list[
     return hits[:limit]
 
 
+def recent(ctx: GitContext, limit: int = RECENT_SHOWN) -> list[Attempt]:
+    """The newest dead ends, whatever they were about."""
+    # Every record here IS a dead end — FAILED, ABANDONED or SUPERSEDED. There is no
+    # success outcome to exclude; this ledger is only ever what did not work.
+    hits = list(load_all(ctx))
+    hits.sort(key=lambda a: a.recorded_at, reverse=True)
+    return hits[:limit]
+
+
 def render_for_board(ctx: GitContext, paths: list[str]) -> str:
-    """Warn before the wheel is reinvented, and only then."""
-    hits = relevant(ctx, paths)
+    """What was already tried, for a session that was not there when it was tried.
+
+    Subject-matched when a subject exists, and the most recent otherwise — because at
+    SessionStart no subject exists yet, and `paths` is empty every single time. Returning
+    nothing in that case meant the ledger never reached a new session at all: the dead
+    ends were recorded, committed, and read by nobody. The entire reason this file exists
+    did not fire, and it did not fire silently.
+
+    The board is the once-per-session injection (decision 0003), so this is the one place
+    it can be said without paying for it on every later turn. Recency is a worse filter
+    than subject and a far better one than nothing.
+    """
+    if paths:
+        # A subject exists and nothing matched it: say nothing. A billing dead end is
+        # noise to a session editing the landing page, and this project's own measurement
+        # is that stale injected context is worse than none. Falling back to recency here
+        # would trade one real bug for the exact failure the subject rule exists to avoid.
+        hits = relevant(ctx, paths)
+        lines = ["ALREADY TRIED on these files — do not repeat without reading why:"]
+    else:
+        hits = recent(ctx)
+        lines = ["ALREADY TRIED here recently — not filtered to your task, so check before repeating:"]
     if not hits:
         return ""
-    lines = ["ALREADY TRIED on these files — do not repeat without reading why:"]
-    lines += [f"  - {a.line()}" for a in hits]
-    return "\n".join(lines)
+    return "\n".join(lines + [f"  - {a.line()}" for a in hits])
 
 
 def summary(ctx: GitContext) -> dict[str, int]:

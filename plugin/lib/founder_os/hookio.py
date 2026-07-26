@@ -14,10 +14,11 @@ Three of them account for most gates that ship enforcing nothing:
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass
-from typing import Any, NoReturn
+from typing import Any, Callable, NoReturn
 
 # The documented ceiling for injected context. The knowledge layer is sized to sit
 # exactly under it so the same payload works as a committed file or as an injection.
@@ -223,3 +224,28 @@ def guard(main: Any, *, fail_closed: bool) -> NoReturn:
             block(f"founder-os: gate failed ({type(exc).__name__}: {exc}). Failing closed.")
         emit_silent()
     emit_silent()
+
+
+def run_cli(main: Callable[[], int | None]) -> int:
+    """Top level for a `founder-os-*` command. Hooks use `guard`; this is for humans.
+
+    Two ordinary things at a terminal produced a traceback and a non-zero exit:
+
+    `founder-os plan list | head` closes the pipe as soon as head has its lines, and the
+    next print raises BrokenPipeError. Python then tries to flush stdout at interpreter
+    shutdown, fails again, and prints "Exception ignored" over the user's terminal. The
+    fix is to redirect stdout to devnull before exiting so that final flush has somewhere
+    to go, and to exit 141 — what a shell reports for a process killed by SIGPIPE — so a
+    script wrapping the command reads it the way it reads `yes | head`.
+
+    Ctrl-C is the other: a KeyboardInterrupt traceback reads as a crash when it was the
+    user's own decision.
+    """
+    try:
+        return main() or 0
+    except KeyboardInterrupt:
+        return 130
+    except BrokenPipeError:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        return 141

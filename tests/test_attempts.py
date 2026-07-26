@@ -76,7 +76,39 @@ class TestSurfacing(AttemptCase):
         attempts.record(ctx, "websockets", "reconnect storms", ["src/ws.ts"])
         self.assertIn("websockets", attempts.render_for_board(ctx, ["src/ws.ts"]))
         self.assertEqual(attempts.render_for_board(ctx, ["src/landing.tsx"]), "")
-        self.assertEqual(attempts.render_for_board(ctx, []), "")
+
+    def test_no_subject_at_all_falls_back_to_the_most_recent(self):
+        """At SessionStart there is no subject — and `paths` was empty EVERY time.
+
+        Returning nothing there meant the ledger never reached a session that was not
+        present when the dead end was hit, which is the only reason this file exists. The
+        dead ends were recorded, committed, and read by nobody, silently.
+
+        An unmatched subject still says nothing (the test above): that is the case where
+        recency would be actively wrong. An ABSENT subject is different — there is nothing
+        to be irrelevant to yet, and the alternative is saying nothing at all.
+        """
+        from founder_os import attempts
+
+        ctx = self.ctx()
+        attempts.record(ctx, "websockets", "reconnect storms", ["src/ws.ts"])
+        self.assertIn("websockets", attempts.render_for_board(ctx, []))
+
+    def test_a_new_session_is_told_what_was_already_tried(self):
+        """The same thing again, through the gate the founder actually runs."""
+        import json
+
+        from founder_os import attempts
+
+        attempts.record(
+            self.ctx(), "in-house stripe proration", "disagreed with stripe by cents", ["billing.py"]
+        )
+        proc = self.run_hook(
+            "session-start",
+            {"session_id": "newcomer", "hook_event_name": "SessionStart", "cwd": str(self.repo)},
+        )
+        body = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("stripe proration", body)
 
     def test_the_board_carries_the_warning_into_the_next_session(self):
         from founder_os import attempts

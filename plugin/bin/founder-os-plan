@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from founder_os import plan, sessions  # noqa: E402
+from founder_os import hookio, plan, sessions  # noqa: E402
 from founder_os.gitctx import resolve_for_cli  # noqa: E402
 
 
@@ -96,4 +96,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(hookio.run_cli(main))

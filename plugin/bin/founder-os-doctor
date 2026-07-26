@@ -28,7 +28,7 @@ from pathlib import Path
 BIN = Path(__file__).resolve().parent
 sys.path.insert(0, str(BIN.parent / "lib"))
 
-from founder_os import __version__  # noqa: E402
+from founder_os import __version__, hookio  # noqa: E402
 
 GREEN = "\033[32m" if sys.stdout.isatty() else ""
 RED = "\033[31m" if sys.stdout.isatty() else ""
@@ -976,4 +976,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(hookio.run_cli(main))
