@@ -67,6 +67,7 @@ class Config:
     max_repeat_signature: int = 3
     require_worktree: bool = True
     block_unfinished_work: bool = True
+    compare_dependencies: bool = True
     autonomy: str = "vibecode"
     protect_trunk: bool = True
     stage_override: str | None = None
@@ -87,6 +88,7 @@ class Config:
             "max_repeat_signature": self.max_repeat_signature,
             "require_worktree": self.require_worktree,
             "block_unfinished_work": self.block_unfinished_work,
+            "compare_dependencies": self.compare_dependencies,
             "autonomy": self.autonomy,
             "protect_trunk": self.protect_trunk,
             "stage_override": self.stage_override,
@@ -150,6 +152,7 @@ _EXPECTED: dict[str, type] = {
     "max_repeat_signature": int,
     "require_worktree": bool,
     "block_unfinished_work": bool,
+    "compare_dependencies": bool,
     "autonomy": str,
     "protect_trunk": bool,
     "stage_override": str,

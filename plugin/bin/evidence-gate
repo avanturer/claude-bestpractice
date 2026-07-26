@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from founder_os import attempts, board, config, discipline, drafts, evidence, hookio, sessions, stage, store  # noqa: E402
+from founder_os import attempts, board, config, discipline, drafts, evidence, hookio, options, sessions, stage, store  # noqa: E402
 from founder_os.gitctx import changed_files, resolve  # noqa: E402
 
 BLOCK_COUNTER = "_consecutive_blocks"
@@ -154,6 +154,11 @@ def main() -> None:
                 f"Task was: {rec.task_statement[:200]}\n"
                 "Revert what is out of scope, or state why it was necessary."
             )
+
+    if cfg.compare_dependencies:
+        uncompared = options.demand(ctx, changed, rec.baseline_commit)
+        if uncompared:
+            problems.append(uncompared)
 
     if cfg.block_unfinished_work:
         unfinished = discipline.introduced(ctx, changed, rec.baseline_commit)

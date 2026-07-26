@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+"""Compare options on stated numbers, then record which one won and why.
+
+    founder-os-options add "cache layer for the dashboard" \
+        --metric latency --metric ops-burden --metric lock-in \
+        --option 'redis:9,3,4' --option 'dict-with-ttl:7,9,9' \
+        --chosen dict-with-ttl --why "200 rpm does not need a second service"
+
+    founder-os-options list
+
+Scores are yours to define; the only rule is that every option is scored on every
+metric, and that choosing the lower-scoring one requires saying why.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from founder_os import options  # noqa: E402
+from founder_os.gitctx import resolve_for_cli  # noqa: E402
+
+
+def parse_option(raw: str, metrics: list[str]) -> options.Option:
+    name, _, scores = raw.partition(":")
+    values = [v.strip() for v in scores.split(",") if v.strip()]
+    if len(values) != len(metrics):
+        raise SystemExit(
+            f"founder-os-options: {name!r} has {len(values)} score(s) for {len(metrics)} metric(s)"
+        )
+    try:
+        numbers = [float(v) for v in values]
+    except ValueError:
+        raise SystemExit(f"founder-os-options: {name!r} has a non-numeric score")
+    return options.Option(name.strip(), dict(zip(metrics, numbers)))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Record a compared decision.")
+    sub = parser.add_subparsers(dest="command")
+
+    add = sub.add_parser("add")
+    add.add_argument("problem")
+    add.add_argument("--metric", action="append", default=[], required=True)
+    add.add_argument("--option", action="append", default=[], required=True, help="name:score,score")
+    add.add_argument("--chosen", required=True)
+    add.add_argument("--why", default="")
+    add.add_argument("--subject", action="append", default=[], help="files this decides")
+
+    sub.add_parser("list")
+    args = parser.parse_args()
+    ctx = resolve_for_cli()
+
+    if args.command == "list":
+        found = options.load_all(ctx)
+        if not found:
+            print("no comparisons on record")
+            return 0
+        for comparison in found:
+            print(comparison.line())
+            if comparison.why:
+                print(f"      {comparison.why[:150]}")
+        return 0
+
+    comparison = options.Comparison(
+        id="", problem=args.problem, metrics=args.metric,
+        options=[parse_option(raw, args.metric) for raw in args.option],
+        chosen=args.chosen, why=args.why, subjects=args.subject,
+    )
+    recorded, complaint = options.record(ctx, comparison)
+    if recorded is None:
+        print(f"founder-os-options: not a comparison — {complaint}", file=sys.stderr)
+        return 1
+    print(f"recorded {recorded.path.name}: {recorded.line()}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
