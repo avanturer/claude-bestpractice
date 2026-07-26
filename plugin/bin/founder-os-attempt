@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""The ledger of dead ends — what was tried and did not work.
+
+Most of it fills itself: an unverified finish is filed automatically, because that is
+exactly the knowledge a revert destroys. This is for the rest.
+
+    founder-os-attempt add "websockets for live updates" --why "reconnect storms under
+        flaky mobile networks; server ran out of file descriptors" --paths src/ws.ts
+    founder-os-attempt list
+    founder-os-attempt list --paths src/ws.ts    # what was already tried HERE
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from founder_os import attempts  # noqa: E402
+from founder_os.gitctx import resolve_for_cli  # noqa: E402
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Record and read failed approaches.")
+    sub = parser.add_subparsers(dest="command")
+
+    add = sub.add_parser("add", help="file an approach that did not work")
+    add.add_argument("title")
+    add.add_argument("--why", required=True, help="why it failed — the part worth keeping")
+    add.add_argument("--paths", nargs="*", default=[], help="files it touched")
+    add.add_argument(
+        "--outcome", default=attempts.FAILED, choices=list(attempts.OUTCOMES)
+    )
+
+    listing = sub.add_parser("list", help="show the ledger")
+    listing.add_argument("--paths", nargs="*", default=[], help="only what touched these files")
+
+    args = parser.parse_args()
+    ctx = resolve_for_cli()
+
+    if args.command == "add":
+        attempt = attempts.record(
+            ctx, args.title, args.why, args.paths, outcome=args.outcome, branch=ctx.branch
+        )
+        if attempt is None:
+            print("already on record — an equivalent attempt exists for these files")
+            return 0
+        print(f"recorded {attempt.path.name}")
+        return 0
+
+    found = attempts.relevant(ctx, args.paths, limit=50) if args.paths else attempts.load_all(ctx)
+    if not found:
+        print("nothing tried and abandoned yet" if not args.paths else "nothing tried on these files")
+        return 0
+    for attempt in sorted(found, key=lambda a: a.recorded_at, reverse=True):
+        print(attempt.line())
+        if attempt.paths:
+            print(f"      {', '.join(attempt.paths[:6])}")
+    counts = attempts.summary(ctx)
+    print(f"\n{sum(counts.values())} on record: " + ", ".join(f"{v} {k}" for k, v in counts.items() if v))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

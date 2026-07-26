@@ -5,8 +5,8 @@
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
 [![version](https://img.shields.io/badge/version-1.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-421%20passing-2ea44f)](#verified)
-[![doctor](https://img.shields.io/badge/doctor-24%20checks-2ea44f)](#verified)
+[![tests](https://img.shields.io/badge/tests-443%20passing-2ea44f)](#verified)
+[![doctor](https://img.shields.io/badge/doctor-25%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
 [![license](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
@@ -146,7 +146,6 @@ Stage is computed from the repository, never configured, and the ratchet only ti
 |---|---|
 | CI plus a deploy target | Egress rules, production-signal airlock |
 | A migration creating a users table, or an auth SDK | Migration gating, production-promotion denial, per-worktree database and port |
-| A payment SDK, or a live-mode key shape | Triple-run verification for anything touching auth, money or schema |
 
 A prototype gets none of it — and additionally has back-compat shims **banned**, a rule
 that disables itself the moment real consumers appear.
@@ -222,7 +221,7 @@ against a cap of 400 — roughly 0.1 % of a 200k window.
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · knowledge · 421 tests · 24 doctor checks · budget
+make check    # lint · docs gate · slop gate · knowledge · 443 tests · 25 doctor checks · budget
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration

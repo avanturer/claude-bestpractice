@@ -196,6 +196,15 @@ def render(
     if red:
         lines.append(red.strip())
 
+    # Before anything else this session might redo: dead ends on the files it is about
+    # to touch. Keyed on subject, so a billing dead end never reaches a landing-page turn.
+    from . import attempts
+
+    tried = attempts.render_for_board(ctx, me.last_touched + me.task_paths)
+    if tried:
+        lines.append("")
+        lines.append(tried)
+
     lines.append("")
     lines.extend(_sessions_block(others, leases, now))
 

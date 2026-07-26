@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
 import re  # noqa: E402
 
-from founder_os import config, evidence, hookio, redact, sessions, stage  # noqa: E402
+from founder_os import config, evidence, gitpolicy, hookio, redact, sessions, stage  # noqa: E402
 from founder_os.gitctx import resolve  # noqa: E402
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
@@ -198,6 +198,18 @@ def main() -> None:
                         "under production concurrency. Use an expand-contract migration, or "
                         f"include the literal token {OVERRIDE} in a comment to accept the loss."
                     )
+
+    # Before any write is examined: may this session write HERE at all? Writes only, so
+    # reads, searches and `git worktree add` itself stay free — a rule that blocks the
+    # command which satisfies it is a trap the agent learns to route around.
+    if event.tool_name in WRITE_TOOLS and (cfg.require_worktree or cfg.protect_trunk):
+        breaches = gitpolicy.violations(ctx, rec.task_statement)
+        if not cfg.require_worktree:
+            breaches = [b for b in breaches if "main checkout" not in b]
+        if not cfg.protect_trunk:
+            breaches = [b for b in breaches if "is the trunk" not in b]
+        if breaches:
+            hookio.deny_tool(breaches[0])
 
     if event.tool_name in WRITE_TOOLS or event.tool_name == "Bash":
         # Bash is a write tool. An agent writes files with heredocs, `>`, `tee` and

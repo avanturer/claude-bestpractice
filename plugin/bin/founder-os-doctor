@@ -54,7 +54,14 @@ def run_gate(gate: str, event: dict, cwd: Path) -> subprocess.CompletedProcess:
     )
 
 
-def make_repo(tmp: Path) -> Path:
+def make_repo(tmp: Path, relax_git_policy: bool = True) -> Path:
+    """A throwaway repository for one check.
+
+    The git policy is relaxed by default because a fixture is a main checkout on the
+    trunk — exactly the state the policy refuses — and every OTHER check would then be
+    testing the worktree rule instead of itself. `check_worktree_is_required` builds one
+    without the relaxation and is where that rule is proven.
+    """
     repo = tmp / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
@@ -63,6 +70,10 @@ def make_repo(tmp: Path) -> Path:
     # The doctor runs on install, on machines whose git config we do not control.
     subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, check=True)
     (repo / "README.md").write_text("seed\n")
+    if relax_git_policy:
+        cfg = repo / ".claude" / "founder-os" / "config.json"
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text(json.dumps({"require_worktree": False, "protect_trunk": False}))
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-qm", "seed"], cwd=repo, check=True)
     return repo
@@ -529,6 +540,41 @@ def check_airlock_quarantine(repo: Path) -> Result:
     )
 
 
+def check_worktree_is_required(repo: Path) -> Result:
+    """Two sessions in one working tree overwrite each other with no git-level symptom.
+
+    Built WITHOUT the relaxation the other fixtures use, so this is the one check that
+    exercises the shipped default.
+    """
+    parent = repo.parent / "strict-case"
+    parent.mkdir(parents=True, exist_ok=True)
+    strict = make_repo(parent, relax_git_policy=False)
+    proc = run_gate(
+        "pre-tool",
+        {
+            "session_id": "doctor-wt",
+            "hook_event_name": "PreToolUse",
+            "cwd": str(strict),
+            "tool_name": "Write",
+            "tool_input": {"file_path": str(strict / "a.py"), "content": "x = 1\n"},
+        },
+        strict,
+    )
+    try:
+        out = json.loads(proc.stdout)["hookSpecificOutput"]
+        denied = out.get("permissionDecision") == "deny"
+        actionable = "git worktree add" in out.get("permissionDecisionReason", "")
+    except (json.JSONDecodeError, KeyError, TypeError):
+        denied = actionable = False
+    return Result(
+        "the main checkout is refused",
+        denied and actionable,
+        "refused, and named the command that fixes it"
+        if denied and actionable
+        else f"denied={denied}, actionable={actionable}",
+    )
+
+
 def check_pushes_are_checked(repo: Path) -> Result:
     """Prove the pre-push gate by attempting a push that should be refused.
 
@@ -898,6 +944,7 @@ def main() -> int:
             check_review_finds_and_bounds,
             check_quiet_session_still_enforces,
             check_pushes_are_checked,
+            check_worktree_is_required,
             check_fabricated_evidence_is_refused,
             check_outside_a_repository_is_not_a_brick,
             check_onboarding,

@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from founder_os import board, config, drafts, evidence, hookio, sessions, stage, store  # noqa: E402
+from founder_os import attempts, board, config, drafts, evidence, hookio, sessions, stage, store  # noqa: E402
 from founder_os.gitctx import changed_files, resolve  # noqa: E402
 
 BLOCK_COUNTER = "_consecutive_blocks"
@@ -53,7 +53,23 @@ def _allow(ctx, rec: sessions.SessionRecord) -> None:
 
 
 def _give_up(ctx, rec: sessions.SessionRecord, reason: str, changed: list) -> None:
-    """Record an unverified finish so it survives the turn and surfaces next session."""
+    """Record an unverified finish so it survives the turn and surfaces next session.
+
+    Also files it as a failed ATTEMPT. A session that could not prove its work is the
+    canonical thing a later session must not blindly redo — and the revert that usually
+    follows destroys the only other trace of it.
+    """
+    if changed:
+        attempts.record(
+            ctx,
+            title=(rec.task_statement or "unverified finish")[:120],
+            why=f"Finished without proof. {reason[:600]}",
+            paths=changed,
+            outcome=attempts.FAILED,
+            branch=rec.branch,
+            session_id=rec.session_id,
+        )
+
     store.append_jsonl(
         store.tier_b(ctx, FAILURE_MARKER),
         {
@@ -106,8 +122,8 @@ def main() -> None:
     # record, and leases still held. Proven in a live session — the escalation ceiling of
     # four was unreachable past one. So the flag now bounds the LOOP, not the check:
     # verification still runs, and only the escalation ceiling can end the turn.
-    attempts = _blocks(rec)
-    if event.stop_hook_active and attempts >= evidence.MAX_CONSECUTIVE_BLOCKS:
+    blocked = _blocks(rec)
+    if event.stop_hook_active and blocked >= evidence.MAX_CONSECUTIVE_BLOCKS:
         _give_up(ctx, rec, "continuation ceiling reached", [])
         _bump_blocks(ctx, rec, 0)
         sys.stderr.write("founder-os: finishing UNVERIFIED — continuation ceiling reached.\n")
@@ -176,18 +192,18 @@ def main() -> None:
 
     reason = "\n\n".join(problems)
 
-    if attempts >= evidence.MAX_CONSECUTIVE_BLOCKS:
+    if blocked >= evidence.MAX_CONSECUTIVE_BLOCKS:
         _give_up(ctx, rec, reason, changed)
         _bump_blocks(ctx, rec, 0)
         sys.stderr.write(
             "founder-os: finishing UNVERIFIED after "
-            f"{attempts} blocked attempts. Recorded for the next session.\n"
+            f"{blocked} blocked attempts. Recorded for the next session.\n"
         )
         hookio.emit_silent()
 
-    _bump_blocks(ctx, rec, attempts + 1)
+    _bump_blocks(ctx, rec, blocked + 1)
     hookio.block(
-        f"founder-os [{attempts + 1}/{evidence.MAX_CONSECUTIVE_BLOCKS}] — not done yet.\n\n"
+        f"founder-os [{blocked + 1}/{evidence.MAX_CONSECUTIVE_BLOCKS}] — not done yet.\n\n"
         f"{reason}\n\n"
         "Your description of what you did is not evidence and was not read."
     )

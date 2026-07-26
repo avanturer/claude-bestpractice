@@ -55,6 +55,8 @@ class Config:
     lease_ttl_seconds: float = 1800.0
     max_tool_calls: int = 2_000
     max_repeat_signature: int = 3
+    require_worktree: bool = True
+    protect_trunk: bool = True
     stage_override: str | None = None
     exempt_paths: list[str] = field(
         default_factory=lambda: [".claude/", "docs/", "README.md", "CHANGELOG.md"]
@@ -71,6 +73,8 @@ class Config:
             "lease_ttl_seconds": self.lease_ttl_seconds,
             "max_tool_calls": self.max_tool_calls,
             "max_repeat_signature": self.max_repeat_signature,
+            "require_worktree": self.require_worktree,
+            "protect_trunk": self.protect_trunk,
             "stage_override": self.stage_override,
             "exempt_paths": self.exempt_paths,
         }
@@ -130,6 +134,8 @@ _EXPECTED: dict[str, type] = {
     "lease_ttl_seconds": float,
     "max_tool_calls": int,
     "max_repeat_signature": int,
+    "require_worktree": bool,
+    "protect_trunk": bool,
     "stage_override": str,
     "exempt_paths": list,
 }

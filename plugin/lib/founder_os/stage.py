@@ -200,6 +200,9 @@ def gates_for(stage: str) -> dict[str, bool]:
         "clean_rerun": ORDER[stage] >= ORDER[TRACTION],
         "migration_gate": ORDER[stage] >= ORDER[TRACTION],
         "worktree_db_isolation": ORDER[stage] >= ORDER[TRACTION],
-        "triple_run_critical": ORDER[stage] >= ORDER[REVENUE],
-        "backup_restore_check": ORDER[stage] >= ORDER[REVENUE],
     }
+
+# Deliberately absent: `triple_run_critical` and `backup_restore_check` were declared
+# here and read by nothing, while three READMEs promised them. A flag no consumer reads
+# is not a feature behind a switch, it is a claim — and an unimplemented claim in a
+# project whose thesis is "verify, do not assert" is the worst kind of bug it can have.

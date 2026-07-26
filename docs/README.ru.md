@@ -5,8 +5,8 @@
 **Память, координация и принуждение для разработки продукта в нескольких параллельных сессиях Claude Code.**
 
 [![version](https://img.shields.io/badge/version-1.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-421%20passing-2ea44f)](#проверено)
-[![doctor](https://img.shields.io/badge/doctor-24%20checks-2ea44f)](#проверено)
+[![tests](https://img.shields.io/badge/tests-443%20passing-2ea44f)](#проверено)
+[![doctor](https://img.shields.io/badge/doctor-25%20checks-2ea44f)](#проверено)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#требования)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#требования)
 [![license](https://img.shields.io/badge/license-MIT-lightgrey)](../LICENSE)
@@ -149,7 +149,6 @@ Stop-гейт **выбрасывает прозу агента** и сам за�
 |---|---|
 | CI плюс цель деплоя | Правила egress, шлюз для продовых сигналов |
 | Миграция, создающая таблицу users, или auth SDK | Гейт миграций, запрет промоушена в прод, своя БД и порт на worktree |
-| Платёжный SDK или форма live-ключа | Тройной прогон верификации для всего, что трогает auth, деньги или схему |
 
 Прототип не получает ничего из этого — и вдобавок ему **запрещены** back-compat
 прослойки: правило само отключается в момент появления реальных потребителей.
@@ -225,7 +224,7 @@ founder-os-ci off        # снять pre-push хук
 ## Проверено
 
 ```
-make check    # lint · docs gate · slop gate · knowledge · 421 тест · 24 проверки доктора · budget
+make check    # lint · docs gate · slop gate · knowledge · 443 теста · 25 проверок доктора · budget
 ```
 
 Доктор доказывает гейты **попыткой сделать плохое**, а не чтением конфигурации обратно —

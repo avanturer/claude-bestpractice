@@ -7,6 +7,7 @@ and the whole point of the design is that the merge and worktree semantics are r
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
@@ -31,7 +32,7 @@ def git(args: list[str], cwd: Path) -> str:
     return proc.stdout.strip()
 
 
-def make_repo(parent: Path, name: str = "repo", seed: bool = True) -> Path:
+def make_repo(parent: Path, name: str = "repo", seed: bool = True, relax_git_policy: bool = False) -> Path:
     repo = parent / name
     repo.mkdir(parents=True)
     git(["init", "-q", "-b", "main"], repo)
@@ -44,6 +45,12 @@ def make_repo(parent: Path, name: str = "repo", seed: bool = True) -> Path:
     git(["config", "tag.gpgsign", "false"], repo)
     if seed:
         (repo / "README.md").write_text("seed\n")
+        if relax_git_policy:
+            # Committed, not just written: config is Tier A by design, and leaving it
+            # untracked would make every "the tree is clean" assertion false.
+            cfg = repo / ".claude" / "founder-os" / "config.json"
+            cfg.parent.mkdir(parents=True, exist_ok=True)
+            cfg.write_text(json.dumps({"require_worktree": False, "protect_trunk": False}))
         git(["add", "-A"], repo)
         git(["commit", "-qm", "seed"], repo)
     return repo
@@ -52,10 +59,31 @@ def make_repo(parent: Path, name: str = "repo", seed: bool = True) -> Path:
 class RepoCase(unittest.TestCase):
     """Base class providing a throwaway repository per test."""
 
+    # The fixture repository is a main checkout on the trunk, which the git policy
+    # refuses by default — correctly, since that is the state where parallel sessions
+    # silently overwrite each other. Every test that is not ABOUT that rule opts out
+    # here; `test_gitpolicy.py` opts back in and is where the default is proven.
+    relax_git_policy = True
+
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="founder-os-test-"))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
-        self.repo = make_repo(self.tmp)
+        self.repo = make_repo(self.tmp, relax_git_policy=self.relax_git_policy)
+
+    def configure(self, **values) -> None:
+        """Merge keys into this repository's founder-os config."""
+        import json
+
+        path = self.repo / ".claude" / "founder-os" / "config.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        current = {}
+        if path.exists():
+            try:
+                current = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                current = {}
+        current.update(values)
+        path.write_text(json.dumps(current), encoding="utf-8")
 
     def ctx(self):
         from founder_os.gitctx import resolve
@@ -82,18 +110,23 @@ class RepoCase(unittest.TestCase):
         """A session record for this case's repository."""
         return session_record_for(self.ctx(), session_id, pid)
 
-    def run_hook(self, name: str, event: dict, env: dict | None = None):
-        """Invoke a gate exactly as the harness does: executable, event JSON on stdin."""
+    def run_hook(self, name: str, event: dict, env: dict | None = None, cwd=None):
+        """Invoke a gate exactly as the harness does: executable, event JSON on stdin.
+
+        `cwd` overrides the repository so a test can fire a gate from a worktree or from
+        a different repository — the worktree rules are only testable that way.
+        """
         import json
         import subprocess
         import sys
 
+        where = cwd or self.repo
         return subprocess.run(
             [sys.executable, str(BIN / name)],
-            input=json.dumps({"cwd": str(self.repo), **event}),
+            input=json.dumps({"cwd": str(where), **event}),
             capture_output=True,
             text=True,
-            cwd=str(self.repo),
+            cwd=str(where),
             timeout=180,
             env=env,
         )

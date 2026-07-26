@@ -92,7 +92,6 @@ class TestGates(unittest.TestCase):
         gates = stage.gates_for(stage.PROTOTYPE)
         self.assertFalse(gates["clean_rerun"])
         self.assertFalse(gates["migration_gate"])
-        self.assertFalse(gates["triple_run_critical"])
 
     def test_prototype_turns_a_rule_off_rather_than_on(self):
         """Back-compat shims are banned while nothing consumes the code."""

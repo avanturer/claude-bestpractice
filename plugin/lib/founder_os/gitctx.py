@@ -78,7 +78,10 @@ def resolve(cwd: Path | str | None = None) -> GitContext:
         git_dir = (worktree_root / git_dir).resolve()
 
     # An unborn branch has no HEAD commit. That is normal for a fresh repo.
-    head = _run(["rev-parse", "HEAD"], cwd, check=False)
+    # `--verify` is what makes an unborn branch return nothing instead of echoing back
+    # the literal string "HEAD". Without it every "has this repo any history?" test read
+    # true in a repository with zero commits, and the docstring above was simply false.
+    head = _run(["rev-parse", "--verify", "--quiet", "HEAD"], cwd, check=False)
     branch = _run(["rev-parse", "--abbrev-ref", "HEAD"], cwd, check=False) or "HEAD"
 
     return GitContext(

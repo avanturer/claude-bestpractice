@@ -5,8 +5,8 @@
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
 [![version](https://img.shields.io/badge/version-1.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-421%20passing-2ea44f)](#已验证)
-[![doctor](https://img.shields.io/badge/doctor-24%20checks-2ea44f)](#已验证)
+[![tests](https://img.shields.io/badge/tests-443%20passing-2ea44f)](#已验证)
+[![doctor](https://img.shields.io/badge/doctor-25%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#运行要求)
 [![license](https://img.shields.io/badge/license-MIT-lightgrey)](../LICENSE)
@@ -136,7 +136,6 @@ Stop gate **丢弃智能体的自述文字**，自己去运行你的测试套件
 |---|---|
 | CI 加上一个部署目标 | 出网规则、生产信号隔离闸 |
 | 创建 users 表的迁移，或一个认证 SDK | 迁移管控、拒绝生产环境提升、每个 worktree 独立数据库与端口 |
-| 支付 SDK，或 live 模式的密钥形态 | 凡是触及认证、金钱或数据结构的改动，一律三次运行验证 |
 
 原型阶段一个都不会启用——并且额外**禁止**向后兼容层，这条规则会在真正出现消费者的
 那一刻自行关闭。
@@ -209,7 +208,7 @@ founder-os-ci off        # 移除 pre-push 钩子
 ## 已验证
 
 ```
-make check    # lint · docs gate · slop gate · knowledge · 421 个测试 · 24 项 doctor 检查 · budget
+make check    # lint · docs gate · slop gate · knowledge · 443 个测试 · 25 项 doctor 检查 · budget
 ```
 
 doctor 通过**真的去做那件坏事**来证明 gate 有效，而不是把配置读回来对一遍——
