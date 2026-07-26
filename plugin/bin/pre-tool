@@ -28,6 +28,26 @@ from founder_os.gitctx import resolve  # noqa: E402
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 SIGNATURE_HISTORY = 64
 
+# The files that decide what the gates do. Everything else under .claude/founder-os/ is
+# the agent's to write — tasks, decisions, dead ends are all meant to be written by it.
+# These are not: they are the rules, and the party being ruled does not amend them.
+PROTECTED_STATE = (
+    ".claude/founder-os/config.json",
+    ".claude/founder-os/stage/",
+    ".claude/founder-os/slop-budget.json",
+)
+
+
+def _protected_state(relpath: str) -> bool:
+    # NOT lstrip("./") — that strips CHARACTERS, so it eats the leading dot of `.claude`
+    # and nothing ever matches. The check silently passed everything and the test that
+    # caught it was an end-to-end run, not the unit test, which is the whole lesson here.
+    rel = relpath.replace("\\", "/")
+    while rel.startswith("./"):
+        rel = rel[2:]
+    return any(rel == p or rel.startswith(p) for p in PROTECTED_STATE)
+
+
 MIGRATION_DIRS = ("migrations/", "db/migrate/", "prisma/migrations/", "alembic/versions/")
 
 # Irreversible and data-shaped: the tests pass either way, and corruption only shows up
@@ -133,6 +153,7 @@ def main() -> None:
 
     ti = event.tool_input
     target = ""
+    shell_targets: list[str] = []
     if event.tool_name in WRITE_TOOLS and ti.get("file_path"):
         target = str(ti["file_path"])
         try:
@@ -142,6 +163,12 @@ def main() -> None:
     elif event.tool_name == "Bash":
         shell_targets = bash_write_targets(str(ti.get("command", "")), ctx.worktree_root)
         target = shell_targets[0] if shell_targets else ""
+
+    # What THIS call writes, as opposed to `touched` below, which carries recent history
+    # for the board and the lease. Any rule about the write in hand has to read this one:
+    # checking `touched` denied every write in the session as soon as one protected path
+    # had ever appeared in it, and the message named the wrong file every time.
+    writing_now = shell_targets if event.tool_name == "Bash" else ([target] if target else [])
 
     # Counters and history are recorded now, because a denied attempt is still an
     # attempt and loop detection depends on seeing it. `last_touched` is NOT: it feeds
@@ -247,6 +274,25 @@ def main() -> None:
             hookio.deny_tool(breaches[0])
 
     if event.tool_name in WRITE_TOOLS or event.tool_name == "Bash":
+        # A gate whose settings the gated party may rewrite is a suggestion. `config.json`
+        # names the command the Stop gate runs as its evidence, and it lives in committed
+        # Tier A where the agent writes freely — so `{"test_command": ["true"]}`, one
+        # Write call, bought a green finish AND deleted the red-suite ledger that was
+        # recording the real failure. Nothing else in the plugin could tell afterwards.
+        #
+        # Refused rather than ignored: the founder still edits this by hand or with
+        # `founder-os ci`, and a rule the agent can see and route around beats one that
+        # silently discards its work.
+        protected = [rel for rel in writing_now if _protected_state(rel)]
+        if protected:
+            hookio.deny_tool(
+                f"founder-os: {protected[0]} is the plugin's own enforcement state, and the "
+                "session being enforced does not get to edit it — pointing `test_command` at "
+                "`true` would buy a green finish and erase the record of the real failure.\n"
+                "Change it with `founder-os ci`, or edit it yourself outside a session. "
+                "Everything else under .claude/founder-os/ is yours to write."
+            )
+
         # Bash is a write tool. An agent writes files with heredocs, `>`, `tee` and
         # `sed -i` constantly, and scanning only the structured write tools left the
         # credential check and the leases wide open to the most common way files get

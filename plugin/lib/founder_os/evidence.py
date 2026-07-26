@@ -194,7 +194,18 @@ def material_changes(changed: list[str], exempt: list[str]) -> list[str]:
         # in ordinary domain code finished silently green.
         if any(rel == p or rel.startswith(p.rstrip("/") + "/") for p in exempt):
             continue
-        if byproducts & set(rel.split("/")):
+        # ...and a byproduct directory never hides SOURCE. `coverage/` is a report
+        # directory in most repositories and a Python package in some, `reports/` is a
+        # service in plenty, and the component rule could not tell them apart: every
+        # `.py` under any directory named coverage, htmlcov, .tox or .gradle anywhere in
+        # the tree was invisible to the gate, so a red suite in that code was never run
+        # at all and the finish went green. Deciding by extension is what separates the
+        # two, because a coverage report is not written in Python.
+        #
+        # The cost of being wrong here is asymmetric and the rule leans the safe way:
+        # a stray source file inside a real byproduct directory makes the gate run the
+        # suite once it did not need to, while the reverse never runs it at all.
+        if byproducts & set(rel.split("/")) and not rel.endswith(SOURCE_SUFFIXES):
             continue
         out.append(rel)
     return out
@@ -249,6 +260,15 @@ def _inside_our_own_run(ctx: GitContext) -> bool:
 RUN_BYPRODUCTS = (
     "__pycache__/", ".pytest_cache/", ".mypy_cache/", ".ruff_cache/", ".tox/",
     ".coverage", "htmlcov/", ".nyc_output/", "coverage/", ".gradle/",
+)
+
+# Extensions a byproduct directory is not allowed to hide. Not exhaustive by intent —
+# every entry here is a language something in this repository is likely to be written in,
+# and an extension missing from the list only costs an unnecessary suite run.
+SOURCE_SUFFIXES = (
+    ".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".go", ".rs",
+    ".java", ".kt", ".kts", ".rb", ".php", ".cs", ".swift", ".c", ".h", ".cc",
+    ".cpp", ".hpp", ".m", ".mm", ".scala", ".ex", ".exs", ".sql", ".sh",
 )
 
 
@@ -419,6 +439,25 @@ def _judge_green_run(
     the executed>0 check, and a stale FAILING artifact blocked a suite that had just
     genuinely passed. The run is the evidence; the file is at most its detail.
     """
+    # The runner's own words outrank its exit code when they disagree, and disagreeing is
+    # ordinary rather than exotic: a Makefile recipe prefixed with `-`, a `|| true`, a
+    # wrapper that swallows the status, a CI shim that always exits 0. Every one of those
+    # printed "1 failed" and handed the gate exit 0, and the gate — whose entire premise
+    # is that it watches the run itself — called it green and cleared the red ledger.
+    #
+    # A runner does not print a failure count for a suite that passed, so this direction
+    # has no false positives worth the trade: the only way to be wrong is to refuse a
+    # finish over the literal text "1 failed", and refusing is the recoverable mistake.
+    broke = _failures_from_output(tail)
+    if broke:
+        return Verdict(
+            False,
+            f"The runner reported {broke} FAILING and then exited 0 — something is "
+            "swallowing the exit status (a `-` prefix in a Makefile recipe, a `|| true`, "
+            f"a wrapper script).\n$ {' '.join(command)}\n{tail}\n"
+            "Fix the tests, or stop hiding the status so a real failure can stop a push.",
+        )
+
     artifact = _first_artifact(ctx.worktree_root, globs)
     if artifact and artifact.mtime < started:
         artifact = None
@@ -450,6 +489,15 @@ _OUTCOMES = re.compile(
     r"(?<![\w.])(\d+)\s+(passed|failed|errors?|xpassed|xfailed|skipped|deselected|ignored)\b"
 )
 _DID_NOT_RUN = {"skipped", "deselected", "ignored"}
+_BROKE = {"failed", "error", "errors"}
+# unittest says "FAILED (failures=1, errors=2)" rather than counting in the outcome line.
+_UNITTEST_BROKE = re.compile(r"(?:failures|errors)=(\d+)")
+
+
+def _failures_from_output(text: str) -> int:
+    """How many tests the runner itself says broke. Zero when it says nothing."""
+    counted = sum(int(n) for n, word in _OUTCOMES.findall(text) if word in _BROKE)
+    return counted + sum(int(n) for n in _UNITTEST_BROKE.findall(text))
 _ZERO_RAN = re.compile(r"(?i)\b(no tests ran|collected 0 items|0 tests? (?:ran|executed))\b")
 
 # stdlib unittest reports differently from pytest — "Ran 3 tests" and "OK (skipped=3)".
