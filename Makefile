@@ -15,7 +15,7 @@ help:
 
 # One definition of done, identical in every session, with no --no-verify path.
 # Eight parallel sessions must not converge on eight notions of finished.
-check: lint docs slop knowledge test doctor budget
+check: lint docs slop polyglot knowledge test doctor budget
 	@echo ""
 	@echo "check: all green"
 
@@ -24,6 +24,9 @@ check: lint docs slop knowledge test doctor budget
 # satisfied by an existing codebase and gets disabled on day one.
 slop:
 	@$(PY) tools/check_slop.py --all
+
+polyglot:
+	@$(PY) tools/check_polyglot.py --all
 
 ratchet:
 	@$(PY) tools/check_slop.py --all --ratchet
