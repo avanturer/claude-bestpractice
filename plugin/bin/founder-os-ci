@@ -13,12 +13,13 @@ The reasoning behind the default is in `founder_os.ci`.
 from __future__ import annotations
 
 import argparse
+import shlex
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from founder_os import ci, hookio  # noqa: E402
+from founder_os import ci, config, hookio  # noqa: E402
 from founder_os.gitctx import resolve_for_cli  # noqa: E402
 
 
@@ -28,8 +29,22 @@ def main() -> int:
         "command", nargs="?", default="status", choices=["status", "local", "github", "off"]
     )
     parser.add_argument("--off", action="store_true", help="with `github`, switch it back off")
+    parser.add_argument(
+        "--print-test-command",
+        action="store_true",
+        help="print the project's own test command, for the pre-push hook to run",
+    )
     args = parser.parse_args()
     ctx = resolve_for_cli()
+
+    if args.print_test_command:
+        # The hook needs the SAME command the Stop gate resolves, or the two disagree
+        # about what "the tests" means and the push gate reports success over a red
+        # suite. Silence when nothing is detectable; the hook treats that as "skip".
+        command = config.load(ctx).test_command or config.detect_test_command(ctx.worktree_root)
+        if command:
+            print(shlex.join(command))
+        return 0
 
     if args.command == "status":
         print("\n".join(ci.status_lines(ctx)))

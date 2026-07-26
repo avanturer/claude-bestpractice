@@ -20,6 +20,7 @@ things that must hold cannot be left to anyone remembering them.
 from __future__ import annotations
 
 import contextlib
+import os
 import shutil
 import stat
 import subprocess
@@ -62,6 +63,17 @@ if [ -f Makefile ] && grep -q '^check:' Makefile; then
     exec make check
 fi
 
+# The project's OWN test command, resolved the same way the Stop gate resolves it. A
+# repository with a `package.json` test script or a `Cargo.toml` and no Makefile used to
+# fall straight past this to the doctor — which proves the PLUGIN's gates fire and runs
+# not one line of the founder's code. So the hook reported success over a red suite, and
+# the doctor's own sandbox writes itself a Makefile, meaning the only branch under test
+# was the one most repositories do not take.
+_cmd="$(founder-os-ci --print-test-command 2>/dev/null || true)"
+if [ -n "$_cmd" ]; then
+    sh -c "$_cmd" || exit $?
+fi
+
 if command -v founder-os-doctor >/dev/null 2>&1; then
     exec founder-os-doctor
 fi
@@ -102,6 +114,24 @@ def _make_executable(path: Path) -> None:
     path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
+def _write_new_file(path: Path, body: str) -> None:
+    """Create the hook, refusing to follow a symlink that appeared under us.
+
+    The displacement above already moves any existing entry aside, so by the time we
+    get here the path should be free — but `write_text` follows a symlink, and a
+    symlink is precisely what husky and lefthook leave at this path. O_EXCL|O_NOFOLLOW
+    turns "something raced us, or the displacement missed a case" into an error
+    instead of into a founder's tracked source file being overwritten in place.
+    """
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(str(path), flags, 0o755)
+    try:
+        os.write(fd, body.encode("utf-8"))
+    finally:
+        os.close(fd)
+    _make_executable(path)
+
+
 def install(ctx: GitContext) -> tuple[bool, str]:
     """Put the hook in place, chaining any hook already there. Returns (changed, note)."""
     path = hook_path(ctx)
@@ -126,8 +156,7 @@ def install(ctx: GitContext) -> tuple[bool, str]:
                 _make_executable(target)
             displaced = target.name
 
-        path.write_text(HOOK_BODY, encoding="utf-8")
-        _make_executable(path)
+        _write_new_file(path, HOOK_BODY)
     except OSError as exc:
         return False, f"could not install the pre-push hook: {exc}"
 

@@ -122,23 +122,29 @@ digests = sorted(
 print(hashlib.sha256("\n".join(digests).encode()).hexdigest())
 EOF
 )"
-# NEWEST copy, not the first one `find` happens to walk into. The CLI keeps a directory
-# per version, so after a single version bump the cache holds both — and `-print -quit`
-# returned whichever the filesystem listed first, usually the OLD one. Its contents no
-# longer matched the source the doctor had just verified, so the script aborted with "the
-# registered copy is NOT the code just verified" and printed a remedy that does not help:
-# uninstalling removes only the current version's directory and leaves the stale sibling,
-# so the next run finds it again and aborts again. Every version bump bricked the
-# installer permanently, and the only escape was deleting the cache by hand.
-CACHED="$(
-  find "$HOME/.claude/plugins" -type d -name "$PLUGIN" -printf '%T@ %p\n' 2>/dev/null \
-    | sort -rn | head -1 | cut -d' ' -f2-
+# ASK THE CLI where it put the copy. Do not go looking for it.
+#
+# Two rounds of this check were wrong in the same way. Searching by `-name founder-os`
+# cannot work at all: the cache is `cache/<marketplace>/<plugin>/<version>/`, both
+# MARKETPLACE and PLUGIN are the literal string "founder-os", and the two matching
+# directories are version-UNSCOPED — so `cache/founder-os` and `cache/founder-os/founder-os`
+# hash identically, and after one version bump either of them hashes both versions at
+# once against a source tree containing one. Neither "-print -quit" nor "newest by mtime"
+# fixes that; the search itself is the bug.
+#
+# `installed_plugins.json` carries `installPath`, which is the exact versioned directory
+# the CLI actually executes from. That is the only thing worth fingerprinting.
+CACHED="$("$PY" - "$HOME/.claude/plugins/installed_plugins.json" "${PLUGIN}@${MARKETPLACE}" <<'EOF'
+import json, pathlib, sys
+registry = pathlib.Path(sys.argv[1])
+try:
+    entries = json.loads(registry.read_text()).get("plugins", {}).get(sys.argv[2], [])
+except (OSError, ValueError, AttributeError):
+    entries = []
+paths = [e.get("installPath", "") for e in entries if isinstance(e, dict)]
+print(next((p for p in paths if p and pathlib.Path(p).is_dir()), ""))
+EOF
 )"
-# BSD find has no -printf. Fall back to the old behaviour there rather than skipping the
-# check: one copy is the common case, and a first-match check beats no check at all.
-if [ -z "$CACHED" ]; then
-  CACHED="$(find "$HOME/.claude/plugins" -type d -name "$PLUGIN" -print 2>/dev/null | tail -1 || true)"
-fi
 if [ -n "$CACHED" ]; then
   CACHED_FINGERPRINT="$("$PY" - "$CACHED" <<'EOF'
 import hashlib, pathlib, sys
@@ -152,14 +158,15 @@ print(hashlib.sha256("\n".join(digests).encode()).hexdigest())
 EOF
 )"
   if [ "$FINGERPRINT" != "$CACHED_FINGERPRINT" ]; then
-    # The remedy has to actually work. `claude plugin uninstall` removes the current
-    # version's directory and leaves every older sibling behind, so telling the founder
-    # to run it left them in the same state on the next attempt, forever.
+    # The remedy has to be runnable. It used to end in "$0", which under the install form
+    # the README actually documents — `curl -fsSL … | bash` — expands to the literal word
+    # `bash`: a founder who followed it uninstalled the plugin and was dropped into an
+    # interactive subshell. Print the documented command instead of guessing at $0.
     die "the registered copy at $CACHED is NOT the code just verified.
-  Clear the stale cache and retry:
+  Clear the cache and re-install:
     claude plugin uninstall ${PLUGIN}@${MARKETPLACE}
-    rm -rf \"\$HOME/.claude/plugins/cache/${PLUGIN}\" \"\$HOME/.claude/plugins/marketplaces/${MARKETPLACE}\"
-    $0"
+    rm -rf \"\$HOME/.claude/plugins/cache/${MARKETPLACE}\"
+    curl -fsSL https://raw.githubusercontent.com/avanturer/claude-bestpractice/HEAD/install.sh | bash"
   fi
   dim "registered copy matches the verified source"
 fi

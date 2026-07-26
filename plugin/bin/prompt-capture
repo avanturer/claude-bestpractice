@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from founder_os import hookio, sessions  # noqa: E402
+from founder_os import hookio, redact, sessions  # noqa: E402
 from founder_os.gitctx import resolve  # noqa: E402
 
 MAX_TASK_CHARS = 600
@@ -63,10 +63,22 @@ def main() -> None:
 
     prompt = (event.prompt or "").strip()
     if prompt and not rec.task_statement:
+        # Scrubbed AT CAPTURE, because this string does not stay here. It fans out to the
+        # session record, the sibling sessions' board, `founder-os status`, every scope-
+        # drift message, and the attempt filed on an unverified finish — which is Tier A,
+        # committed. A founder who opens a session by pasting "deploy with
+        # STRIPE_KEY=sk_live_..." had that key written verbatim into a file bound for git,
+        # by the plugin whose pre-write gate exists to refuse exactly that write.
+        #
+        # Control characters go too: this text is rendered into an injected block, and an
+        # ANSI escape or an RTL override in it is a way to make the board lie.
+        safe = redact.scrub(redact.strip_control(prompt))
         sessions.touch(
             ctx,
             event.session_id,
-            task_statement=prompt[:MAX_TASK_CHARS],
+            task_statement=safe[:MAX_TASK_CHARS],
+            # Paths from the ORIGINAL: redaction rewrites credential-shaped tokens, and a
+            # filename is not a credential. Scrubbing first would lose real paths.
             task_paths=extract_paths(prompt, ctx.worktree_root),
         )
     else:

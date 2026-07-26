@@ -5,7 +5,7 @@
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
 [![version](https://img.shields.io/badge/version-1.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-540%20passing-2ea44f)](#verified)
+[![tests](https://img.shields.io/badge/tests-572%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-25%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
@@ -38,6 +38,12 @@ founder-os status    # everything at once
 
 The installer runs the doctor **before** registering anything and refuses to install if
 any gate fails to fire. Gates that silently do nothing are worse than no gates.
+
+Read that claim narrowly, because it is narrow: the doctor builds its own throwaway
+repository and attacks that. It proves **the gates work**, not that they are correctly
+wired into *your* project — so "All 25 checks passed" is a statement about this software,
+never a clean bill of health for your repository. `founder-os status` is the one that
+looks at yours.
 
 ---
 
@@ -230,7 +236,7 @@ against a cap of 400 — roughly 0.1 % of a 200k window.
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 540 tests · 25 doctor checks · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 572 tests · 25 doctor checks · budget
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration

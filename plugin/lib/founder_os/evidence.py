@@ -762,10 +762,14 @@ def record_red(ctx: GitContext, command: list[str], tail: str) -> None:
     something nobody is tracking — which is exactly how a broken test survives for weeks
     in a repository where nobody reads the diffs.
 
-    Tier A rather than Tier B on purpose: this has to outlive the session, be visible
-    from every worktree, and travel with the branch. `first_seen` is preserved across
-    re-observations so the board can say how long it has been broken, which is the
-    number that makes it embarrassing enough to fix.
+    Tier A rather than Tier B on purpose: this has to outlive the session and be visible
+    from every worktree. It travels with the branch only ONCE COMMITTED — nothing here
+    commits it, and `.claude/` is untracked in a fresh repository, so on a branch nobody
+    has committed the state directory on, this is a local file and no more. Saying it
+    "travels with the branch" flatly was a promise the code does not keep.
+
+    `first_seen` is preserved across re-observations so the board can say how long it has
+    been broken, which is the number that makes it embarrassing enough to fix.
     """
     path = store.tier_a(ctx, RED_SUITE_FILE)
     previous = store.read_json(path, default={}) or {}

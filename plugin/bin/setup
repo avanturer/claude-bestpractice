@@ -46,6 +46,12 @@ def main() -> None:
             "Checks now run locally before every push (`founder-os-ci status` to see, "
             "`founder-os-ci github` to add hosted CI)."
         )
+        # `hook_note` was computed and thrown away, so displacing the founder's own
+        # pre-push hook — husky's, lefthook's — happened without a word. It chains
+        # correctly now, but chaining silently is still the wrong half of the fix: the
+        # one thing they must be told is that a file of theirs moved.
+        if "moved to" in hook_note:
+            lines.append(hook_note.split("\n", 1)[-1].strip())
     if written:
         lines.append("Derived from your code: " + ", ".join(written))
     if gaps:

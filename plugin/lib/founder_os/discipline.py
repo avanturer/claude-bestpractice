@@ -152,8 +152,20 @@ def introduced(ctx: GitContext, relpaths: list[str], baseline: str) -> list[Find
     if not baseline:
         return now
 
+    # Only the files a finding could possibly be subtracted from. This used to fork one
+    # `git show` per changed path with no filter at all, so an untracked build directory
+    # — where every single lookup is guaranteed to miss, because untracked files are not
+    # in the baseline — turned the Stop gate into a 94-second pause. The founder sees
+    # that as the session hanging, on every turn.
+    #
+    # Two filters, both free: a suffix `scan` would ignore anyway, and a path with no
+    # finding to explain. Nothing else changes; `git show` on a path absent from the
+    # baseline returned empty and cost a process.
+    interesting = {f.path for f in now}
     before = set()
     for rel in relpaths:
+        if rel not in interesting:
+            continue
         source = _baseline_source(ctx, baseline, rel)
         if source:
             before |= {
