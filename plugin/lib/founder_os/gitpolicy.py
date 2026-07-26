@@ -44,14 +44,14 @@ def default_branch(ctx: GitContext) -> str:
     """
     probe = subprocess.run(
         ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
-        cwd=str(ctx.worktree_root), capture_output=True, text=True, timeout=30,
+        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=30,
     )
     if probe.returncode == 0 and probe.stdout.strip():
         return probe.stdout.strip().split("/", 1)[-1]
 
     listed = subprocess.run(
         ["git", "branch", "--format=%(refname:short)"],
-        cwd=str(ctx.worktree_root), capture_output=True, text=True, timeout=30,
+        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=30,
     ).stdout.split()
     for name in TRUNK_NAMES:
         if name in listed:
@@ -111,7 +111,7 @@ def worktree_paths_in_use(ctx: GitContext) -> dict[str, str]:
     """branch -> worktree path, so the board can name where each session is."""
     proc = subprocess.run(
         ["git", "worktree", "list", "--porcelain"],
-        cwd=str(ctx.worktree_root), capture_output=True, text=True, timeout=30,
+        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=30,
     )
     out: dict[str, str] = {}
     path = ""

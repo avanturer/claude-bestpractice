@@ -40,7 +40,7 @@ def open_pr(ctx, base: str) -> int:
         ["gh", "pr", "create", "--base", base, "--head", ctx.branch,
          "--title", ctx.branch.split("/")[-1].replace("-", " "),
          "--body", delivery.pr_body(ctx, base), "--draft"],
-        cwd=str(ctx.worktree_root), capture_output=True, text=True, timeout=300,
+        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=300,
     )
     print(proc.stdout.strip() or proc.stderr.strip())
     return proc.returncode

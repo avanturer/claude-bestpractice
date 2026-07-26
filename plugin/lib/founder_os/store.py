@@ -92,8 +92,30 @@ def read_json(path: Path, default: Any = None) -> Any:
         return default
 
 
+def dumps(obj: Any, **kwargs: Any) -> str:
+    """JSON that can always be encoded, without making readable content unreadable.
+
+    A path git handed us that is not valid UTF-8 arrives as a string carrying lone
+    surrogates — that is what makes it still open the real file. `ensure_ascii=False`
+    then raises UnicodeEncodeError at `.encode()`, and the raise happens inside a
+    fail-closed gate, so one oddly-named file in the repository refused every write in
+    the session.
+
+    `ensure_ascii=True` escapes the surrogate to `\\udce9`, which is pure ASCII, encodes
+    fine, and reads back as the identical string. But it also escapes every Cyrillic and
+    CJK character, and Tier A files are committed and read by humans. So: the readable
+    form first, the escaped form only for the payload that cannot take it.
+    """
+    text = json.dumps(obj, ensure_ascii=False, **kwargs)
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        text = json.dumps(obj, ensure_ascii=True, **kwargs)
+    return text
+
+
 def write_json(path: Path, obj: Any, mode: int = 0o600) -> None:
-    atomic_write(path, json.dumps(obj, indent=2, sort_keys=True, ensure_ascii=False) + "\n", mode)
+    atomic_write(path, dumps(obj, indent=2, sort_keys=True) + "\n", mode)
 
 
 def append_jsonl(path: Path, obj: Any, mode: int = 0o600) -> None:
@@ -103,7 +125,7 @@ def append_jsonl(path: Path, obj: Any, mode: int = 0o600) -> None:
     sessions interleave records without tearing one.
     """
     ensure_dir(path.parent)
-    line = json.dumps(obj, sort_keys=True, ensure_ascii=False) + "\n"
+    line = dumps(obj, sort_keys=True) + "\n"
     fd = os.open(str(path), os.O_CREAT | os.O_WRONLY | os.O_APPEND, mode)
     try:
         os.write(fd, line.encode("utf-8"))

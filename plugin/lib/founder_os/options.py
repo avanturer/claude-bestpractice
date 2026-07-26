@@ -216,7 +216,7 @@ def _show(ctx: GitContext, ref: str, rel: str) -> str:
         return ""
     proc = subprocess.run(
         ["git", "show", f"{ref}:{rel}"],
-        cwd=str(ctx.worktree_root), capture_output=True, text=True, timeout=30,
+        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=30,
     )
     return proc.stdout if proc.returncode == 0 else ""
 

@@ -89,7 +89,7 @@ def merge_state(ctx: GitContext) -> MergeState:
 
     listed = subprocess.run(
         ["git", "diff", "--name-only", "--diff-filter=U"],
-        cwd=str(ctx.worktree_root), capture_output=True, text=True, timeout=30,
+        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=30,
     ).stdout
     return MergeState(True, [p for p in listed.splitlines() if p], kind)
 
@@ -97,7 +97,7 @@ def merge_state(ctx: GitContext) -> MergeState:
 def _git_dir(ctx: GitContext) -> Path:
     out = subprocess.run(
         ["git", "rev-parse", "--absolute-git-dir"],
-        cwd=str(ctx.worktree_root), capture_output=True, text=True, timeout=30,
+        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=30,
     ).stdout.strip()
     return Path(out) if out else ctx.common_dir
 
@@ -108,7 +108,7 @@ def commits_since(ctx: GitContext, base: str) -> list[str]:
         return []
     out = subprocess.run(
         ["git", "log", "--reverse", "--format=%s", f"{base}..HEAD"],
-        cwd=str(ctx.worktree_root), capture_output=True, text=True, timeout=60,
+        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=60,
     )
     return [line for line in out.stdout.splitlines() if line.strip()]
 
@@ -118,7 +118,7 @@ def diffstat(ctx: GitContext, base: str) -> str:
         return ""
     out = subprocess.run(
         ["git", "diff", "--shortstat", f"{base}..HEAD"],
-        cwd=str(ctx.worktree_root), capture_output=True, text=True, timeout=60,
+        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=60,
     )
     return out.stdout.strip()
 
@@ -240,7 +240,7 @@ def ready(ctx: GitContext, base: str) -> list[str]:
 
     dirty = subprocess.run(
         ["git", "status", "--porcelain"],
-        cwd=str(ctx.worktree_root), capture_output=True, text=True, timeout=30,
+        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=30,
     ).stdout.strip()
     if dirty:
         problems.append("there are uncommitted changes")

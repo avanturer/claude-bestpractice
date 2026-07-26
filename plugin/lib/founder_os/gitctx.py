@@ -24,7 +24,19 @@ def _run(args: list[str], cwd: Path | str, check: bool = True) -> str:
         ["git", *args],
         cwd=str(cwd),
         capture_output=True,
-        text=True,
+        # NOT text=True. That decodes as strict UTF-8, and a filename is a byte string
+        # on POSIX, not text — one file named in latin-1 anywhere in the repository made
+        # `git diff --name-only` raise UnicodeDecodeError inside the fail-closed Stop
+        # gate. Every finish was then refused, identically, forever, with a message about
+        # a codec; no config setting escaped it and no amount of re-running helped.
+        #
+        # surrogateescape, not replace: it round-trips. The undecodable bytes come back
+        # as lone surrogates, and because Python's own filesystem encoding uses the same
+        # error handler, `open()` and `Path.stat()` on that string reach the real file.
+        # `replace` would substitute U+FFFD and every downstream path check would read
+        # the file as deleted — which is how a failing suite passed the gate once already.
+        encoding="utf-8",
+        errors="surrogateescape",
         timeout=30,
     )
     if check and proc.returncode != 0:
@@ -165,7 +177,8 @@ def is_ancestor(ctx: GitContext, maybe_ancestor: str, descendant: str = "HEAD") 
         ["git", "merge-base", "--is-ancestor", maybe_ancestor, descendant],
         cwd=str(ctx.worktree_root),
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="surrogateescape",
         timeout=30,
     )
     return proc.returncode == 0

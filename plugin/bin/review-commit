@@ -64,7 +64,7 @@ CHECKS: list[tuple[str, re.Pattern[str], str]] = [
 
 def git(args: list[str], cwd: Path) -> str:
     proc = subprocess.run(
-        ["git", *args], cwd=str(cwd), capture_output=True, text=True, timeout=120
+        ["git", *args], cwd=str(cwd), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=120
     )
     return proc.stdout if proc.returncode == 0 else ""
 

@@ -213,16 +213,48 @@ class TestPreTool(GateCase):
         )
         self.assertIsNone(self.decision(proc))
 
-    def test_denies_a_repeated_signature(self):
-        self.start()
-        event = {
-            "session_id": "s1",
+    def bash_event(self, command: str, session_id: str = "s1") -> dict:
+        return {
+            "session_id": session_id,
             "hook_event_name": "PreToolUse",
             "tool_name": "Bash",
-            "tool_input": {"command": "npm test"},
+            "tool_input": {"command": command},
         }
+
+    def test_denies_a_repeated_signature(self):
+        """The identical command back to back with nothing in between is a stuck loop."""
+        self.start()
+        event = self.bash_event("npm test")
         decisions = [self.decision(self.gate("pre-tool", event)) for _ in range(6)]
         self.assertIn("deny", decisions)
+
+    def test_the_ordinary_fix_loop_is_never_denied(self):
+        """Run the suite, fix a thing, run it again. That is the work, not a loop.
+
+        The counter used to be a session lifetime total, so the fourth `npm test` of a
+        session was refused for the rest of it — and `npm test` is the command the Stop
+        gate orders the agent to run. The two gates deadlocked: finish refused for want
+        of a test run, test run refused for having been run before, nothing clearing
+        either. This is the single most common shape of an agent's turn.
+        """
+        self.start()
+        for round_number in range(1, 6):
+            suite = self.decision(self.gate("pre-tool", self.bash_event("npm test")))
+            self.assertIsNone(suite, f"the suite was refused on round {round_number}")
+            self.gate("pre-tool", self.bash_event(f"grep -n thing_{round_number} src.py"))
+
+    def test_doing_anything_else_clears_the_streak(self):
+        """A count with no way down is a ratchet, and this one is not meant to be."""
+        self.start()
+        event = self.bash_event("npm test")
+        decisions = [self.decision(self.gate("pre-tool", event)) for _ in range(6)]
+        self.assertIn("deny", decisions, "precondition: the streak must trip first")
+
+        self.gate("pre-tool", self.bash_event("git status"))
+        self.assertIsNone(
+            self.decision(self.gate("pre-tool", event)),
+            "still refused after doing something else — the count never comes down",
+        )
 
     def test_fails_closed_on_garbage(self):
         proc = subprocess.run(

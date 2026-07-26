@@ -113,7 +113,7 @@ def sibling_worktrees(ctx: GitContext) -> list[Path]:
         ["git", "worktree", "list", "--porcelain"],
         cwd=str(ctx.worktree_root),
         capture_output=True,
-        text=True,
+        encoding="utf-8", errors="surrogateescape",
         timeout=30,
     )
     if proc.returncode != 0:

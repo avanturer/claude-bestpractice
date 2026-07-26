@@ -62,7 +62,7 @@ def hash_paths(ctx: GitContext, relpaths: list[str]) -> dict[str, str]:
         ["git", "hash-object", "--", *existing],
         cwd=str(ctx.worktree_root),
         capture_output=True,
-        text=True,
+        encoding="utf-8", errors="surrogateescape",
         timeout=60,
     )
     if proc.returncode != 0:

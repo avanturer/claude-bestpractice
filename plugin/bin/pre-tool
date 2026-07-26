@@ -157,10 +157,27 @@ def main() -> None:
             f"{cfg.max_tool_calls}. Stop and summarise what is done and what remains."
         )
 
-    if counts[sig] > cfg.max_repeat_signature:
+    # CONSECUTIVE repeats, never a lifetime total. The lifetime count made the fourth
+    # `npm test` of a session a permanent refusal — and `npm test` is the command the
+    # Stop gate ORDERS the agent to run, so the two gates deadlocked: finish refused for
+    # want of a test run, test run refused for having been run before. Doing anything
+    # else in between did not clear it, because nothing ever decremented the counter.
+    #
+    # Running the suite five times while fixing five things is the work, not a loop. A
+    # loop is the identical call with nothing in between, which is what this counts now.
+    # Alternating cycles — test, edit, test, edit, forever — are a different shape and
+    # `detect_loop` below is what sees those.
+    streak = 0
+    for previous in reversed(history):
+        if previous != sig:
+            break
+        streak += 1
+    if streak > cfg.max_repeat_signature:
         hookio.deny_tool(
-            f"founder-os: `{sig}` has now been attempted {counts[sig]} times. Repeating it "
-            "is not making progress. Change approach, or state plainly that you are stuck."
+            f"founder-os: `{sig}` has now been run {streak} times in a row with nothing in "
+            "between. Repeating it unchanged is not making progress — change the input, "
+            "change the approach, or say plainly that you are stuck.\n"
+            "Anything else you do clears this: the count is consecutive, not a lifetime total."
         )
 
     if cfg.loop_detect:

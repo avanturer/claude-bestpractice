@@ -19,6 +19,7 @@ things that must hold cannot be left to anyone remembering them.
 
 from __future__ import annotations
 
+import contextlib
 import shutil
 import stat
 import subprocess
@@ -29,6 +30,13 @@ from .gitctx import GitContext
 HOOK_NAME = "pre-push"
 MARKER = "# founder-os pre-push gate"
 BACKUP_SUFFIX = ".founder-os.bak"
+
+# A hook we displaced is moved here and CHAINED, never merely copied aside. Copying it
+# aside is what "backup" sounds like and is not what the founder needs: their husky or
+# lefthook pre-push stopped running the moment ours landed, silently, and a check that
+# stopped running is the exact failure this project exists to prevent — committed by the
+# thing that prevents it.
+DISPLACED_NAME = "pre-push.founder-os-original"
 CI_VARIABLE = "FOUNDER_OS_CI"
 WORKFLOW = ".github/workflows/check.yml"
 
@@ -41,6 +49,14 @@ HOOK_BODY = f"""#!/bin/sh
 # --no-verify when you genuinely need to push red work; that is a deliberate act and
 # leaves a record, which a silently-skipped hosted run does not.
 set -e
+
+# Whatever pre-push was here before goes first, with the same stdin and arguments git
+# gave us, and its refusal is still a refusal. Displacing someone's husky hook without
+# running it would silently switch off a check they rely on.
+_original="$(dirname "$0")/{DISPLACED_NAME}"
+if [ -x "$_original" ]; then
+    "$_original" "$@" || exit $?
+fi
 
 if [ -f Makefile ] && grep -q '^check:' Makefile; then
     exec make check
@@ -63,7 +79,7 @@ def hooks_dir(ctx: GitContext) -> Path:
     """
     configured = subprocess.run(
         ["git", "config", "--get", "core.hooksPath"],
-        cwd=str(ctx.worktree_root), capture_output=True, text=True, timeout=30,
+        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=30,
     ).stdout.strip()
     if configured:
         path = Path(configured)
@@ -82,38 +98,67 @@ def installed(ctx: GitContext) -> bool:
         return False
 
 
+def _make_executable(path: Path) -> None:
+    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
 def install(ctx: GitContext) -> tuple[bool, str]:
-    """Put the hook in place. Returns (changed, human-readable note)."""
+    """Put the hook in place, chaining any hook already there. Returns (changed, note)."""
     path = hook_path(ctx)
     if installed(ctx):
         return False, "pre-push hook already installed"
 
+    displaced = ""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists():
-            # Never clobber someone else's hook. A pre-push that silently vanished is a
-            # check that stopped running, which is the failure this project is about.
-            path.with_suffix(path.suffix + BACKUP_SUFFIX).write_text(
-                path.read_text(encoding="utf-8", errors="replace"), encoding="utf-8"
-            )
+        if path.is_symlink() or path.exists():
+            # `path.exists()` follows symlinks and `write_text` writes THROUGH them, so a
+            # hooks directory that symlinks pre-push at a script in the working tree —
+            # husky and lefthook both do this — had our body written over that tracked
+            # source file. `git status` showed the founder's own script modified, and the
+            # undo could not put it back because it restored a hook, not the file.
+            #
+            # Move, never copy: the link itself is what has to go, so what remains is a
+            # real file we own. `os.replace` moves a symlink as a symlink.
+            target = path.parent / DISPLACED_NAME
+            path.replace(target)
+            with contextlib.suppress(OSError):
+                _make_executable(target)
+            displaced = target.name
+
         path.write_text(HOOK_BODY, encoding="utf-8")
-        path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        _make_executable(path)
     except OSError as exc:
         return False, f"could not install the pre-push hook: {exc}"
+
+    if displaced:
+        return True, (
+            f"installed {path}\n"
+            f"  Your existing {HOOK_NAME} was moved to {displaced} and now runs FIRST, "
+            "before these checks. Nothing it used to refuse is allowed through."
+        )
     return True, f"installed {path}"
 
 
 def remove(ctx: GitContext) -> tuple[bool, str]:
-    """Take the hook out and restore whatever was there before it."""
+    """Take the hook out and put back whatever was there before it."""
     path = hook_path(ctx)
     if not installed(ctx):
         return False, "no founder-os pre-push hook installed"
 
     path.unlink(missing_ok=True)
+
+    displaced = path.parent / DISPLACED_NAME
+    if displaced.is_symlink() or displaced.exists():
+        displaced.replace(path)
+        return True, f"removed, and put your original {HOOK_NAME} back"
+
+    # The old shape, still honoured so an install from before the chaining change can be
+    # undone by a plugin from after it.
     backup = path.with_suffix(path.suffix + BACKUP_SUFFIX)
     if backup.exists():
-        path.write_text(backup.read_text(encoding="utf-8"), encoding="utf-8")
-        path.chmod(path.stat().st_mode | stat.S_IXUSR)
+        path.write_text(backup.read_text(encoding="utf-8", errors="replace"), encoding="utf-8")
+        _make_executable(path)
         backup.unlink(missing_ok=True)
         return True, f"removed, and restored the previous {HOOK_NAME}"
     return True, "removed. Nothing checks your pushes from this machine now."
@@ -137,7 +182,7 @@ def hosted_enabled(ctx: GitContext) -> bool | None:
         return None
     proc = subprocess.run(
         ["gh", "variable", "list", "--json", "name,value"],
-        cwd=str(ctx.worktree_root), capture_output=True, text=True, timeout=60,
+        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=60,
     )
     if proc.returncode != 0:
         return None
@@ -165,7 +210,7 @@ def set_hosted(ctx: GitContext, on: bool) -> tuple[bool, str]:
         )
     proc = subprocess.run(
         ["gh", "variable", "set", CI_VARIABLE, "--body", "on" if on else "off"],
-        cwd=str(ctx.worktree_root), capture_output=True, text=True, timeout=120,
+        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=120,
     )
     if proc.returncode != 0:
         return False, f"gh refused: {(proc.stderr or proc.stdout).strip()[:300]}"

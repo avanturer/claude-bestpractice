@@ -175,11 +175,20 @@ def _scan_text(source: str, rel: str) -> list[Finding]:
 
 
 def _baseline_source(ctx: GitContext, baseline: str, rel: str) -> str:
+    """The file as it was at the baseline, or empty. Never raises on its contents.
+
+    A legacy source file encoded in latin-1 — a comment with an accent in it is enough —
+    made this raise UnicodeDecodeError inside the fail-closed Stop gate, wedging every
+    finish in the repository. `replace` is right here where it is wrong for filenames:
+    this text is only ever scanned for stub markers, so a mangled byte costs at worst one
+    missed TODO, while a raised exception costs the founder the ability to finish at all.
+    """
     import subprocess
 
     proc = subprocess.run(
         ["git", "show", f"{baseline}:{rel}"],
-        cwd=str(ctx.worktree_root), capture_output=True, text=True, timeout=30,
+        cwd=str(ctx.worktree_root), capture_output=True,
+        encoding="utf-8", errors="replace", timeout=30,
     )
     return proc.stdout if proc.returncode == 0 else ""
 

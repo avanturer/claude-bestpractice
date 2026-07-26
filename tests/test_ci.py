@@ -97,13 +97,76 @@ class TestInstallIsSafe(CICase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("#!/bin/sh\necho someone-elses-hook\n")
 
-        ci.install(self.ctx())
-        backup = path.with_suffix(path.suffix + ci.BACKUP_SUFFIX)
-        self.assertTrue(backup.exists(), "the previous hook was destroyed")
-        self.assertIn("someone-elses-hook", backup.read_text())
+        _, note = ci.install(self.ctx())
+        displaced = path.parent / ci.DISPLACED_NAME
+        self.assertTrue(displaced.exists(), "the previous hook was destroyed")
+        self.assertIn("someone-elses-hook", displaced.read_text())
+        self.assertIn("runs FIRST", note, "the founder was not told their hook moved")
 
         ci.remove(self.ctx())
         self.assertIn("someone-elses-hook", path.read_text(), "the previous hook was not restored")
+
+    def test_the_displaced_hook_still_runs(self):
+        """Moving a hook aside without running it switches off a check, silently.
+
+        That is the exact failure this project exists to prevent, committed by the thing
+        that prevents it — and it would have shipped as "backed up", which sounds safe.
+        """
+        from founder_os import ci
+
+        path = ci.hook_path(self.ctx())
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("#!/bin/sh\necho THEIR-CHECK-RAN\nexit 0\n")
+        path.chmod(0o755)
+        ci.install(self.ctx())
+
+        proc = subprocess.run(
+            ["sh", str(path)], cwd=str(self.repo), capture_output=True, text=True, timeout=60,
+        )
+        self.assertIn("THEIR-CHECK-RAN", proc.stdout)
+
+    def test_a_refusal_from_the_displaced_hook_is_still_a_refusal(self):
+        from founder_os import ci
+
+        path = ci.hook_path(self.ctx())
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("#!/bin/sh\necho nope >&2\nexit 3\n")
+        path.chmod(0o755)
+        ci.install(self.ctx())
+
+        proc = subprocess.run(
+            ["sh", str(path)], cwd=str(self.repo), capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(proc.returncode, 3, "the displaced hook's refusal was swallowed")
+
+    def test_it_does_not_write_through_a_symlink(self):
+        """husky and lefthook both symlink the hook at a script in the working tree.
+
+        `Path.exists()` follows symlinks and `write_text` writes through them, so the
+        hook body landed inside the founder's own tracked source file. `git status`
+        showed their script modified, and the undo could not put it back because it
+        restored a hook, not the file.
+        """
+        from founder_os import ci
+
+        target = self.repo / "scripts" / "prepush.sh"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("#!/bin/sh\necho MY-OWN-CHECK\n")
+        target.chmod(0o755)
+
+        path = ci.hook_path(self.ctx())
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.symlink_to(target)
+
+        ci.install(self.ctx())
+        self.assertEqual(
+            target.read_text(), "#!/bin/sh\necho MY-OWN-CHECK\n",
+            "the hook body was written through the symlink into tracked source",
+        )
+
+        ci.remove(self.ctx())
+        self.assertTrue(path.is_symlink(), "the symlink was not put back as a symlink")
+        self.assertEqual(path.resolve(), target.resolve())
 
     def test_removal_reports_that_nothing_checks_pushes(self):
         from founder_os import ci

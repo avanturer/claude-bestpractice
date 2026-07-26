@@ -267,7 +267,8 @@ def run_suite(ctx: GitContext, command: list[str]) -> tuple[int, str]:
             command,
             cwd=str(ctx.worktree_root),
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=RUN_TIMEOUT,
             env=env,
             start_new_session=True,
@@ -524,7 +525,8 @@ def clean_rerun(ctx: GitContext, command: list[str]) -> Verdict:
             ["git", "worktree", "add", "--detach", "--quiet", str(target), ctx.head],
             cwd=str(ctx.worktree_root),
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=120,
         )
         if add.returncode != 0:
@@ -536,7 +538,8 @@ def clean_rerun(ctx: GitContext, command: list[str]) -> Verdict:
             command,
             cwd=str(target),
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=CLEAN_RERUN_TIMEOUT,
             env=env,
         )
@@ -568,7 +571,8 @@ def clean_rerun(ctx: GitContext, command: list[str]) -> Verdict:
             ["git", "worktree", "remove", "--force", str(target)],
             cwd=str(ctx.worktree_root),
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=60,
         )
         subprocess.run(
