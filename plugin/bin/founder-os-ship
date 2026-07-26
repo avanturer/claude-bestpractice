@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""What this branch delivered, for the person who never reads the code.
+
+    founder-os-ship            what changed, in product terms
+    founder-os-ship --pr       open a pull request with that as the body
+
+The stated operating mode is that the founder looks at outcomes and never at diffs.
+Every other surface in this plugin faces the agent; this one faces the other way.
+"""
+
+from __future__ import annotations
+
+import argparse
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from founder_os import delivery, gitpolicy  # noqa: E402
+from founder_os.gitctx import resolve_for_cli  # noqa: E402
+
+
+def open_pr(ctx, base: str) -> int:
+    problems = delivery.ready(ctx, base)
+    if problems:
+        print("not ready to open a pull request:", file=sys.stderr)
+        for problem in problems:
+            print(f"  - {problem}", file=sys.stderr)
+        return 1
+
+    if not shutil.which("gh"):
+        print("gh is not installed. The body is below; paste it into the PR:\n")
+        print(delivery.pr_body(ctx, base))
+        return 1
+
+    subprocess.run(["git", "push", "-u", "origin", ctx.branch], cwd=str(ctx.worktree_root), timeout=300)
+    proc = subprocess.run(
+        ["gh", "pr", "create", "--base", base, "--head", ctx.branch,
+         "--title", ctx.branch.split("/")[-1].replace("-", " "),
+         "--body", delivery.pr_body(ctx, base), "--draft"],
+        cwd=str(ctx.worktree_root), capture_output=True, text=True, timeout=300,
+    )
+    print(proc.stdout.strip() or proc.stderr.strip())
+    return proc.returncode
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="What this branch delivered.")
+    parser.add_argument("--pr", action="store_true", help="open a draft pull request")
+    args = parser.parse_args()
+
+    ctx = resolve_for_cli()
+    base = gitpolicy.default_branch(ctx) or "main"
+
+    state = delivery.merge_state(ctx)
+    if state.in_progress:
+        print(state.render(), file=sys.stderr)
+        return 1
+
+    if args.pr:
+        return open_pr(ctx, base)
+
+    print(delivery.shipped(ctx, base))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

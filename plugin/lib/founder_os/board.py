@@ -173,6 +173,19 @@ def _sessions_block(others: list[SessionRecord], leases: dict, now: float) -> li
     return out
 
 
+def _alerts(ctx: GitContext) -> list[str]:
+    """State that must be seen before anything else, or it gets made worse.
+
+    A Stop block lasts exactly the turn it fires in; these are committed or on-disk, so
+    they follow the branch into every worktree and every future session. And an
+    unfinished merge leaves a tree that reads as normal while half of it is conflict
+    markers — a session that is not told will commit them.
+    """
+    from . import delivery
+
+    return [line for line in (red_suite_line(ctx).strip(), delivery.merge_state(ctx).render()) if line]
+
+
 def render(
     ctx: GitContext,
     me: SessionRecord,
@@ -188,13 +201,7 @@ def render(
 
     lines.append(f"repo {ctx.worktree_root.name} | branch {me.branch} | baseline {me.baseline_commit[:12] or 'unborn'}")
 
-    # A Stop block lasts exactly the turn it fires in. This is committed state, so a
-    # broken suite follows the branch into every worktree and every future session until
-    # it is green again — which is the difference between refusing a finish and never
-    # letting the failure be forgotten.
-    red = red_suite_line(ctx)
-    if red:
-        lines.append(red.strip())
+    lines.extend(_alerts(ctx))
 
     # Before anything else this session might redo: dead ends on the files it is about
     # to touch. Keyed on subject, so a billing dead end never reaches a landing-page turn.
