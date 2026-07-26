@@ -219,7 +219,8 @@ def main() -> None:
     # Before any write is examined: may this session write HERE at all? Writes only, so
     # reads, searches and `git worktree add` itself stay free — a rule that blocks the
     # command which satisfies it is a trap the agent learns to route around.
-    if event.tool_name in WRITE_TOOLS and (cfg.require_worktree or cfg.protect_trunk):
+    writing = event.tool_name in WRITE_TOOLS or (event.tool_name == "Bash" and touched)
+    if writing and (cfg.require_worktree or cfg.protect_trunk):
         breaches = gitpolicy.violations(ctx, rec.task_statement)
         if not cfg.require_worktree:
             breaches = [b for b in breaches if "main checkout" not in b]

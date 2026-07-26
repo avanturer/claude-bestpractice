@@ -19,6 +19,7 @@ from __future__ import annotations
 import errno
 import json
 import os
+import platform
 import time
 import uuid
 from contextlib import contextmanager
@@ -30,9 +31,10 @@ from .gitctx import GitContext
 TIER_A_DIRNAME = ".claude/founder-os"
 TIER_B_DIRNAME = "founder-os"
 
-# A lock older than this is presumed abandoned. Long enough that a slow but live
-# holder is never robbed; short enough that a crashed session does not wedge the
-# repository until someone notices.
+# The mtime backstop, for a holder whose liveness cannot be established: a lock from a
+# different machine over a shared filesystem, or one whose payload never landed. Long
+# enough that a slow but live holder is never robbed. A crashed holder on THIS machine
+# does not wait for it — see `_lock_is_stale`.
 LOCK_STALE_SECONDS = 120.0
 LOCK_ACQUIRE_TIMEOUT = 10.0
 LOCK_POLL_INTERVAL = 0.02
@@ -127,16 +129,83 @@ def read_jsonl(path: Path) -> list[Any]:
     return out
 
 
-def _lock_is_stale(lock_path: Path, stale_after: float) -> bool:
-    """Staleness is judged by the lock file's mtime, never by a timestamp inside it.
+def lock_identity() -> str:
+    """Where a pid written into a lock is the same number this process would see.
 
-    A clock value written into the payload is the holder's opinion; the mtime is the
-    filesystem's. Under a clock change the payload lies and the mtime does not.
+    Hostname plus pid-namespace inode. Two containers on one host share a boot and a
+    clock but not a pid namespace, so pid 1234 in one is a different process — or no
+    process — in the other. Comparing the pair is what makes it safe to ask the kernel
+    whether a lock holder is still alive.
     """
     try:
-        return (time.time() - lock_path.stat().st_mtime) > stale_after
+        namespace = os.readlink("/proc/self/ns/pid")
+    except OSError:
+        namespace = ""
+    return f"{platform.node()}/{namespace}"
+
+
+def _lock_is_stale(lock_path: Path, stale_after: float) -> bool:
+    """Dead holder, or an old enough file. Two rules, and the first one is the useful one.
+
+    Time alone was the whole test, and it made a crash cost every other session two
+    minutes of hard failure: the lock is not stale until `stale_after`, `file_lock`
+    gives up after ten seconds, and a gate that raises is a gate that fails closed. One
+    session crashing at the wrong instant refused writes across the entire clone.
+
+    So ask the kernel first. When the payload names this machine's pid namespace, a pid
+    that no longer exists is positive evidence of death and the lock is reclaimable now.
+
+    The mtime rule stays as the backstop for everything that cannot be answered that
+    way — an unreadable or half-written payload, a holder on another machine over a
+    shared filesystem. Staleness there is judged by the file's mtime and never by a
+    timestamp inside it: a clock value in the payload is the holder's opinion, the mtime
+    is the filesystem's, and under a clock change the payload lies while the mtime does not.
+    """
+    try:
+        stat = lock_path.stat()
     except FileNotFoundError:
         return False
+
+    holder = _read_lock_payload(lock_path)
+    if holder.get("identity") == lock_identity():
+        pid = holder.get("pid")
+        if isinstance(pid, int) and pid > 0 and not _pid_alive(pid):
+            return True
+
+    return (time.time() - stat.st_mtime) > stale_after
+
+
+def _read_lock_payload(lock_path: Path) -> dict:
+    """The holder's own description, or an empty one. Never raises, never blocks.
+
+    The window between O_EXCL creating the file and the payload being written is real,
+    and a reader landing inside it sees zero bytes. That is not an error — it resolves
+    to "cannot tell", which falls through to the mtime rule.
+    """
+    try:
+        raw = lock_path.read_bytes()
+    except OSError:
+        return {}
+    try:
+        parsed = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _pid_alive(pid: int) -> bool:
+    """Signal 0 probes existence without delivering anything.
+
+    `PermissionError` means the process exists and belongs to someone else, which is
+    all that was asked. Treating it as dead would let one user steal another's lock.
+    """
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, OSError):
+        return True
+    return True
 
 
 def _reclaim(lock_path: Path) -> None:
@@ -169,7 +238,9 @@ def file_lock(
     """
     ensure_dir(lock_path.parent)
     deadline = time.monotonic() + timeout
-    payload = json.dumps({"pid": os.getpid(), "acquired_at": time.time()}).encode("utf-8")
+    payload = json.dumps(
+        {"pid": os.getpid(), "acquired_at": time.time(), "identity": lock_identity()}
+    ).encode("utf-8")
 
     while True:
         try:

@@ -151,7 +151,10 @@ COMMIT_MESSAGE = re.compile(
     re.S,
 )
 
-CONFLICT_MARKERS = re.compile(r"(?m)^(?:<{7}|={7}|>{7})(?:\s|$)")
+# `=======` alone is also how Markdown and reStructuredText underline a seven-character
+# heading, so requiring the OPENING marker as well is what stops `Options` under a row of
+# equals signs being hard-refused as an unresolved conflict.
+CONFLICT_MARKERS = re.compile(r"(?m)^<{7}(?:\s|$).*?^={7}(?:\s|$)", re.S)
 
 
 def commit_message(command: str) -> str:

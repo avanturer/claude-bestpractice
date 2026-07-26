@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
+import subprocess
+import sys
 import time
 import unittest
 from pathlib import Path
@@ -152,6 +154,57 @@ class TestLocks(RepoCase):
             with self.assertRaises(store.LockTimeout):
                 with store.file_lock(lock, timeout=0.2, stale_after=3600):
                     pass
+
+    def dead_pid(self) -> int:
+        """A pid that certainly no longer names a process: spawn one and reap it."""
+        proc = subprocess.Popen([sys.executable, "-c", ""])
+        proc.wait()
+        return proc.pid
+
+    def plant(self, name: str, payload: dict) -> Path:
+        lock = store.tier_b(self.ctx(), name)
+        store.ensure_dir(lock.parent)
+        lock.write_text(json.dumps(payload))
+        return lock
+
+    def test_a_crashed_holder_does_not_wedge_the_clone_for_two_minutes(self):
+        """The whole point of the pid rule: no waiting out `stale_after` after a crash.
+
+        Time alone meant one session dying at the wrong moment failed every other
+        session's writes for two minutes — and these gates fail closed, so "failed" is
+        "refused everything".
+        """
+        lock = self.plant(
+            "crashed.lock",
+            {"pid": self.dead_pid(), "acquired_at": time.time(), "identity": store.lock_identity()},
+        )
+        started = time.monotonic()
+        with store.file_lock(lock, timeout=2, stale_after=86400):
+            pass
+        self.assertLess(time.monotonic() - started, 1.0, "waited on a lock whose holder is gone")
+
+    def test_a_pid_from_another_namespace_is_never_reasoned_about(self):
+        """Container B's pid 1234 is not container A's. Same host, same clock, same file."""
+        lock = self.plant(
+            "foreign.lock",
+            {"pid": self.dead_pid(), "acquired_at": time.time(), "identity": "elsewhere/pid:[1]"},
+        )
+        with self.assertRaises(store.LockTimeout):
+            with store.file_lock(lock, timeout=0.3, stale_after=3600):
+                pass
+
+    def test_a_payload_that_never_landed_falls_back_to_time(self):
+        """O_EXCL creates the file before the write. A reader can land in that window."""
+        lock = self.plant("empty.lock", {})
+        lock.write_bytes(b"")
+        with self.assertRaises(store.LockTimeout):
+            with store.file_lock(lock, timeout=0.3, stale_after=3600):
+                pass
+
+        old = time.time() - 600
+        os.utime(lock, (old, old))
+        with store.file_lock(lock, timeout=2, stale_after=60):
+            pass
 
     def test_concurrent_processes_do_not_lose_updates(self):
         """The lost-update race, run for real across processes."""

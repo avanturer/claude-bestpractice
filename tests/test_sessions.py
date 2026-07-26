@@ -175,6 +175,44 @@ class TestLeases(RepoCase):
         self.assertEqual(sessions.leases_held_by(ctx, "a"), [])
         self.assertEqual(sessions.leases_held_by(ctx, "b"), ["two.py"])
 
+    def corrupt_table(self) -> None:
+        """One unreadable row beside a good one, the shape a torn write leaves behind."""
+        with store.guarded_json(store.tier_b(self.ctx(), sessions.LEASES_FILE), default={}) as box:
+            box[0] = {
+                "src/broken.py": "not a lease at all",
+                "src/fine.py": {
+                    "session_id": "a",
+                    "pid": 999_999_999,
+                    "acquired_at": time.time(),
+                    "expires_at": time.time() + 9999,
+                },
+            }
+
+    def test_a_corrupt_row_does_not_refuse_every_write_on_the_clone(self):
+        """Every lease call must survive one malformed row, because the caller is a gate.
+
+        The table was type-checked and its rows were not, so `holder.get(...)` raised
+        AttributeError inside the fail-closed pre-write gate. A single bad byte in an
+        ephemeral cache file would refuse every write in every session until a human
+        found and deleted it — while the doctor still reported all checks passing.
+        """
+        ctx = self.ctx()
+        self.corrupt_table()
+        self.assertIsNone(sessions.acquire_lease(ctx, "b", "src/broken.py"))
+        self.assertEqual(sessions.leases_held_by(ctx, "b"), ["src/broken.py"])
+
+    def test_a_corrupt_row_does_not_take_the_good_rows_with_it(self):
+        ctx = self.ctx()
+        self.corrupt_table()
+        sessions.acquire_lease(ctx, "b", "src/other.py")
+        self.assertEqual(sessions.leases_held_by(ctx, "a"), ["src/fine.py"])
+
+    def test_release_survives_a_corrupt_row(self):
+        ctx = self.ctx()
+        self.corrupt_table()
+        sessions.release_all(ctx, "a")
+        self.assertEqual(sessions.leases_held_by(ctx, "a"), [])
+
 
 class TestCrossWorktree(RepoCase):
     def test_sibling_worktrees_see_each_other(self):

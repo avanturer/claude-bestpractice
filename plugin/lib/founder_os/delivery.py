@@ -25,6 +25,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import store
 from .gitctx import GitContext
 
 
@@ -52,6 +53,29 @@ class MergeState:
         )
 
 
+# What actually means "half-finished", verified against git 2.43 rather than assumed.
+#
+# `REBASE_HEAD` is deliberately NOT here, and that is the whole point of this table.
+# Git LEAVES IT BEHIND after `git rebase --continue` succeeds: resolve a conflict, finish
+# the rebase, and the file is still sitting in the git dir on a completely clean tree.
+# Treating it as a marker meant the single most ordinary recovery in this founder's
+# workflow — rebase, hit a conflict, resolve it, continue — permanently convinced the
+# plugin that a rebase was unfinished. `founder-os ship` then refused forever, `ready()`
+# blocked every pull request, and every session opened with UNRESOLVED REBASE in its
+# board. Nothing clears it, so the repository never recovers on its own.
+#
+# The directories are the real markers: git creates them when a rebase starts and removes
+# them when it ends, both of which were observed. `rebase-apply` covers `git rebase
+# --apply` and `git am`, which the directory check missed entirely.
+_IN_PROGRESS = (
+    ("MERGE_HEAD", "merge"),
+    ("CHERRY_PICK_HEAD", "cherry-pick"),
+    ("REVERT_HEAD", "revert"),
+    ("rebase-merge", "rebase"),
+    ("rebase-apply", "rebase"),
+)
+
+
 def merge_state(ctx: GitContext) -> MergeState:
     """Whether a merge, rebase or cherry-pick is half-finished, and what is unresolved.
 
@@ -59,17 +83,7 @@ def merge_state(ctx: GitContext) -> MergeState:
     and reformatted between versions.
     """
     git_dir = _git_dir(ctx)
-    kinds = {
-        "MERGE_HEAD": "merge",
-        "REBASE_HEAD": "rebase",
-        "CHERRY_PICK_HEAD": "cherry-pick",
-        "REVERT_HEAD": "revert",
-    }
-    kind = ""
-    for marker, name in kinds.items():
-        if (git_dir / marker).exists() or (git_dir / "rebase-merge").is_dir():
-            kind = name if (git_dir / marker).exists() else "rebase"
-            break
+    kind = next((name for marker, name in _IN_PROGRESS if (git_dir / marker).exists()), "")
     if not kind:
         return MergeState()
 
@@ -120,14 +134,30 @@ def shipped(ctx: GitContext, base: str) -> str:
 
     lines = _work_sections(ctx)
 
-    red = evidence.red_line(ctx)
     lines.append("")
-    lines.append(red if red else "Tests: green.")
+    lines.append(_test_health(ctx))
 
     stat = diffstat(ctx, base)
     if stat:
         lines.append(f"({stat} — the code, if you want it)")
     return "\n".join(lines)
+
+
+def _test_health(ctx: GitContext) -> str:
+    """Observed green, observed red, or never observed — three states, not two.
+
+    Reporting "Tests: green." from the ABSENCE of a red record turns no-evidence into a
+    positive assertion, on the one surface built for a founder who reads no code. That
+    is decision 0002 inverted by the thing that quotes it.
+    """
+    from . import evidence
+
+    red = evidence.red_line(ctx)
+    if red:
+        return red
+    if evidence.last_green(ctx):
+        return "Tests: green (observed by the gate)."
+    return "Tests: NEVER RUN here — nothing has verified this."
 
 
 def _section(heading: str, items: list[str], bullet: str = "  - ") -> list[str]:
@@ -176,6 +206,21 @@ def pr_body(ctx: GitContext, base: str) -> str:
 
 
 
+def _unverified_here(ctx: GitContext) -> bool:
+    """Unverified finishes recorded on THIS branch. Tier B is shared by every worktree.
+
+    The check read the whole file, and the file is clone-wide: one session finishing
+    without proof on `feat/a` blocked the pull request for `feat/b`, `feat/c` and every
+    branch opened afterwards, forever, since nothing removes the record. Meanwhile the
+    message said "this branch", which is how it survived being read.
+    """
+    records = store.read_jsonl(store.tier_b(ctx, "unverified.jsonl"))
+    return any(
+        isinstance(r, dict) and r.get("branch") == ctx.branch
+        for r in records
+    )
+
+
 def ready(ctx: GitContext, base: str) -> list[str]:
     """Reasons this branch is not ready to open a pull request. Empty when it is."""
     from . import evidence
@@ -188,6 +233,10 @@ def ready(ctx: GitContext, base: str) -> list[str]:
         problems.append(f"no commits on top of {base}")
     if evidence.red(ctx):
         problems.append("the test suite is red")
+    if not evidence.last_green(ctx):
+        problems.append("no test run has ever been observed on this branch")
+    if _unverified_here(ctx):
+        problems.append("this branch carries an UNVERIFIED finish")
 
     dirty = subprocess.run(
         ["git", "status", "--porcelain"],

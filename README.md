@@ -154,8 +154,6 @@ Stage is computed from the repository, never configured, and the ratchet only ti
 | CI plus a deploy target | Egress rules, production-signal airlock |
 | A migration creating a users table, or an auth SDK | Migration gating, production-promotion denial, per-worktree database and port |
 
-A prototype gets none of it — and additionally has back-compat shims **banned**, a rule
-that disables itself the moment real consumers appear.
 
 ### Checks run locally, not on someone's meter
 
@@ -223,7 +221,7 @@ In a session: `/founder-os:status` · `/founder-os:plan` · `/founder-os:review`
 | `checkpoint` | PreCompact | fails open | Extractive checkpoint, zero model calls, secrets scrubbed |
 | `evidence-gate` | Stop | **fails closed** | Scope drift, test evidence, clean re-run; harvests decision drafts |
 
-Nine entries against a self-imposed budget of twelve. Always-on context **~195 tokens**
+Nine entries against a self-imposed budget of twelve. Always-on context **~329 tokens**
 against a cap of 400 — roughly 0.1 % of a 200k window.
 
 ---
@@ -231,7 +229,7 @@ against a cap of 400 — roughly 0.1 % of a 200k window.
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 525 tests · 25 doctor checks · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 540 tests · 25 doctor checks · budget
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration

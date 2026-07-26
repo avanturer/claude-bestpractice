@@ -70,11 +70,18 @@ def _give_up(ctx, rec: sessions.SessionRecord, reason: str, changed: list) -> No
             session_id=rec.session_id,
         )
 
+    # `ctx.branch`, not `rec.branch`. The record's branch is where the session STARTED,
+    # and an agent that branches mid-session — which is exactly what the worktree rule
+    # pushes it to do — files the failure against a branch that no longer holds the work.
+    # This marker is read back by `delivery.ready()` to refuse a pull request, so the
+    # wrong name there blocks an innocent branch and lets the guilty one through.
+    branch = ctx.branch or rec.branch
+
     store.append_jsonl(
         store.tier_b(ctx, FAILURE_MARKER),
         {
             "session_id": rec.session_id,
-            "branch": rec.branch,
+            "branch": branch,
             "baseline_commit": rec.baseline_commit,
             "reason": reason,
             "recorded_at": time.time(),
@@ -83,8 +90,8 @@ def _give_up(ctx, rec: sessions.SessionRecord, reason: str, changed: list) -> No
     board.add_open_item(
         ctx,
         item_id=f"unverified-{rec.session_id[:8]}-{int(time.time())}",
-        text=f"UNVERIFIED finish on {rec.branch}: {reason[:200]}",
-        branch=rec.branch,
+        text=f"UNVERIFIED finish on {branch}: {reason[:200]}",
+        branch=branch,
         session_id=rec.session_id,
         # Stamped with the files this finish left unverified. Once they are rewritten,
         # the warning is about code that no longer exists and stops being asserted.

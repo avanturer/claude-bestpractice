@@ -1,6 +1,6 @@
 ---
 name: founder-defaults
-description: This repository's standing engineering defaults: style, structure, testing, security, dependencies. Use at the start of any implementation task.
+description: "This repository's standing engineering defaults — style, structure, testing, security, dependencies. Use at the start of any implementation task."
 ---
 
 # Standing defaults

@@ -59,6 +59,17 @@ def attempts_dir(ctx: GitContext) -> Path:
     return store.tier_a(ctx, ATTEMPTS_DIR)
 
 
+def _one_line(text: str) -> str:
+    """Collapse to a single line so a value cannot become a frontmatter key.
+
+    A newline in a title used to end the title field and start a new one, so a title
+    reading "websockets\noutcome: superseded" forged its own outcome, discarded `paths`
+    and broke dedup — after which the same dead end accumulated on every turn. No
+    attacker needed: a pasted task statement carries newlines.
+    """
+    return " ".join(str(text).replace("---", "—").split())
+
+
 def _slug(text: str) -> str:
     return "-".join(re.findall(r"[a-z0-9]+", text.lower())[:6]) or "attempt"
 
@@ -135,7 +146,7 @@ def record(
     subject = sorted({p for p in paths if p})[:20]
 
     for existing in load_all(ctx):
-        same_title = existing.title.strip().lower() == title.strip().lower()
+        same_title = existing.title.strip().lower() == _one_line(title)[:MAX_TITLE_CHARS].strip().lower()
         if same_title and (not subject or set(existing.paths) & set(subject)):
             return None
 
@@ -146,11 +157,11 @@ def record(
         rendered = "\n".join(
             [
                 "---",
-                f"title: {title[:MAX_TITLE_CHARS]}",
-                f"outcome: {outcome}",
+                f"title: {_one_line(title)[:MAX_TITLE_CHARS]}",
+                f"outcome: {_one_line(outcome)}",
                 f"paths: {', '.join(subject)}",
-                f"branch: {branch}",
-                f"session: {session_id}",
+                f"branch: {_one_line(branch)}",
+                f"session: {_one_line(session_id)}",
                 f"recorded_at: {time.time():.0f}",
                 "---",
                 "",

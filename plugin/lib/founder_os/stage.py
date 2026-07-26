@@ -25,7 +25,27 @@ TRACTION = "traction"
 REVENUE = "revenue"
 
 ORDER = {PROTOTYPE: 0, TRACTION: 1, REVENUE: 2}
-STAGE_FILE = "stage.json"
+
+# The ratchet is committed as one file per stage REACHED, holding a constant. That shape
+# is not tidiness, it is merge behaviour, and it is decision 0001 applied to the one place
+# that had ignored it.
+#
+# A single `stage.json` carried `reached_at` and the full signal dump, so every branch
+# rewrote every byte of it. Two branches that both merely ran a gate — no stage change,
+# nothing anyone did on purpose — came back with a conflict in a file the founder has
+# never heard of, in a workflow whose entire premise is that they do not read code. The
+# first merge of two parallel sessions was the trigger, which is the normal case here.
+#
+# Same stage on both sides now means the identical path with identical bytes, and git
+# resolves add/add silently when the content matches. Different stages mean two different
+# files, both survive the merge, and `current()` takes the highest — which is precisely
+# what a ratchet means. The conflict is gone by construction rather than by a merge driver
+# the founder would have to install.
+STAGE_DIR = "stage"
+
+# Volatile by nature and derived from the tree, so it is Tier B: never committed, never
+# merged, rebuilt by `reindex` from the same probe that wrote it.
+SIGNALS_FILE = "stage-signals.json"
 
 _PAYMENT_DEPS = (
     "stripe",
@@ -152,6 +172,22 @@ def classify(sig: StageSignals) -> str:
     return PROTOTYPE
 
 
+def _reached_path(ctx: GitContext, stage: str) -> Path:
+    return store.tier_a(ctx, STAGE_DIR, f"reached-{stage}.json")
+
+
+def recorded_stage(ctx: GitContext) -> str | None:
+    """The highest stage this branch has ever reached, or None.
+
+    No reader for the older single-file shape, deliberately. Nothing has been released,
+    so there is no installation to stay compatible with — and a compat path for a format
+    that never shipped is the exact thing `check_slop.py` refuses, from the project that
+    wrote the rule.
+    """
+    reached = [name for name in ORDER if _reached_path(ctx, name).exists()]
+    return max(reached, key=lambda name: ORDER[name]) if reached else None
+
+
 def current(ctx: GitContext, override: str | None = None) -> tuple[str, StageSignals]:
     """Resolve the stage, applying the ratchet so it never regresses.
 
@@ -163,46 +199,52 @@ def current(ctx: GitContext, override: str | None = None) -> tuple[str, StageSig
     if override and override in ORDER:
         detected = override if ORDER[override] > ORDER[detected] else detected
 
-    path = store.tier_a(ctx, STAGE_FILE)
-    recorded = store.read_json(path, default={}) or {}
-    previous = recorded.get("stage") if isinstance(recorded, dict) else None
-
+    previous = recorded_stage(ctx)
     resolved = detected
     if previous in ORDER and ORDER[previous] > ORDER[detected]:
         resolved = previous
         sig.reasons.append(f"ratchet held at {previous} (probe said {detected})")
 
-    if resolved != previous:
-        store.write_json(
-            path,
-            {
-                "stage": resolved,
-                "reached_at": time.time(),
-                "signals": sig.to_dict(),
-            },
-            mode=0o644,
-        )
+    marker = _reached_path(ctx, resolved)
+    if not marker.exists():
+        # A constant, and deliberately so: anything varying here — a timestamp, a host,
+        # a signal dump — reintroduces the conflict this shape exists to remove.
+        store.write_json(marker, {"stage": resolved}, mode=0o644)
+
+    store.write_json(
+        store.tier_b(ctx, SIGNALS_FILE),
+        {"stage": resolved, "observed_at": time.time(), "signals": sig.to_dict()},
+    )
     return resolved, sig
 
 
 def gates_for(stage: str) -> dict[str, bool]:
-    """Which gates fire at this stage. The prototype row is deliberately short."""
+    """Which gates this stage governs. Every key here is read by a gate; see below.
+
+    The prototype row is deliberately short, and nothing in the table ever switches off
+    as the stage rises — the founder's most valuable repository must not be the least
+    protected one.
+    """
     return {
         # Always. The spine does not scale down: a prototype that lies about passing
         # tests is exactly as useless as a revenue system that does.
         "evidence_gate": True,
         "scope_drift": True,
-        "loop_detect": True,
-        "secret_scan": True,
-        # Prototype explicitly turns this OFF: no back-compat shims while nothing
-        # consumes the code.
-        "forbid_compat_shims": stage == PROTOTYPE,
         "clean_rerun": ORDER[stage] >= ORDER[TRACTION],
         "migration_gate": ORDER[stage] >= ORDER[TRACTION],
-        "worktree_db_isolation": ORDER[stage] >= ORDER[TRACTION],
     }
 
-# Deliberately absent: `triple_run_critical` and `backup_restore_check` were declared
-# here and read by nothing, while three READMEs promised them. A flag no consumer reads
-# is not a feature behind a switch, it is a claim — and an unimplemented claim in a
-# project whose thesis is "verify, do not assert" is the worst kind of bug it can have.
+
+# Deliberately absent, and this list is the point of the table rather than a footnote to
+# it. `triple_run_critical`, `backup_restore_check`, `forbid_compat_shims`,
+# `worktree_db_isolation` and `secret_scan` were all declared here and read by nothing.
+# A flag no consumer reads is not a feature behind a switch, it is a claim — and an
+# unimplemented claim in a project whose thesis is "verify, do not assert" is the worst
+# kind of bug it can have. Three of those five were promised by name in three READMEs.
+#
+# The last two are subtler and worth naming separately, because they were true:
+# the credential pre-write scan and the loop detector really do fire at every stage.
+# But this table did not make them fire — `pre-tool` runs the scan unconditionally and
+# reads the loop switch from `config`. A row that merely agrees with behaviour it does
+# not control is a second source of truth, and the moment the two disagree the table is
+# the one that gets believed. `test_every_declared_gate_has_a_consumer` keeps it empty.

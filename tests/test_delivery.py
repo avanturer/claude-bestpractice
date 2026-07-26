@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import unittest
@@ -62,6 +63,59 @@ class TestMergeState(DeliveryCase):
         proc = self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
         body = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
         self.assertIn("UNRESOLVED MERGE", body)
+
+    def stop_a_rebase(self) -> None:
+        """Leave the rebase halted on a conflict in f.txt."""
+        self.write("f.txt", "base\n")
+        self.commit()
+        git(["switch", "-qc", "topic"], self.repo)
+        self.write("f.txt", "from topic\n")
+        self.commit()
+        git(["switch", "-q", "main"], self.repo)
+        self.write("f.txt", "from main\n")
+        self.commit()
+        git(["switch", "-q", "topic"], self.repo)
+        subprocess.run(["git", "rebase", "main"], cwd=str(self.repo), capture_output=True, timeout=60)
+
+    def rebase_through_a_conflict(self) -> None:
+        """Rebase, hit a conflict, resolve it, continue — the ordinary recovery."""
+        self.stop_a_rebase()
+        self.write("f.txt", "resolved\n")
+        git(["add", "f.txt"], self.repo)
+        subprocess.run(
+            ["git", "rebase", "--continue"],
+            cwd=str(self.repo), capture_output=True, timeout=60,
+            env={**os.environ, "GIT_EDITOR": "true"},
+        )
+
+    def test_a_finished_rebase_is_not_reported_as_unfinished(self):
+        """Git leaves REBASE_HEAD behind after --continue. It is not a marker.
+
+        Reading it as one made the most ordinary recovery in this workflow poison the
+        repository permanently: ship refused, every pull request blocked, every session
+        opened with UNRESOLVED REBASE, and nothing on earth cleared it.
+        """
+        from founder_os import delivery
+
+        self.rebase_through_a_conflict()
+        self.assertTrue(
+            (self.repo / ".git" / "REBASE_HEAD").exists(),
+            "the leftover this test exists for is not present — git changed, re-verify",
+        )
+        state = delivery.merge_state(self.ctx())
+        self.assertFalse(state.in_progress, f"clean tree reported as mid-{state.kind}")
+        blockers = delivery.ready(self.ctx(), "main")
+        self.assertNotIn("a rebase is unfinished", blockers)
+
+    def test_a_stopped_rebase_is_still_caught(self):
+        """Removing the false positive must not remove the true one."""
+        from founder_os import delivery
+
+        self.stop_a_rebase()
+        state = delivery.merge_state(self.ctx())
+        self.assertTrue(state.in_progress)
+        self.assertEqual(state.kind, "rebase")
+        self.assertIn("f.txt", state.conflicted)
 
 
 class TestWhatShipped(DeliveryCase):
@@ -136,6 +190,34 @@ class TestPullRequestReadiness(DeliveryCase):
         from founder_os import delivery
 
         self.assertIn("no commits on top of main", delivery.ready(self.ctx(), "main"))
+
+    def unverified_on(self, branch: str) -> None:
+        from founder_os import store
+
+        store.append_jsonl(
+            store.tier_b(self.ctx(), "unverified.jsonl"),
+            {"session_id": "s1", "branch": branch, "reason": "no runner", "recorded_at": 0},
+        )
+
+    def test_an_unverified_finish_blocks_the_branch_it_happened_on(self):
+        from founder_os import delivery
+
+        self.unverified_on("main")
+        self.assertIn("this branch carries an UNVERIFIED finish", delivery.ready(self.ctx(), "main"))
+
+    def test_it_does_not_block_every_other_branch_on_the_clone(self):
+        """Tier B is shared by every worktree; the marker is not.
+
+        One session finishing without proof on one branch used to block pull requests on
+        every branch of the clone, forever, while the message claimed it was about "this
+        branch".
+        """
+        from founder_os import delivery
+
+        self.unverified_on("feat/somewhere-else")
+        self.assertNotIn(
+            "this branch carries an UNVERIFIED finish", delivery.ready(self.ctx(), "main")
+        )
 
     def test_the_body_is_written_for_someone_who_does_not_read_diffs(self):
         from founder_os import delivery, plan

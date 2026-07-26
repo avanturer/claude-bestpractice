@@ -82,7 +82,10 @@ def python_stubs(source: str, relpath: str) -> list[Finding]:
     """
     try:
         tree = ast.parse(source)
-    except SyntaxError:
+    except (SyntaxError, ValueError):
+        # ValueError, not SyntaxError, is what a NUL byte raises before 3.11 — and 3.9
+        # is the declared floor. Uncaught it escaped into the fail-closed Stop handler,
+        # which blocks WITHOUT advancing the escalation counter: a permanent wedge.
         return []
 
     out: list[Finding] = []

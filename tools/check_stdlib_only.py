@@ -15,6 +15,19 @@ import pathlib
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+# Enough of the 3.9 standard library for this codebase; the check is "did someone add a
+# dependency", not "is this a complete stdlib inventory".
+_STDLIB_39 = {
+    "abc", "argparse", "ast", "base64", "collections", "concurrent", "contextlib", "copy",
+    "csv", "dataclasses", "datetime", "difflib", "enum", "errno", "fnmatch", "functools",
+    "glob", "hashlib", "heapq", "hmac", "html", "http", "importlib", "inspect", "io",
+    "itertools", "json", "logging", "math", "os", "pathlib", "pickle", "platform", "pprint",
+    "queue", "random", "re", "secrets", "select", "shlex", "shutil", "signal", "socket",
+    "sqlite3", "stat", "statistics", "string", "subprocess", "sys", "tempfile", "textwrap",
+    "threading", "time", "token", "tokenize", "traceback", "types", "typing", "unicodedata",
+    "unittest", "urllib", "uuid", "warnings", "xml", "zipfile", "zlib", "__future__",
+}
+
 LOCAL = {"founder_os", "helpers"}
 
 
@@ -25,7 +38,10 @@ def python_files() -> list[pathlib.Path]:
 
 
 def main() -> int:
-    allowed = set(sys.stdlib_module_names) | LOCAL
+    # `sys.stdlib_module_names` is 3.10+, and 3.9 is this project's declared floor — so
+    # the very first step of `make check` died on the oldest Python it claims to support.
+    # Nothing caught it because the hosted matrix is opt-in and switched off.
+    allowed = set(getattr(sys, "stdlib_module_names", ())) | _STDLIB_39 | LOCAL
     problems: list[str] = []
 
     for path in python_files():

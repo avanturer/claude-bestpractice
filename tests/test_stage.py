@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import subprocess
 import unittest
 
-from helpers import RepoCase
+from helpers import BIN, LIB, RepoCase, git
 
 from founder_os import config, stage
 
@@ -76,7 +77,72 @@ class TestRatchet(RepoCase):
 
         ctx = self.ctx()
         stage.current(ctx)
-        self.assertTrue(store.tier_a(ctx, stage.STAGE_FILE).exists())
+        self.assertTrue(store.tier_a(ctx, stage.STAGE_DIR, "reached-prototype.json").exists())
+
+    def test_the_committed_marker_holds_nothing_that_varies(self):
+        """A timestamp or a signal dump in here is what made merges conflict."""
+        from founder_os import store
+
+        ctx = self.ctx()
+        stage.current(ctx)
+        body = store.read_json(store.tier_a(ctx, stage.STAGE_DIR, "reached-prototype.json"))
+        self.assertEqual(body, {"stage": stage.PROTOTYPE})
+
+    def test_the_volatile_half_is_not_committed(self):
+        from founder_os import store
+
+        ctx = self.ctx()
+        stage.current(ctx)
+        recorded = store.read_json(store.tier_b(ctx, stage.SIGNALS_FILE), default={})
+        self.assertIn("signals", recorded)
+
+        # Not "outside the repo directory" — Tier B is under .git/, which is inside it.
+        # The property that matters is that git cannot see it, so ask git.
+        untracked = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=str(self.repo), capture_output=True, text=True, timeout=30,
+        ).stdout
+        self.assertNotIn(stage.SIGNALS_FILE, untracked)
+
+    def test_a_marker_alone_holds_the_ratchet(self):
+        """The committed marker is the whole record; nothing else needs to survive."""
+        from founder_os import store
+
+        ctx = self.ctx()
+        store.write_json(store.tier_a(ctx, stage.STAGE_DIR, "reached-revenue.json"),
+                         {"stage": stage.REVENUE})
+        resolved, signals = stage.current(ctx)
+        self.assertEqual(resolved, stage.REVENUE)
+        self.assertTrue(any("ratchet held" in r for r in signals.reasons))
+
+    def test_two_branches_at_the_same_stage_merge_without_a_conflict(self):
+        """The reason the shape changed, asserted against real git rather than reasoning.
+
+        Two sessions that each merely ran a gate — no stage change, nothing deliberate —
+        used to come back with a conflict in a file the founder has never heard of.
+        """
+        ctx = self.ctx()
+        stage.current(ctx)
+        git(["add", "-A"], self.repo)
+        git(["commit", "-qm", "base"], self.repo)
+
+        git(["switch", "-qc", "feat/a"], self.repo)
+        self.write("a.txt", "a\n")
+        stage.current(self.ctx())
+        git(["add", "-A"], self.repo)
+        git(["commit", "-qm", "a"], self.repo)
+
+        git(["switch", "-q", "main"], self.repo)
+        self.write("b.txt", "b\n")
+        stage.current(self.ctx())
+        git(["add", "-A"], self.repo)
+        git(["commit", "-qm", "b"], self.repo)
+
+        merged = subprocess.run(
+            ["git", "merge", "--no-edit", "feat/a"],
+            cwd=str(self.repo), capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(merged.returncode, 0, merged.stdout + merged.stderr)
 
 
 class TestGates(unittest.TestCase):
@@ -86,24 +152,46 @@ class TestGates(unittest.TestCase):
             gates = stage.gates_for(name)
             self.assertTrue(gates["evidence_gate"], name)
             self.assertTrue(gates["scope_drift"], name)
-            self.assertTrue(gates["secret_scan"], name)
 
     def test_expensive_gates_are_off_at_prototype(self):
         gates = stage.gates_for(stage.PROTOTYPE)
         self.assertFalse(gates["clean_rerun"])
         self.assertFalse(gates["migration_gate"])
 
-    def test_prototype_turns_a_rule_off_rather_than_on(self):
-        """Back-compat shims are banned while nothing consumes the code."""
-        self.assertTrue(stage.gates_for(stage.PROTOTYPE)["forbid_compat_shims"])
-        self.assertFalse(stage.gates_for(stage.REVENUE)["forbid_compat_shims"])
-
     def test_revenue_enables_everything_traction_does(self):
         traction = stage.gates_for(stage.TRACTION)
         revenue = stage.gates_for(stage.REVENUE)
         for key, value in traction.items():
-            if value and key != "forbid_compat_shims":
+            if value:
                 self.assertTrue(revenue[key], key)
+
+    def test_no_gate_switches_off_as_the_stage_rises(self):
+        """The table is a ratchet too, not just the stage it is keyed on.
+
+        A gate that fires at prototype and stops at revenue would mean the founder's
+        most valuable repository is the least protected one. Nothing in the table may
+        be shaped that way, so assert the shape rather than any one row of it.
+        """
+        rows = [stage.gates_for(name) for name in (stage.PROTOTYPE, stage.TRACTION, stage.REVENUE)]
+        for lower, higher in zip(rows, rows[1:]):
+            for key, on in lower.items():
+                if on:
+                    self.assertTrue(higher[key], key)
+
+    def test_every_declared_gate_has_a_consumer(self):
+        """A flag no code reads is a claim, and this project's thesis forbids claims.
+
+        `forbid_compat_shims` sat in this table for weeks, promised in three READMEs and
+        read by nothing. It passed every test because the tests asserted the flag's value
+        rather than its effect.
+        """
+        source = "\n".join(
+            path.read_text(encoding="utf-8", errors="replace")
+            for path in list((LIB / "founder_os").rglob("*.py")) + list(BIN.iterdir())
+            if path.is_file() and path.name != "stage.py"
+        )
+        for key in stage.gates_for(stage.REVENUE):
+            self.assertIn(key, source, f"{key} is declared in stage.gates_for and read nowhere")
 
 
 class TestConfigDetection(RepoCase):

@@ -395,6 +395,7 @@ def _verify_by_running(ctx: GitContext, globs: list[str], command: list[str]) ->
             f"The suite FAILS on the code as it stands.\n$ {' '.join(command)}\n{tail}",
         )
     clear_red(ctx)
+    record_green(ctx, command)
 
     return _judge_green_run(ctx, globs, command, tail, started)
 
@@ -649,6 +650,28 @@ def record_red(ctx: GitContext, command: list[str], tail: str) -> None:
         },
         mode=0o644,
     )
+
+
+GREEN_FILE = "last-green.json"
+
+
+def record_green(ctx: GitContext, command: list[str]) -> None:
+    """Remember that a run was OBSERVED to pass, positively.
+
+    Needed because "no red record" and "verified green" are different states and were
+    being reported as the same one. A repository where nothing has ever run has no red
+    record either.
+    """
+    store.write_json(
+        store.tier_a(ctx, GREEN_FILE),
+        {"command": command, "at": time.time(), "branch": ctx.branch},
+        mode=0o644,
+    )
+
+
+def last_green(ctx: GitContext) -> dict | None:
+    got = store.read_json(store.tier_a(ctx, GREEN_FILE), default=None)
+    return got if isinstance(got, dict) and got.get("command") else None
 
 
 def clear_red(ctx: GitContext) -> bool:

@@ -128,7 +128,13 @@ def stash_baseline(ctx: GitContext) -> str:
     tree is clean (stash create prints nothing in that case).
     """
     sha = _run(["stash", "create"], ctx.worktree_root, check=False)
-    return sha or ctx.head
+    # VALIDATE, never trust the stdout. Mid-merge and mid-rebase `stash create` refuses
+    # and prints its refusal, which was then stored as the session's baseline — a
+    # baseline that resolves to nothing makes every diff empty, so the Stop gate saw no
+    # changes and allowed every finish for the rest of that session. Silently.
+    if sha and _run(["rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}"], ctx.worktree_root, check=False):
+        return sha
+    return ctx.head
 
 
 def resolve_for_cli(cwd: Path | str | None = None) -> GitContext:

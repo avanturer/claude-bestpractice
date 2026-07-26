@@ -205,6 +205,13 @@ def main() -> int:
     paths = [p for p in (all_files() if args.all else changed_files()) if eligible(p)]
     findings = [f for path in paths for f in scan(path)]
 
+    if not paths:
+        # "clean — 0 files checked" is the exact shape of lie this repository exists to
+        # refuse: a green line printed over an empty set. This repo is pure Python, so
+        # zero is the correct answer here — but it is a NOT-RUN, and it has to read as one.
+        print("polyglot: NOT RUN — no non-Python source in scope (rules exercised by tests/test_polyglot.py)")
+        return 0
+
     if not findings:
         print(f"polyglot: clean — {len(paths)} non-Python file(s) checked")
         return 0

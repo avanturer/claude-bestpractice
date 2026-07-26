@@ -318,6 +318,28 @@ def _leases_path(ctx: GitContext) -> Path:
     return store.tier_b(ctx, LEASES_FILE)
 
 
+def _lease_table(box_value: object) -> dict[str, dict]:
+    """The lease table with every unusable row dropped, never a crash.
+
+    The outer `isinstance(..., dict)` check guarded the table and not its rows, so one
+    corrupt value — a truncated write, a hand-edit, a `>` into the file — made every
+    `holder.get(...)` raise AttributeError inside the pre-write gate. That gate is
+    fail-closed, so a single malformed byte in an ephemeral cache file would have
+    refused every write in every session on the clone until someone found the file.
+
+    A row that cannot be read is treated as no row: the path is simply unclaimed, and
+    the next acquire overwrites it. Losing one lease is recoverable. Losing the ability
+    to write is not.
+    """
+    if not isinstance(box_value, dict):
+        return {}
+    return {
+        path: holder
+        for path, holder in box_value.items()
+        if isinstance(path, str) and isinstance(holder, dict)
+    }
+
+
 def acquire_lease(ctx: GitContext, session_id: str, relpath: str, ttl: float = 1800.0) -> str | None:
     """Claim exclusive intent to edit a path.
 
@@ -327,7 +349,7 @@ def acquire_lease(ctx: GitContext, session_id: str, relpath: str, ttl: float = 1
     """
     now = time.time()
     with store.guarded_json(_leases_path(ctx), default={}) as box:
-        table = box[0] if isinstance(box[0], dict) else {}
+        table = _lease_table(box[0])
         holder = table.get(relpath)
         if holder and holder.get("session_id") != session_id:
             expires = holder.get("expires_at", 0)
@@ -350,7 +372,7 @@ def release_all(ctx: GitContext, session_id: str) -> int:
 def _release_many(ctx: GitContext, session_ids: set[str]) -> int:
     removed = 0
     with store.guarded_json(_leases_path(ctx), default={}) as box:
-        table = box[0] if isinstance(box[0], dict) else {}
+        table = _lease_table(box[0])
         for path in [p for p, h in table.items() if h.get("session_id") in session_ids]:
             table.pop(path, None)
             removed += 1
@@ -359,7 +381,5 @@ def _release_many(ctx: GitContext, session_ids: set[str]) -> int:
 
 
 def leases_held_by(ctx: GitContext, session_id: str) -> list[str]:
-    table = store.read_json(_leases_path(ctx), default={}) or {}
-    if not isinstance(table, dict):
-        return []
+    table = _lease_table(store.read_json(_leases_path(ctx), default={}))
     return sorted(p for p, h in table.items() if h.get("session_id") == session_id)

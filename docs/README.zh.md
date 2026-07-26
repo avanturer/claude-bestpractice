@@ -144,8 +144,6 @@ Stop gate **丢弃智能体的自述文字**，自己去运行你的测试套件
 | CI 加上一个部署目标 | 出网规则、生产信号隔离闸 |
 | 创建 users 表的迁移，或一个认证 SDK | 迁移管控、拒绝生产环境提升、每个 worktree 独立数据库与端口 |
 
-原型阶段一个都不会启用——并且额外**禁止**向后兼容层，这条规则会在真正出现消费者的
-那一刻自行关闭。
 
 ### 检查在本地跑，不花别人的机时
 
@@ -210,7 +208,7 @@ founder-os-ci off        # 移除 pre-push 钩子
 | `checkpoint` | PreCompact | 失败放行 | 抽取式检查点，零模型调用，密钥已清洗 |
 | `evidence-gate` | Stop | **失败拦截** | 范围漂移、测试证据、干净重跑；顺带收割决策草稿 |
 
-九个条目，自设上限是十二个。常驻上下文 **约 195 tokens**，上限 400 ——
+九个条目，自设上限是十二个。常驻上下文 **约 329 tokens**，上限 400 ——
 大约是 200k 窗口的 0.1 %。
 
 ---
@@ -218,7 +216,7 @@ founder-os-ci off        # 移除 pre-push 钩子
 ## 已验证
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 525 个测试 · 25 项 doctor 检查 · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 540 个测试 · 25 项 doctor 检查 · budget
 ```
 
 doctor 通过**真的去做那件坏事**来证明 gate 有效，而不是把配置读回来对一遍——
