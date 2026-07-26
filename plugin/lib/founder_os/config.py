@@ -44,6 +44,16 @@ DEFAULT_ARTIFACT_GLOBS = [
 ]
 
 
+# How much the founder is in the loop. Advisory by construction — no matcher can tell
+# "asked a necessary question" from "asked because asking is easier than finding out" —
+# so this is injected as context rather than enforced, and it is labelled as such.
+#
+#   vibecode  the agent does everything it can do itself: finds credentials in the
+#             environment, reads the PR, searches the web, decides. The founder is shown
+#             outcomes — numbers, a preview, a working feature — and never the diff.
+#   pair      the agent proposes before acting on anything structural.
+AUTONOMY = ("vibecode", "pair")
+
 @dataclass
 class Config:
     test_command: list[str] = field(default_factory=list)
@@ -56,6 +66,8 @@ class Config:
     max_tool_calls: int = 2_000
     max_repeat_signature: int = 3
     require_worktree: bool = True
+    block_unfinished_work: bool = True
+    autonomy: str = "vibecode"
     protect_trunk: bool = True
     stage_override: str | None = None
     exempt_paths: list[str] = field(
@@ -74,6 +86,8 @@ class Config:
             "max_tool_calls": self.max_tool_calls,
             "max_repeat_signature": self.max_repeat_signature,
             "require_worktree": self.require_worktree,
+            "block_unfinished_work": self.block_unfinished_work,
+            "autonomy": self.autonomy,
             "protect_trunk": self.protect_trunk,
             "stage_override": self.stage_override,
             "exempt_paths": self.exempt_paths,
@@ -135,6 +149,8 @@ _EXPECTED: dict[str, type] = {
     "max_tool_calls": int,
     "max_repeat_signature": int,
     "require_worktree": bool,
+    "block_unfinished_work": bool,
+    "autonomy": str,
     "protect_trunk": bool,
     "stage_override": str,
     "exempt_paths": list,
@@ -240,6 +256,10 @@ def load_checked(ctx: GitContext) -> tuple[Config, list[str]]:
         dropped = [g for g in cfg.artifact_globs if g not in usable]
         complaints.append(f"artifact_globs must be relative and non-empty; dropped {dropped}")
         cfg.artifact_globs = usable or list(DEFAULT_ARTIFACT_GLOBS)
+
+    if cfg.autonomy not in AUTONOMY:
+        complaints.append(f"autonomy {cfg.autonomy!r} is not one of {', '.join(AUTONOMY)}; using vibecode")
+        cfg.autonomy = "vibecode"
 
     if cfg.stage_override is not None and cfg.stage_override not in ("prototype", "traction", "revenue"):
         complaints.append(f"stage_override {cfg.stage_override!r} is not a known stage; ignored")

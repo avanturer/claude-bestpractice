@@ -56,6 +56,29 @@ def build_record(ctx: GitContext, event: hookio.HookEvent) -> sessions.SessionRe
     )
 
 
+_AUTONOMY_LINES = {
+    "vibecode": (
+        "mode: vibecode — do it yourself. Read the PR, search the web, take credentials "
+        "from the environment, pick between options and record why. Ask the founder only "
+        "for what is genuinely theirs: money, legal exposure, product direction. Show "
+        "outcomes, never diffs."
+    ),
+    "pair": (
+        "mode: pair — propose before anything structural: schema, dependencies, public "
+        "interfaces. Small fixes still go straight in."
+    ),
+}
+
+
+def _autonomy_line(mode: str) -> str:
+    """One line, because this is the half of the contract no program can check.
+
+    Everything else in this board is a fact the harness enforces. This is advice, and
+    saying so is the difference between a rule and a suggestion the model quietly drops.
+    """
+    return _AUTONOMY_LINES.get(mode, _AUTONOMY_LINES["vibecode"])
+
+
 def main() -> None:
     event = hookio.read_event()
     ctx = hookio.repo(event.cwd or os.getcwd())
@@ -73,6 +96,7 @@ def main() -> None:
 
     body = board.render(ctx, me, others, len(reaped), leases)
     body += f"\nstage: {resolved_stage} (computed from the repository, not configured)"
+    body += "\n" + _autonomy_line(config.load(ctx).autonomy)
 
     hookio.emit_context("SessionStart", body)
 
