@@ -40,7 +40,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from . import provenance, store
+from . import provenance, store, testcount
 from .gitctx import GitContext, changed_files
 
 # Consecutive Stop blocks before we stop blocking and leave a durable marker instead.
@@ -48,6 +48,12 @@ from .gitctx import GitContext, changed_files
 MAX_CONSECUTIVE_BLOCKS = 4
 
 CLEAN_RERUN_TIMEOUT = 300
+
+# How much of the declared suite a run may miss before it stops counting as a witnessed
+# green. Loose on purpose: parametrisation, generated cases and language-specific
+# idioms all make the structural count approximate, and a false accusation here costs
+# the founder a finish. Half the suite going missing is not approximation.
+NARROW_RUN_SHORTFALL = 0.5
 
 
 @dataclass
@@ -486,6 +492,22 @@ def _judge_by_counts(ctx: GitContext, command: list[str], tail: str) -> Verdict:
             f"nothing here witnesses that any test ran.\n$ {' '.join(command)}\n{tail}",
             unverified=True,
         )
+    # Against the tree, not against the run's own account of itself. A run that touched
+    # a small fraction of the tests this repository declares is a narrowed run — the
+    # recipe was scoped to one file, a filter was passed, a directory was skipped — and
+    # calling that a witnessed green is how a red suite goes quiet. The threshold is
+    # deliberately loose: runners expand parametrised cases, so `executed` routinely
+    # exceeds `declared`, and only a large shortfall means anything.
+    declared = testcount.count_tree(ctx.worktree_root)
+    missing = testcount.shortfall(declared, executed)
+    if missing >= NARROW_RUN_SHORTFALL:
+        return Verdict(
+            True,
+            f"suite run by the gate: exit 0, but it executed {executed} test(s) while this "
+            f"tree declares {declared}. That is a narrowed run, not the suite.\n"
+            f"$ {' '.join(command)}",
+            unverified=True,
+        )
     return Verdict(True, f"suite run by the gate: exit 0, {executed} test(s) executed")
 
 
@@ -821,11 +843,16 @@ def record_red(ctx: GitContext, command: list[str], tail: str) -> None:
     # the failing test outright — but it cannot make a narrower run look like it executed
     # more tests than the wider one did.
     executed = max(_executed_from_output(tail), 0)
+    declared = testcount.count_tree(ctx.worktree_root)
     store.write_json(
         path,
         {
             "command": command,
             "executed": max(executed, int(previous.get("executed") or 0)),
+            # What the TREE declared when it went red, counted by this gate rather
+            # than reported by the run. Deleting the failing test to go green has to
+            # get past this number, and stdout cannot move it.
+            "declared": max(declared, int(previous.get("declared") or 0)),
             "first_seen": previous.get("first_seen", time.time()),
             "last_seen": time.time(),
             "branch": ctx.branch,
@@ -855,6 +882,27 @@ def record_green(ctx: GitContext, command: list[str]) -> None:
 def last_green(ctx: GitContext) -> dict | None:
     got = store.read_json(store.tier_a(ctx, GREEN_FILE), default=None)
     return got if isinstance(got, dict) and got.get("command") else None
+
+
+def _covers_the_red_run(ctx: GitContext, entry: dict, executed: int | None) -> bool:
+    """Whether this green run is at least as much suite as the one that went red.
+
+    Two comparisons, and they fail differently on purpose.
+
+    `executed` is parsed from the run's own stdout, so the gated party writes both sides
+    of it — `@echo '2 passed'` satisfies it for free. It is still worth having, because it
+    catches the honest-looking narrowings: a recipe scoped to one file, a filter argument,
+    a directory skipped.
+
+    The declared count is read off the test FILES by this gate. Moving it means writing
+    real test declarations, which is a cost this plugin is content to impose on anyone who
+    wants a red suite to go quiet. It is what stops "delete the failing test" — the single
+    move a blocking Stop gate most incentivises — from being the cheapest way out.
+    """
+    if executed is not None and executed < int(entry.get("executed") or 0):
+        return False
+    was = int(entry.get("declared") or 0)
+    return not (was and testcount.count_tree(ctx.worktree_root) < was)
 
 
 def clear_red(
@@ -892,7 +940,7 @@ def clear_red(
     # is not the same suite passing, it is a smaller suite passing, and the difference is
     # invisible in argv. Costs one comparison and catches all three routes: 2 tests -> 1,
     # 2 -> 1, and 1 -> 0.
-    if executed is not None and executed < int(entry.get("executed") or 0):
+    if not _covers_the_red_run(ctx, entry, executed):
         return False
 
     store.tier_a(ctx, RED_SUITE_FILE).unlink(missing_ok=True)
