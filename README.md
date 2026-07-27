@@ -136,12 +136,29 @@ directory, so a transition is `git mv`. Five worktrees produce five clean adds i
 five conflicting hunks in one JSON blob. Ids allocate against every sibling worktree,
 because worktrees share the namespace before their files are ever committed.
 
-### Completion accepted on evidence
+### Completion is expensive to fake
 
-The Stop gate **discards the agent's prose** and runs your test suite itself, treating
-its own observed exit code as the evidence. A file claiming the tests passed is an
-assertion with angle brackets: a hand-written one, one from another project, and `touch
-junit.xml` all defeated an earlier artifact-reading version of this gate.
+The Stop gate **discards the agent's prose** and runs your test suite itself. What it
+does *not* do is treat that as proof, and the honest version of the claim is worth
+stating plainly, because six rounds of adversarial verification took the earlier version
+apart four separate times:
+
+> **The agent writes your code, your tests, your test command and your build files. Any
+> check that reads the runner's output is reading something the agent can write.** This
+> gate raises the cost of a false green from one line to several deliberate steps, and
+> leaves a durable record of each. It does not make one impossible.
+
+That is what got broken, in order: it trusted an artifact file (hand-written XML beat
+it), then the exit code (`-` before a Makefile recipe), then the words "N failed" (stop
+printing them), then the count "N passed" (`@echo '2 passed in 0.03s'`). Each fix moved
+the forgery one level down rather than out.
+
+So one signal is now taken from outside that loop: the gate **counts test declarations in
+your source tree itself** and compares. A run that executes a fraction of what the tree
+declares is recorded as unverified rather than green, and a red suite cannot be cleared by
+a tree that has shed tests — deleting the failing test is the move a blocking gate most
+invites, and it was the cheapest way out. Moving that number means writing real tests,
+which is a price this plugin is content to charge.
 
 Past prototype stage it additionally re-runs against a clean checkout of the committed
 tree, which catches the green-here-red-there class — an uncommitted file, a local
