@@ -121,3 +121,54 @@ class TestItGuardsTheLedger(RepoCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheGateDrivesTheRunnerItself(RepoCase):
+    """The wrapper is out of the trust path, which is the only move that ends the pattern.
+
+    Seven rounds broke this gate by forging whatever number it read, because every number
+    it read came from a process the agent's recipe defined. `make test` is now not run at
+    all when a real runner is drivable: the gate invokes pytest with a report path of its
+    own choosing in a temp directory outside the repository.
+    """
+
+    def project(self, regression: bool, recipe: str) -> None:
+        self.write("src/__init__.py", "")
+        self.write("src/calc.py", "def div(a, b):\n    return a * b\n" if regression
+                   else "def div(a, b):\n    return a / b\n")
+        body = "from src.calc import div\n\ndef test_div():\n    assert div(9, 3) == 3\n"
+        body += "".join(f"def test_pad_{i}():\n    assert True\n" for i in range(10))
+        self.write("tests/test_calc.py", body)
+        self.write("Makefile", f"test:\n\t{recipe}\n")
+        self.commit("project")
+
+    def test_a_forged_recipe_does_not_hide_a_regression(self):
+        """Round seven's winning attack: echo a believable count. The recipe is not run."""
+        from founder_os import evidence
+
+        self.project(regression=True, recipe="@echo '11 passed in 0.01s'")
+        verdict = evidence._verify_by_running(self.ctx(), [], ["make", "test"])
+        self.assertIsNotNone(verdict)
+        self.assertFalse(verdict.ok, "a forged recipe still bought a green")
+        self.assertIn("run by the gate itself", verdict.reason)
+        self.assertIsNotNone(evidence.red(self.ctx()))
+        self.assertIsNone(evidence.last_green(self.ctx()))
+
+    def test_honest_work_passes_even_with_a_nonsense_recipe(self):
+        """The recipe is irrelevant in both directions, or this would block correct work."""
+        from founder_os import evidence
+
+        self.project(regression=False, recipe="@echo 'lol nothing here'")
+        verdict = evidence._verify_by_running(self.ctx(), [], ["make", "test"])
+        self.assertIsNotNone(verdict)
+        self.assertTrue(verdict.ok, verdict.reason)
+        self.assertIsNotNone(evidence.last_green(self.ctx()))
+
+    def test_it_declines_rather_than_guessing_when_no_runner_is_drivable(self):
+        """None means "could not witness", and the caller must not read it as a pass."""
+        from founder_os import witness
+
+        self.write("main.c", "int main(void) { return 0; }\n")
+        self.commit("c project")
+        self.assertEqual(witness.detect(self.repo), "")
+        self.assertIsNone(witness.run(self.ctx()))

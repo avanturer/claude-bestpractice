@@ -40,7 +40,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from . import provenance, store, testcount
+from . import provenance, store, testcount, witness
 from .gitctx import GitContext, changed_files
 
 # Consecutive Stop blocks before we stop blocking and leave a durable marker instead.
@@ -415,6 +415,27 @@ def _verify_by_running(ctx: GitContext, globs: list[str], command: list[str]) ->
         # flag was being set on every child without anything ever reading it.
         return None
 
+    # THE RUNNER ITSELF, when one is drivable — not the command the project declares.
+    # `make test` and `npm run test` are recipes the agent writes, and every round of
+    # verification since round four has forged one. Cutting the wrapper out of the trust
+    # path is the only move that ends that, because the count then comes from a report
+    # file at a path the recipe has no name for.
+    seen = witness.run(ctx)
+    if seen is not None:
+        return _judge_witnessed(ctx, seen)
+
+    return _verify_by_declared_command(ctx, globs, command)
+
+
+def _verify_by_declared_command(
+    ctx: GitContext, globs: list[str], command: list[str]
+) -> Verdict | None:
+    """Fall back to the command the PROJECT declares, when no runner is drivable.
+
+    Weaker by construction and known to be: everything this reads — the exit code, the
+    output, any artifact — is written by a process whose recipe the agent controls.
+    The count checks downstream are what is left when the wrapper cannot be cut out.
+    """
     started = time.time()
     code, tail = run_suite(ctx, command)
     if code == -1:
@@ -448,6 +469,27 @@ def _verify_by_running(ctx: GitContext, globs: list[str], command: list[str]) ->
     if clear_red(ctx, command, _executed_from_output(tail)) or red(ctx) is None:
         record_green(ctx, command)
     return verdict
+
+
+def _judge_witnessed(ctx: GitContext, seen: witness.Witnessed) -> Verdict:
+    """A run this gate drove itself. The only path here that reads no project-authored number."""
+    command = [seen.runner]
+    if seen.failed or seen.returncode != 0:
+        record_red(ctx, command, seen.tail)
+        return Verdict(
+            False,
+            f"The suite FAILS on the code as it stands — {seen.failed} failing of "
+            f"{seen.executed} run by the gate itself with {seen.runner}.\n{seen.tail}",
+        )
+    if seen.executed == 0:
+        return Verdict(
+            False,
+            f"{seen.runner} ran and executed NOTHING — every test skipped, or none "
+            f"collected. A run that asserts nothing is not evidence.\n{seen.tail}",
+        )
+    if clear_red(ctx, command, seen.executed) or red(ctx) is None:
+        record_green(ctx, command)
+    return Verdict(True, f"{seen.executed} test(s) run by the gate itself via {seen.runner}")
 
 
 def _first_artifact(root: Path, globs: list[str]) -> Artifact | None:

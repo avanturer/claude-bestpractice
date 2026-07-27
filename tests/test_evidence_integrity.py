@@ -29,22 +29,34 @@ class TestTheRunnersOwnWordsOutrankItsExitCode(RepoCase):
         self.write("src.py", "x = 1\n")
 
     def test_it_is_refused(self):
+        """However the gate gets there, a failing suite must not finish.
+
+        It now gets there by running pytest itself rather than the project's recipe, so
+        the swallowed exit status never reaches it — the wrapper is out of the trust path
+        entirely. The message below is the direct-run one; the swallowed-status message is
+        asserted against the fallback path in `test_the_fallback_still_reads_the_output`.
+        """
         self.failing_suite_behind_a_swallowed_status()
         proc = self.run_hook(
             "evidence-gate",
             {"session_id": "s1", "hook_event_name": "Stop", "cwd": str(self.repo)},
         )
         self.assertEqual(proc.returncode, 2, "a suite reporting failures finished green")
-        self.assertIn("FAILING and then exited 0", proc.stderr)
+        self.assertIn("FAILS on the code as it stands", proc.stderr)
 
-    def test_the_refusal_names_the_cause_rather_than_the_symptom(self):
-        """"Tests failed" would send the agent to fix passing tests. The status is a lie."""
-        self.failing_suite_behind_a_swallowed_status()
-        proc = self.run_hook(
-            "evidence-gate",
-            {"session_id": "s1", "hook_event_name": "Stop", "cwd": str(self.repo)},
+    def test_the_fallback_still_reads_the_output(self):
+        """When no runner is drivable, the swallowed-status check is what is left.
+
+        "Tests failed" would send the agent to fix passing tests; the status is the lie,
+        so the message has to name the status.
+        """
+        from founder_os import evidence
+
+        verdict = evidence._judge_green_run(
+            self.ctx(), [], ["make", "test"], "1 failed, 3 passed in 0.1s", 0
         )
-        self.assertIn("swallowing the exit status", proc.stderr)
+        self.assertFalse(verdict.ok)
+        self.assertIn("swallowing the exit status", verdict.reason)
 
     def test_a_genuinely_passing_suite_is_still_accepted(self):
         """The check is worthless if it refuses the honest case too."""
