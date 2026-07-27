@@ -38,14 +38,14 @@ docs:
 # anchor check is what makes a rename fail loudly instead of leaving the layer
 # describing a symbol that no longer exists.
 knowledge:
-	@$(PY) plugin/bin/founder-os-knowledge index >/dev/null
-	@$(PY) plugin/bin/founder-os-knowledge validate
+	@$(PY) plugin/bin/claude-bestpractice-knowledge index >/dev/null
+	@$(PY) plugin/bin/claude-bestpractice-knowledge validate
 
 test:
 	@$(PY) -m unittest discover -s tests -t tests
 
 doctor:
-	@$(PY) plugin/bin/founder-os-doctor
+	@$(PY) plugin/bin/claude-bestpractice-doctor
 
 lint:
 	@$(PY) -m compileall -q plugin/lib plugin/bin tests tools

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from helpers import RepoCase
 
-from founder_os import store
+from claude_bestpractice import store
 
 
 def _contend(args) -> int:
@@ -34,7 +34,7 @@ class TestTiers(RepoCase):
         main_ctx = self.ctx()
         wt = self.add_worktree("feature")
 
-        from founder_os.gitctx import resolve
+        from claude_bestpractice.gitctx import resolve
 
         wt_ctx = resolve(wt)
 
@@ -241,7 +241,7 @@ class TestGuardedJson(RepoCase):
 
         A finish that could not be proved, a decision drafted and not yet accepted: no
         amount of rescanning the repository brings an event back. `rmtree` took them, and
-        `founder-os reindex` printed "Nothing durable was lost" over the top of it.
+        `claude-bestpractice reindex` printed "Nothing durable was lost" over the top of it.
         """
         ctx = self.ctx()
         store.write_json(store.tier_b(ctx, "derived.json"), {"cache": True})

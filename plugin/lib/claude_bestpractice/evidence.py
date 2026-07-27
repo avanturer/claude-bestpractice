@@ -231,10 +231,10 @@ RUN_TIMEOUT = 300
 NOT_EXECUTABLE = 127
 
 # Set on every child this gate spawns, and checked before spawning one. The VALUE is a
-# per-run nonce, not a flag: a bare `export FOUNDER_OS_VERIFYING=1` in a shell profile
+# per-run nonce, not a flag: a bare `export CLAUDE_BESTPRACTICE_VERIFYING=1` in a shell profile
 # would otherwise switch the whole evidence gate off for every session on the machine,
 # which is a recursion guard doubling as an off switch.
-VERIFYING_ENV = "FOUNDER_OS_VERIFYING"
+VERIFYING_ENV = "CLAUDE_BESTPRACTICE_VERIFYING"
 NONCE_FILE = "verifying.nonce"
 
 
@@ -243,7 +243,7 @@ def _issue_nonce(ctx: GitContext) -> str:
 
     A per-process value cannot work — the child is a different process and would never
     match, so the guard silently stops guarding and the gate recurses. A bare flag cannot
-    work either: `export FOUNDER_OS_VERIFYING=1` in a shell profile would switch the
+    work either: `export CLAUDE_BESTPRACTICE_VERIFYING=1` in a shell profile would switch the
     evidence gate off everywhere. So the token is unguessable AND shared, and it only
     exists on disk while a run this gate started is actually in flight.
     """
@@ -388,7 +388,7 @@ def _verify_by_reading(ctx: GitContext, globs: list[str], changed: list[str]) ->
         f"{artifact.path.name}: {artifact.detail} — UNBOUND. No test command could be run "
         "here, so this artifact was read, not witnessed, and a hand-written one is "
         "indistinguishable from a real one. Set `test_command` in "
-        ".claude/founder-os/config.json to make finishing verifiable.",
+        ".claude/claude-bestpractice/config.json to make finishing verifiable.",
         artifact,
         unverified=True,
     )
@@ -460,7 +460,7 @@ def _verify_by_declared_command(
 
     # `clear_red` returns whether it accepted this run as covering the recorded failure,
     # and that return value was DISCARDED. So a run judged too narrow to clear the red
-    # record still stamped `last-green.json` — the file `founder-os ship` reads to tell
+    # record still stamped `last-green.json` — the file `claude-bestpractice ship` reads to tell
     # the founder "Tests: green (observed by the gate)". The gate refused and reassured
     # in the same breath, which is what turned a two-step evasion into a one-step one.
     #
@@ -790,7 +790,7 @@ def clean_rerun(ctx: GitContext, command: list[str]) -> Verdict:
         # not exist — breaking Stop on every zero-commit repository past prototype.
         return Verdict(True, "unborn branch: nothing committed to re-run")
 
-    tmp = Path(tempfile.mkdtemp(prefix="founder-os-verify-"))
+    tmp = Path(tempfile.mkdtemp(prefix="claude-bestpractice-verify-"))
     target = tmp / "tree"
     try:
         add = subprocess.run(
@@ -991,7 +991,7 @@ def clear_red(
     `test:` target scoped to the test it just wrote; `detect_test_command` prefers
     Makefiles, so the gate switches to `make test`; that narrower command passes;
     `failing-suite.json` is deleted, `last-green.json` is written, every sibling board
-    drops its RED SUITE line and `founder-os ship` reports "Tests: green (observed by the
+    drops its RED SUITE line and `claude-bestpractice ship` reports "Tests: green (observed by the
     gate)" — while the command that actually failed still fails.
 
     That is worse than missing the regression. The plugin manufactures positive evidence

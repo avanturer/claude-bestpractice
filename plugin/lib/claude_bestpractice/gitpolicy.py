@@ -90,19 +90,19 @@ def violations(ctx: GitContext, task: str = "") -> list[str]:
     out: list[str] = []
     if not ctx.is_worktree:
         out.append(
-            "founder-os: this is the main checkout, not a worktree. Several sessions "
+            "claude-bestpractice: this is the main checkout, not a worktree. Several sessions "
             "sharing one working tree overwrite each other silently — git does not "
             "notice, and neither will you.\n"
             f"  {worktree_advice(ctx, task)}\n"
             "then work there. Set `require_worktree: false` in "
-            ".claude/founder-os/config.json if this repository is genuinely single-session."
+            ".claude/claude-bestpractice/config.json if this repository is genuinely single-session."
         )
     if on_trunk(ctx):
         out.append(
-            f"founder-os: {ctx.branch} is the trunk. Work on a branch so it can be "
+            f"claude-bestpractice: {ctx.branch} is the trunk. Work on a branch so it can be "
             "reverted and merged as one unit.\n"
             f"  git switch -c feat/{'-'.join(task.lower().split()[:4]) or 'work'}\n"
-            "Set `protect_trunk: false` in .claude/founder-os/config.json to allow it."
+            "Set `protect_trunk: false` in .claude/claude-bestpractice/config.json to allow it."
         )
     return out
 

@@ -22,8 +22,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from founder_os import attempts, board, config, discipline, drafts, evidence, hookio, options, sessions, stage, store  # noqa: E402
-from founder_os.gitctx import changed_files, resolve  # noqa: E402
+from claude_bestpractice import attempts, board, config, discipline, drafts, evidence, hookio, options, sessions, stage, store  # noqa: E402
+from claude_bestpractice.gitctx import changed_files, resolve  # noqa: E402
 
 BLOCK_COUNTER = "_consecutive_blocks"
 FAILURE_MARKER = "unverified.jsonl"
@@ -139,7 +139,7 @@ def main() -> None:
     if event.stop_hook_active and blocked >= evidence.MAX_CONSECUTIVE_BLOCKS:
         _give_up(ctx, rec, "continuation ceiling reached", [])
         _bump_blocks(ctx, rec, 0)
-        sys.stderr.write("founder-os: finishing UNVERIFIED — continuation ceiling reached.\n")
+        sys.stderr.write("claude-bestpractice: finishing UNVERIFIED — continuation ceiling reached.\n")
         _allow(ctx, rec)
     # The test artifact is exempt from scope drift because THIS GATE demands it. Without
     # this the two checks deadlock: finish without evidence and you are blocked for the
@@ -147,7 +147,7 @@ def main() -> None:
     # not name. Found by running a whole project lifecycle end to end, not by reading.
     exempt = (
         list(cfg.exempt_paths)
-        + [".claude/founder-os/", ".claude/"]
+        + [".claude/claude-bestpractice/", ".claude/"]
         + list(evidence.RUN_BYPRODUCTS)
     )
     # Artifact globs are matched AS GLOBS. Truncating `reports/**/*.xml` to `reports`
@@ -211,9 +211,9 @@ def main() -> None:
             # frozen counter is a wedge, and a wedged founder uninstalls the plugin.
             verdict = evidence.Verdict(
                 False,
-                f"founder-os could not verify this turn: {type(exc).__name__}: {exc}\n"
+                f"claude-bestpractice could not verify this turn: {type(exc).__name__}: {exc}\n"
                 "This is a fault in the gate or its configuration, not in your work. "
-                "Check .claude/founder-os/config.json.",
+                "Check .claude/claude-bestpractice/config.json.",
             )
         if not verdict.ok:
             problems.append(verdict.reason)
@@ -231,7 +231,7 @@ def main() -> None:
     if not problems:
         if unverified_reason:
             _give_up(ctx, rec, unverified_reason, changed)
-            sys.stderr.write(f"founder-os: finishing UNVERIFIED — {unverified_reason}\n")
+            sys.stderr.write(f"claude-bestpractice: finishing UNVERIFIED — {unverified_reason}\n")
         _allow(ctx, rec)
 
     reason = "\n\n".join(problems)
@@ -240,14 +240,14 @@ def main() -> None:
         _give_up(ctx, rec, reason, changed)
         _bump_blocks(ctx, rec, 0)
         sys.stderr.write(
-            "founder-os: finishing UNVERIFIED after "
+            "claude-bestpractice: finishing UNVERIFIED after "
             f"{blocked} blocked attempts. Recorded for the next session.\n"
         )
         hookio.emit_silent()
 
     _bump_blocks(ctx, rec, blocked + 1)
     hookio.block(
-        f"founder-os [{blocked + 1}/{evidence.MAX_CONSECUTIVE_BLOCKS}] — not done yet.\n\n"
+        f"claude-bestpractice [{blocked + 1}/{evidence.MAX_CONSECUTIVE_BLOCKS}] — not done yet.\n\n"
         f"{reason}\n\n"
         "Your description of what you did is not evidence and was not read."
     )

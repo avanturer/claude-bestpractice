@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """What this branch delivered, for the person who never reads the code.
 
-    founder-os-ship            what changed, in product terms
-    founder-os-ship --pr       open a pull request with that as the body
+    claude-bestpractice-ship            what changed, in product terms
+    claude-bestpractice-ship --pr       open a pull request with that as the body
 
 The stated operating mode is that the founder looks at outcomes and never at diffs.
 Every other surface in this plugin faces the agent; this one faces the other way.
@@ -18,8 +18,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from founder_os import delivery, gitpolicy, hookio  # noqa: E402
-from founder_os.gitctx import resolve_for_cli  # noqa: E402
+from claude_bestpractice import delivery, gitpolicy, hookio  # noqa: E402
+from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
 
 
 def open_pr(ctx, base: str) -> int:

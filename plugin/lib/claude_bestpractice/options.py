@@ -243,9 +243,9 @@ def demand(ctx: GitContext, changed: list[str], baseline: str) -> str:
         "A dependency is a permanent operational cost paid by every future session, and "
         "reaching for the obvious one is how it gets paid without anyone deciding to.\n"
         "Record what else was considered and on what numbers:\n"
-        f"  founder-os-options add \"{uncompared[0]}: why this one\" \\\n"
+        f"  claude-bestpractice-options add \"{uncompared[0]}: why this one\" \\\n"
         "      --metric latency --metric ops-burden --metric lock-in \\\n"
         f"      --option '{uncompared[0]}:8,4,3' --option 'stdlib:6,9,9' \\\n"
         f"      --chosen {uncompared[0]} --why \"...\"\n"
-        "Set `compare_dependencies: false` in .claude/founder-os/config.json to stop asking."
+        "Set `compare_dependencies: false` in .claude/claude-bestpractice/config.json to stop asking."
     )

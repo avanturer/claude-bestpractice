@@ -17,7 +17,7 @@ turns an anonymous HTTP POST into code execution on the founder's machine.
 
 Input: JSON on stdin, either one object or a list. Output: `.claude/signals/<id>.md`.
 
-    curl -s "$SENTRY_API/issues/" | founder-os-ingest
+    curl -s "$SENTRY_API/issues/" | claude-bestpractice-ingest
 """
 
 from __future__ import annotations
@@ -31,8 +31,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from founder_os import hookio, redact, store  # noqa: E402
-from founder_os.gitctx import resolve_for_cli  # noqa: E402
+from claude_bestpractice import hookio, redact, store  # noqa: E402
+from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
 
 SIGNALS_DIR = ".claude/signals"
 MAX_FIELD_CHARS = 1_200

@@ -68,7 +68,7 @@ class TestSessionStart(GateCase):
 
     def test_registers_the_session(self):
         self.start("registered")
-        from founder_os import sessions
+        from claude_bestpractice import sessions
 
         self.assertIsNotNone(sessions.get(self.ctx(), "registered"))
 
@@ -81,7 +81,7 @@ class TestSessionStart(GateCase):
     def test_baseline_survives_a_restart(self):
         """A resume must not move the review anchor."""
         self.start("keeper")
-        from founder_os import sessions
+        from claude_bestpractice import sessions
 
         first = sessions.get(self.ctx(), "keeper").baseline_commit
         self.write("noise.py", "x = 1\n")
@@ -117,7 +117,7 @@ class TestPromptCapture(GateCase):
                 "prompt": "Fix the login bug in src/auth.py",
             },
         )
-        from founder_os import sessions
+        from claude_bestpractice import sessions
 
         rec = sessions.get(self.ctx(), "s1")
         self.assertEqual(rec.task_statement, "Fix the login bug in src/auth.py")
@@ -139,7 +139,7 @@ class TestPromptCapture(GateCase):
                 "prompt-capture",
                 {"session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": prompt},
             )
-        from founder_os import sessions
+        from claude_bestpractice import sessions
 
         self.assertEqual(sessions.get(self.ctx(), "s1").task_statement, "original task")
 
@@ -153,7 +153,7 @@ class TestPromptCapture(GateCase):
                 "prompt": "make it faster, e.g. by caching things.",
             },
         )
-        from founder_os import sessions
+        from claude_bestpractice import sessions
 
         self.assertEqual(sessions.get(self.ctx(), "s1").task_paths, [])
 
@@ -303,7 +303,7 @@ class TestPreTool(GateCase):
         self.start("beta")
         self.gate("pre-tool", self.edit_event("alpha", "src/shared.py"))
 
-        from founder_os import sessions
+        from claude_bestpractice import sessions
 
         self.assertEqual(sessions.leases_held_by(self.ctx(), "alpha"), ["src/shared.py"])
         self.stop("alpha")  # nothing changed, so the gate allows and releases
@@ -312,7 +312,7 @@ class TestPreTool(GateCase):
 
     def test_dead_session_lease_does_not_block_forever(self):
         """One crashed session must not poison a path permanently."""
-        from founder_os import sessions
+        from claude_bestpractice import sessions
 
         ctx = self.ctx()
         sessions.register(
@@ -343,7 +343,7 @@ class TestPreTool(GateCase):
                 "tool_input": {"file_path": str(self.repo / "src" / "x.py"), "new_string": "y = 2"},
             },
         )
-        from founder_os import sessions
+        from claude_bestpractice import sessions
 
         self.assertIn("src/x.py", sessions.get(self.ctx(), "s1").last_touched)
 
@@ -410,13 +410,13 @@ class TestEvidenceGate(GateCase):
         self.start()
         self.write("feature.py", "x = 1\n")
 
-        from founder_os import evidence
+        from claude_bestpractice import evidence
 
         codes = [self.stop().returncode for _ in range(evidence.MAX_CONSECUTIVE_BLOCKS + 1)]
         self.assertEqual(codes[: evidence.MAX_CONSECUTIVE_BLOCKS], [2] * evidence.MAX_CONSECUTIVE_BLOCKS)
         self.assertEqual(codes[-1], 0)
 
-        from founder_os import store
+        from claude_bestpractice import store
 
         markers = store.read_jsonl(store.tier_b(self.ctx(), "unverified.jsonl"))
         self.assertEqual(len(markers), 1)
@@ -425,7 +425,7 @@ class TestEvidenceGate(GateCase):
     def test_unverified_finish_surfaces_on_the_next_board(self):
         self.start()
         self.write("feature.py", "x = 1\n")
-        from founder_os import evidence
+        from claude_bestpractice import evidence
 
         for _ in range(evidence.MAX_CONSECUTIVE_BLOCKS + 1):
             self.stop()
@@ -440,7 +440,7 @@ class TestEvidenceGate(GateCase):
         self.write("junit.xml", JUNIT_PASS)
         self.assertEqual(self.stop().returncode, 0)
 
-        from founder_os import sessions
+        from claude_bestpractice import sessions
 
         rec = sessions.get(self.ctx(), "s1")
         self.assertEqual(rec.tool_signatures.get("_consecutive_blocks"), 0)
@@ -454,7 +454,7 @@ class TestCheckpoint(GateCase):
             {"session_id": "s1", "hook_event_name": "PreCompact", "trigger": "auto"},
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        files = list((self.repo / ".claude" / "founder-os" / "checkpoints").glob("*.md"))
+        files = list((self.repo / ".claude" / "claude-bestpractice" / "checkpoints").glob("*.md"))
         self.assertEqual(len(files), 1)
         text = files[0].read_text()
         self.assertIn("baseline_commit:", text)
@@ -483,7 +483,7 @@ class TestCheckpoint(GateCase):
                 "transcript_path": str(transcript),
             },
         )
-        text = next((self.repo / ".claude" / "founder-os" / "checkpoints").glob("*.md")).read_text()
+        text = next((self.repo / ".claude" / "claude-bestpractice" / "checkpoints").glob("*.md")).read_text()
         self.assertNotIn("AKIAIOSFODNN7EXAMPLE", text)
         self.assertIn("[REDACTED]", text)
 
@@ -500,7 +500,7 @@ class TestCheckpoint(GateCase):
             },
         )
         self.assertEqual(proc.returncode, 0)
-        self.assertTrue(list((self.repo / ".claude" / "founder-os" / "checkpoints").glob("*.md")))
+        self.assertTrue(list((self.repo / ".claude" / "claude-bestpractice" / "checkpoints").glob("*.md")))
 
     def test_checkpoints_do_not_collide(self):
         self.start()
@@ -510,14 +510,14 @@ class TestCheckpoint(GateCase):
                 {"session_id": "s1", "hook_event_name": "PreCompact", "trigger": "auto"},
             )
             time.sleep(1.01)  # filenames are second-resolution by design
-        files = list((self.repo / ".claude" / "founder-os" / "checkpoints").glob("*.md"))
+        files = list((self.repo / ".claude" / "claude-bestpractice" / "checkpoints").glob("*.md"))
         self.assertEqual(len(files), 3)
 
 
 class TestDoctorAndReindex(GateCase):
     def test_doctor_passes_against_a_clean_checkout(self):
         proc = subprocess.run(
-            [sys.executable, str(BIN / "founder-os-doctor")],
+            [sys.executable, str(BIN / "claude-bestpractice-doctor")],
             capture_output=True,
             text=True,
             timeout=600,
@@ -527,11 +527,11 @@ class TestDoctorAndReindex(GateCase):
 
     def test_reindex_rebuilds_tier_b(self):
         self.start()
-        from founder_os import store
+        from claude_bestpractice import store
 
         self.assertTrue(store.tier_b(self.ctx()).exists())
         proc = subprocess.run(
-            [sys.executable, str(BIN / "founder-os-reindex")],
+            [sys.executable, str(BIN / "claude-bestpractice-reindex")],
             capture_output=True,
             text=True,
             cwd=str(self.repo),
@@ -544,14 +544,14 @@ class TestDoctorAndReindex(GateCase):
     def test_reindex_dry_run_changes_nothing(self):
         self.start("keepme")
         proc = subprocess.run(
-            [sys.executable, str(BIN / "founder-os-reindex"), "--dry-run"],
+            [sys.executable, str(BIN / "claude-bestpractice-reindex"), "--dry-run"],
             capture_output=True,
             text=True,
             cwd=str(self.repo),
             timeout=120,
         )
         self.assertEqual(proc.returncode, 0)
-        from founder_os import sessions
+        from claude_bestpractice import sessions
 
         self.assertIsNotNone(sessions.get(self.ctx(), "keepme"))
 

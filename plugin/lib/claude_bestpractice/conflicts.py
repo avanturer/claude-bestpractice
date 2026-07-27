@@ -70,7 +70,7 @@ def _read_json(path: Path) -> dict:
 
 
 def _ours(command: str) -> bool:
-    return "founder-os" in command or "founder_os" in command
+    return "claude-bestpractice" in command or "claude_bestpractice" in command
 
 
 def _handlers(matchers: object) -> list[dict]:
@@ -213,7 +213,7 @@ def quarantine_loose_hooks(ctx: GitContext) -> tuple[int, list[str]]:
         # 0600, not 0644. settings.local.json is where personal tokens live, and the
         # backup is a NEW file no standard .gitignore covers — so a world-readable copy
         # of someone's credentials appears next to it, ready for the next `git add -A`.
-        backup = path.with_suffix(path.suffix + ".founder-os.bak")
+        backup = path.with_suffix(path.suffix + ".claude-bestpractice.bak")
         store.atomic_write(backup, json.dumps(data, indent=2), mode=0o600)
         backups.append(backup.name)
 

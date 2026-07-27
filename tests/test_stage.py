@@ -7,7 +7,7 @@ import unittest
 
 from helpers import BIN, LIB, RepoCase, git
 
-from founder_os import config, stage
+from claude_bestpractice import config, stage
 
 
 class TestClassification(RepoCase):
@@ -73,7 +73,7 @@ class TestRatchet(RepoCase):
         self.assertEqual(resolved, stage.REVENUE)
 
     def test_stage_is_recorded_in_tier_a(self):
-        from founder_os import store
+        from claude_bestpractice import store
 
         ctx = self.ctx()
         stage.current(ctx)
@@ -81,7 +81,7 @@ class TestRatchet(RepoCase):
 
     def test_the_committed_marker_holds_nothing_that_varies(self):
         """A timestamp or a signal dump in here is what made merges conflict."""
-        from founder_os import store
+        from claude_bestpractice import store
 
         ctx = self.ctx()
         stage.current(ctx)
@@ -89,7 +89,7 @@ class TestRatchet(RepoCase):
         self.assertEqual(body, {"stage": stage.PROTOTYPE})
 
     def test_the_volatile_half_is_not_committed(self):
-        from founder_os import store
+        from claude_bestpractice import store
 
         ctx = self.ctx()
         stage.current(ctx)
@@ -106,7 +106,7 @@ class TestRatchet(RepoCase):
 
     def test_a_marker_alone_holds_the_ratchet(self):
         """The committed marker is the whole record; nothing else needs to survive."""
-        from founder_os import store
+        from claude_bestpractice import store
 
         ctx = self.ctx()
         store.write_json(store.tier_a(ctx, stage.STAGE_DIR, "reached-revenue.json"),
@@ -187,7 +187,7 @@ class TestGates(unittest.TestCase):
         """
         source = "\n".join(
             path.read_text(encoding="utf-8", errors="replace")
-            for path in list((LIB / "founder_os").rglob("*.py")) + list(BIN.iterdir())
+            for path in list((LIB / "claude_bestpractice").rglob("*.py")) + list(BIN.iterdir())
             if path.is_file() and path.name != "stage.py"
         )
         for key in stage.gates_for(stage.REVENUE):

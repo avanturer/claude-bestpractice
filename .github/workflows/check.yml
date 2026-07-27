@@ -11,10 +11,10 @@ on:
 jobs:
   check:
     # OFF by default, because Actions minutes are a real budget and the same gates run
-    # locally on every push through the pre-push hook `founder-os-ci local` installs.
-    # Turn it on with:  gh variable set FOUNDER_OS_CI --body on
+    # locally on every push through the pre-push hook `claude-bestpractice-ci local` installs.
+    # Turn it on with:  gh variable set CLAUDE_BESTPRACTICE_CI --body on
     # or Settings -> Secrets and variables -> Actions -> Variables.
-    if: vars.FOUNDER_OS_CI == 'on'
+    if: vars.CLAUDE_BESTPRACTICE_CI == 'on'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -37,7 +37,7 @@ jobs:
 
       - name: Identify git
         run: |
-          git config --global user.email "ci@founder-os"
+          git config --global user.email "ci@claude-bestpractice"
           git config --global user.name "ci"
           git config --global init.defaultBranch main
 

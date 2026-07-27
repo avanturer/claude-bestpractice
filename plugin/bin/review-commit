@@ -35,8 +35,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from founder_os import board, hookio, redact, sessions, store  # noqa: E402
-from founder_os.gitctx import resolve, stash_baseline  # noqa: E402
+from claude_bestpractice import board, hookio, redact, sessions, store  # noqa: E402
+from claude_bestpractice.gitctx import resolve, stash_baseline  # noqa: E402
 
 MAX_FINDINGS_SHOWN = 6
 REPORT_DIR = "reviews"

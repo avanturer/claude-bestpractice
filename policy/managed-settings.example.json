@@ -19,7 +19,7 @@
       "$comment_excluded": "Keep empty. This array merges from every scope and cannot be locked down; hash-check the resolved list at SessionStart. Detection only.",
       "filesystem": {
         "allowRead": ["."],
-        "denyWrite": ["/opt/founder-os"]
+        "denyWrite": ["/opt/claude-bestpractice"]
       }
     }
   },
@@ -32,7 +32,7 @@
         "Edit(**/.claude/settings.json)",
         "Edit(**/.claude/settings.local.json)",
         "Edit(~/.claude/plugins/**)",
-        "Edit(//opt/founder-os/**)",
+        "Edit(//opt/claude-bestpractice/**)",
         "Edit(//**/.claude/projects/**)",
         "Read(**/.env)"
       ],

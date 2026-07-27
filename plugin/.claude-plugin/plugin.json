@@ -1,5 +1,5 @@
 {
-  "name": "founder-os",
+  "name": "claude-bestpractice",
   "version": "1.0.0",
   "description": "Enforcement, memory and parallel-session coordination for solo founders running several Claude Code sessions on one repository.",
   "author": {

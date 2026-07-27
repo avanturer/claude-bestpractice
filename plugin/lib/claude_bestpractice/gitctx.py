@@ -159,7 +159,7 @@ def resolve_for_cli(cwd: Path | str | None = None) -> GitContext:
     try:
         return resolve(cwd)
     except GitError as exc:
-        raise SystemExit(f"founder-os: {exc}\nRun this inside a git repository.")
+        raise SystemExit(f"claude-bestpractice: {exc}\nRun this inside a git repository.")
 
 
 def blob_sha(ctx: GitContext, relpath: str) -> str | None:

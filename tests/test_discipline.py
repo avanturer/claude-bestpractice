@@ -13,7 +13,7 @@ class TestStubDetection(unittest.TestCase):
     def scan(self, name: str, source: str):
         import tempfile
 
-        from founder_os import discipline
+        from claude_bestpractice import discipline
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -64,7 +64,7 @@ class TestStubDetection(unittest.TestCase):
 class TestOnlyThisSessionsWork(RepoCase):
     def test_pre_existing_stubs_are_not_blamed_on_this_turn(self):
         """A check that always fires is one the agent learns to route around."""
-        from founder_os import discipline
+        from claude_bestpractice import discipline
 
         self.write("legacy.py", "def old():\n    pass\n")
         self.commit()
@@ -75,7 +75,7 @@ class TestOnlyThisSessionsWork(RepoCase):
         self.assertEqual(found, [], f"blamed a pre-existing stub: {[str(f) for f in found]}")
 
     def test_a_new_stub_beside_an_old_one_is_caught(self):
-        from founder_os import discipline
+        from claude_bestpractice import discipline
 
         self.write("legacy.py", "def old():\n    pass\n")
         self.commit()
@@ -87,7 +87,7 @@ class TestOnlyThisSessionsWork(RepoCase):
         self.assertIn("fresh", found[0].text)
 
     def test_a_brand_new_file_is_all_this_session_s_doing(self):
-        from founder_os import discipline
+        from claude_bestpractice import discipline
 
         self.write("new.py", "def f():\n    pass\n")
         found = discipline.introduced(self.ctx(), ["new.py"], self.ctx().head)
@@ -134,7 +134,7 @@ class TestAutonomyMode(RepoCase):
         self.assertIn("mode: pair", body)
 
     def test_an_unknown_mode_falls_back_and_complains(self):
-        from founder_os import config
+        from claude_bestpractice import config
 
         self.configure(autonomy="telepathy")
         cfg, complaints = config.load_checked(self.ctx())

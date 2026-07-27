@@ -28,7 +28,7 @@ _STDLIB_39 = {
     "unittest", "urllib", "uuid", "warnings", "xml", "zipfile", "zlib", "__future__",
 }
 
-LOCAL = {"founder_os", "helpers"}
+LOCAL = {"claude_bestpractice", "helpers"}
 
 
 def python_files() -> list[pathlib.Path]:

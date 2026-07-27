@@ -7,7 +7,7 @@ import unittest
 
 from helpers import RepoCase, session_record_for
 
-from founder_os import sessions, store
+from claude_bestpractice import sessions, store
 
 
 record = session_record_for
@@ -217,7 +217,7 @@ class TestLeases(RepoCase):
 class TestCrossWorktree(RepoCase):
     def test_sibling_worktrees_see_each_other(self):
         """The gap no surveyed tool closes: siblings are mutually visible."""
-        from founder_os.gitctx import resolve
+        from claude_bestpractice.gitctx import resolve
 
         main_ctx = self.ctx()
         wt = self.add_worktree("feature")
@@ -232,7 +232,7 @@ class TestCrossWorktree(RepoCase):
         self.assertEqual(from_wt, from_main)
 
     def test_leases_are_shared_across_worktrees(self):
-        from founder_os.gitctx import resolve
+        from claude_bestpractice.gitctx import resolve
 
         main_ctx = self.ctx()
         wt_ctx = resolve(self.add_worktree("feature"))

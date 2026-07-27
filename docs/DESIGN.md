@@ -153,7 +153,7 @@ layout produce five different filenames, five clean adds and five distinct ids. 
 against a single `tasks.json` produce five overlapping hunks in one JSON object and five identical
 `max(local)+1` ids.
 
-**Tier B — ephemeral coordination**, at `$(git rev-parse --git-common-dir)/founder-os/`. The only
+**Tier B — ephemeral coordination**, at `$(git rev-parse --git-common-dir)/claude-bestpractice/`. The only
 location that is shared by every worktree of one repository, invisible to git, survives branch
 switches, and dies with the clone. Holds the session registry, the lease table, the derived index,
 and the repomap cache keyed by **content hash, not mtime** — worktree creation and `git checkout`
@@ -175,7 +175,7 @@ other); Redis or Neo4j daemons (infrastructure the founder must operate, and bot
 - Leases carry owner pid, TTL and heartbeat. SessionStart reaps expired leases. Validity requires
   both that the pid is alive *and* that the worktree is still registered in
   `$GIT_COMMON_DIR/worktrees/*/gitdir`.
-- `rm -rf <git-common-dir>/founder-os && founder-os reindex` is a tested, documented command. Tier B
+- `rm -rf <git-common-dir>/claude-bestpractice && claude-bestpractice reindex` is a tested, documented command. Tier B
   is entirely derivable from Tier A plus transcripts.
 
 ### 4.3 Worktree lifecycle

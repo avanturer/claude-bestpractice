@@ -29,16 +29,16 @@ from pathlib import Path
 from .gitctx import GitContext
 
 HOOK_NAME = "pre-push"
-MARKER = "# founder-os pre-push gate"
-BACKUP_SUFFIX = ".founder-os.bak"
+MARKER = "# claude-bestpractice pre-push gate"
+BACKUP_SUFFIX = ".claude-bestpractice.bak"
 
 # A hook we displaced is moved here and CHAINED, never merely copied aside. Copying it
 # aside is what "backup" sounds like and is not what the founder needs: their husky or
 # lefthook pre-push stopped running the moment ours landed, silently, and a check that
 # stopped running is the exact failure this project exists to prevent — committed by the
 # thing that prevents it.
-DISPLACED_NAME = "pre-push.founder-os-original"
-CI_VARIABLE = "FOUNDER_OS_CI"
+DISPLACED_NAME = "pre-push.claude-bestpractice-original"
+CI_VARIABLE = "CLAUDE_BESTPRACTICE_CI"
 WORKFLOW = ".github/workflows/check.yml"
 
 # `make check` when the project has one, because that is the command the founder already
@@ -69,16 +69,16 @@ fi
 # not one line of the founder's code. So the hook reported success over a red suite, and
 # the doctor's own sandbox writes itself a Makefile, meaning the only branch under test
 # was the one most repositories do not take.
-_cmd="$(founder-os-ci --print-test-command 2>/dev/null || true)"
+_cmd="$(claude-bestpractice-ci --print-test-command 2>/dev/null || true)"
 if [ -n "$_cmd" ]; then
     sh -c "$_cmd" || exit $?
 fi
 
-if command -v founder-os-doctor >/dev/null 2>&1; then
-    exec founder-os-doctor
+if command -v claude-bestpractice-doctor >/dev/null 2>&1; then
+    exec claude-bestpractice-doctor
 fi
 
-echo "founder-os: no 'make check' target and no doctor on PATH — nothing to run" >&2
+echo "claude-bestpractice: no 'make check' target and no doctor on PATH — nothing to run" >&2
 exit 0
 """
 
@@ -173,7 +173,7 @@ def remove(ctx: GitContext) -> tuple[bool, str]:
     """Take the hook out and put back whatever was there before it."""
     path = hook_path(ctx)
     if not installed(ctx):
-        return False, "no founder-os pre-push hook installed"
+        return False, "no claude-bestpractice pre-push hook installed"
 
     path.unlink(missing_ok=True)
 
@@ -263,5 +263,5 @@ def status_lines(ctx: GitContext) -> list[str]:
 
     if not local:
         out.append("")
-        out.append("Nothing checks a push from this machine. `founder-os-ci local` fixes that.")
+        out.append("Nothing checks a push from this machine. `claude-bestpractice-ci local` fixes that.")
     return out

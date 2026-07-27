@@ -8,7 +8,7 @@ import unittest
 
 from helpers import RepoCase  # noqa: F401  (sys.path setup)
 
-from founder_os import hookio
+from claude_bestpractice import hookio
 
 
 class TestEventParsing(unittest.TestCase):

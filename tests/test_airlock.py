@@ -13,7 +13,7 @@ from helpers import BIN, RepoCase
 class TestIngest(RepoCase):
     def ingest(self, payload) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [sys.executable, str(BIN / "founder-os-ingest")],
+            [sys.executable, str(BIN / "claude-bestpractice-ingest")],
             input=json.dumps(payload),
             capture_output=True,
             text=True,
@@ -94,7 +94,7 @@ class TestIngest(RepoCase):
 
     def test_invalid_json_is_refused(self):
         proc = subprocess.run(
-            [sys.executable, str(BIN / "founder-os-ingest")],
+            [sys.executable, str(BIN / "claude-bestpractice-ingest")],
             input="not json",
             capture_output=True,
             text=True,
@@ -164,7 +164,7 @@ class TestMigrationGate(GateCase):
         """A typed acknowledgement, not a config flag that gets set once and forgotten."""
         self.reach_traction()
         self.start()
-        proc = self.migration("-- FOUNDER_OS_I_ACCEPT_DATA_LOSS\nDROP TABLE users;")
+        proc = self.migration("-- CLAUDE_BESTPRACTICE_I_ACCEPT_DATA_LOSS\nDROP TABLE users;")
         self.assertIsNone(self.decision(proc))
 
     def test_prototype_stage_does_not_gate_migrations(self):
@@ -248,10 +248,10 @@ class TestReviewCommit(GateCase):
         self.start()
         self.write("bad.py", "def f():\n    try:\n        go()\n    except Exception:\n        pass\n")
         self.review()
-        reports = list((self.repo / ".claude" / "founder-os" / "reviews").glob("*.md"))
+        reports = list((self.repo / ".claude" / "claude-bestpractice" / "reviews").glob("*.md"))
         self.assertEqual(len(reports), 1)
 
-        from founder_os import board
+        from claude_bestpractice import board
 
         self.assertTrue(any("review finding" in i.get("text", "") for i in board.open_items(self.ctx())))
 

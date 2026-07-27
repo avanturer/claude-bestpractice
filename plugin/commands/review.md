@@ -10,7 +10,7 @@ Current diff:
 !`git --no-pager diff --stat ${1:-HEAD} | tail -30`
 
 Spawn the `independent-reviewer` agent against this diff. Give it the baseline ref, the
-list of changed files, and the task statement from `.claude/founder-os/plan/doing/` if
+list of changed files, and the task statement from `.claude/claude-bestpractice/plan/doing/` if
 one exists.
 
 Do not review it yourself first and do not summarise your own opinion into the prompt —

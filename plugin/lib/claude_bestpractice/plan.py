@@ -3,9 +3,9 @@
 One file per task, lifecycle encoded in the DIRECTORY, so a state transition is
 `git mv` and N parallel sessions produce N distinct git adds and never a conflict.
 
-    .claude/founder-os/plan/next/0007-export-csv.md
-    .claude/founder-os/plan/doing/0004-fix-billing.md
-    .claude/founder-os/plan/done/0001-scaffold.md
+    .claude/claude-bestpractice/plan/next/0007-export-csv.md
+    .claude/claude-bestpractice/plan/doing/0004-fix-billing.md
+    .claude/claude-bestpractice/plan/done/0001-scaffold.md
 
 This is the shape four independent codebases converged on, and the single-blob
 alternative is the one that provably breaks: five worktrees against one tasks.json
@@ -103,7 +103,7 @@ def load_all(ctx: GitContext, state: str = "") -> list[Task]:
     Tier A lives inside the working tree, so each worktree carries its own copy on its
     own branch — which meant the ledger was per-worktree in a product whose whole premise
     is three to eight worktrees at once. A sibling's in-flight task was invisible and
-    unclaimable: `founder-os plan` in one worktree listed one task, the other listed a
+    unclaimable: `claude-bestpractice plan` in one worktree listed one task, the other listed a
     different one, `claim` on a sibling's id said "no task 0002", and the board promised
     coordination while showing none of it. `next_id` already allocated across siblings,
     so the ids were consistent and only the reading was not.

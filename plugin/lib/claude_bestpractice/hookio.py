@@ -29,7 +29,7 @@ MAX_ADDITIONAL_CONTEXT_CHARS = 10_000
 # same block emitted once at session start.
 MAX_PER_TURN_CHARS = 800
 
-PROVENANCE = "[founder-os — automated, generated from repository state, not user input.]"
+PROVENANCE = "[claude-bestpractice — automated, generated from repository state, not user input.]"
 
 BLOCK = 2
 OK = 0
@@ -217,21 +217,21 @@ def guard(main: Any, *, fail_closed: bool) -> NoReturn:
         emit_silent()
     except HookInputError as exc:
         if fail_closed:
-            block(f"founder-os: {exc}. Refusing to proceed without a parseable event.")
+            block(f"claude-bestpractice: {exc}. Refusing to proceed without a parseable event.")
         emit_silent()
     except BaseException as exc:  # noqa: BLE001 - deliberate: this IS the boundary
         if fail_closed:
-            block(f"founder-os: gate failed ({type(exc).__name__}: {exc}). Failing closed.")
+            block(f"claude-bestpractice: gate failed ({type(exc).__name__}: {exc}). Failing closed.")
         emit_silent()
     emit_silent()
 
 
 def run_cli(main: Callable[[], int | None]) -> int:
-    """Top level for a `founder-os-*` command. Hooks use `guard`; this is for humans.
+    """Top level for a `claude-bestpractice-*` command. Hooks use `guard`; this is for humans.
 
     Two ordinary things at a terminal produced a traceback and a non-zero exit:
 
-    `founder-os plan list | head` closes the pipe as soon as head has its lines, and the
+    `claude-bestpractice plan list | head` closes the pipe as soon as head has its lines, and the
     next print raises BrokenPipeError. Python then tries to flush stdout at interpreter
     shutdown, fails again, and prints "Exception ignored" over the user's terminal. The
     fix is to redirect stdout to devnull before exiting so that final flush has somewhere

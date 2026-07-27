@@ -21,8 +21,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from founder_os import hookio, knowledge, repomap  # noqa: E402
-from founder_os.gitctx import resolve  # noqa: E402
+from claude_bestpractice import hookio, knowledge, repomap  # noqa: E402
+from claude_bestpractice.gitctx import resolve  # noqa: E402
 
 # Deliberately small. This is re-paid on every spawn, and at several parallel sessions
 # it is the dominant recurring cost in the whole design.

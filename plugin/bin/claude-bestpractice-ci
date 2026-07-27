@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Choose where the checks run. Local is the default and is installed at setup.
 
-    founder-os-ci status     what runs where, and what it costs
-    founder-os-ci local      install the pre-push hook
-    founder-os-ci github     switch the hosted workflow on
-    founder-os-ci github --off
-    founder-os-ci off        remove the pre-push hook
+    claude-bestpractice-ci status     what runs where, and what it costs
+    claude-bestpractice-ci local      install the pre-push hook
+    claude-bestpractice-ci github     switch the hosted workflow on
+    claude-bestpractice-ci github --off
+    claude-bestpractice-ci off        remove the pre-push hook
 
-The reasoning behind the default is in `founder_os.ci`.
+The reasoning behind the default is in `claude_bestpractice.ci`.
 """
 
 from __future__ import annotations
@@ -19,8 +19,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from founder_os import ci, config, hookio  # noqa: E402
-from founder_os.gitctx import resolve_for_cli  # noqa: E402
+from claude_bestpractice import ci, config, hookio  # noqa: E402
+from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
 
 
 def main() -> int:

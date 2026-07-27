@@ -61,12 +61,12 @@ class DisarmCase(RepoCase):
             return False
 
     def session_files(self) -> list[Path]:
-        directory = self.repo / ".git" / "founder-os" / "sessions"
+        directory = self.repo / ".git" / "claude-bestpractice" / "sessions"
         return sorted(directory.glob("*.json")) if directory.is_dir() else []
 
     def stdlib_runner(self) -> None:
         """Pin the test command to unittest so no fixture needs a third-party runner."""
-        path = self.repo / ".claude" / "founder-os" / "config.json"
+        path = self.repo / ".claude" / "claude-bestpractice" / "config.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             json.dumps({"test_command": [sys.executable, *STDLIB_DISCOVER]})
@@ -178,7 +178,7 @@ class TestSkippedIsNotPassed(unittest.TestCase):
     def parse(self, xml: str):
         import tempfile
 
-        from founder_os import evidence
+        from claude_bestpractice import evidence
 
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "junit.xml"
@@ -199,7 +199,7 @@ class TestSkippedIsNotPassed(unittest.TestCase):
     def test_the_pytest_json_report_agrees(self):
         import tempfile
 
-        from founder_os import evidence
+        from claude_bestpractice import evidence
 
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "report.json"
@@ -242,7 +242,7 @@ class TestConfigTyposCannotBrickTheRepository(RepoCase):
     """A hand-edited file is edited by hand, so it will contain "false" and "2000"."""
 
     def write_config(self, payload: dict) -> None:
-        path = self.repo / ".claude" / "founder-os" / "config.json"
+        path = self.repo / ".claude" / "claude-bestpractice" / "config.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload))
 
@@ -258,19 +258,19 @@ class TestConfigTyposCannotBrickTheRepository(RepoCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
     def test_the_string_false_means_false(self):
-        from founder_os import config
+        from claude_bestpractice import config
 
         self.write_config({"leases_enabled": "false"})
         self.assertIs(config.load(self.ctx()).leases_enabled, False)
 
     def test_a_bare_string_is_not_iterated_as_characters(self):
-        from founder_os import config
+        from claude_bestpractice import config
 
         self.write_config({"exempt_paths": "docs/"})
         self.assertEqual(config.load(self.ctx()).exempt_paths, ["docs/"])
 
     def test_a_bad_value_is_reported_rather_than_swallowed(self):
-        from founder_os import config
+        from claude_bestpractice import config
 
         self.write_config({"lease_ttl_seconds": True, "stage_override": "banana"})
         cfg, complaints = config.load_checked(self.ctx())
@@ -287,7 +287,7 @@ class TestAMissingRunnerDoesNotWedgeTheSession(RepoCase):
         self.write("Dockerfile", "FROM scratch\n")
         self.write("app.py", "x = 1\n")
         self.commit()
-        path = self.repo / ".claude" / "founder-os" / "config.json"
+        path = self.repo / ".claude" / "claude-bestpractice" / "config.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({"test_command": ["definitely-not-installed", "test"]}))
 
@@ -314,7 +314,7 @@ class TestConcurrentIdAllocation(RepoCase):
         """Same id twice merges cleanly and then `claim` acts on the wrong task."""
         workers = [
             subprocess.Popen(
-                [sys.executable, str(BIN / "founder-os-plan"), "add", f"task number {i}"],
+                [sys.executable, str(BIN / "claude-bestpractice-plan"), "add", f"task number {i}"],
                 cwd=str(self.repo), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             for i in range(10)
@@ -322,7 +322,7 @@ class TestConcurrentIdAllocation(RepoCase):
         for worker in workers:
             worker.wait(timeout=180)
 
-        files = list((self.repo / ".claude" / "founder-os" / "plan" / "next").glob("*.md"))
+        files = list((self.repo / ".claude" / "claude-bestpractice" / "plan" / "next").glob("*.md"))
         ids = [f.name.split("-", 1)[0] for f in files]
         self.assertEqual(len(ids), 10)
         self.assertEqual(len(set(ids)), 10, f"duplicate ids: {sorted(ids)}")
@@ -344,7 +344,7 @@ class TestNothingCanWedgeTheGate(RepoCase):
         self.write("a.py", "x = 2\n")
         for broken in ({"artifact_globs": ["/tmp/junit.xml"]}, {"artifact_globs": [""]}):
             with self.subTest(config=broken):
-                path = self.repo / ".claude" / "founder-os" / "config.json"
+                path = self.repo / ".claude" / "claude-bestpractice" / "config.json"
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(json.dumps(broken))
                 codes = [self.stop() for _ in range(6)]
@@ -449,7 +449,7 @@ class TestNoCachedVerdictOutlivesItsCause(RepoCase):
         self.commit()
 
     def config(self, command: list) -> None:
-        path = self.repo / ".claude" / "founder-os" / "config.json"
+        path = self.repo / ".claude" / "claude-bestpractice" / "config.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({"test_command": command}))
 
@@ -491,7 +491,7 @@ class TestTheGateCannotReEnterItself(RepoCase):
             "exit 0\n"
         )
         script.chmod(0o755)
-        config_path = self.repo / ".claude" / "founder-os" / "config.json"
+        config_path = self.repo / ".claude" / "claude-bestpractice" / "config.json"
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(json.dumps({"test_command": ["./selftest.sh"]}))
         self.write("app.py", "x = 1\n")
@@ -510,7 +510,7 @@ class TestARenameActuallyFailsValidation(RepoCase):
     """The README's headline memory claim, which a substring test did not deliver."""
 
     def test_a_rename_that_keeps_the_old_name_as_a_substring_is_caught(self):
-        from founder_os import knowledge
+        from claude_bestpractice import knowledge
 
         self.write("models.py", "class PurchaseOrder:\n    pass\n")
         self.assertFalse(
@@ -519,7 +519,7 @@ class TestARenameActuallyFailsValidation(RepoCase):
         )
 
     def test_the_symbol_still_being_there_resolves(self):
-        from founder_os import knowledge
+        from claude_bestpractice import knowledge
 
         self.write("models.py", "class Order:\n    pass\n")
         self.assertTrue(knowledge.anchor_resolves(self.ctx(), "Order @ models.py"))
@@ -527,7 +527,7 @@ class TestARenameActuallyFailsValidation(RepoCase):
 
 class TestTheDecisionIndexKeepsTheNewest(RepoCase):
     def test_truncation_drops_the_oldest_not_the_newest(self):
-        from founder_os import knowledge
+        from claude_bestpractice import knowledge
 
         for i in range(1, 26):
             self.write(
@@ -546,8 +546,8 @@ class TestTheDecisionIndexKeepsTheNewest(RepoCase):
 class TestTheReaperReachesOtherWorktrees(RepoCase):
     def test_a_dead_sibling_s_claim_returns_to_the_queue(self):
         """The reaper runs in a surviving worktree; the dead session's file is not there."""
-        from founder_os import plan
-        from founder_os.gitctx import resolve
+        from claude_bestpractice import plan
+        from claude_bestpractice.gitctx import resolve
 
         ctx = self.ctx()
         task = plan.add(ctx, "ship the thing")
@@ -565,7 +565,7 @@ class TestTheReaperReachesOtherWorktrees(RepoCase):
 
 class TestTheQuarantineBackupIsNotWorldReadable(RepoCase):
     def test_a_backup_of_local_settings_keeps_its_secrets_private(self):
-        from founder_os import conflicts
+        from claude_bestpractice import conflicts
 
         self.write(
             ".claude/settings.local.json",
@@ -586,11 +586,11 @@ class TestCLIsOutsideARepositorySaySoPlainly(unittest.TestCase):
     """A traceback reads as a crash in the tool; this is an ordinary situation."""
 
     CLIS = {
-        "founder-os": ["status"],
-        "founder-os-plan": ["list"],
-        "founder-os-knowledge": ["validate"],
-        "founder-os-reindex": [],
-        "founder-os-decide": ["list"],
+        "claude-bestpractice": ["status"],
+        "claude-bestpractice-plan": ["list"],
+        "claude-bestpractice-knowledge": ["validate"],
+        "claude-bestpractice-reindex": [],
+        "claude-bestpractice-decide": ["list"],
     }
 
     def run_cli(self, name: str, args: list) -> subprocess.CompletedProcess:

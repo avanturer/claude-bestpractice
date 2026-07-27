@@ -6,7 +6,7 @@ import unittest
 
 from helpers import RepoCase  # noqa: F401  (ensures sys.path is set up)
 
-from founder_os import redact
+from claude_bestpractice import redact
 
 
 class TestDetection(unittest.TestCase):

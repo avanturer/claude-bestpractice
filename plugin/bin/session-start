@@ -18,8 +18,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from founder_os import board, config, hookio, sessions, stage, store  # noqa: E402
-from founder_os.gitctx import GitContext, resolve, stash_baseline  # noqa: E402
+from claude_bestpractice import board, config, hookio, sessions, stage, store  # noqa: E402
+from claude_bestpractice.gitctx import GitContext, resolve, stash_baseline  # noqa: E402
 
 
 def build_record(ctx: GitContext, event: hookio.HookEvent) -> sessions.SessionRecord:

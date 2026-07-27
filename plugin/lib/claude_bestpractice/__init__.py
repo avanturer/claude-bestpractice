@@ -1,4 +1,4 @@
-"""founder-os: enforcement, memory and parallel-session coordination for Claude Code.
+"""claude-bestpractice: enforcement, memory and parallel-session coordination for Claude Code.
 
 Design rule that governs every module here: nothing that matters is asked of the
 model. Enforcement lives in the harness or in git; the model's context carries only

@@ -11,7 +11,7 @@ import unittest
 
 from helpers import BIN, RepoCase
 
-from founder_os import board, provenance
+from claude_bestpractice import board, provenance
 
 
 class TestStamping(RepoCase):
@@ -84,7 +84,7 @@ class TestDriftDetection(RepoCase):
         self.commit()
         stamps = provenance.stamp(self.ctx(), ["a.py"])
 
-        from founder_os.gitctx import resolve
+        from claude_bestpractice.gitctx import resolve
 
         wt_ctx = resolve(self.add_worktree("feature"))
         status, _ = provenance.check(wt_ctx, stamps)
@@ -156,7 +156,7 @@ class TestCheckpointStamps(RepoCase):
             "checkpoint",
             {"session_id": "s1", "hook_event_name": "PreCompact", "trigger": "auto"},
         )
-        text = next((self.repo / ".claude" / "founder-os" / "checkpoints").glob("*.md")).read_text()
+        text = next((self.repo / ".claude" / "claude-bestpractice" / "checkpoints").glob("*.md")).read_text()
         self.assertIn("feature.py @ ", text)
 
 

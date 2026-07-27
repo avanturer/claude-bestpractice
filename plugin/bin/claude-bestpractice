@@ -17,9 +17,9 @@ from pathlib import Path
 BIN = Path(__file__).resolve().parent
 sys.path.insert(0, str(BIN.parent / "lib"))
 
-from founder_os import __version__, board, ci, conflicts, delivery, drafts, hookio, knowledge, onboard  # noqa: E402
-from founder_os import plan, provenance, sessions, stage  # noqa: E402
-from founder_os.gitctx import resolve_for_cli  # noqa: E402
+from claude_bestpractice import __version__, board, ci, conflicts, delivery, drafts, hookio, knowledge, onboard  # noqa: E402
+from claude_bestpractice import plan, provenance, sessions, stage  # noqa: E402
+from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
 
 BOLD = "\033[1m" if sys.stdout.isatty() else ""
 DIM = "\033[2m" if sys.stdout.isatty() else ""
@@ -41,7 +41,7 @@ def cmd_status(ctx) -> int:
     gaps = onboard.unanswered(ctx)
     pending = drafts.pending(ctx)
 
-    print(f"{BOLD}founder-os {__version__}{OFF}  {ctx.worktree_root.name} @ {ctx.branch}")
+    print(f"{BOLD}claude-bestpractice {__version__}{OFF}  {ctx.worktree_root.name} @ {ctx.branch}")
     print(f"{DIM}stage: {resolved_stage} — {'; '.join(signals.reasons[:3]) or 'no signals yet'}{OFF}")
 
     heading("CHECKS")
@@ -79,7 +79,7 @@ def cmd_status(ctx) -> int:
     for problem in problems[:5]:
         print(f"  problem: {problem}")
     if pending:
-        print(f"  {len(pending)} decision draft(s) waiting — `founder-os-decide list`")
+        print(f"  {len(pending)} decision draft(s) waiting — `claude-bestpractice-decide list`")
 
     heading("MEMORY HEALTH")
     stale = prov.get(provenance.SUSPECT, 0) + prov.get(provenance.GONE, 0)
@@ -91,28 +91,28 @@ def cmd_status(ctx) -> int:
         heading("CONFLICTS")
         for conflict in found[:6]:
             print(f"  {conflict}")
-        print(f"  {DIM}`founder-os adopt` neutralises what can be neutralised{OFF}")
+        print(f"  {DIM}`claude-bestpractice adopt` neutralises what can be neutralised{OFF}")
 
     heading("NEXT ACTION")
     if found and any(c.action == "quarantine" for c in found):
-        print("  Another tool contests an event we own: `founder-os adopt`")
+        print("  Another tool contests an event we own: `claude-bestpractice adopt`")
     elif gaps:
         print("  Answer the placeholders in .claude/rules/product.md — nothing else derives them.")
     elif problems:
-        print("  Repair the knowledge layer: `founder-os-knowledge validate`")
+        print("  Repair the knowledge layer: `claude-bestpractice-knowledge validate`")
     elif counts["doing"] == 0 and counts["next"] > 0:
-        print("  Claim a task: `founder-os-plan claim <id>`")
+        print("  Claim a task: `claude-bestpractice-plan claim <id>`")
     elif pending:
-        print("  Review drafted decisions: `founder-os-decide list`")
+        print("  Review drafted decisions: `claude-bestpractice-decide list`")
     else:
-        print("  Nothing blocking. `founder-os-doctor` proves the gates still fire.")
+        print("  Nothing blocking. `claude-bestpractice-doctor` proves the gates still fire.")
     print()
     return 0
 
 
 def cmd_init(ctx, force: bool) -> int:
     written = onboard.write(ctx, force=force)
-    print(f"{BOLD}founder-os init{OFF}  {ctx.worktree_root}")
+    print(f"{BOLD}claude-bestpractice init{OFF}  {ctx.worktree_root}")
     if written:
         print("\nderived from your code:")
         for rel in written:
@@ -129,12 +129,12 @@ def cmd_init(ctx, force: bool) -> int:
         print("\nwaiting on you — these cannot be derived and must not be invented:")
         for gap in gaps:
             print(f"  {gap}")
-    print("\nThen: `founder-os status`")
+    print("\nThen: `claude-bestpractice status`")
     return 0
 
 
 def cmd_doctor(_ctx) -> int:
-    return subprocess.run([sys.executable, str(BIN / "founder-os-doctor")]).returncode
+    return subprocess.run([sys.executable, str(BIN / "claude-bestpractice-doctor")]).returncode
 
 
 def cmd_adopt(ctx, dry_run: bool, restore: bool) -> int:
@@ -164,7 +164,7 @@ def cmd_adopt(ctx, dry_run: bool, restore: bool) -> int:
         print(f"\nquarantined {moved} contesting hook entr{'y' if moved == 1 else 'ies'}")
         for backup in backups:
             print(f"  backup: {backup}")
-        print("  undo with `founder-os adopt --restore`")
+        print("  undo with `claude-bestpractice adopt --restore`")
 
     excludes = conflicts.exclusion_settings(found)
     if excludes:
@@ -180,7 +180,7 @@ def cmd_adopt(ctx, dry_run: bool, restore: bool) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(prog="founder-os", description="founder-os control plane")
+    parser = argparse.ArgumentParser(prog="claude-bestpractice", description="claude-bestpractice control plane")
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("status", help="what is known, in flight, planned and enforced (default)")
     init = sub.add_parser("init", help="derive the knowledge layer from this repository")

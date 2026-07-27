@@ -21,8 +21,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from founder_os import hookio, redact, sessions  # noqa: E402
-from founder_os.gitctx import resolve  # noqa: E402
+from claude_bestpractice import hookio, redact, sessions  # noqa: E402
+from claude_bestpractice.gitctx import resolve  # noqa: E402
 
 MAX_TASK_CHARS = 600
 
@@ -64,7 +64,7 @@ def main() -> None:
     prompt = (event.prompt or "").strip()
     if prompt and not rec.task_statement:
         # Scrubbed AT CAPTURE, because this string does not stay here. It fans out to the
-        # session record, the sibling sessions' board, `founder-os status`, every scope-
+        # session record, the sibling sessions' board, `claude-bestpractice status`, every scope-
         # drift message, and the attempt filed on an unverified finish — which is Tier A,
         # committed. A founder who opens a session by pasting "deploy with
         # STRIPE_KEY=sk_live_..." had that key written verbatim into a file bound for git,

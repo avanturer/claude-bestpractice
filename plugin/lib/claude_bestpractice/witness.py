@@ -103,7 +103,7 @@ def run(ctx: GitContext, env: dict[str, str] | None = None) -> Witnessed | None:
         return None
     # The report lands OUTSIDE the working tree. Inside it, the project's own recipe could
     # write the file before we ever run — which is the attack this exists to end.
-    with tempfile.TemporaryDirectory(prefix="founder-os-witness-") as scratch:
+    with tempfile.TemporaryDirectory(prefix="claude-bestpractice-witness-") as scratch:
         if runner == "pytest":
             return _run_pytest(ctx, Path(scratch) / "report.xml", env)
         return _run_go(ctx, env)

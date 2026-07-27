@@ -50,7 +50,7 @@ class TestTheRunnersOwnWordsOutrankItsExitCode(RepoCase):
         "Tests failed" would send the agent to fix passing tests; the status is the lie,
         so the message has to name the status.
         """
-        from founder_os import evidence
+        from claude_bestpractice import evidence
 
         verdict = evidence._judge_green_run(
             self.ctx(), [], ["make", "test"], "1 failed, 3 passed in 0.1s", 0
@@ -60,13 +60,13 @@ class TestTheRunnersOwnWordsOutrankItsExitCode(RepoCase):
 
     def test_a_genuinely_passing_suite_is_still_accepted(self):
         """The check is worthless if it refuses the honest case too."""
-        from founder_os import evidence
+        from claude_bestpractice import evidence
 
         self.assertEqual(evidence._failures_from_output("4 passed in 0.10s"), 0)
         self.assertEqual(evidence._failures_from_output("Ran 4 tests in 0.1s\n\nOK\n"), 0)
 
     def test_it_reads_unittest_as_well_as_pytest(self):
-        from founder_os import evidence
+        from claude_bestpractice import evidence
 
         self.assertEqual(evidence._failures_from_output("FAILED (failures=2, errors=1)"), 3)
         self.assertEqual(evidence._failures_from_output("2 failed, 3 passed in 1.0s"), 2)
@@ -81,7 +81,7 @@ class TestByproductDirectoriesDoNotHideSource(RepoCase):
     """
 
     def test_source_under_a_byproduct_directory_is_visible(self):
-        from founder_os import evidence
+        from claude_bestpractice import evidence
 
         for path in (
             "src/coverage/rules.py",
@@ -97,7 +97,7 @@ class TestByproductDirectoriesDoNotHideSource(RepoCase):
 
     def test_actual_byproducts_are_still_hidden(self):
         """Otherwise the gate reports its own test run as the agent's scope drift."""
-        from founder_os import evidence
+        from claude_bestpractice import evidence
 
         for path in (
             "__pycache__/mod.cpython-311.pyc",
@@ -133,17 +133,17 @@ class TestTheGatedPartyCannotAmendTheRules(RepoCase):
             return None
 
     def test_the_config_is_refused(self):
-        proc = self.run_hook("pre-tool", self.write_event(".claude/founder-os/config.json"))
+        proc = self.run_hook("pre-tool", self.write_event(".claude/claude-bestpractice/config.json"))
         self.assertEqual(self.decision(proc), "deny")
 
     def test_the_stage_ratchet_is_refused(self):
         proc = self.run_hook(
-            "pre-tool", self.write_event(".claude/founder-os/stage/reached-revenue.json")
+            "pre-tool", self.write_event(".claude/claude-bestpractice/stage/reached-revenue.json")
         )
         self.assertEqual(self.decision(proc), "deny")
 
     def test_the_slop_budget_is_refused(self):
-        proc = self.run_hook("pre-tool", self.write_event(".claude/founder-os/slop-budget.json"))
+        proc = self.run_hook("pre-tool", self.write_event(".claude/claude-bestpractice/slop-budget.json"))
         self.assertEqual(self.decision(proc), "deny")
 
     def test_the_shell_route_is_refused_too(self):
@@ -153,7 +153,7 @@ class TestTheGatedPartyCannotAmendTheRules(RepoCase):
             {
                 "session_id": "s1", "hook_event_name": "PreToolUse", "cwd": str(self.repo),
                 "tool_name": "Bash",
-                "tool_input": {"command": "echo '{}' > .claude/founder-os/config.json"},
+                "tool_input": {"command": "echo '{}' > .claude/claude-bestpractice/config.json"},
             },
         )
         self.assertEqual(self.decision(proc), "deny")
@@ -162,9 +162,9 @@ class TestTheGatedPartyCannotAmendTheRules(RepoCase):
         """The agent is MEANT to write tasks, decisions and dead ends. Over-refusing here
         would break the memory layer to protect the config."""
         for relpath in (
-            ".claude/founder-os/plan/next/0001-task.md",
-            ".claude/founder-os/decisions/0001-x.md",
-            ".claude/founder-os/attempts/0001-y.md",
+            ".claude/claude-bestpractice/plan/next/0001-task.md",
+            ".claude/claude-bestpractice/decisions/0001-x.md",
+            ".claude/claude-bestpractice/attempts/0001-y.md",
         ):
             proc = self.run_hook("pre-tool", self.write_event(relpath))
             self.assertIsNone(self.decision(proc), f"{relpath} was refused")
@@ -187,18 +187,18 @@ class TestARedLedgerSurvivesAShrinkingSuite(RepoCase):
     """
 
     def red(self, command: list[str], tail: str) -> None:
-        from founder_os import evidence
+        from claude_bestpractice import evidence
 
         evidence.record_red(self.ctx(), command, tail)
 
     def still_red(self) -> bool:
-        from founder_os import evidence
+        from claude_bestpractice import evidence
 
         return evidence.red(self.ctx()) is not None
 
     def test_a_narrower_run_behind_the_same_command_does_not_clear_it(self):
         """A Makefile recipe edited to run only the new test. argv never changes."""
-        from founder_os import evidence
+        from claude_bestpractice import evidence
 
         self.red(["make", "test"], "1 failed, 1 passed in 0.1s")
         self.assertFalse(evidence.clear_red(self.ctx(), ["make", "test"], 1))
@@ -210,7 +210,7 @@ class TestARedLedgerSurvivesAShrinkingSuite(RepoCase):
         Three ordinary turns, no evasion — the second red is genuine. The high-water
         mark is what stops the record's own identity from being laundered.
         """
-        from founder_os import evidence
+        from claude_bestpractice import evidence
 
         self.red(["python3", "-m", "pytest", "-q"], "1 failed, 1 passed in 0.1s")
         self.red(["make", "test"], "1 failed, 1 passed in 0.1s")
@@ -220,7 +220,7 @@ class TestARedLedgerSurvivesAShrinkingSuite(RepoCase):
 
     def test_deleting_the_failing_test_does_not_clear_it(self):
         """The single most common way an agent turns a blocking Stop gate into a pass."""
-        from founder_os import evidence
+        from claude_bestpractice import evidence
 
         self.red(["go", "test", "./..."], "--- FAIL: TestDiscount\n1 failed")
         verdict = evidence._judge_green_run(
@@ -231,7 +231,7 @@ class TestARedLedgerSurvivesAShrinkingSuite(RepoCase):
 
     def test_the_same_suite_passing_does_clear_it(self):
         """The check is worthless if the honest case cannot recover."""
-        from founder_os import evidence
+        from claude_bestpractice import evidence
 
         self.red(["python3", "-m", "pytest", "-q"], "1 failed, 1 passed in 0.1s")
         self.assertTrue(evidence.clear_red(self.ctx(), ["python3", "-m", "pytest", "-q"], 2))
@@ -242,7 +242,7 @@ class TestCannotTellIsNotGreen(RepoCase):
     """"The output said nothing I can count" was being reported as "the tests passed"."""
 
     def test_a_run_with_no_countable_output_is_unverified(self):
-        from founder_os import evidence
+        from claude_bestpractice import evidence
 
         for tail in ("?   example.com/svc  [no test files]", "", "Building...\nDone.\n"):
             verdict = evidence._judge_green_run(self.ctx(), [], ["make", "test"], tail, 0)
@@ -250,15 +250,15 @@ class TestCannotTellIsNotGreen(RepoCase):
             self.assertTrue(verdict.unverified, f"{tail!r} counted as witnessed green")
 
     def test_a_countable_run_is_verified(self):
-        from founder_os import evidence
+        from claude_bestpractice import evidence
 
         verdict = evidence._judge_green_run(self.ctx(), [], ["pytest"], "4 passed in 0.2s", 0)
         self.assertTrue(verdict.ok)
         self.assertFalse(verdict.unverified)
 
     def test_an_unverified_run_never_writes_a_green_record(self):
-        """`founder-os ship` reads that file and tells the founder "Tests: green"."""
-        from founder_os import evidence
+        """`claude-bestpractice ship` reads that file and tells the founder "Tests: green"."""
+        from claude_bestpractice import evidence
 
         self.assertIsNone(evidence.last_green(self.ctx()))
 

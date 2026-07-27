@@ -10,7 +10,7 @@ import unittest
 
 from helpers import BIN, RepoCase, git
 
-from founder_os import plan, sessions
+from claude_bestpractice import plan, sessions
 
 
 class PlanCase(RepoCase):
@@ -109,7 +109,7 @@ class TestClaiming(PlanCase):
 class TestParallelWorktrees(PlanCase):
     def test_ids_do_not_collide_across_worktrees(self):
         """The allocator must see sibling worktrees before their files are committed."""
-        from founder_os.gitctx import resolve
+        from claude_bestpractice.gitctx import resolve
 
         main_ctx = self.ctx()
         plan.add(main_ctx, "on main")
@@ -187,7 +187,7 @@ class TestBoardRendering(PlanCase):
 class TestCli(PlanCase):
     def run_cli(self, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [sys.executable, str(BIN / "founder-os-plan"), *args],
+            [sys.executable, str(BIN / "claude-bestpractice-plan"), *args],
             capture_output=True,
             text=True,
             cwd=str(self.repo),

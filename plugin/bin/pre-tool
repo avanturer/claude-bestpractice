@@ -22,26 +22,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
 import re  # noqa: E402
 
-from founder_os import config, evidence, gitpolicy, hookio, redact, sessions, stage  # noqa: E402
-from founder_os.gitctx import resolve  # noqa: E402
+from claude_bestpractice import config, evidence, gitpolicy, hookio, redact, sessions, stage  # noqa: E402
+from claude_bestpractice.gitctx import resolve  # noqa: E402
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 SIGNATURE_HISTORY = 64
 
-# The files that decide what the gates do. Everything else under .claude/founder-os/ is
+# The files that decide what the gates do. Everything else under .claude/claude-bestpractice/ is
 # the agent's to write — tasks, decisions, dead ends are all meant to be written by it.
 # These are not: they are the rules, and the party being ruled does not amend them.
 PROTECTED_STATE = (
-    ".claude/founder-os/config.json",
-    ".claude/founder-os/stage/",
-    ".claude/founder-os/slop-budget.json",
+    ".claude/claude-bestpractice/config.json",
+    ".claude/claude-bestpractice/stage/",
+    ".claude/claude-bestpractice/slop-budget.json",
     # The record of a failing suite. Not on this list until round six, while every
     # elaborate defence of *clearing* it was being built — and the gate's own denial text
-    # told the agent "everything else under .claude/founder-os/ is yours to write", which
-    # was true and was an instruction. `rm .claude/founder-os/failing-suite.json` was
+    # told the agent "everything else under .claude/claude-bestpractice/ is yours to write", which
+    # was true and was an instruction. `rm .claude/claude-bestpractice/failing-suite.json` was
     # allowed, silently, and ended the whole argument in one call.
-    ".claude/founder-os/failing-suite.json",
-    ".claude/founder-os/last-green.json",
+    ".claude/claude-bestpractice/failing-suite.json",
+    ".claude/claude-bestpractice/last-green.json",
 )
 
 
@@ -52,7 +52,7 @@ def _protected_state(relpath: str) -> bool:
     rel = relpath.replace("\\", "/")
     while rel.startswith("./"):
         rel = rel[2:]
-    # `rm -rf .claude/founder-os/stage` names the DIRECTORY, with no trailing slash, so a
+    # `rm -rf .claude/claude-bestpractice/stage` names the DIRECTORY, with no trailing slash, so a
     # prefix entry of ".../stage/" matched nothing and the whole stage ratchet could be
     # deleted in one command. Match the directory itself as well as its contents.
     if any(
@@ -60,7 +60,7 @@ def _protected_state(relpath: str) -> bool:
         for p in PROTECTED_STATE
     ):
         return True
-    # And an ANCESTOR of anything protected. `rm -rf .claude/founder-os` names neither a
+    # And an ANCESTOR of anything protected. `rm -rf .claude/claude-bestpractice` names neither a
     # protected file nor a protected directory, and takes every one of them with it —
     # a rule that guards the leaves and not the branch guards nothing.
     return any(p.startswith(rel.rstrip("/") + "/") for p in PROTECTED_STATE)
@@ -84,7 +84,7 @@ PRODUCTION_DEPLOY = re.compile(
 
 # An explicit, typed acknowledgement. Not a config flag: a flag gets set once and then
 # permanently disables the gate, which is how these die.
-OVERRIDE = "FOUNDER_OS_I_ACCEPT_DATA_LOSS"
+OVERRIDE = "CLAUDE_BESTPRACTICE_I_ACCEPT_DATA_LOSS"
 
 
 def signature(event: hookio.HookEvent) -> str:
@@ -218,7 +218,7 @@ def main() -> None:
 
     if calls > cfg.max_tool_calls:
         hookio.deny_tool(
-            f"founder-os: this session has made {calls} tool calls, past the ceiling of "
+            f"claude-bestpractice: this session has made {calls} tool calls, past the ceiling of "
             f"{cfg.max_tool_calls}. Stop and summarise what is done and what remains."
         )
 
@@ -239,7 +239,7 @@ def main() -> None:
         streak += 1
     if streak > cfg.max_repeat_signature:
         hookio.deny_tool(
-            f"founder-os: `{sig}` has now been run {streak} times in a row with nothing in "
+            f"claude-bestpractice: `{sig}` has now been run {streak} times in a row with nothing in "
             "between. Repeating it unchanged is not making progress — change the input, "
             "change the approach, or say plainly that you are stuck.\n"
             "Anything else you do clears this: the count is consecutive, not a lifetime total."
@@ -249,7 +249,7 @@ def main() -> None:
         loop = evidence.detect_loop(history)
         if loop:
             hookio.deny_tool(
-                f"founder-os: detected a repeating cycle: {loop}. Break out of it — try a "
+                f"claude-bestpractice: detected a repeating cycle: {loop}. Break out of it — try a "
                 "different approach or report the blocker."
             )
 
@@ -262,23 +262,23 @@ def main() -> None:
             complaint = gitpolicy.message_complaint(message)
             if complaint:
                 hookio.deny_tool(
-                    f"founder-os: {complaint}\n"
+                    f"claude-bestpractice: {complaint}\n"
                     "The reader is not a reviewer — there is none. It is the next session, "
                     "running `git log` on this file to work out why it looks the way it does.\n"
-                    "Set `commit_conventions: false` in .claude/founder-os/config.json to stop checking."
+                    "Set `commit_conventions: false` in .claude/claude-bestpractice/config.json to stop checking."
                 )
 
     if event.tool_name in WRITE_TOOLS or event.tool_name == "Bash":
         conflicted = gitpolicy.conflict_complaint(proposed_content(event))
         if conflicted:
-            hookio.deny_tool(f"founder-os: {conflicted}")
+            hookio.deny_tool(f"claude-bestpractice: {conflicted}")
 
     if gates["migration_gate"]:
         if event.tool_name == "Bash":
             command = str(ti.get("command", ""))
             if PRODUCTION_DEPLOY.search(command) and OVERRIDE not in command:
                 hookio.deny_tool(
-                    "founder-os: promoting to production is the one action that cannot be undone "
+                    "claude-bestpractice: promoting to production is the one action that cannot be undone "
                     "by re-running it. Deploy to a preview environment instead, or ask the human "
                     "to promote. Rollback stays automatic; promotion does not."
                 )
@@ -292,7 +292,7 @@ def main() -> None:
                 body = proposed_content(event)
                 if DESTRUCTIVE_DDL.search(body) and OVERRIDE not in body:
                     hookio.deny_tool(
-                        "founder-os: destructive DDL in a migration. This is irreversible and "
+                        "claude-bestpractice: destructive DDL in a migration. This is irreversible and "
                         "data-shaped — the tests pass either way and corruption surfaces only "
                         "under production concurrency. Use an expand-contract migration, or "
                         f"include the literal token {OVERRIDE} in a comment to accept the loss."
@@ -319,16 +319,16 @@ def main() -> None:
         # recording the real failure. Nothing else in the plugin could tell afterwards.
         #
         # Refused rather than ignored: the founder still edits this by hand or with
-        # `founder-os ci`, and a rule the agent can see and route around beats one that
+        # `claude-bestpractice ci`, and a rule the agent can see and route around beats one that
         # silently discards its work.
         protected = [rel for rel in writing_now if _protected_state(rel)]
         if protected:
             hookio.deny_tool(
-                f"founder-os: {protected[0]} is the plugin's own enforcement state, and the "
+                f"claude-bestpractice: {protected[0]} is the plugin's own enforcement state, and the "
                 "session being enforced does not get to edit it — pointing `test_command` at "
                 "`true` would buy a green finish and erase the record of the real failure.\n"
-                "Change it with `founder-os ci`, or edit it yourself outside a session. "
-                "Everything else under .claude/founder-os/ is yours to write."
+                "Change it with `claude-bestpractice ci`, or edit it yourself outside a session. "
+                "Everything else under .claude/claude-bestpractice/ is yours to write."
             )
 
         # Bash is a write tool. An agent writes files with heredocs, `>`, `tee` and
@@ -340,7 +340,7 @@ def main() -> None:
         hits = redact.find(content)
         if hits:
             hookio.deny_tool(
-                f"founder-os: refusing this write — it contains what looks like a credential "
+                f"claude-bestpractice: refusing this write — it contains what looks like a credential "
                 f"({', '.join(hits)}). Put it in an environment variable and reference it. "
                 "Post-hoc cleanup does not work: the value is already on disk and in the "
                 "transcript, which .gitignore does not cover."
@@ -357,7 +357,7 @@ def main() -> None:
                 other = sessions.get(ctx, owner)
                 where = f" on branch {other.branch}" if other else ""
                 hookio.deny_tool(
-                    f"founder-os: session {owner[:8]}{where} is editing {touched[0]} right now. "
+                    f"claude-bestpractice: session {owner[:8]}{where} is editing {touched[0]} right now. "
                     "Work on something else, or coordinate before touching this file — "
                     "whoever writes second wins silently and neither of you would notice."
                 )

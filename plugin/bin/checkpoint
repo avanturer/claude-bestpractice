@@ -29,8 +29,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from founder_os import hookio, provenance, redact, sessions, store  # noqa: E402
-from founder_os.gitctx import changed_files, resolve  # noqa: E402
+from claude_bestpractice import hookio, provenance, redact, sessions, store  # noqa: E402
+from claude_bestpractice.gitctx import changed_files, resolve  # noqa: E402
 
 MAX_TURN_CHARS = 300
 MAX_TURNS = 3

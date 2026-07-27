@@ -19,8 +19,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from founder_os import ci, hookio, onboard, plan, stage, store  # noqa: E402
-from founder_os.gitctx import resolve  # noqa: E402
+from claude_bestpractice import ci, hookio, onboard, plan, stage, store  # noqa: E402
+from claude_bestpractice.gitctx import resolve  # noqa: E402
 
 
 def main() -> None:
@@ -40,11 +40,11 @@ def main() -> None:
     # budget that three to eight parallel sessions spend like a small team.
     hook_installed, hook_note = ci.install(ctx)
 
-    lines = [f"founder-os is set up. Detected stage: {resolved}."]
+    lines = [f"claude-bestpractice is set up. Detected stage: {resolved}."]
     if hook_installed:
         lines.append(
-            "Checks now run locally before every push (`founder-os-ci status` to see, "
-            "`founder-os-ci github` to add hosted CI)."
+            "Checks now run locally before every push (`claude-bestpractice-ci status` to see, "
+            "`claude-bestpractice-ci github` to add hosted CI)."
         )
         # `hook_note` was computed and thrown away, so displacing the founder's own
         # pre-push hook — husky's, lefthook's — happened without a word. It chains
@@ -62,7 +62,7 @@ def main() -> None:
             + "; ".join(gaps)
             + ". Ask the user for them when it is relevant, do not guess."
         )
-    lines.append("Run `founder-os status` to see everything at once.")
+    lines.append("Run `claude-bestpractice status` to see everything at once.")
 
     hookio.emit_context("Setup", "\n".join(lines), limit=1_500)
 

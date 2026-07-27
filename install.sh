@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# founder-os installer. One command, no configuration, works in any repository.
+# claude-bestpractice installer. One command, no configuration, works in any repository.
 #
 #   curl -fsSL https://raw.githubusercontent.com/avanturer/claude-bestpractice/HEAD/install.sh | bash
 #
@@ -11,10 +11,10 @@
 
 set -euo pipefail
 
-REPO_URL="${FOUNDER_OS_REPO:-https://github.com/avanturer/claude-bestpractice.git}"
-INSTALL_DIR="${FOUNDER_OS_DIR:-$HOME/.founder-os}"
-MARKETPLACE="founder-os"
-PLUGIN="founder-os"
+REPO_URL="${CLAUDE_BESTPRACTICE_REPO:-https://github.com/avanturer/claude-bestpractice.git}"
+INSTALL_DIR="${CLAUDE_BESTPRACTICE_DIR:-$HOME/.claude-bestpractice}"
+MARKETPLACE="claude-bestpractice"
+PLUGIN="claude-bestpractice"
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
 dim()  { printf '\033[2m%s\033[0m\n' "$*"; }
@@ -40,7 +40,7 @@ if [ -z "$PY" ]; then
   die "python 3.9 or newer is required (no other dependency is)"
 fi
 
-bold "founder-os"
+bold "claude-bestpractice"
 dim  "python: $($PY --version 2>&1) · claude: $(claude --version 2>&1 | head -1)"
 
 # ---------------------------------------------------------------- fetch or update
@@ -74,9 +74,9 @@ chmod +x "$INSTALL_DIR"/plugin/bin/* 2>/dev/null || true
 bold "verifying"
 # mktemp, not a fixed /tmp path: a predictable name that an attacker (or a stale
 # symlink) already created is followed by the redirect, truncating whatever it points at.
-DOCTOR_LOG="$(mktemp -t founder-os-doctor.XXXXXX)"
+DOCTOR_LOG="$(mktemp -t claude-bestpractice-doctor.XXXXXX)"
 trap 'rm -f "$DOCTOR_LOG" "${LOG:-}"' EXIT
-if ! "$PY" "$INSTALL_DIR/plugin/bin/founder-os-doctor" >"$DOCTOR_LOG" 2>&1; then
+if ! "$PY" "$INSTALL_DIR/plugin/bin/claude-bestpractice-doctor" >"$DOCTOR_LOG" 2>&1; then
   cat "$DOCTOR_LOG"
   die "the doctor failed — refusing to install gates that do not fire"
 fi
@@ -97,7 +97,7 @@ fi
 # and the upgrade branch was dead. Match anywhere on the line.
 # `update` is also a no-op when the version string has not changed, which is exactly the
 # case during development — so uninstall and reinstall, which does refresh the cache.
-LOG="$(mktemp -t founder-os-register.XXXXXX)"
+LOG="$(mktemp -t claude-bestpractice-register.XXXXXX)"
 if claude plugin list 2>/dev/null | grep -q "${PLUGIN}@${MARKETPLACE}"; then
   dim "refreshing the installed copy"
   claude plugin uninstall "${PLUGIN}@${MARKETPLACE}" >"$LOG" 2>&1 || true
@@ -124,10 +124,10 @@ EOF
 )"
 # ASK THE CLI where it put the copy. Do not go looking for it.
 #
-# Two rounds of this check were wrong in the same way. Searching by `-name founder-os`
+# Two rounds of this check were wrong in the same way. Searching by `-name claude-bestpractice`
 # cannot work at all: the cache is `cache/<marketplace>/<plugin>/<version>/`, both
-# MARKETPLACE and PLUGIN are the literal string "founder-os", and the two matching
-# directories are version-UNSCOPED — so `cache/founder-os` and `cache/founder-os/founder-os`
+# MARKETPLACE and PLUGIN are the literal string "claude-bestpractice", and the two matching
+# directories are version-UNSCOPED — so `cache/claude-bestpractice` and `cache/claude-bestpractice/claude-bestpractice`
 # hash identically, and after one version bump either of them hashes both versions at
 # once against a source tree containing one. Neither "-print -quit" nor "newest by mtime"
 # fixes that; the search itself is the bug.
@@ -175,9 +175,9 @@ fi
 # symlink is only so the commands also work in the founder's own terminal.
 LINK_DIR="$HOME/.local/bin"
 mkdir -p "$LINK_DIR"
-for command in founder-os founder-os-doctor founder-os-knowledge founder-os-plan \
-               founder-os-decide founder-os-ingest founder-os-reindex founder-os-ci \
-               founder-os-attempt founder-os-options founder-os-ship; do
+for command in claude-bestpractice claude-bestpractice-doctor claude-bestpractice-knowledge claude-bestpractice-plan \
+               claude-bestpractice-decide claude-bestpractice-ingest claude-bestpractice-reindex claude-bestpractice-ci \
+               claude-bestpractice-attempt claude-bestpractice-options claude-bestpractice-ship; do
   ln -sf "$INSTALL_DIR/plugin/bin/$command" "$LINK_DIR/$command"
 done
 
@@ -190,14 +190,14 @@ cat <<TEXT
   Plugin changes take effect in your NEXT session, not this one.
 
   In any repository:
-    founder-os init      derive the knowledge layer from the code that is there
-    founder-os status    what is known, in flight, planned and enforced
-    founder-os doctor    prove every gate still fires
+    claude-bestpractice init      derive the knowledge layer from the code that is there
+    claude-bestpractice status    what is known, in flight, planned and enforced
+    claude-bestpractice doctor    prove every gate still fires
 
   Inside a Claude session:
-    /founder-os:status   the same view, read by the agent
-    /founder-os:plan     the work ledger
-    /founder-os:review   fresh-context review of the current diff
+    /claude-bestpractice:status   the same view, read by the agent
+    /claude-bestpractice:plan     the work ledger
+    /claude-bestpractice:review   fresh-context review of the current diff
 
 TEXT
 

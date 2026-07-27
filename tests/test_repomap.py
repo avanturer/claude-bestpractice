@@ -6,7 +6,7 @@ import unittest
 
 from helpers import RepoCase
 
-from founder_os import repomap
+from claude_bestpractice import repomap
 
 
 class TestExtraction(unittest.TestCase):

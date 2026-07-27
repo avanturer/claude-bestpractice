@@ -1,11 +1,11 @@
 """Storage substrate: two tiers, atomic writes, and locks that actually lock.
 
-TIER A  <repo>/.claude/founder-os/   committed, one file per artifact, lifecycle in
+TIER A  <repo>/.claude/claude-bestpractice/   committed, one file per artifact, lifecycle in
                                      the directory name so a transition is `git mv`.
                                      Collision-free filenames mean N sessions produce
                                      N distinct adds and never a merge conflict.
 
-TIER B  <git-common-dir>/founder-os/ ephemeral coordination. The only location that
+TIER B  <git-common-dir>/claude-bestpractice/ ephemeral coordination. The only location that
                                      is shared by every worktree of one clone, is
                                      invisible to git, survives branch switches, and
                                      dies with the clone.
@@ -28,8 +28,8 @@ from typing import Any, Iterator
 
 from .gitctx import GitContext
 
-TIER_A_DIRNAME = ".claude/founder-os"
-TIER_B_DIRNAME = "founder-os"
+TIER_A_DIRNAME = ".claude/claude-bestpractice"
+TIER_B_DIRNAME = "claude-bestpractice"
 
 # The mtime backstop, for a holder whose liveness cannot be established: a lock from a
 # different machine over a shared filesystem, or one whose payload never landed. Long
@@ -308,7 +308,7 @@ def guarded_json(
 # Tier B is DESCRIBED as entirely derived, and four of its files are not. These record
 # events — a finish that could not be proved, a suite observed failing, a decision the
 # agent drafted and nobody has accepted yet — and no amount of rescanning the repository
-# brings an event back. Purging them was silent, permanent, and `founder-os reindex`
+# brings an event back. Purging them was silent, permanent, and `claude-bestpractice reindex`
 # printed "Nothing durable was lost" over the top of it.
 #
 # Keeping the list here rather than in the command: the destruction lives here, so the

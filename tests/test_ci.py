@@ -16,7 +16,7 @@ from pathlib import Path
 
 from helpers import BIN, REPO_ROOT, RepoCase, git
 
-CLI = BIN / "founder-os-ci"
+CLI = BIN / "claude-bestpractice-ci"
 
 
 class CICase(RepoCase):
@@ -27,7 +27,7 @@ class CICase(RepoCase):
         )
 
     def ctx(self):
-        from founder_os.gitctx import resolve
+        from claude_bestpractice.gitctx import resolve
 
         return resolve(self.repo)
 
@@ -82,7 +82,7 @@ class TestTheHookStopsAPush(CICase):
 
 class TestInstallIsSafe(CICase):
     def test_it_is_idempotent(self):
-        from founder_os import ci
+        from claude_bestpractice import ci
 
         first, _ = ci.install(self.ctx())
         second, note = ci.install(self.ctx())
@@ -91,7 +91,7 @@ class TestInstallIsSafe(CICase):
         self.assertIn("already", note)
 
     def test_it_never_silently_destroys_another_tool_s_hook(self):
-        from founder_os import ci
+        from claude_bestpractice import ci
 
         path = ci.hook_path(self.ctx())
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -112,7 +112,7 @@ class TestInstallIsSafe(CICase):
         That is the exact failure this project exists to prevent, committed by the thing
         that prevents it — and it would have shipped as "backed up", which sounds safe.
         """
-        from founder_os import ci
+        from claude_bestpractice import ci
 
         path = ci.hook_path(self.ctx())
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -126,7 +126,7 @@ class TestInstallIsSafe(CICase):
         self.assertIn("THEIR-CHECK-RAN", proc.stdout)
 
     def test_a_refusal_from_the_displaced_hook_is_still_a_refusal(self):
-        from founder_os import ci
+        from claude_bestpractice import ci
 
         path = ci.hook_path(self.ctx())
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -147,7 +147,7 @@ class TestInstallIsSafe(CICase):
         showed their script modified, and the undo could not put it back because it
         restored a hook, not the file.
         """
-        from founder_os import ci
+        from claude_bestpractice import ci
 
         target = self.repo / "scripts" / "prepush.sh"
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -169,7 +169,7 @@ class TestInstallIsSafe(CICase):
         self.assertEqual(path.resolve(), target.resolve())
 
     def test_removal_reports_that_nothing_checks_pushes(self):
-        from founder_os import ci
+        from claude_bestpractice import ci
 
         ci.install(self.ctx())
         changed, note = ci.remove(self.ctx())
@@ -179,7 +179,7 @@ class TestInstallIsSafe(CICase):
 
     def test_it_honours_core_hookspath(self):
         """A repo that configured its own hooks directory gets the hook there, or nowhere."""
-        from founder_os import ci
+        from claude_bestpractice import ci
 
         (self.repo / "githooks").mkdir()
         git(["config", "core.hooksPath", "githooks"], self.repo)
@@ -189,7 +189,7 @@ class TestInstallIsSafe(CICase):
 
     def test_the_hook_is_executable(self):
         """git silently ignores a hook without the bit, which looks exactly like passing."""
-        from founder_os import ci
+        from claude_bestpractice import ci
 
         ci.install(self.ctx())
         self.assertTrue(ci.hook_path(self.ctx()).stat().st_mode & 0o111)
@@ -199,23 +199,23 @@ class TestLocalIsTheDefault(CICase):
     """An opt-in check nobody opted into is the same as no check."""
 
     def test_setup_installs_it(self):
-        from founder_os import ci
+        from claude_bestpractice import ci
 
         self.run_hook("setup", {"session_id": "s1", "hook_event_name": "Setup"})
         self.assertTrue(ci.installed(self.ctx()), "setup left pushes unchecked")
 
     def test_init_installs_it(self):
-        from founder_os import ci
+        from claude_bestpractice import ci
 
         subprocess.run(
-            [sys.executable, str(BIN / "founder-os"), "init"],
+            [sys.executable, str(BIN / "claude-bestpractice"), "init"],
             capture_output=True, text=True, cwd=str(self.repo), timeout=180,
         )
         self.assertTrue(ci.installed(self.ctx()))
 
     def test_status_says_what_runs_where(self):
         proc = subprocess.run(
-            [sys.executable, str(BIN / "founder-os"), "status"],
+            [sys.executable, str(BIN / "claude-bestpractice"), "status"],
             capture_output=True, text=True, cwd=str(self.repo), timeout=180,
         )
         self.assertIn("CHECKS", proc.stdout)
@@ -226,25 +226,25 @@ class TestHostedCICostsNothingUntilAskedFor(CICase):
     def workflow(self, gated: bool) -> None:
         path = self.repo / ".github" / "workflows" / "check.yml"
         path.parent.mkdir(parents=True, exist_ok=True)
-        guard = "    if: vars.FOUNDER_OS_CI == 'on'\n" if gated else ""
+        guard = "    if: vars.CLAUDE_BESTPRACTICE_CI == 'on'\n" if gated else ""
         path.write_text(f"name: check\non:\n  push:\njobs:\n  check:\n{guard}    runs-on: ubuntu-latest\n")
 
     def test_a_gated_workflow_is_reported_as_opt_in(self):
-        from founder_os import ci
+        from claude_bestpractice import ci
 
         self.workflow(gated=True)
         self.assertEqual(ci.workflow_state(self.ctx()), "gated")
         self.assertTrue(any("gated" in line for line in ci.status_lines(self.ctx())))
 
     def test_an_ungated_workflow_is_called_out_as_spending_minutes(self):
-        from founder_os import ci
+        from claude_bestpractice import ci
 
         self.workflow(gated=False)
         self.assertEqual(ci.workflow_state(self.ctx()), "always")
         self.assertTrue(any("UNGATED" in line for line in ci.status_lines(self.ctx())))
 
     def test_enabling_without_gh_explains_the_manual_route(self):
-        from founder_os import ci
+        from claude_bestpractice import ci
 
         self.workflow(gated=True)
         ok, note = ci.set_hosted(self.ctx(), on=True)
@@ -256,7 +256,7 @@ class TestHostedCICostsNothingUntilAskedFor(CICase):
             self.assertTrue("gh variable set" in note or "gh refused" in note, note)
 
     def test_it_refuses_when_there_is_no_workflow(self):
-        from founder_os import ci
+        from claude_bestpractice import ci
 
         ok, note = ci.set_hosted(self.ctx(), on=True)
         self.assertFalse(ok)
@@ -267,7 +267,7 @@ class TestTheShippedWorkflowIsOptIn(unittest.TestCase):
     """This repository's own CI must not spend minutes on every push either."""
 
     def test_the_check_job_is_gated(self):
-        from founder_os import ci
+        from claude_bestpractice import ci
 
         text = (REPO_ROOT / ci.WORKFLOW).read_text(encoding="utf-8")
         self.assertIn(f"vars.{ci.CI_VARIABLE} == 'on'", text)

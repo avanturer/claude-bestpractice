@@ -15,7 +15,7 @@ import unittest
 
 from helpers import RepoCase
 
-from founder_os import testcount
+from claude_bestpractice import testcount
 
 
 class TestCounting(RepoCase):
@@ -70,7 +70,7 @@ class TestItGuardsTheLedger(RepoCase):
 
     def test_deleting_tests_cannot_clear_a_red_record(self):
         """The single move a blocking Stop gate most incentivises."""
-        from founder_os import evidence
+        from claude_bestpractice import evidence
 
         self.suite_of(6)
         evidence.record_red(self.ctx(), ["pytest"], "1 failed, 5 passed in 0.1s")
@@ -80,7 +80,7 @@ class TestItGuardsTheLedger(RepoCase):
 
     def test_a_fabricated_count_is_not_a_witnessed_green(self):
         """`test:\\n\\t@echo '2 passed in 0.03s'` — the cheapest forgery round six found."""
-        from founder_os import evidence
+        from claude_bestpractice import evidence
 
         self.suite_of(6)
         verdict = evidence._judge_green_run(self.ctx(), [], ["make", "test"], "2 passed in 0.03s", 0)
@@ -95,7 +95,7 @@ class TestItGuardsTheLedger(RepoCase):
         here from the files and `executed` is parsed from the gated party's stdout, so
         the unchecked side was an open door.
         """
-        from founder_os import evidence
+        from claude_bestpractice import evidence
 
         self.suite_of(6)
         for claimed in ("9999 passed in 0.01s", "999999999 passed in 0.01s"):
@@ -104,14 +104,14 @@ class TestItGuardsTheLedger(RepoCase):
 
     def test_parametrisation_is_still_allowed_to_exceed_the_count(self):
         """One parametrize over twenty inputs is twenty reported tests from one line."""
-        from founder_os import evidence
+        from claude_bestpractice import evidence
 
         self.suite_of(6)
         verdict = evidence._judge_green_run(self.ctx(), [], ["pytest"], "120 passed in 2.0s", 0)
         self.assertFalse(verdict.unverified)
 
     def test_the_whole_suite_passing_still_clears_it(self):
-        from founder_os import evidence
+        from claude_bestpractice import evidence
 
         self.suite_of(6)
         evidence.record_red(self.ctx(), ["pytest"], "1 failed, 5 passed in 0.1s")
@@ -144,7 +144,7 @@ class TestTheGateDrivesTheRunnerItself(RepoCase):
 
     def test_a_forged_recipe_does_not_hide_a_regression(self):
         """Round seven's winning attack: echo a believable count. The recipe is not run."""
-        from founder_os import evidence
+        from claude_bestpractice import evidence
 
         self.project(regression=True, recipe="@echo '11 passed in 0.01s'")
         verdict = evidence._verify_by_running(self.ctx(), [], ["make", "test"])
@@ -156,7 +156,7 @@ class TestTheGateDrivesTheRunnerItself(RepoCase):
 
     def test_honest_work_passes_even_with_a_nonsense_recipe(self):
         """The recipe is irrelevant in both directions, or this would block correct work."""
-        from founder_os import evidence
+        from claude_bestpractice import evidence
 
         self.project(regression=False, recipe="@echo 'lol nothing here'")
         verdict = evidence._verify_by_running(self.ctx(), [], ["make", "test"])
@@ -166,7 +166,7 @@ class TestTheGateDrivesTheRunnerItself(RepoCase):
 
     def test_it_declines_rather_than_guessing_when_no_runner_is_drivable(self):
         """None means "could not witness", and the caller must not read it as a pass."""
-        from founder_os import witness
+        from claude_bestpractice import witness
 
         self.write("main.c", "int main(void) { return 0; }\n")
         self.commit("c project")

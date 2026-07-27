@@ -12,29 +12,29 @@ from helpers import BIN, RepoCase
 
 class AttemptCase(RepoCase):
     def ctx(self):
-        from founder_os.gitctx import resolve
+        from claude_bestpractice.gitctx import resolve
 
         return resolve(self.repo)
 
     def cli(self, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [sys.executable, str(BIN / "founder-os-attempt"), *args],
+            [sys.executable, str(BIN / "claude-bestpractice-attempt"), *args],
             capture_output=True, text=True, cwd=str(self.repo), timeout=180,
         )
 
 
 class TestRecording(AttemptCase):
     def test_an_attempt_survives_as_committed_state(self):
-        from founder_os import attempts
+        from claude_bestpractice import attempts
 
         attempts.record(self.ctx(), "websockets", "reconnect storms", ["src/ws.ts"])
-        files = list((self.repo / ".claude" / "founder-os" / "attempts").glob("*.md"))
+        files = list((self.repo / ".claude" / "claude-bestpractice" / "attempts").glob("*.md"))
         self.assertEqual(len(files), 1)
         self.assertIn("reconnect storms", files[0].read_text())
 
     def test_the_same_dead_end_is_not_filed_twice(self):
         """A ledger that accumulates near-duplicates is one nobody reads."""
-        from founder_os import attempts
+        from claude_bestpractice import attempts
 
         ctx = self.ctx()
         self.assertIsNotNone(attempts.record(ctx, "websockets", "reconnect storms", ["src/ws.ts"]))
@@ -42,7 +42,7 @@ class TestRecording(AttemptCase):
         self.assertEqual(len(attempts.load_all(ctx)), 1)
 
     def test_the_same_title_on_different_files_is_a_different_attempt(self):
-        from founder_os import attempts
+        from claude_bestpractice import attempts
 
         ctx = self.ctx()
         attempts.record(ctx, "polling", "too slow", ["src/a.ts"])
@@ -52,7 +52,7 @@ class TestRecording(AttemptCase):
     def test_ids_do_not_collide_under_parallel_writes(self):
         workers = [
             subprocess.Popen(
-                [sys.executable, str(BIN / "founder-os-attempt"), "add", f"approach {i}",
+                [sys.executable, str(BIN / "claude-bestpractice-attempt"), "add", f"approach {i}",
                  "--why", "did not work", "--paths", f"src/{i}.ts"],
                 cwd=str(self.repo), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
@@ -60,7 +60,7 @@ class TestRecording(AttemptCase):
         ]
         for worker in workers:
             worker.wait(timeout=180)
-        files = list((self.repo / ".claude" / "founder-os" / "attempts").glob("*.md"))
+        files = list((self.repo / ".claude" / "claude-bestpractice" / "attempts").glob("*.md"))
         ids = [f.name.split("-", 1)[0] for f in files]
         self.assertEqual(len(ids), 8)
         self.assertEqual(len(set(ids)), 8, f"duplicate ids: {sorted(ids)}")
@@ -70,7 +70,7 @@ class TestSurfacing(AttemptCase):
     """By subject, not by recency — otherwise it is archaeology in every turn."""
 
     def test_it_warns_only_on_the_files_being_touched(self):
-        from founder_os import attempts
+        from claude_bestpractice import attempts
 
         ctx = self.ctx()
         attempts.record(ctx, "websockets", "reconnect storms", ["src/ws.ts"])
@@ -88,7 +88,7 @@ class TestSurfacing(AttemptCase):
         recency would be actively wrong. An ABSENT subject is different — there is nothing
         to be irrelevant to yet, and the alternative is saying nothing at all.
         """
-        from founder_os import attempts
+        from claude_bestpractice import attempts
 
         ctx = self.ctx()
         attempts.record(ctx, "websockets", "reconnect storms", ["src/ws.ts"])
@@ -98,7 +98,7 @@ class TestSurfacing(AttemptCase):
         """The same thing again, through the gate the founder actually runs."""
         import json
 
-        from founder_os import attempts
+        from claude_bestpractice import attempts
 
         attempts.record(
             self.ctx(), "in-house stripe proration", "disagreed with stripe by cents", ["billing.py"]
@@ -111,7 +111,7 @@ class TestSurfacing(AttemptCase):
         self.assertIn("stripe proration", body)
 
     def test_the_board_carries_the_warning_into_the_next_session(self):
-        from founder_os import attempts
+        from claude_bestpractice import attempts
 
         attempts.record(self.ctx(), "websockets", "reconnect storms", ["src/ws.ts"])
         self.write("src/ws.ts", "// editing this again\n")
@@ -132,7 +132,7 @@ class TestAutomaticCapture(AttemptCase):
     """Manual upkeep is the problem this replaces, so most of it must fill itself."""
 
     def test_an_unverified_finish_becomes_a_failed_attempt(self):
-        from founder_os import attempts
+        from claude_bestpractice import attempts
 
         self.write("app.py", "x = 1\n")
         self.commit()

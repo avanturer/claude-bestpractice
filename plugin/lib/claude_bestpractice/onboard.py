@@ -139,7 +139,7 @@ def render_entities(ctx: GitContext, found: Findings) -> str:
         return knowledge.load(ctx).entities_raw or _ENTITIES_EMPTY
 
     lines = [
-        "# Derived from the code by `founder-os-onboard`, then edited by hand.",
+        "# Derived from the code by `claude-bestpractice-onboard`, then edited by hand.",
         "# The `code:` anchor is checked on every `make knowledge` — a rename fails",
         "# validation rather than leaving this file describing something that is gone.",
         "",

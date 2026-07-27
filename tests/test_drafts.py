@@ -9,7 +9,7 @@ import unittest
 
 from helpers import BIN, RepoCase
 
-from founder_os import drafts
+from claude_bestpractice import drafts
 
 
 class TestClassification(unittest.TestCase):
@@ -134,7 +134,7 @@ class TestTranscriptReading(RepoCase):
 class TestCli(RepoCase):
     def run_cli(self, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [sys.executable, str(BIN / "founder-os-decide"), *args],
+            [sys.executable, str(BIN / "claude-bestpractice-decide"), *args],
             capture_output=True,
             text=True,
             cwd=str(self.repo),
@@ -154,7 +154,7 @@ class TestCli(RepoCase):
         proc = self.run_cli("accept", "1")
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
-        from founder_os import knowledge
+        from claude_bestpractice import knowledge
 
         files = knowledge.decision_files(ctx)
         self.assertEqual(len(files), 1)
@@ -167,7 +167,7 @@ class TestCli(RepoCase):
         self.assertEqual(self.run_cli("discard", "1").returncode, 0)
         self.assertEqual(drafts.pending(ctx), [])
 
-        from founder_os import knowledge
+        from claude_bestpractice import knowledge
 
         self.assertEqual(knowledge.decision_files(ctx), [])
 

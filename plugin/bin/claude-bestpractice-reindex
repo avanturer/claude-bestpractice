@@ -18,12 +18,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from founder_os import hookio, sessions, stage, store  # noqa: E402
-from founder_os.gitctx import resolve_for_cli  # noqa: E402
+from claude_bestpractice import hookio, sessions, stage, store  # noqa: E402
+from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Rebuild founder-os derived state.")
+    parser = argparse.ArgumentParser(description="Rebuild claude-bestpractice derived state.")
     parser.add_argument("--dry-run", action="store_true", help="report without deleting")
     args = parser.parse_args()
 

@@ -28,7 +28,7 @@ def read(rel: str) -> str:
 
 class TestVersionAgreement(unittest.TestCase):
     def declared(self) -> str:
-        source = read("plugin/lib/founder_os/__init__.py")
+        source = read("plugin/lib/claude_bestpractice/__init__.py")
         match = re.search(r'__version__\s*=\s*"([^"]+)"', source)
         self.assertIsNotNone(match, "__init__.py has no __version__")
         return match.group(1)
@@ -205,7 +205,7 @@ class TestReindexKeepsWhatItCannotRebuild(RepoCase):
     """
 
     def seed(self) -> None:
-        from founder_os import board, store
+        from claude_bestpractice import board, store
 
         ctx = self.ctx()
         board.add_open_item(
@@ -215,7 +215,7 @@ class TestReindexKeepsWhatItCannotRebuild(RepoCase):
         store.append_jsonl(store.tier_b(ctx, "decision-inbox.jsonl"), {"title": "use postgres"})
 
     def test_the_records_survive(self):
-        from founder_os import board, store
+        from claude_bestpractice import board, store
 
         self.seed()
         store.purge_tier_b(self.ctx())
@@ -227,7 +227,7 @@ class TestReindexKeepsWhatItCannotRebuild(RepoCase):
 
     def test_the_genuinely_derived_state_is_still_dropped(self):
         """Otherwise this is not a rebuild, it is a no-op with extra steps."""
-        from founder_os import sessions, store
+        from claude_bestpractice import sessions, store
 
         ctx = self.ctx()
         sessions.register(ctx, session_record_for(ctx, "s1"))
@@ -240,7 +240,7 @@ class TestReindexKeepsWhatItCannotRebuild(RepoCase):
         claim that specific is the kind a founder stops checking."""
         self.seed()
         proc = subprocess.run(
-            [sys.executable, str(BIN / "founder-os-reindex")],
+            [sys.executable, str(BIN / "claude-bestpractice-reindex")],
             cwd=str(self.repo), capture_output=True, text=True, timeout=120,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)

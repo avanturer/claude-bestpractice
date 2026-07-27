@@ -1,6 +1,6 @@
 <div align="center">
 
-# founder-os
+# claude-bestpractice
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
@@ -20,7 +20,7 @@
 
 ```sh
 claude plugin marketplace add avanturer/claude-bestpractice
-claude plugin install founder-os@founder-os
+claude plugin install claude-bestpractice@claude-bestpractice
 ```
 
 Or, to have the gates proven on your machine **before** anything is registered:
@@ -34,19 +34,19 @@ The two are not equivalent, and the difference matters on your first day:
 |  | `claude plugin install` | `install.sh` |
 |---|---|---|
 | Gates fire in a session | yes | yes |
-| `founder-os` in **your own terminal** | no | yes (symlinks into `~/.local/bin`) |
+| `claude-bestpractice` in **your own terminal** | no | yes (symlinks into `~/.local/bin`) |
 | Doctor run before anything is registered | no | yes |
 
 Claude Code puts the plugin's `bin/` on the Bash tool's PATH automatically, so on the
 marketplace path the commands below work **inside a session** and are `command not found`
-in your shell. That is worth knowing because `founder-os init` is what installs the
+in your shell. That is worth knowing because `claude-bestpractice init` is what installs the
 pre-push gate: skip it and the gate is off while `claude plugin list` says `✓ enabled`.
 
 In any repository afterwards — from your terminal, or by asking Claude to run them:
 
 ```sh
-founder-os init      # derive what it can from your code; ask you for what it cannot
-founder-os status    # everything at once
+claude-bestpractice init      # derive what it can from your code; ask you for what it cannot
+claude-bestpractice status    # everything at once
 ```
 
 The installer runs the doctor **before** registering anything and refuses to install if
@@ -55,7 +55,7 @@ any gate fails to fire. Gates that silently do nothing are worse than no gates.
 Read that claim narrowly, because it is narrow: the doctor builds its own throwaway
 repository and attacks that. It proves **the gates work**, not that they are correctly
 wired into *your* project — so "All 25 checks passed" is a statement about this software,
-never a clean bill of health for your repository. `founder-os status` is the one that
+never a clean bill of health for your repository. `claude-bestpractice status` is the one that
 looks at yours.
 
 ---
@@ -131,7 +131,7 @@ enforcing, so death now requires the process to be gone or its pid recycled.
 
 ### A work ledger that merges
 
-`.claude/founder-os/plan/{next,doing,done}/` — one file per task, state encoded in the
+`.claude/claude-bestpractice/plan/{next,doing,done}/` — one file per task, state encoded in the
 directory, so a transition is `git mv`. Five worktrees produce five clean adds instead of
 five conflicting hunks in one JSON blob. Ids allocate against every sibling worktree,
 because worktrees share the namespace before their files are ever committed.
@@ -194,7 +194,7 @@ Stage is computed from the repository, never configured, and the ratchet only ti
 
 ### Checks run locally, not on someone's meter
 
-`founder-os init` installs a **pre-push hook** that runs your own `make check` — or the
+`claude-bestpractice init` installs a **pre-push hook** that runs your own `make check` — or the
 doctor, in a repository that has none — before anything leaves the machine. Free, and in
 time to stop the push rather than to email you about it afterwards.
 
@@ -205,9 +205,9 @@ The shipped GitHub Actions workflow is **gated behind a repository variable**, s
 costs nothing until you ask for it:
 
 ```sh
-founder-os-ci status     # what runs where
-founder-os-ci github     # switch hosted CI on (sets the variable via gh)
-founder-os-ci off        # remove the pre-push hook
+claude-bestpractice-ci status     # what runs where
+claude-bestpractice-ci github     # switch hosted CI on (sets the variable via gh)
+claude-bestpractice-ci off        # remove the pre-push hook
 ```
 
 Both can run at once — a pre-push hook only binds machines that installed it, so a
@@ -217,7 +217,7 @@ hosted run does not.
 
 ### It takes over what fights it
 
-`founder-os adopt` finds other tools contesting the events this owns, quarantines their
+`claude-bestpractice adopt` finds other tools contesting the events this owns, quarantines their
 hook entries into a labelled block with a backup, and tells you exactly which competing
 plugins to disable. Reversible with `--restore`. It never deletes another tool's
 configuration silently.
@@ -228,21 +228,21 @@ configuration silently.
 
 | | |
 |---|---|
-| `founder-os status` | Sessions, plan, knowledge, memory health, conflicts, next action |
-| `founder-os init` | Derive the knowledge layer from your code |
-| `founder-os adopt` | Take over events another tool is contesting |
-| `founder-os doctor` | Prove each gate by attempting a known-bad action |
-| `founder-os-plan` | The work ledger: `add`, `list`, `claim`, `done` |
-| `founder-os-decide` | Accept a decision drafted from your own corrections |
-| `founder-os-ingest` | Sanitise production errors into fenced task files |
-| `founder-os-knowledge` | Validate the decided layer, refresh its index |
-| `founder-os-reindex` | Drop and rebuild everything derived |
-| `founder-os-ci` | Where the checks run: local pre-push by default, hosted CI opt-in |
-| `founder-os-attempt` | The dead-end ledger: what was tried, and why it failed |
-| `founder-os-options` | Record a decision as a scored comparison of alternatives |
-| `founder-os-ship` | What this branch delivered, for someone who never reads code (`--pr` opens one) |
+| `claude-bestpractice status` | Sessions, plan, knowledge, memory health, conflicts, next action |
+| `claude-bestpractice init` | Derive the knowledge layer from your code |
+| `claude-bestpractice adopt` | Take over events another tool is contesting |
+| `claude-bestpractice doctor` | Prove each gate by attempting a known-bad action |
+| `claude-bestpractice-plan` | The work ledger: `add`, `list`, `claim`, `done` |
+| `claude-bestpractice-decide` | Accept a decision drafted from your own corrections |
+| `claude-bestpractice-ingest` | Sanitise production errors into fenced task files |
+| `claude-bestpractice-knowledge` | Validate the decided layer, refresh its index |
+| `claude-bestpractice-reindex` | Drop and rebuild everything derived |
+| `claude-bestpractice-ci` | Where the checks run: local pre-push by default, hosted CI opt-in |
+| `claude-bestpractice-attempt` | The dead-end ledger: what was tried, and why it failed |
+| `claude-bestpractice-options` | Record a decision as a scored comparison of alternatives |
+| `claude-bestpractice-ship` | What this branch delivered, for someone who never reads code (`--pr` opens one) |
 
-In a session: `/founder-os:status` · `/founder-os:plan` · `/founder-os:review`
+In a session: `/claude-bestpractice:status` · `/claude-bestpractice:plan` · `/claude-bestpractice:review`
 
 ## The gates
 
@@ -292,17 +292,17 @@ Claude Code 2.1.220.
 
 Two directories, and the difference matters:
 
-**`.claude/founder-os/` — commit this.** Tasks, decisions, dead ends, the stage marker.
+**`.claude/claude-bestpractice/` — commit this.** Tasks, decisions, dead ends, the stage marker.
 It is deliberately inside your repository because it must travel with the branch: a
 decision taken on `feat/billing` is about `feat/billing`, and a task list that does not
 follow a branch switch is worse than none. One file per item, so five worktrees produce
 five clean adds rather than five conflicting hunks in one blob. Nothing in it varies
 between runs, so it does not turn up as a diff every time a gate fires.
 
-**`.git/founder-os/` — ignore it, git already does.** Live sessions, leases, the
+**`.git/claude-bestpractice/` — ignore it, git already does.** Live sessions, leases, the
 loop counter, the test receipt. It lives in the git common directory because that is the
 only path shared by every worktree of one clone, invisible to git, surviving branch
-switches, and dying with the clone. It is entirely rebuildable: `founder-os reindex`
+switches, and dying with the clone. It is entirely rebuildable: `claude-bestpractice reindex`
 regenerates it from the committed half, and that path is tested rather than assumed.
 
 You never edit either by hand. If you want the whole thing gone, delete both directories
@@ -313,7 +313,7 @@ and uninstall the plugin — nothing else on your machine is touched.
 Claude Code's `/plugin` panel shows what a plugin adds to your context window every
 turn, which makes this a number you can compare rather than a claim you have to take.
 
-founder-os holds **~332 tokens** of always-on context across four components, against a
+claude-bestpractice holds **~332 tokens** of always-on context across four components, against a
 self-imposed ceiling of 400. `make check` fails the build if it goes over, and the
 ceiling has been held by trimming descriptions rather than by raising it — twice.
 

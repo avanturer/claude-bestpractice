@@ -9,7 +9,7 @@ import unittest
 
 from helpers import BIN, REPO_ROOT, RepoCase
 
-from founder_os import knowledge, onboard
+from claude_bestpractice import knowledge, onboard
 
 SLOP = REPO_ROOT / "tools" / "check_slop.py"
 
@@ -171,7 +171,7 @@ class TestWorktreeCreate(RepoCase):
     def test_derives_a_deterministic_port_and_database(self):
         """Worktrees isolate files but share the daemon, ports and caches."""
         self.hook(branch="feature-z")
-        from founder_os import store
+        from claude_bestpractice import store
 
         record = store.read_json(store.tier_b(self.ctx(), "worktrees", "feature-z.json"))
         self.assertIsNotNone(record)
@@ -181,7 +181,7 @@ class TestWorktreeCreate(RepoCase):
     def test_two_branches_get_different_ports(self):
         self.hook(branch="alpha")
         self.hook(branch="beta")
-        from founder_os import store
+        from claude_bestpractice import store
 
         ctx = self.ctx()
         a = store.read_json(store.tier_b(ctx, "worktrees", "alpha.json"))
@@ -192,7 +192,7 @@ class TestWorktreeCreate(RepoCase):
 class TestStatusCommand(RepoCase):
     def status(self) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [sys.executable, str(BIN / "founder-os"), "status"],
+            [sys.executable, str(BIN / "claude-bestpractice"), "status"],
             capture_output=True,
             text=True,
             cwd=str(self.repo),
@@ -213,7 +213,7 @@ class TestStatusCommand(RepoCase):
     def test_init_derives_and_reports(self):
         self.write("models.py", "class Invoice:\n    pass\n")
         proc = subprocess.run(
-            [sys.executable, str(BIN / "founder-os"), "init"],
+            [sys.executable, str(BIN / "claude-bestpractice"), "init"],
             capture_output=True,
             text=True,
             cwd=str(self.repo),
@@ -309,7 +309,7 @@ class TestSlopChecker(RepoCase):
         self.slop("--all", "--ratchet")
         (self.repo / "long.py").unlink()
         self.slop("--all", "--ratchet")
-        budget = json.loads((self.repo / ".claude/founder-os/slop-budget.json").read_text())
+        budget = json.loads((self.repo / ".claude/claude-bestpractice/slop-budget.json").read_text())
         self.assertEqual(budget["long_functions"], 0)
 
 

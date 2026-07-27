@@ -14,8 +14,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from founder_os import hookio, plan, sessions  # noqa: E402
-from founder_os.gitctx import resolve_for_cli  # noqa: E402
+from claude_bestpractice import hookio, plan, sessions  # noqa: E402
+from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
 
 
 def cmd_add(ctx, title: str, body: str) -> int:
@@ -66,7 +66,7 @@ def cmd_done(ctx, task_id: str) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="founder-os work ledger")
+    parser = argparse.ArgumentParser(description="claude-bestpractice work ledger")
     sub = parser.add_subparsers(dest="command")
 
     add = sub.add_parser("add", help="add a task to next")

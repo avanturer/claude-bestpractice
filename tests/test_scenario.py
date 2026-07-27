@@ -18,7 +18,7 @@ import unittest
 
 from helpers import BIN, RepoCase, git
 
-from founder_os import board, conflicts, knowledge, plan, provenance, sessions
+from claude_bestpractice import board, conflicts, knowledge, plan, provenance, sessions
 
 JUNIT_PASS = '<?xml version="1.0"?><testsuite name="s" tests="6" failures="0" errors="0"></testsuite>'
 JUNIT_FAIL = '<?xml version="1.0"?><testsuite name="s" tests="6" failures="2" errors="0"></testsuite>'
@@ -110,7 +110,7 @@ class TestFullLifecycle(Scenario):
         )
 
     def phase_plan_and_start(self) -> None:
-        self.cli("founder-os-plan", "add", "Add CSV export to billing")
+        self.cli("claude-bestpractice-plan", "add", "Add CSV export to billing")
         self.assertEqual(plan.summary(self.ctx())["next"], 1)
 
         board_text = self.context_of(
@@ -120,7 +120,7 @@ class TestFullLifecycle(Scenario):
         self.assertIn("health:", board_text)
         self.assertIn("stage: prototype", board_text)
 
-        self.cli("founder-os-plan", "claim", "0001", "--session", "s1")
+        self.cli("claude-bestpractice-plan", "claim", "0001", "--session", "s1")
         self.hook(
             "prompt-capture",
             session_id="s1",
@@ -175,7 +175,7 @@ class TestFullLifecycle(Scenario):
         )
         self.assertEqual(allowed.returncode, 0, allowed.stderr)
 
-        self.cli("founder-os-plan", "done", "0001")
+        self.cli("claude-bestpractice-plan", "done", "0001")
         counts = plan.summary(self.ctx())
         self.assertEqual((counts["doing"], counts["done"]), (0, 1))
 
@@ -338,7 +338,7 @@ class TestMemoryStaysHonest(Scenario):
             "checkpoint", session_id="s1", hook_event_name="PreCompact", trigger="auto"
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        saved = list((self.repo / ".claude" / "founder-os" / "checkpoints").glob("*.md"))
+        saved = list((self.repo / ".claude" / "claude-bestpractice" / "checkpoints").glob("*.md"))
         self.assertEqual(len(saved), 1)
         text = saved[0].read_text()
         self.assertIn("src/billing.js @ ", text)
@@ -350,7 +350,7 @@ class TestMemoryStaysHonest(Scenario):
         self.hook("session-start", session_id="s1", hook_event_name="SessionStart")
         plan.add(self.ctx(), "durable task")
 
-        proc = self.cli("founder-os-reindex")
+        proc = self.cli("claude-bestpractice-reindex")
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
         # Tier A survived; only derived state was dropped.
@@ -414,7 +414,7 @@ class TestConflictTakeover(Scenario):
         self.write(
             ".claude/settings.json",
             json.dumps(
-                {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/x/founder-os/bin/evidence-gate"}]}]}}
+                {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/x/claude-bestpractice/bin/evidence-gate"}]}]}}
             ),
         )
         moved, _ = conflicts.quarantine_loose_hooks(self.ctx())
@@ -427,7 +427,7 @@ class TestConflictTakeover(Scenario):
         )
         self.write(".claude/settings.json", original)
 
-        proc = self.cli("founder-os", "adopt", "--dry-run")
+        proc = self.cli("claude-bestpractice", "adopt", "--dry-run")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("dry run", proc.stdout)
         self.assertEqual((self.repo / ".claude" / "settings.json").read_text(), original)

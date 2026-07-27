@@ -36,7 +36,7 @@ def make_repo(parent: Path, name: str = "repo", seed: bool = True, relax_git_pol
     repo = parent / name
     repo.mkdir(parents=True)
     git(["init", "-q", "-b", "main"], repo)
-    git(["config", "user.email", "test@founder-os"], repo)
+    git(["config", "user.email", "test@claude-bestpractice"], repo)
     git(["config", "user.name", "test"], repo)
     # Never sign fixture commits: signing reaches outside the test, and a host
     # signing helper that is unavailable would fail every repository-backed test
@@ -48,7 +48,7 @@ def make_repo(parent: Path, name: str = "repo", seed: bool = True, relax_git_pol
         if relax_git_policy:
             # Committed, not just written: config is Tier A by design, and leaving it
             # untracked would make every "the tree is clean" assertion false.
-            cfg = repo / ".claude" / "founder-os" / "config.json"
+            cfg = repo / ".claude" / "claude-bestpractice" / "config.json"
             cfg.parent.mkdir(parents=True, exist_ok=True)
             cfg.write_text(json.dumps({"require_worktree": False, "protect_trunk": False}))
         git(["add", "-A"], repo)
@@ -66,15 +66,15 @@ class RepoCase(unittest.TestCase):
     relax_git_policy = True
 
     def setUp(self) -> None:
-        self.tmp = Path(tempfile.mkdtemp(prefix="founder-os-test-"))
+        self.tmp = Path(tempfile.mkdtemp(prefix="claude-bestpractice-test-"))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.repo = make_repo(self.tmp, relax_git_policy=self.relax_git_policy)
 
     def configure(self, **values) -> None:
-        """Merge keys into this repository's founder-os config."""
+        """Merge keys into this repository's claude-bestpractice config."""
         import json
 
-        path = self.repo / ".claude" / "founder-os" / "config.json"
+        path = self.repo / ".claude" / "claude-bestpractice" / "config.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         current = {}
         if path.exists():
@@ -86,7 +86,7 @@ class RepoCase(unittest.TestCase):
         path.write_text(json.dumps(current), encoding="utf-8")
 
     def ctx(self):
-        from founder_os.gitctx import resolve
+        from claude_bestpractice.gitctx import resolve
 
         return resolve(self.repo)
 
@@ -141,7 +141,7 @@ def session_record_for(ctx, session_id: str, pid: int | None = None):
     import os
     import time
 
-    from founder_os import sessions
+    from claude_bestpractice import sessions
 
     now = time.time()
     return sessions.SessionRecord(

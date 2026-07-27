@@ -1,6 +1,6 @@
 <div align="center">
 
-# founder-os
+# claude-bestpractice
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
@@ -20,7 +20,7 @@
 
 ```sh
 claude plugin marketplace add avanturer/claude-bestpractice
-claude plugin install founder-os@founder-os
+claude plugin install claude-bestpractice@claude-bestpractice
 ```
 
 或者用这条——它会在注册任何东西**之前**先在你的机器上验证每个 gate：
@@ -34,19 +34,19 @@ curl -fsSL https://raw.githubusercontent.com/avanturer/claude-bestpractice/HEAD/
 |  | `claude plugin install` | `install.sh` |
 |---|---|---|
 | gate 在会话中生效 | 是 | 是 |
-| `founder-os` 在**你自己的终端**里可用 | 否 | 是（软链到 `~/.local/bin`）|
+| `claude-bestpractice` 在**你自己的终端**里可用 | 否 | 是（软链到 `~/.local/bin`）|
 | 注册前先跑 doctor | 否 | 是 |
 
 Claude Code 会自动把插件的 `bin/` 加进 Bash 工具的 PATH，所以走 marketplace 路径时，
 下面这些命令在**会话内**可用，在你自己的 shell 里则是 `command not found`。这一点很重要，
-因为 pre-push gate 正是由 `founder-os init` 安装的：跳过它，gate 就是关着的，而
+因为 pre-push gate 正是由 `claude-bestpractice init` 安装的：跳过它，gate 就是关着的，而
 `claude plugin list` 依然显示 `✓ enabled`。
 
 之后在任意仓库中——在终端里运行，或者让 Claude 替你运行：
 
 ```sh
-founder-os init      # 能从代码推导的自动推导，推导不出的才来问你
-founder-os status    # 一次看全
+claude-bestpractice init      # 能从代码推导的自动推导，推导不出的才来问你
+claude-bestpractice status    # 一次看全
 ```
 
 安装器在注册任何东西**之前**先跑 doctor，只要有一个 gate 没有真正触发就拒绝安装。
@@ -120,7 +120,7 @@ health: 3 live session(s), 1 reaped, 4 open item(s), 1 stale (suppressed)
 
 ### 能够合并的工作台账
 
-`.claude/founder-os/plan/{next,doing,done}/` —— 一个任务一个文件，状态由目录编码，
+`.claude/claude-bestpractice/plan/{next,doing,done}/` —— 一个任务一个文件，状态由目录编码，
 所以状态转移就是一次 `git mv`。五个 worktree 产生五次干净的新增，而不是同一个 JSON
 里五段互相冲突的 hunk。ID 的分配会参照所有兄弟 worktree，因为 worktree 在文件被提交
 之前就已经共享同一个命名空间。
@@ -175,7 +175,7 @@ Stop gate **丢弃智能体的自述文字**，自己去运行你的测试套件
 
 ### 检查在本地跑，不花别人的机时
 
-`founder-os init` 会装上一个 **pre-push 钩子**，在任何东西离开这台机器之前先跑你自己的
+`claude-bestpractice init` 会装上一个 **pre-push 钩子**，在任何东西离开这台机器之前先跑你自己的
 `make check`——仓库没有的话就跑 doctor。免费，而且时机对：它拦下这次 push，而不是事后
 给你发一封邮件。
 
@@ -185,9 +185,9 @@ Stop gate **丢弃智能体的自述文字**，自己去运行你的测试套件
 随附的 GitHub Actions 工作流**由一个仓库变量把守**，在你主动开启之前不花一分钱：
 
 ```sh
-founder-os-ci status     # 什么在哪里跑
-founder-os-ci github     # 打开托管 CI（通过 gh 设置该变量）
-founder-os-ci off        # 移除 pre-push 钩子
+claude-bestpractice-ci status     # 什么在哪里跑
+claude-bestpractice-ci github     # 打开托管 CI（通过 gh 设置该变量）
+claude-bestpractice-ci off        # 移除 pre-push 钩子
 ```
 
 两者可以并存：pre-push 钩子只约束装了它的机器，所以一个别人也会推送的仓库仍然需要托管
@@ -196,7 +196,7 @@ founder-os-ci off        # 移除 pre-push 钩子
 
 ### 它会接管与它冲突的东西
 
-`founder-os adopt` 会找出争抢本插件所拥有事件的其他工具，把它们的 hook 条目移入一个
+`claude-bestpractice adopt` 会找出争抢本插件所拥有事件的其他工具，把它们的 hook 条目移入一个
 带标记的区块并留下备份，然后明确告诉你该禁用哪些竞争插件。可用 `--restore` 撤销。
 它绝不会悄悄删除别的工具的配置。
 
@@ -206,21 +206,21 @@ founder-os-ci off        # 移除 pre-push 钩子
 
 | | |
 |---|---|
-| `founder-os status` | 会话、计划、知识、记忆健康度、冲突、下一步动作 |
-| `founder-os init` | 从你的代码推导出知识层 |
-| `founder-os adopt` | 接管被其他工具争抢的事件 |
-| `founder-os doctor` | 通过尝试一个已知的坏动作来证明每个 gate 有效 |
-| `founder-os-plan` | 工作台账：`add`、`list`、`claim`、`done` |
-| `founder-os-decide` | 采纳一条由你自己的纠正草拟出的决策 |
-| `founder-os-ingest` | 把生产环境错误净化成带围栏的任务文件 |
-| `founder-os-knowledge` | 校验已决层，刷新其索引 |
-| `founder-os-reindex` | 丢弃并重建所有推导内容 |
-| `founder-os-ci` | 检查在哪里跑：默认本地 pre-push，托管 CI 按需开启 |
-| `founder-os-attempt` | 死路台账：试过什么、为什么没成 |
-| `founder-os-options` | 把决策记成一次按指标打分的方案比较 |
-| `founder-os-ship` | 这条分支交付了什么，写给不读代码的人（`--pr` 直接开 PR）|
+| `claude-bestpractice status` | 会话、计划、知识、记忆健康度、冲突、下一步动作 |
+| `claude-bestpractice init` | 从你的代码推导出知识层 |
+| `claude-bestpractice adopt` | 接管被其他工具争抢的事件 |
+| `claude-bestpractice doctor` | 通过尝试一个已知的坏动作来证明每个 gate 有效 |
+| `claude-bestpractice-plan` | 工作台账：`add`、`list`、`claim`、`done` |
+| `claude-bestpractice-decide` | 采纳一条由你自己的纠正草拟出的决策 |
+| `claude-bestpractice-ingest` | 把生产环境错误净化成带围栏的任务文件 |
+| `claude-bestpractice-knowledge` | 校验已决层，刷新其索引 |
+| `claude-bestpractice-reindex` | 丢弃并重建所有推导内容 |
+| `claude-bestpractice-ci` | 检查在哪里跑：默认本地 pre-push，托管 CI 按需开启 |
+| `claude-bestpractice-attempt` | 死路台账：试过什么、为什么没成 |
+| `claude-bestpractice-options` | 把决策记成一次按指标打分的方案比较 |
+| `claude-bestpractice-ship` | 这条分支交付了什么，写给不读代码的人（`--pr` 直接开 PR）|
 
-在会话中：`/founder-os:status` · `/founder-os:plan` · `/founder-os:review`
+在会话中：`/claude-bestpractice:status` · `/claude-bestpractice:plan` · `/claude-bestpractice:review`
 
 ## 各个 Gate
 
@@ -269,15 +269,15 @@ Claude Code 2.1.220 上通过。
 
 两个目录，区别很重要：
 
-**`.claude/founder-os/` —— 提交它。** 任务、决策、走过的死路、阶段标记。它被有意放在
+**`.claude/claude-bestpractice/` —— 提交它。** 任务、决策、走过的死路、阶段标记。它被有意放在
 仓库内部，因为它必须跟着分支走：在 `feat/billing` 上做出的决策就是关于 `feat/billing`
 的，而一个切分支就丢失的任务清单比没有更糟。每个条目一个文件，所以五个 worktree 产生
 五次干净的 add，而不是同一个 JSON 大对象里五段互相冲突的改动。里面没有任何逐次变化的
 内容，所以它不会在每次 gate 触发时都冒出来变成一个 diff。
 
-**`.git/founder-os/` —— 不用管，git 本来就看不见它。** 活跃会话、文件租约、循环计数器、
+**`.git/claude-bestpractice/` —— 不用管，git 本来就看不见它。** 活跃会话、文件租约、循环计数器、
 测试回执。它放在 git 公共目录里，因为那是唯一一个被同一个克隆的所有 worktree 共享、对
-git 不可见、能扛过分支切换、并随克隆一起消亡的位置。它完全可重建：`founder-os reindex`
+git 不可见、能扛过分支切换、并随克隆一起消亡的位置。它完全可重建：`claude-bestpractice reindex`
 会从已提交的那一半重新生成它，而这条路径是被测试过的，不是假设的。
 
 两者都不需要你手动编辑。如果想彻底清除，删掉这两个目录并卸载插件即可——你机器上别的
@@ -288,7 +288,7 @@ git 不可见、能扛过分支切换、并随克隆一起消亡的位置。它�
 Claude Code 的 `/plugin` 面板现在会显示每个插件每轮向上下文窗口添加多少内容，所以这是
 一个可以横向比较的数字，而不是一句需要你相信的说法。
 
-founder-os 的常驻上下文为 **约 332 tokens**，分布在四个组件上，自设上限为 400。
+claude-bestpractice 的常驻上下文为 **约 332 tokens**，分布在四个组件上，自设上限为 400。
 超出时 `make check` 直接让构建失败；而这条上限是靠精简描述守住的，不是靠抬高门槛——
 已经这样做过两次。
 

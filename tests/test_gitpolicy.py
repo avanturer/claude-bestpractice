@@ -27,7 +27,7 @@ class PolicyCase(RepoCase):
     relax_git_policy = False
 
     def ctx(self, root=None):
-        from founder_os.gitctx import resolve
+        from claude_bestpractice.gitctx import resolve
 
         return resolve(root or self.repo)
 
@@ -143,7 +143,7 @@ class TestAdoptability(PolicyCase):
 class TestTrunkDetection(PolicyCase):
     def test_it_asks_the_repository_rather_than_guessing(self):
         """A default branch not called `main` is ordinary; guessing refuses real work."""
-        from founder_os import gitpolicy
+        from claude_bestpractice import gitpolicy
 
         git(["switch", "-qc", "delivery"], self.repo)
         git(["branch", "-M", "main", "old-main"], self.repo)
@@ -154,8 +154,8 @@ class TestTrunkDetection(PolicyCase):
         import tempfile
         from pathlib import Path
 
-        from founder_os import gitpolicy
-        from founder_os.gitctx import resolve
+        from claude_bestpractice import gitpolicy
+        from claude_bestpractice.gitctx import resolve
 
         with tempfile.TemporaryDirectory() as tmp:
             fresh = Path(tmp) / "fresh"
@@ -239,6 +239,6 @@ class TestConflictMarkers(PolicyCase):
         self.assertIn("conflict marker", proc.stdout)
 
     def test_ordinary_content_with_equals_signs_is_fine(self):
-        from founder_os import gitpolicy
+        from claude_bestpractice import gitpolicy
 
         self.assertEqual(gitpolicy.conflict_complaint("x = 1\nsep = '=' * 40\n"), "")

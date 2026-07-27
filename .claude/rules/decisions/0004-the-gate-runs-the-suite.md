@@ -1,6 +1,6 @@
 ---
 title: The gate runs the suite; an artifact is not evidence
-paths: plugin/lib/founder_os/evidence.py
+paths: plugin/lib/claude_bestpractice/evidence.py
 supersedes: "0002"
 date: 2026-07-25
 ---

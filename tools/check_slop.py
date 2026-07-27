@@ -37,7 +37,7 @@ import sys
 from collections import Counter
 from dataclasses import dataclass
 
-BUDGET_FILE = ".claude/founder-os/slop-budget.json"
+BUDGET_FILE = ".claude/claude-bestpractice/slop-budget.json"
 
 DEFAULT_BUDGETS = {
     "swallowed_exceptions": 0,

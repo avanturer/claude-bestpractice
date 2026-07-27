@@ -13,12 +13,12 @@ from helpers import BIN, RepoCase
 class OptionCase(RepoCase):
     def cli(self, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [sys.executable, str(BIN / "founder-os-options"), *args],
+            [sys.executable, str(BIN / "claude-bestpractice-options"), *args],
             capture_output=True, text=True, cwd=str(self.repo), timeout=180,
         )
 
     def comparison(self, **overrides):
-        from founder_os import options
+        from claude_bestpractice import options
 
         base = dict(
             id="", problem="cache layer", metrics=["latency", "ops"],
@@ -34,7 +34,7 @@ class OptionCase(RepoCase):
 
 class TestWhatCountsAsAComparison(OptionCase):
     def test_one_option_is_not_a_comparison(self):
-        from founder_os import options
+        from claude_bestpractice import options
 
         one = self.comparison(options=[options.Option("redis", {"latency": 9, "ops": 3})], chosen="redis")
         recorded, complaint = options.record(self.ctx(), one)
@@ -42,14 +42,14 @@ class TestWhatCountsAsAComparison(OptionCase):
         self.assertIn("at least", complaint)
 
     def test_better_with_no_axis_is_a_preference(self):
-        from founder_os import options
+        from claude_bestpractice import options
 
         recorded, complaint = options.record(self.ctx(), self.comparison(metrics=[]))
         self.assertIsNone(recorded)
         self.assertIn("no metrics", complaint)
 
     def test_every_option_must_be_scored_on_every_metric(self):
-        from founder_os import options
+        from claude_bestpractice import options
 
         half = self.comparison(
             options=[
@@ -63,14 +63,14 @@ class TestWhatCountsAsAComparison(OptionCase):
 
     def test_choosing_the_loser_silently_is_refused(self):
         """Overriding the numbers is allowed. Doing it without saying why is not."""
-        from founder_os import options
+        from claude_bestpractice import options
 
         recorded, complaint = options.record(self.ctx(), self.comparison(chosen="redis", why=""))
         self.assertIsNone(recorded)
         self.assertIn("scores highest", complaint)
 
     def test_choosing_the_loser_with_a_reason_is_accepted(self):
-        from founder_os import options
+        from claude_bestpractice import options
 
         recorded, _ = options.record(
             self.ctx(), self.comparison(chosen="redis", why="we already run redis for sessions")
@@ -78,7 +78,7 @@ class TestWhatCountsAsAComparison(OptionCase):
         self.assertIsNotNone(recorded)
 
     def test_a_real_comparison_is_recorded(self):
-        from founder_os import options
+        from claude_bestpractice import options
 
         recorded, complaint = options.record(self.ctx(), self.comparison())
         self.assertIsNotNone(recorded, complaint)
@@ -88,7 +88,7 @@ class TestWhatCountsAsAComparison(OptionCase):
 
 class TestDependencyDetection(unittest.TestCase):
     def names(self, text: str) -> set:
-        from founder_os.options import _dependency_names
+        from claude_bestpractice.options import _dependency_names
 
         return _dependency_names(text)
 
@@ -142,7 +142,7 @@ class TestTheGateDemandsIt(RepoCase):
         self.assertNotIn("no comparison on record", self.stop().stderr)
 
     def test_a_recorded_comparison_satisfies_it(self):
-        from founder_os import options
+        from claude_bestpractice import options
 
         self.start_with_manifest({"express": "^4.18"})
         options.record(

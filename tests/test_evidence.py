@@ -8,7 +8,7 @@ import unittest
 
 from helpers import RepoCase
 
-from founder_os import evidence
+from claude_bestpractice import evidence
 
 JUNIT_PASS = '<?xml version="1.0"?><testsuite name="s" tests="4" failures="0" errors="0"></testsuite>'
 JUNIT_FAIL = '<?xml version="1.0"?><testsuite name="s" tests="4" failures="1" errors="0"></testsuite>'
@@ -65,7 +65,7 @@ class TestArtifactParsing(RepoCase):
 
 class TestVerify(RepoCase):
     def changed(self) -> list[str]:
-        from founder_os.gitctx import changed_files
+        from claude_bestpractice.gitctx import changed_files
 
         return changed_files(self.ctx())
 
@@ -125,8 +125,8 @@ class TestMaterialChanges(unittest.TestCase):
     def test_drops_exempt_paths(self):
         """The plugin's own bookkeeping must not demand a test run to justify itself."""
         out = evidence.material_changes(
-            ["src/a.py", ".claude/founder-os/stage.json", "docs/x.md"],
-            [".claude/founder-os/", "docs/"],
+            ["src/a.py", ".claude/claude-bestpractice/stage.json", "docs/x.md"],
+            [".claude/claude-bestpractice/", "docs/"],
         )
         self.assertEqual(out, ["src/a.py"])
 
@@ -203,7 +203,7 @@ class TestScopeDrift(unittest.TestCase):
 
     def test_exempt_paths_are_never_drift(self):
         drift = evidence.scope_drift(
-            changed=["docs/x.md", ".claude/founder-os/config.json"],
+            changed=["docs/x.md", ".claude/claude-bestpractice/config.json"],
             task_paths=["src/auth.py"],
             exempt=["docs/", ".claude/"],
         )

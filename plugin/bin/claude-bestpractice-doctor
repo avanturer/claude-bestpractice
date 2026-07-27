@@ -28,7 +28,7 @@ from pathlib import Path
 BIN = Path(__file__).resolve().parent
 sys.path.insert(0, str(BIN.parent / "lib"))
 
-from founder_os import __version__, hookio  # noqa: E402
+from claude_bestpractice import __version__, hookio  # noqa: E402
 
 GREEN = "\033[32m" if sys.stdout.isatty() else ""
 RED = "\033[31m" if sys.stdout.isatty() else ""
@@ -65,13 +65,13 @@ def make_repo(tmp: Path, relax_git_policy: bool = True) -> Path:
     repo = tmp / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.email", "doctor@founder-os"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "doctor@claude-bestpractice"], cwd=repo, check=True)
     subprocess.run(["git", "config", "user.name", "doctor"], cwd=repo, check=True)
     # The doctor runs on install, on machines whose git config we do not control.
     subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, check=True)
     (repo / "README.md").write_text("seed\n")
     if relax_git_policy:
-        cfg = repo / ".claude" / "founder-os" / "config.json"
+        cfg = repo / ".claude" / "claude-bestpractice" / "config.json"
         cfg.parent.mkdir(parents=True, exist_ok=True)
         cfg.write_text(json.dumps({"require_worktree": False, "protect_trunk": False}))
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
@@ -371,7 +371,7 @@ def check_checkpoint(repo: Path) -> Result:
         },
         repo,
     )
-    written = list((repo / ".claude" / "founder-os" / "checkpoints").glob("*.md"))
+    written = list((repo / ".claude" / "claude-bestpractice" / "checkpoints").glob("*.md"))
     ok = proc.returncode == 0 and bool(written)
     return Result(
         "checkpoint persists before compaction",
@@ -383,8 +383,8 @@ def check_checkpoint(repo: Path) -> Result:
 def check_knowledge_anchor(repo: Path) -> Result:
     """A renamed symbol must break its entity anchor rather than describe a ghost."""
     sys.path.insert(0, str(BIN.parent / "lib"))
-    from founder_os import knowledge
-    from founder_os.gitctx import resolve
+    from claude_bestpractice import knowledge
+    from claude_bestpractice.gitctx import resolve
 
     (repo / "src").mkdir(exist_ok=True)
     (repo / "src" / "models.py").write_text("class Invoice:\n    pass\n")
@@ -420,8 +420,8 @@ def check_knowledge_anchor(repo: Path) -> Result:
 def check_provenance_suppression(repo: Path) -> Result:
     """A claim whose subject was rewritten must stop being asserted."""
     sys.path.insert(0, str(BIN.parent / "lib"))
-    from founder_os import board, provenance, sessions
-    from founder_os.gitctx import resolve
+    from claude_bestpractice import board, provenance, sessions
+    from claude_bestpractice.gitctx import resolve
 
     ctx = resolve(repo)
     (repo / "parser.py").write_text("def parse():\n    pass\n")
@@ -516,7 +516,7 @@ def check_airlock_quarantine(repo: Path) -> Result:
         "count": 1,
     }
     proc = subprocess.run(
-        [sys.executable, str(BIN / "founder-os-ingest")],
+        [sys.executable, str(BIN / "claude-bestpractice-ingest")],
         input=json.dumps(payload),
         capture_output=True,
         text=True,
@@ -583,8 +583,8 @@ def check_pushes_are_checked(repo: Path) -> Result:
     like a working gate until the day something red gets pushed.
     """
     sys.path.insert(0, str(BIN.parent / "lib"))
-    from founder_os import ci
-    from founder_os.gitctx import resolve
+    from claude_bestpractice import ci
+    from claude_bestpractice.gitctx import resolve
 
     ctx = resolve(repo)
     installed, note = ci.install(ctx)
@@ -630,7 +630,7 @@ def check_quiet_session_still_enforces(repo: Path) -> Result:
     Nothing crashed and nothing warned, so only performing the attack detects it.
     """
     start_session(repo, "doctor-quiet")
-    sessions_dir = repo / ".git" / "founder-os" / "sessions"
+    sessions_dir = repo / ".git" / "claude-bestpractice" / "sessions"
     for path in sessions_dir.glob("*.json"):
         record = json.loads(path.read_text())
         record["heartbeat_at"] = time.time() - 960
@@ -779,7 +779,7 @@ def check_onboarding(repo: Path) -> Result:
         "from models import Order\n\n\ndef charge():\n    return Order\n"
     )
     proc = subprocess.run(
-        [sys.executable, str(BIN / "founder-os"), "init"],
+        [sys.executable, str(BIN / "claude-bestpractice"), "init"],
         capture_output=True,
         text=True,
         cwd=str(repo),
@@ -810,8 +810,8 @@ def check_onboarding(repo: Path) -> Result:
 def check_plan_ledger(repo: Path) -> Result:
     """Work state must survive a crash and be reclaimable, not stuck in flight."""
     sys.path.insert(0, str(BIN.parent / "lib"))
-    from founder_os import plan, sessions
-    from founder_os.gitctx import resolve
+    from claude_bestpractice import plan, sessions
+    from claude_bestpractice.gitctx import resolve
 
     ctx = resolve(repo)
     task = plan.add(ctx, "doctor task")
@@ -850,7 +850,7 @@ def check_worktree_provisioning(repo: Path) -> Result:
     """The worktree hook must return a path and seed trust, or hooks never run there."""
     import tempfile as _tempfile
 
-    home = Path(_tempfile.mkdtemp(prefix="founder-os-home-"))
+    home = Path(_tempfile.mkdtemp(prefix="claude-bestpractice-home-"))
     proc = subprocess.run(
         [sys.executable, str(BIN / "worktree-create")],
         input=json.dumps(
@@ -897,8 +897,8 @@ def check_worktree_provisioning(repo: Path) -> Result:
 def check_reap(repo: Path) -> Result:
     """A session whose process is gone must not stay on the board forever."""
     sys.path.insert(0, str(BIN.parent / "lib"))
-    from founder_os import sessions
-    from founder_os.gitctx import resolve
+    from claude_bestpractice import sessions
+    from claude_bestpractice.gitctx import resolve
 
     ctx = resolve(repo)
     ghost = sessions.SessionRecord(
@@ -921,12 +921,12 @@ def check_reap(repo: Path) -> Result:
 
 
 def main() -> int:
-    print(f"{DIM}founder-os doctor {__version__}{OFF}")
+    print(f"{DIM}claude-bestpractice doctor {__version__}{OFF}")
     print(f"{DIM}Proving gates by attempting known-bad actions, not by reading config.{OFF}\n")
 
     results = [check_environment(), check_hooks_wiring(), check_fail_closed_on_garbage()]
 
-    tmp = Path(tempfile.mkdtemp(prefix="founder-os-doctor-"))
+    tmp = Path(tempfile.mkdtemp(prefix="claude-bestpractice-doctor-"))
     try:
         for factory in (
             check_session_start,
@@ -952,7 +952,7 @@ def main() -> int:
             check_worktree_provisioning,
             check_reap,
         ):
-            repo = make_repo(Path(tempfile.mkdtemp(prefix="founder-os-case-", dir=tmp)))
+            repo = make_repo(Path(tempfile.mkdtemp(prefix="claude-bestpractice-case-", dir=tmp)))
             try:
                 results.append(factory(repo))
             except Exception as exc:  # noqa: BLE001 - a crashed check is a failed check

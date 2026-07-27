@@ -23,7 +23,7 @@ anything; the permission layer will refuse and it wastes a turn.
 
 ## Method
 
-1. **Read the task statement first**, in `.claude/founder-os/plan/doing/` or the
+1. **Read the task statement first**, in `.claude/claude-bestpractice/plan/doing/` or the
    session record. A change that is correct but unrelated to the task is a finding.
 2. **Read the entities file** at `.claude/domain/entities.yaml`. Every entry names what
    breaks when that concept is misunderstood. Check those specific things.

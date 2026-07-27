@@ -9,7 +9,7 @@ import unittest
 
 from helpers import BIN, RepoCase
 
-from founder_os import knowledge
+from claude_bestpractice import knowledge
 
 GOOD_PRODUCT = """# Product
 
@@ -242,7 +242,7 @@ class TestSubagentBrief(KnowledgeCase):
 class TestCli(KnowledgeCase):
     def run_cli(self, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [sys.executable, str(BIN / "founder-os-knowledge"), *args],
+            [sys.executable, str(BIN / "claude-bestpractice-knowledge"), *args],
             capture_output=True,
             text=True,
             cwd=str(self.repo),

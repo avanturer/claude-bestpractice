@@ -35,8 +35,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from founder_os import hookio, store  # noqa: E402
-from founder_os.gitctx import resolve  # noqa: E402
+from claude_bestpractice import hookio, store  # noqa: E402
+from claude_bestpractice.gitctx import resolve  # noqa: E402
 
 PORT_BASE = 41000
 PORT_RANGE = 900
@@ -49,7 +49,7 @@ def derive_port(worktree_path: str) -> int:
 
 def derive_db_name(repo_name: str, branch: str) -> str:
     safe = re.sub(r"[^a-z0-9_]", "_", f"{repo_name}_{branch}".lower())
-    return safe[:60] or "founder_os_dev"
+    return safe[:60] or "claude_bestpractice_dev"
 
 
 def trust_worktree(path: str) -> bool:

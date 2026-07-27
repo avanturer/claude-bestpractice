@@ -7,7 +7,7 @@
     "  - The event arrives on STDIN as JSON. TOOL_NAME / TOOL_INPUT env vars do not exist.",
     "  - type 'http' fails OPEN on non-2xx, timeout and connection error. Never use it for a gate.",
     "",
-    "Verify with `plugin/bin/founder-os-doctor`, which proves each gate by attempting a",
+    "Verify with `plugin/bin/claude-bestpractice-doctor`, which proves each gate by attempting a",
     "known-bad action rather than reading this file back."
   ],
 
@@ -20,7 +20,7 @@
             "command": "${CLAUDE_PLUGIN_ROOT}/bin/setup",
             "timeout": 120,
             "once": true,
-            "statusMessage": "founder-os: deriving project knowledge"
+            "statusMessage": "claude-bestpractice: deriving project knowledge"
           }
         ]
       }
@@ -33,7 +33,7 @@
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/bin/worktree-create",
             "timeout": 60,
-            "statusMessage": "founder-os: provisioning worktree"
+            "statusMessage": "claude-bestpractice: provisioning worktree"
           }
         ]
       }
@@ -47,7 +47,7 @@
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/bin/session-start",
             "timeout": 30,
-            "statusMessage": "founder-os: session board"
+            "statusMessage": "claude-bestpractice: session board"
           }
         ]
       }
@@ -80,8 +80,8 @@
             "if": "Bash(git commit:*)",
             "timeout": 300,
             "asyncRewake": true,
-            "rewakeMessage": "founder-os finished reviewing your commit.",
-            "statusMessage": "founder-os: reviewing"
+            "rewakeMessage": "claude-bestpractice finished reviewing your commit.",
+            "statusMessage": "claude-bestpractice: reviewing"
           }
         ]
       }
@@ -106,7 +106,7 @@
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/bin/checkpoint",
             "timeout": 60,
-            "statusMessage": "founder-os: checkpoint"
+            "statusMessage": "claude-bestpractice: checkpoint"
           }
         ]
       }
@@ -119,7 +119,7 @@
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/bin/evidence-gate",
             "timeout": 900,
-            "statusMessage": "founder-os: verifying"
+            "statusMessage": "claude-bestpractice: verifying"
           }
         ]
       }

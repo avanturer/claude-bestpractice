@@ -1,12 +1,12 @@
 ---
 title: Cross-session state lives in the git common dir
-paths: plugin/lib/founder_os/store.py
+paths: plugin/lib/claude_bestpractice/store.py
 date: 2026-07-25
 ---
 
 ## Decision
-Ephemeral coordination state goes in `$(git rev-parse --git-common-dir)/founder-os/`.
-Durable state goes in `<repo>/.claude/founder-os/`, one file per artifact, with the
+Ephemeral coordination state goes in `$(git rev-parse --git-common-dir)/claude-bestpractice/`.
+Durable state goes in `<repo>/.claude/claude-bestpractice/`, one file per artifact, with the
 lifecycle encoded in the directory name so a transition is `git mv`.
 
 ## Why

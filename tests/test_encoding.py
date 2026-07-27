@@ -36,7 +36,7 @@ class TestUndecodableFilenames(RepoCase):
         then read the file as deleted — which is how a failing suite passed the gate
         once already. The escaped form has to reach the real inode.
         """
-        from founder_os import gitctx
+        from claude_bestpractice import gitctx
 
         self.make_it()
         changed = gitctx.changed_files(self.ctx())
@@ -75,7 +75,7 @@ class TestUndecodableFilenames(RepoCase):
         A lone surrogate cannot be UTF-8 encoded, so storing one raised inside the same
         fail-closed gates — the crash simply moved from the read to the write.
         """
-        from founder_os import gitctx, store
+        from claude_bestpractice import gitctx, store
 
         self.make_it()
         ctx = self.ctx()
@@ -86,7 +86,7 @@ class TestUndecodableFilenames(RepoCase):
 
     def test_readable_content_is_not_escaped_to_pay_for_it(self):
         """The fallback must be a fallback. Committed Tier A files are read by humans."""
-        from founder_os import store
+        from claude_bestpractice import store
 
         path = store.tier_a(self.ctx(), "readable.json")
         store.write_json(path, {"why": "перепробовали три подхода"})
@@ -95,7 +95,7 @@ class TestUndecodableFilenames(RepoCase):
 
 class TestUndecodableFileContents(RepoCase):
     def test_a_latin1_source_file_does_not_wedge_the_discipline_check(self):
-        from founder_os import discipline
+        from claude_bestpractice import discipline
 
         (self.repo / "legacy.py").write_bytes(LATIN1_SOURCE)
         baseline = self.commit("legacy")
@@ -114,7 +114,7 @@ class TestUndecodableFileContents(RepoCase):
 
     def test_a_latin1_commit_message_does_not_break_the_ship_view(self):
         """git log output is bytes too, and the founder-facing view reads it."""
-        from founder_os import delivery
+        from claude_bestpractice import delivery
 
         self.write("a.py", "x = 1\n")
         git(["add", "-A"], self.repo)

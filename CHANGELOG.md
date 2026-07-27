@@ -48,12 +48,12 @@ times and filed as a permanent failure.
 
 - **The doctor proves the gates work, not that your repository is safe.** It builds a
   throwaway repository and attacks that. "All 25 checks passed" is a statement about this
-  software. `founder-os status` is the one that looks at yours.
+  software. `claude-bestpractice status` is the one that looks at yours.
 - **The two install paths are not equivalent.** `claude plugin install` puts the gates in
-  your sessions; only `install.sh` puts the `founder-os` commands in your own terminal.
-  `founder-os init` installs the pre-push gate, so on the marketplace path you must run
+  your sessions; only `install.sh` puts the `claude-bestpractice` commands in your own terminal.
+  `claude-bestpractice init` installs the pre-push gate, so on the marketplace path you must run
   it from inside a session or the gate stays off.
-- **`.claude/founder-os/` is yours to commit.** State travels with a branch only once
+- **`.claude/claude-bestpractice/` is yours to commit.** State travels with a branch only once
   committed; nothing here commits it for you.
 - **This is not for teams.** Every trade-off assumes one owner and no reviewer.
 - **The enforcement surface is Claude Code specific.** The portable half would be the
