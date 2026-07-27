@@ -85,7 +85,30 @@ class TestItGuardsTheLedger(RepoCase):
         self.suite_of(6)
         verdict = evidence._judge_green_run(self.ctx(), [], ["make", "test"], "2 passed in 0.03s", 0)
         self.assertTrue(verdict.unverified, "a run touching a third of the suite read as green")
-        self.assertIn("narrowed run", verdict.reason)
+        self.assertIn("do not match closely enough", verdict.reason)
+
+    def test_inflating_the_fabricated_count_does_not_help(self):
+        """`2` -> `9999`. One keystroke defeated the first version of this check.
+
+        The bound was one-sided — it caught a run reporting FEWER tests than the tree
+        declares and blessed any number above as parametrisation. `declared` is counted
+        here from the files and `executed` is parsed from the gated party's stdout, so
+        the unchecked side was an open door.
+        """
+        from founder_os import evidence
+
+        self.suite_of(6)
+        for claimed in ("9999 passed in 0.01s", "999999999 passed in 0.01s"):
+            verdict = evidence._judge_green_run(self.ctx(), [], ["make", "test"], claimed, 0)
+            self.assertTrue(verdict.unverified, f"{claimed!r} read as a witnessed green")
+
+    def test_parametrisation_is_still_allowed_to_exceed_the_count(self):
+        """One parametrize over twenty inputs is twenty reported tests from one line."""
+        from founder_os import evidence
+
+        self.suite_of(6)
+        verdict = evidence._judge_green_run(self.ctx(), [], ["pytest"], "120 passed in 2.0s", 0)
+        self.assertFalse(verdict.unverified)
 
     def test_the_whole_suite_passing_still_clears_it(self):
         from founder_os import evidence

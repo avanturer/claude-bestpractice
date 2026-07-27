@@ -458,13 +458,16 @@ def _first_artifact(root: Path, globs: list[str]) -> Artifact | None:
     return None
 
 
-def _judge_by_counts(ctx: GitContext, command: list[str], tail: str) -> Verdict:
+def _judge_by_counts(
+    ctx: GitContext, command: list[str], tail: str, executed: int | None = None
+) -> Verdict:
     """Exit 0 was reported. Did anything actually run?
 
     Three answers, and the middle one is the one that kept being lost: a countable
     number of tests ran, zero ran, or the output said nothing countable at all.
     """
-    executed = _executed_from_output(tail)
+    if executed is None:
+        executed = _executed_from_output(tail)
     if executed == 0:
         return Verdict(
             False,
@@ -499,13 +502,19 @@ def _judge_by_counts(ctx: GitContext, command: list[str], tail: str) -> Verdict:
     # deliberately loose: runners expand parametrised cases, so `executed` routinely
     # exceeds `declared`, and only a large shortfall means anything.
     declared = testcount.count_tree(ctx.worktree_root)
-    missing = testcount.shortfall(declared, executed)
-    if missing >= NARROW_RUN_SHORTFALL:
+    if declared and not testcount.plausible(declared, executed):
+        # BOTH sides, because the two numbers have different authors. `declared` is read
+        # off the test files by this gate; `executed` is a regex over the gated party's
+        # stdout. The first cut of this check penalised only executed BELOW declared and
+        # blessed overcounting as parametrisation — so the round-six forgery
+        # `@echo '2 passed'` became `@echo '9999 passed'` and walked straight through.
+        # One keystroke. The counter had raised the cost of the cheapest attack by
+        # exactly one character.
         return Verdict(
             True,
-            f"suite run by the gate: exit 0, but it executed {executed} test(s) while this "
-            f"tree declares {declared}. That is a narrowed run, not the suite.\n"
-            f"$ {' '.join(command)}",
+            f"suite run by the gate: exit 0, and it reported {executed} test(s) while this "
+            f"tree declares {declared}. Those do not match closely enough to be the same "
+            f"suite.\n$ {' '.join(command)}",
             unverified=True,
         )
     return Verdict(True, f"suite run by the gate: exit 0, {executed} test(s) executed")
@@ -547,6 +556,14 @@ def _judge_green_run(
         if not artifact.passed:
             return Verdict(False, f"{artifact.path.name}: {artifact.detail}.", artifact)
         artifact.bound = True
+        # ...and the artifact faces the same floor as stdout does. This branch RETURNED
+        # before the count check was ever reached, so a recipe of
+        # `printf '<testsuite tests="1" failures="0"/>' > junit.xml` — 46 bytes — bought a
+        # witnessed green against a tree declaring 41. An artifact's `tests=` attribute is
+        # exactly as forgeable as an echo and has no business being trusted further.
+        counted = _judge_by_counts(ctx, command, tail, executed=max(artifact.total - artifact.skipped, 0))
+        if counted.unverified:
+            return Verdict(True, counted.reason, artifact, unverified=True)
         return Verdict(
             True, f"suite run by the gate: exit 0; {artifact.path.name}: {artifact.detail}", artifact
         )

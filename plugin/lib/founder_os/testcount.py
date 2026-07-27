@@ -131,3 +131,30 @@ def shortfall(declared: int, executed: int) -> float:
     if declared <= 0 or executed < 0:
         return 0.0
     return max(0.0, (declared - executed) / declared)
+
+
+# How far above the declared count a run may report before it stops looking like the same
+# suite. Parametrisation genuinely multiplies cases — one `@pytest.mark.parametrize` over
+# twenty inputs is twenty reported tests from one declaration — so the ceiling has to be
+# generous. It just cannot be infinite, which is what it was.
+OVERCOUNT_CEILING = 30
+
+
+def plausible(declared: int, executed: int) -> bool:
+    """Whether a reported count could belong to this tree, bounded on BOTH sides.
+
+    The first version of this comparison was one-sided: it caught a run that reported far
+    FEWER tests than the tree declares, and blessed any number above. The two values have
+    different authors — `declared` is counted here from the files, `executed` is parsed
+    from the gated party's own stdout — so a one-sided bound is an open door on the side
+    it does not check. The round-six forgery `@echo '2 passed'` needed one character to
+    become `@echo '9999 passed'`, and that cleared any tree under twenty thousand tests.
+
+    This does not make the number trustworthy. It makes a forged one have to be close to
+    right, which means knowing the tree, which is strictly more work than typing 9999.
+    """
+    if declared <= 0 or executed < 0:
+        return True
+    if shortfall(declared, executed) >= 0.5:
+        return False
+    return executed <= declared * OVERCOUNT_CEILING
