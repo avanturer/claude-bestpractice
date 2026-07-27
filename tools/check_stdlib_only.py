@@ -33,7 +33,9 @@ LOCAL = {"claude_bestpractice", "helpers"}
 
 def python_files() -> list[pathlib.Path]:
     files = list((ROOT / "plugin" / "lib").rglob("*.py"))
-    files += [p for p in (ROOT / "plugin" / "bin").iterdir() if p.is_file()]
+    # Extensionless only: bin/ also holds the .cmd shims that make the same paths
+    # runnable under PowerShell, and those are batch files, not Python.
+    files += [p for p in (ROOT / "plugin" / "bin").iterdir() if p.is_file() and not p.suffix]
     return files
 
 

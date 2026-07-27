@@ -64,6 +64,25 @@ The failure mode it does not prevent is an agent that has decided to end the tur
 cost and knows where to push. If you need a guarantee against that, this is not it, and
 nothing that runs inside the same machine as the agent is.
 
+## Windows
+
+Everything in this repository was built and verified on Linux. `bin/` is twenty
+extensionless Python scripts with a `#!/usr/bin/env python3` line, and Windows does not
+read shebangs — so before v1.0 not one command and **not one gate** ran there. The plugin
+installed, reported enabled, and enforced nothing.
+
+v1.0 ships a `.cmd` shim beside each script. Claude Code runs hooks through Git Bash where
+it exists and PowerShell where it does not; PowerShell resolves an extensionless path
+through PATHEXT, so the same hook command reaches the shim without hooks.json changing.
+The shim tries `py -3` before `python`, because the python.org installer ships `py.exe`
+and `python.exe` and not `python3.exe` — the very name the POSIX shebang needs.
+
+**This fix is designed from the documented behaviour and is NOT verified by execution.**
+The suite asserts the shims exist, pair with their scripts, use CRLF and hardcode no
+name; it cannot assert they run, because that needs Windows and this suite has never been
+on one. Treat Windows as unverified until someone reports back — and given what this page
+is about, do not take "it should work" from me as more than that.
+
 ## How to check any of this yourself
 
 Every claim above is reproducible in a scratch repository in under a minute. The gate is

@@ -246,3 +246,53 @@ class TestReindexKeepsWhatItCannotRebuild(RepoCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("Kept, because nothing can rebuild them", proc.stdout)
         self.assertIn("unverified.jsonl", proc.stdout)
+
+
+class TestWindowsShims(unittest.TestCase):
+    """`bin/` is twenty extensionless Python scripts with a `#!/usr/bin/env python3` line.
+
+    Windows does not read shebangs. Claude Code runs hooks through Git Bash where it
+    exists and PowerShell where it does not, and PowerShell cannot execute an
+    extensionless file — so on a machine without Git Bash, not one command AND NOT ONE
+    GATE ran. The plugin installed, reported enabled, and enforced nothing.
+
+    PowerShell does resolve a path without an extension through PATHEXT, so a `.cmd`
+    beside each script makes the identical hook command work in both shells without a
+    single entry in hooks.json changing.
+
+    These tests assert the shims are present and shaped right. They cannot assert that
+    they RUN — that needs Windows, and this suite has never been on one.
+    """
+
+    BIN = REPO_ROOT / "plugin" / "bin"
+
+    def scripts(self) -> list[Path]:
+        return sorted(p for p in self.BIN.iterdir() if p.is_file() and not p.suffix)
+
+    def test_every_executable_has_one(self):
+        missing = [p.name for p in self.scripts() if not p.with_suffix(".cmd").is_file()]
+        self.assertEqual(missing, [], "these cannot run under PowerShell")
+
+    def test_no_shim_is_orphaned(self):
+        names = {p.name for p in self.scripts()}
+        orphans = [p.name for p in self.BIN.glob("*.cmd") if p.stem not in names]
+        self.assertEqual(orphans, [], "a shim pointing at a script that no longer exists")
+
+    def test_they_use_crlf(self):
+        """cmd.exe is unreliable with LF-only batch files."""
+        for shim in self.BIN.glob("*.cmd"):
+            self.assertIn(b"\r\n", shim.read_bytes(), shim.name)
+
+    def test_they_try_the_launcher_before_bare_python(self):
+        """python.org ships py.exe and python.exe and NOT python3.exe — which is the name
+        the POSIX shebang resolves to, and the reason a shim is needed at all."""
+        for shim in self.BIN.glob("*.cmd"):
+            body = shim.read_text(encoding="utf-8")
+            self.assertIn("py -3", body, shim.name)
+            self.assertIn("python ", body, shim.name)
+
+    def test_they_do_not_hardcode_a_name(self):
+        """`%~n0` makes one body correct for all twenty, so a renamed command cannot
+        leave a shim silently pointing at the old one."""
+        for shim in self.BIN.glob("*.cmd"):
+            self.assertIn("%~dp0%~n0", shim.read_text(encoding="utf-8"), shim.name)
