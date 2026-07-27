@@ -83,6 +83,16 @@ name; it cannot assert they run, because that needs Windows and this suite has n
 on one. Treat Windows as unverified until someone reports back — and given what this page
 is about, do not take "it should work" from me as more than that.
 
+## Platform status, stated exactly
+
+| | |
+|---|---|
+| **Linux** | Verified by execution throughout. Every attack and every fix on this page was run here. |
+| **macOS** | **Never run.** No known blocker: the two Linux-only reads (`/proc/<pid>/stat` for the pid fingerprint, `/proc/self/ns/pid` for the lock identity) are already written to degrade to "cannot tell", and "cannot tell" resolves to alive by design. Unverified is not the same as working. |
+| **Windows** | **Never run**, and it was outright broken until v1.0 — extensionless scripts with a shebang Windows does not read, so no command and no gate ran. Now shimmed, and one genuine hazard fixed: `os.kill(pid, 0)` is a harmless existence probe on POSIX and on Windows is `CTRL_C_EVENT`, so the liveness check would have interrupted the sibling session it was asking about. |
+
+Treat macOS and Windows as unverified until someone reports back.
+
 ## How to check any of this yourself
 
 Every claim above is reproducible in a scratch repository in under a minute. The gate is

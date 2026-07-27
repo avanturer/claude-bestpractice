@@ -221,6 +221,16 @@ def _pid_alive(pid: int) -> bool:
     `PermissionError` means the process exists and belongs to someone else, which is
     all that was asked. Treating it as dead would let one user steal another's lock.
     """
+    # NEVER os.kill on Windows. There, signal 0 is CTRL_C_EVENT and every other signal
+    # goes through TerminateProcess — so the "is this process alive?" probe INTERRUPTS OR
+    # KILLS the process it is asking about. On a founder's machine that is a liveness
+    # check that reaches across and takes down a sibling Claude Code session.
+    #
+    # "Cannot tell" resolves to ALIVE, which is this module's rule everywhere else: the
+    # cost of a wrong reap is a disarmed session, and the heartbeat ceiling is the backstop
+    # for a record that outlived its process.
+    if os.name != "posix":
+        return True
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
