@@ -35,6 +35,13 @@ PROTECTED_STATE = (
     ".claude/founder-os/config.json",
     ".claude/founder-os/stage/",
     ".claude/founder-os/slop-budget.json",
+    # The record of a failing suite. Not on this list until round six, while every
+    # elaborate defence of *clearing* it was being built — and the gate's own denial text
+    # told the agent "everything else under .claude/founder-os/ is yours to write", which
+    # was true and was an instruction. `rm .claude/founder-os/failing-suite.json` was
+    # allowed, silently, and ended the whole argument in one call.
+    ".claude/founder-os/failing-suite.json",
+    ".claude/founder-os/last-green.json",
 )
 
 
@@ -45,7 +52,18 @@ def _protected_state(relpath: str) -> bool:
     rel = relpath.replace("\\", "/")
     while rel.startswith("./"):
         rel = rel[2:]
-    return any(rel == p or rel.startswith(p) for p in PROTECTED_STATE)
+    # `rm -rf .claude/founder-os/stage` names the DIRECTORY, with no trailing slash, so a
+    # prefix entry of ".../stage/" matched nothing and the whole stage ratchet could be
+    # deleted in one command. Match the directory itself as well as its contents.
+    if any(
+        rel == p or rel == p.rstrip("/") or rel.startswith(p.rstrip("/") + "/")
+        for p in PROTECTED_STATE
+    ):
+        return True
+    # And an ANCESTOR of anything protected. `rm -rf .claude/founder-os` names neither a
+    # protected file nor a protected directory, and takes every one of them with it —
+    # a rule that guards the leaves and not the branch guards nothing.
+    return any(p.startswith(rel.rstrip("/") + "/") for p in PROTECTED_STATE)
 
 
 MIGRATION_DIRS = ("migrations/", "db/migrate/", "prisma/migrations/", "alembic/versions/")
@@ -101,6 +119,18 @@ BASH_WRITE_TARGETS = re.compile(r"(?:>>?\s*|\btee\s+(?:-a\s+)?)(?P<path>[\"']?[\
 # path-shaped enough (`s/x/y/`) to fool a single pattern.
 SED_IN_PLACE = re.compile(r"\bsed\s+(?:-\S+\s+|'[^']*'\s+|\"[^\"]*\"\s+)*(?P<path>[\w./@+-]+)")
 
+# DESTRUCTION is not a redirect, and the write scanner only ever looked for redirects.
+# So every rule keyed on "which paths does this command write" — the credential scan, the
+# leases, and the protected-state refusal — was bypassable with `rm`. Deleting the record
+# of a failing suite is not a write to it, and one `rm` ended an argument the rest of this
+# gate spends hundreds of lines having.
+#
+# Every path-shaped argument of these verbs counts, because `rm -rf a b c` names three.
+BASH_REMOVES = re.compile(
+    r"\b(?:rm|unlink|shred|truncate|mv|cp|install|ln)\b(?P<args>(?:\s+(?:-\S+|[\w./@+-]+))+)"
+)
+_ARG = re.compile(r"[\w./@+-]+")
+
 
 def bash_write_targets(command: str, root: Path) -> list[str]:
     """Repo-relative paths a shell command appears to write.
@@ -116,8 +146,16 @@ def bash_write_targets(command: str, root: Path) -> list[str]:
     matches = list(BASH_WRITE_TARGETS.finditer(scannable))
     if "sed" in scannable and " -i" in scannable:
         matches += list(SED_IN_PLACE.finditer(scannable))
-    for match in matches:
-        raw = match.group("path").strip("\"'")
+    raws = [m.group("path") for m in matches]
+
+    # ...and every path a destructive verb names. `rm` is not a redirect, so none of
+    # these commands produced a target at all, and every rule keyed on "what does this
+    # write" was one `rm` away from irrelevant.
+    for match in BASH_REMOVES.finditer(scannable):
+        raws += [a for a in _ARG.findall(match.group("args")) if not a.startswith("-")]
+
+    for raw in raws:
+        raw = raw.strip("\"'")
         if not raw or raw.startswith("/dev/"):
             continue
         try:

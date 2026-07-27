@@ -428,8 +428,18 @@ def _verify_by_running(ctx: GitContext, globs: list[str], command: list[str]) ->
     # meant the two most common fake greens each cleared the red ledger on their way to
     # being refused, so the refusal was correct and the state it left behind was a lie.
     verdict = _judge_green_run(ctx, globs, command, tail, started)
-    if verdict.ok and not verdict.unverified:
-        clear_red(ctx, command, _executed_from_output(tail))
+    if not (verdict.ok and not verdict.unverified):
+        return verdict
+
+    # `clear_red` returns whether it accepted this run as covering the recorded failure,
+    # and that return value was DISCARDED. So a run judged too narrow to clear the red
+    # record still stamped `last-green.json` — the file `founder-os ship` reads to tell
+    # the founder "Tests: green (observed by the gate)". The gate refused and reassured
+    # in the same breath, which is what turned a two-step evasion into a one-step one.
+    #
+    # A green record now means exactly what the red record's absence means, or it is not
+    # written at all.
+    if clear_red(ctx, command, _executed_from_output(tail)) or red(ctx) is None:
         record_green(ctx, command)
     return verdict
 
