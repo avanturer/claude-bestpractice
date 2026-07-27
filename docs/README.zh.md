@@ -5,7 +5,7 @@
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
 [![version](https://img.shields.io/badge/version-1.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-572%20passing-2ea44f)](#已验证)
+[![tests](https://img.shields.io/badge/tests-602%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-25%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#运行要求)
@@ -17,6 +17,15 @@
 </div>
 
 ---
+
+已经在 Claude Code 会话里——最短的路径，不需要终端：
+
+```
+/plugin marketplace add avanturer/claude-bestpractice
+/plugin install claude-bestpractice
+```
+
+从终端出发，同样的事情：
 
 ```sh
 claude plugin marketplace add avanturer/claude-bestpractice
@@ -244,7 +253,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 ## 已验证
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 572 个测试 · 25 项 doctor 检查 · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 602 个测试 · 25 项 doctor 检查 · budget
 ```
 
 doctor 通过**真的去做那件坏事**来证明 gate 有效，而不是把配置读回来对一遍——
