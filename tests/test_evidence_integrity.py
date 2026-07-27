@@ -162,5 +162,94 @@ class TestTheGatedPartyCannotAmendTheRules(RepoCase):
         self.assertIsNone(self.decision(proc))
 
 
+
+
+class TestARedLedgerSurvivesAShrinkingSuite(RepoCase):
+    """The record of a failing suite is cleared only by the same suite passing.
+
+    Matching the command's NAME was the first fix and it was not enough: three routes
+    kept argv byte-identical while changing what it executed. The identity the check
+    compared against is written by the party being gated, so the check compares what the
+    run DID — a green that executed fewer tests than the red run is a smaller suite
+    passing, and that difference is invisible in argv.
+    """
+
+    def red(self, command: list[str], tail: str) -> None:
+        from founder_os import evidence
+
+        evidence.record_red(self.ctx(), command, tail)
+
+    def still_red(self) -> bool:
+        from founder_os import evidence
+
+        return evidence.red(self.ctx()) is not None
+
+    def test_a_narrower_run_behind_the_same_command_does_not_clear_it(self):
+        """A Makefile recipe edited to run only the new test. argv never changes."""
+        from founder_os import evidence
+
+        self.red(["make", "test"], "1 failed, 1 passed in 0.1s")
+        self.assertFalse(evidence.clear_red(self.ctx(), ["make", "test"], 1))
+        self.assertTrue(self.still_red())
+
+    def test_an_honest_wider_failure_cannot_be_used_to_reset_the_bar(self):
+        """Route 1: let a wider red overwrite the record, then narrow THAT one.
+
+        Three ordinary turns, no evasion — the second red is genuine. The high-water
+        mark is what stops the record's own identity from being laundered.
+        """
+        from founder_os import evidence
+
+        self.red(["python3", "-m", "pytest", "-q"], "1 failed, 1 passed in 0.1s")
+        self.red(["make", "test"], "1 failed, 1 passed in 0.1s")
+        self.assertEqual(evidence.red(self.ctx())["executed"], 2)
+        self.assertFalse(evidence.clear_red(self.ctx(), ["make", "test"], 1))
+        self.assertTrue(self.still_red())
+
+    def test_deleting_the_failing_test_does_not_clear_it(self):
+        """The single most common way an agent turns a blocking Stop gate into a pass."""
+        from founder_os import evidence
+
+        self.red(["go", "test", "./..."], "--- FAIL: TestDiscount\n1 failed")
+        verdict = evidence._judge_green_run(
+            self.ctx(), [], ["go", "test", "./..."], "?   example.com/svc  [no test files]", 0
+        )
+        self.assertTrue(verdict.unverified, "a suite that vanished read as verified green")
+        self.assertTrue(self.still_red())
+
+    def test_the_same_suite_passing_does_clear_it(self):
+        """The check is worthless if the honest case cannot recover."""
+        from founder_os import evidence
+
+        self.red(["python3", "-m", "pytest", "-q"], "1 failed, 1 passed in 0.1s")
+        self.assertTrue(evidence.clear_red(self.ctx(), ["python3", "-m", "pytest", "-q"], 2))
+        self.assertFalse(self.still_red())
+
+
+class TestCannotTellIsNotGreen(RepoCase):
+    """"The output said nothing I can count" was being reported as "the tests passed"."""
+
+    def test_a_run_with_no_countable_output_is_unverified(self):
+        from founder_os import evidence
+
+        for tail in ("?   example.com/svc  [no test files]", "", "Building...\nDone.\n"):
+            verdict = evidence._judge_green_run(self.ctx(), [], ["make", "test"], tail, 0)
+            self.assertTrue(verdict.ok, tail)
+            self.assertTrue(verdict.unverified, f"{tail!r} counted as witnessed green")
+
+    def test_a_countable_run_is_verified(self):
+        from founder_os import evidence
+
+        verdict = evidence._judge_green_run(self.ctx(), [], ["pytest"], "4 passed in 0.2s", 0)
+        self.assertTrue(verdict.ok)
+        self.assertFalse(verdict.unverified)
+
+    def test_an_unverified_run_never_writes_a_green_record(self):
+        """`founder-os ship` reads that file and tells the founder "Tests: green"."""
+        from founder_os import evidence
+
+        self.assertIsNone(evidence.last_green(self.ctx()))
+
+
 if __name__ == "__main__":
     unittest.main()

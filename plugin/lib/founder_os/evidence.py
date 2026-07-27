@@ -429,7 +429,7 @@ def _verify_by_running(ctx: GitContext, globs: list[str], command: list[str]) ->
     # being refused, so the refusal was correct and the state it left behind was a lie.
     verdict = _judge_green_run(ctx, globs, command, tail, started)
     if verdict.ok and not verdict.unverified:
-        clear_red(ctx, command)
+        clear_red(ctx, command, _executed_from_output(tail))
         record_green(ctx, command)
     return verdict
 
@@ -440,6 +440,43 @@ def _first_artifact(root: Path, globs: list[str]) -> Artifact | None:
         if artifact:
             return artifact
     return None
+
+
+def _judge_by_counts(ctx: GitContext, command: list[str], tail: str) -> Verdict:
+    """Exit 0 was reported. Did anything actually run?
+
+    Three answers, and the middle one is the one that kept being lost: a countable
+    number of tests ran, zero ran, or the output said nothing countable at all.
+    """
+    executed = _executed_from_output(tail)
+    if executed == 0:
+        return Verdict(
+            False,
+            "The suite exited 0 but EXECUTED NOTHING — every test was skipped, or none was "
+            f"collected.\n$ {' '.join(command)}\n{tail}\n"
+            "A run that asserts nothing is not evidence. Make the tests runnable here, or "
+            f"emit a machine-readable report: {artifact_hint(ctx)}",
+        )
+
+    # -1 is "the output said nothing I can count", and it was being treated as a pass.
+    # That is the same mistake as trusting the exit code, one level down: `go test ./...`
+    # prints "[no test files]" and exits 0 after the agent deletes the failing test; a
+    # Makefile recipe of `true` exits 0 having run nothing; a recipe that only `printf`s
+    # a junit.xml exits 0 having run nothing. All three read as -1, all three were
+    # certified green, and all three DELETED the red-suite ledger on the way.
+    #
+    # Allowed, because plenty of legitimate runners print nothing this can parse and
+    # blocking them would make the gate unusable. But `unverified` — so it cannot clear
+    # a red record and cannot write a green one, which is what turned "I could not tell"
+    # into "I checked and it passed" on every surface the founder reads.
+    if executed < 0:
+        return Verdict(
+            True,
+            f"suite run by the gate: exit 0, but its output reported no test counts, so "
+            f"nothing here witnesses that any test ran.\n$ {' '.join(command)}\n{tail}",
+            unverified=True,
+        )
+    return Verdict(True, f"suite run by the gate: exit 0, {executed} test(s) executed")
 
 
 def _judge_green_run(
@@ -486,15 +523,7 @@ def _judge_green_run(
     # runner has no complaints about a suite in which every test was skipped. pytest
     # exits 0 on `1 skipped`, which made the skip accounting above dead code on the
     # default path: an implementation that raised NotImplementedError finished green.
-    if _executed_from_output(tail) == 0:
-        return Verdict(
-            False,
-            "The suite exited 0 but EXECUTED NOTHING — every test was skipped, or none was "
-            f"collected.\n$ {' '.join(command)}\n{tail}\n"
-            "A run that asserts nothing is not evidence. Make the tests runnable here, or "
-            f"emit a machine-readable report: {artifact_hint(ctx)}",
-        )
-    return Verdict(True, f"suite run by the gate: exit 0 ({' '.join(command)})")
+    return _judge_by_counts(ctx, command, tail)
 
 
 # "1 passed", "3 failed, 2 passed in 0.1s", "1 skipped in 0.01s", "no tests ran".
@@ -773,11 +802,21 @@ def record_red(ctx: GitContext, command: list[str], tail: str) -> None:
     """
     path = store.tier_a(ctx, RED_SUITE_FILE)
     previous = store.read_json(path, default={}) or {}
+    if not isinstance(previous, dict):
+        previous = {}
+
+    # The HIGH-WATER MARK of tests seen executing on this branch, not just this run's.
+    # This is what makes the record hard to clear by shrinking the suite: the agent can
+    # rewrite `command`, rewrite a Makefile recipe behind an unchanged command, or delete
+    # the failing test outright — but it cannot make a narrower run look like it executed
+    # more tests than the wider one did.
+    executed = max(_executed_from_output(tail), 0)
     store.write_json(
         path,
         {
             "command": command,
-            "first_seen": previous.get("first_seen", time.time()) if isinstance(previous, dict) else time.time(),
+            "executed": max(executed, int(previous.get("executed") or 0)),
+            "first_seen": previous.get("first_seen", time.time()),
             "last_seen": time.time(),
             "branch": ctx.branch,
             "tail": tail[-1_200:],
@@ -808,7 +847,9 @@ def last_green(ctx: GitContext) -> dict | None:
     return got if isinstance(got, dict) and got.get("command") else None
 
 
-def clear_red(ctx: GitContext, command: list[str] | None = None) -> bool:
+def clear_red(
+    ctx: GitContext, command: list[str] | None = None, executed: int | None = None
+) -> bool:
     """A green run clears the red record only when it is the SAME run that went red.
 
     Returns True when a previously recorded failure was cleared.
@@ -829,6 +870,21 @@ def clear_red(ctx: GitContext, command: list[str] | None = None) -> bool:
         return False
     if command is not None and list(entry.get("command") or []) != list(command):
         return False
+
+    # Matching the command's NAME is not enough, and this is where the first fix fell
+    # short. Three routes kept argv byte-identical while changing what it executed:
+    # editing a Makefile recipe behind an unchanged `make test`; letting an honest wider
+    # failure overwrite the record's `command` first and then narrowing THAT; and simply
+    # deleting the failing test so the same command runs a smaller suite. The identity
+    # the check compared against was written by the party being gated.
+    #
+    # So compare what the run DID. A green that executed fewer tests than the red run did
+    # is not the same suite passing, it is a smaller suite passing, and the difference is
+    # invisible in argv. Costs one comparison and catches all three routes: 2 tests -> 1,
+    # 2 -> 1, and 1 -> 0.
+    if executed is not None and executed < int(entry.get("executed") or 0):
+        return False
+
     store.tier_a(ctx, RED_SUITE_FILE).unlink(missing_ok=True)
     return True
 
