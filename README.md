@@ -351,6 +351,7 @@ Stated up front, because the default in this category is false assurance.
 | [`docs/ENFORCEMENT.md`](docs/ENFORCEMENT.md) | Binding vs advisory, the ten-rule budget, what cannot hold |
 | [`docs/ECONOMICS.md`](docs/ECONOMICS.md) | Token budget, prompt-cache invariants, rate-limit admission control |
 | [`docs/EVIDENCE.md`](docs/EVIDENCE.md) | Every measured claim with its source and evidence tier |
+| [`docs/LIMITS.md`](docs/LIMITS.md) | **What a false green still costs** — eight rounds of attacks, and the ones that still work |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | What shipped, and the bugs that only execution found |
 
 MIT.

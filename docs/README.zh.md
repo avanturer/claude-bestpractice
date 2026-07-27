@@ -325,6 +325,7 @@ founder-os 的常驻上下文为 **约 332 tokens**，分布在四个组件上�
 | [`ENFORCEMENT.md`](ENFORCEMENT.md) | 强制 vs 建议、十条规则的预算、哪些约束根本立不住 |
 | [`ECONOMICS.md`](ECONOMICS.md) | token 预算、prompt cache 不变式、限流下的准入控制 |
 | [`EVIDENCE.md`](EVIDENCE.md) | 每一条量化断言及其来源与证据等级 |
+| [`LIMITS.md`](LIMITS.md) | **一次假绿灯现在要付出什么** —— 八轮攻击，以及至今仍然奏效的那些 |
 | [`ROADMAP.md`](ROADMAP.md) | 已交付的内容，以及只有执行才发现的那些 bug |
 
 MIT。

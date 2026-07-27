@@ -351,6 +351,7 @@ founder-os держит **~332 токена** постоянного конте�
 | [`ENFORCEMENT.md`](ENFORCEMENT.md) | Binding против advisory, бюджет в десять правил, что не держится |
 | [`ECONOMICS.md`](ECONOMICS.md) | Бюджет токенов, инварианты prompt-cache, admission control под rate limit |
 | [`EVIDENCE.md`](EVIDENCE.md) | Каждое измеренное утверждение с источником и уровнем доказательности |
+| [`LIMITS.md`](LIMITS.md) | **Чего всё ещё стоит ложный зелёный** — восемь раундов атак и те, что до сих пор работают |
 | [`ROADMAP.md`](ROADMAP.md) | Что уехало, и баги, которые нашло только исполнение |
 
 MIT.
