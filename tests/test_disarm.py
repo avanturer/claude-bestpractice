@@ -314,7 +314,7 @@ class TestConcurrentIdAllocation(RepoCase):
         """Same id twice merges cleanly and then `claim` acts on the wrong task."""
         workers = [
             subprocess.Popen(
-                [sys.executable, str(BIN / "claude-bestpractice-plan"), "add", f"task number {i}"],
+                [sys.executable, str(BIN / "claude-bp-plan"), "add", f"task number {i}"],
                 cwd=str(self.repo), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             for i in range(10)
@@ -586,11 +586,11 @@ class TestCLIsOutsideARepositorySaySoPlainly(unittest.TestCase):
     """A traceback reads as a crash in the tool; this is an ordinary situation."""
 
     CLIS = {
-        "claude-bestpractice": ["status"],
-        "claude-bestpractice-plan": ["list"],
-        "claude-bestpractice-knowledge": ["validate"],
-        "claude-bestpractice-reindex": [],
-        "claude-bestpractice-decide": ["list"],
+        "claude-bp": ["status"],
+        "claude-bp-plan": ["list"],
+        "claude-bp-knowledge": ["validate"],
+        "claude-bp-reindex": [],
+        "claude-bp-decide": ["list"],
     }
 
     def run_cli(self, name: str, args: list) -> subprocess.CompletedProcess:

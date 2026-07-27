@@ -308,7 +308,7 @@ def guarded_json(
 # Tier B is DESCRIBED as entirely derived, and four of its files are not. These record
 # events — a finish that could not be proved, a suite observed failing, a decision the
 # agent drafted and nobody has accepted yet — and no amount of rescanning the repository
-# brings an event back. Purging them was silent, permanent, and `claude-bestpractice reindex`
+# brings an event back. Purging them was silent, permanent, and `claude-bp reindex`
 # printed "Nothing durable was lost" over the top of it.
 #
 # Keeping the list here rather than in the command: the destruction lives here, so the

@@ -175,7 +175,7 @@ other); Redis or Neo4j daemons (infrastructure the founder must operate, and bot
 - Leases carry owner pid, TTL and heartbeat. SessionStart reaps expired leases. Validity requires
   both that the pid is alive *and* that the worktree is still registered in
   `$GIT_COMMON_DIR/worktrees/*/gitdir`.
-- `rm -rf <git-common-dir>/claude-bestpractice && claude-bestpractice reindex` is a tested, documented command. Tier B
+- `rm -rf <git-common-dir>/claude-bestpractice && claude-bp reindex` is a tested, documented command. Tier B
   is entirely derivable from Tier A plus transcripts.
 
 ### 4.3 Worktree lifecycle

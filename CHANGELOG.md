@@ -48,10 +48,10 @@ times and filed as a permanent failure.
 
 - **The doctor proves the gates work, not that your repository is safe.** It builds a
   throwaway repository and attacks that. "All 25 checks passed" is a statement about this
-  software. `claude-bestpractice status` is the one that looks at yours.
+  software. `claude-bp status` is the one that looks at yours.
 - **The two install paths are not equivalent.** `claude plugin install` puts the gates in
   your sessions; only `install.sh` puts the `claude-bestpractice` commands in your own terminal.
-  `claude-bestpractice init` installs the pre-push gate, so on the marketplace path you must run
+  `claude-bp init` installs the pre-push gate, so on the marketplace path you must run
   it from inside a session or the gate stays off.
 - **`.claude/claude-bestpractice/` is yours to commit.** State travels with a branch only once
   committed; nothing here commits it for you.

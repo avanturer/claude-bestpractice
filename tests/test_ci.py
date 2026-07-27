@@ -16,7 +16,7 @@ from pathlib import Path
 
 from helpers import BIN, REPO_ROOT, RepoCase, git
 
-CLI = BIN / "claude-bestpractice-ci"
+CLI = BIN / "claude-bp-ci"
 
 
 class CICase(RepoCase):
@@ -208,14 +208,14 @@ class TestLocalIsTheDefault(CICase):
         from claude_bestpractice import ci
 
         subprocess.run(
-            [sys.executable, str(BIN / "claude-bestpractice"), "init"],
+            [sys.executable, str(BIN / "claude-bp"), "init"],
             capture_output=True, text=True, cwd=str(self.repo), timeout=180,
         )
         self.assertTrue(ci.installed(self.ctx()))
 
     def test_status_says_what_runs_where(self):
         proc = subprocess.run(
-            [sys.executable, str(BIN / "claude-bestpractice"), "status"],
+            [sys.executable, str(BIN / "claude-bp"), "status"],
             capture_output=True, text=True, cwd=str(self.repo), timeout=180,
         )
         self.assertIn("CHECKS", proc.stdout)

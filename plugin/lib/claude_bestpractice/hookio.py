@@ -231,7 +231,7 @@ def run_cli(main: Callable[[], int | None]) -> int:
 
     Two ordinary things at a terminal produced a traceback and a non-zero exit:
 
-    `claude-bestpractice plan list | head` closes the pipe as soon as head has its lines, and the
+    `claude-bp plan list | head` closes the pipe as soon as head has its lines, and the
     next print raises BrokenPipeError. Python then tries to flush stdout at interpreter
     shutdown, fails again, and prints "Exception ignored" over the user's terminal. The
     fix is to redirect stdout to devnull before exiting so that final flush has somewhere

@@ -7,7 +7,7 @@
     "  - The event arrives on STDIN as JSON. TOOL_NAME / TOOL_INPUT env vars do not exist.",
     "  - type 'http' fails OPEN on non-2xx, timeout and connection error. Never use it for a gate.",
     "",
-    "Verify with `plugin/bin/claude-bestpractice-doctor`, which proves each gate by attempting a",
+    "Verify with `plugin/bin/claude-bp-doctor`, which proves each gate by attempting a",
     "known-bad action rather than reading this file back."
   ],
 

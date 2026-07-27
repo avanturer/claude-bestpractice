@@ -517,7 +517,7 @@ class TestCheckpoint(GateCase):
 class TestDoctorAndReindex(GateCase):
     def test_doctor_passes_against_a_clean_checkout(self):
         proc = subprocess.run(
-            [sys.executable, str(BIN / "claude-bestpractice-doctor")],
+            [sys.executable, str(BIN / "claude-bp-doctor")],
             capture_output=True,
             text=True,
             timeout=600,
@@ -531,7 +531,7 @@ class TestDoctorAndReindex(GateCase):
 
         self.assertTrue(store.tier_b(self.ctx()).exists())
         proc = subprocess.run(
-            [sys.executable, str(BIN / "claude-bestpractice-reindex")],
+            [sys.executable, str(BIN / "claude-bp-reindex")],
             capture_output=True,
             text=True,
             cwd=str(self.repo),
@@ -544,7 +544,7 @@ class TestDoctorAndReindex(GateCase):
     def test_reindex_dry_run_changes_nothing(self):
         self.start("keepme")
         proc = subprocess.run(
-            [sys.executable, str(BIN / "claude-bestpractice-reindex"), "--dry-run"],
+            [sys.executable, str(BIN / "claude-bp-reindex"), "--dry-run"],
             capture_output=True,
             text=True,
             cwd=str(self.repo),

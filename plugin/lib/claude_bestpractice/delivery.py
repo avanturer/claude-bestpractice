@@ -15,7 +15,7 @@ diff is one line at the bottom for whoever wants it.
 
 **What shipped.** The stated operating mode is that the founder looks at outcomes — a
 number, a preview, a working feature — and never at code. Nothing in this plugin produced
-that view; every surface it had was for the agent. `claude-bestpractice ship` is the one that
+that view; every surface it had was for the agent. `claude-bp ship` is the one that
 faces the other way.
 """
 
@@ -60,7 +60,7 @@ class MergeState:
 # the rebase, and the file is still sitting in the git dir on a completely clean tree.
 # Treating it as a marker meant the single most ordinary recovery in this founder's
 # workflow — rebase, hit a conflict, resolve it, continue — permanently convinced the
-# plugin that a rebase was unfinished. `claude-bestpractice ship` then refused forever, `ready()`
+# plugin that a rebase was unfinished. `claude-bp ship` then refused forever, `ready()`
 # blocked every pull request, and every session opened with UNRESOLVED REBASE in its
 # board. Nothing clears it, so the repository never recovers on its own.
 #

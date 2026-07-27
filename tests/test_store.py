@@ -241,7 +241,7 @@ class TestGuardedJson(RepoCase):
 
         A finish that could not be proved, a decision drafted and not yet accepted: no
         amount of rescanning the repository brings an event back. `rmtree` took them, and
-        `claude-bestpractice reindex` printed "Nothing durable was lost" over the top of it.
+        `claude-bp reindex` printed "Nothing durable was lost" over the top of it.
         """
         ctx = self.ctx()
         store.write_json(store.tier_b(ctx, "derived.json"), {"cache": True})

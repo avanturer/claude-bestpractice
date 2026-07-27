@@ -516,7 +516,7 @@ def check_airlock_quarantine(repo: Path) -> Result:
         "count": 1,
     }
     proc = subprocess.run(
-        [sys.executable, str(BIN / "claude-bestpractice-ingest")],
+        [sys.executable, str(BIN / "claude-bp-ingest")],
         input=json.dumps(payload),
         capture_output=True,
         text=True,
@@ -779,7 +779,7 @@ def check_onboarding(repo: Path) -> Result:
         "from models import Order\n\n\ndef charge():\n    return Order\n"
     )
     proc = subprocess.run(
-        [sys.executable, str(BIN / "claude-bestpractice"), "init"],
+        [sys.executable, str(BIN / "claude-bp"), "init"],
         capture_output=True,
         text=True,
         cwd=str(repo),
@@ -921,12 +921,12 @@ def check_reap(repo: Path) -> Result:
 
 
 def main() -> int:
-    print(f"{DIM}claude-bestpractice doctor {__version__}{OFF}")
+    print(f"{DIM}claude-bp doctor {__version__}{OFF}")
     print(f"{DIM}Proving gates by attempting known-bad actions, not by reading config.{OFF}\n")
 
     results = [check_environment(), check_hooks_wiring(), check_fail_closed_on_garbage()]
 
-    tmp = Path(tempfile.mkdtemp(prefix="claude-bestpractice-doctor-"))
+    tmp = Path(tempfile.mkdtemp(prefix="claude-bp-doctor-"))
     try:
         for factory in (
             check_session_start,

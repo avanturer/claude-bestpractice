@@ -69,13 +69,13 @@ fi
 # not one line of the founder's code. So the hook reported success over a red suite, and
 # the doctor's own sandbox writes itself a Makefile, meaning the only branch under test
 # was the one most repositories do not take.
-_cmd="$(claude-bestpractice-ci --print-test-command 2>/dev/null || true)"
+_cmd="$(claude-bp-ci --print-test-command 2>/dev/null || true)"
 if [ -n "$_cmd" ]; then
     sh -c "$_cmd" || exit $?
 fi
 
-if command -v claude-bestpractice-doctor >/dev/null 2>&1; then
-    exec claude-bestpractice-doctor
+if command -v claude-bp-doctor >/dev/null 2>&1; then
+    exec claude-bp-doctor
 fi
 
 echo "claude-bestpractice: no 'make check' target and no doctor on PATH — nothing to run" >&2
@@ -263,5 +263,5 @@ def status_lines(ctx: GitContext) -> list[str]:
 
     if not local:
         out.append("")
-        out.append("Nothing checks a push from this machine. `claude-bestpractice-ci local` fixes that.")
+        out.append("Nothing checks a push from this machine. `claude-bp-ci local` fixes that.")
     return out

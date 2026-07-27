@@ -18,7 +18,7 @@ class AttemptCase(RepoCase):
 
     def cli(self, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [sys.executable, str(BIN / "claude-bestpractice-attempt"), *args],
+            [sys.executable, str(BIN / "claude-bp-attempt"), *args],
             capture_output=True, text=True, cwd=str(self.repo), timeout=180,
         )
 
@@ -52,7 +52,7 @@ class TestRecording(AttemptCase):
     def test_ids_do_not_collide_under_parallel_writes(self):
         workers = [
             subprocess.Popen(
-                [sys.executable, str(BIN / "claude-bestpractice-attempt"), "add", f"approach {i}",
+                [sys.executable, str(BIN / "claude-bp-attempt"), "add", f"approach {i}",
                  "--why", "did not work", "--paths", f"src/{i}.ts"],
                 cwd=str(self.repo), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )

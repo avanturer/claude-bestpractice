@@ -240,7 +240,7 @@ class TestReindexKeepsWhatItCannotRebuild(RepoCase):
         claim that specific is the kind a founder stops checking."""
         self.seed()
         proc = subprocess.run(
-            [sys.executable, str(BIN / "claude-bestpractice-reindex")],
+            [sys.executable, str(BIN / "claude-bp-reindex")],
             cwd=str(self.repo), capture_output=True, text=True, timeout=120,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)

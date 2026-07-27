@@ -11,7 +11,7 @@ on:
 jobs:
   check:
     # OFF by default, because Actions minutes are a real budget and the same gates run
-    # locally on every push through the pre-push hook `claude-bestpractice-ci local` installs.
+    # locally on every push through the pre-push hook `claude-bp-ci local` installs.
     # Turn it on with:  gh variable set CLAUDE_BESTPRACTICE_CI --body on
     # or Settings -> Secrets and variables -> Actions -> Variables.
     if: vars.CLAUDE_BESTPRACTICE_CI == 'on'

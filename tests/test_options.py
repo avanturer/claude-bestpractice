@@ -13,7 +13,7 @@ from helpers import BIN, RepoCase
 class OptionCase(RepoCase):
     def cli(self, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [sys.executable, str(BIN / "claude-bestpractice-options"), *args],
+            [sys.executable, str(BIN / "claude-bp-options"), *args],
             capture_output=True, text=True, cwd=str(self.repo), timeout=180,
         )
 

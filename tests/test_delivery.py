@@ -14,7 +14,7 @@ from helpers import BIN, RepoCase, git
 class DeliveryCase(RepoCase):
     def ship(self, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [sys.executable, str(BIN / "claude-bestpractice-ship"), *args],
+            [sys.executable, str(BIN / "claude-bp-ship"), *args],
             capture_output=True, text=True, cwd=str(self.repo), timeout=180,
         )
 

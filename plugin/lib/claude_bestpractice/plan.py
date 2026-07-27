@@ -103,7 +103,7 @@ def load_all(ctx: GitContext, state: str = "") -> list[Task]:
     Tier A lives inside the working tree, so each worktree carries its own copy on its
     own branch — which meant the ledger was per-worktree in a product whose whole premise
     is three to eight worktrees at once. A sibling's in-flight task was invisible and
-    unclaimable: `claude-bestpractice plan` in one worktree listed one task, the other listed a
+    unclaimable: `claude-bp plan` in one worktree listed one task, the other listed a
     different one, `claim` on a sibling's id said "no task 0002", and the board promised
     coordination while showing none of it. `next_id` already allocated across siblings,
     so the ids were consistent and only the reading was not.

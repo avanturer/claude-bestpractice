@@ -17,7 +17,7 @@ turns an anonymous HTTP POST into code execution on the founder's machine.
 
 Input: JSON on stdin, either one object or a list. Output: `.claude/signals/<id>.md`.
 
-    curl -s "$SENTRY_API/issues/" | claude-bestpractice-ingest
+    curl -s "$SENTRY_API/issues/" | claude-bp-ingest
 """
 
 from __future__ import annotations

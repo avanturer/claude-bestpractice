@@ -39,14 +39,14 @@ curl -fsSL https://raw.githubusercontent.com/avanturer/claude-bestpractice/HEAD/
 
 Claude Code 会自动把插件的 `bin/` 加进 Bash 工具的 PATH，所以走 marketplace 路径时，
 下面这些命令在**会话内**可用，在你自己的 shell 里则是 `command not found`。这一点很重要，
-因为 pre-push gate 正是由 `claude-bestpractice init` 安装的：跳过它，gate 就是关着的，而
+因为 pre-push gate 正是由 `claude-bp init` 安装的：跳过它，gate 就是关着的，而
 `claude plugin list` 依然显示 `✓ enabled`。
 
 之后在任意仓库中——在终端里运行，或者让 Claude 替你运行：
 
 ```sh
-claude-bestpractice init      # 能从代码推导的自动推导，推导不出的才来问你
-claude-bestpractice status    # 一次看全
+claude-bp init      # 能从代码推导的自动推导，推导不出的才来问你
+claude-bp status    # 一次看全
 ```
 
 安装器在注册任何东西**之前**先跑 doctor，只要有一个 gate 没有真正触发就拒绝安装。
@@ -175,7 +175,7 @@ Stop gate **丢弃智能体的自述文字**，自己去运行你的测试套件
 
 ### 检查在本地跑，不花别人的机时
 
-`claude-bestpractice init` 会装上一个 **pre-push 钩子**，在任何东西离开这台机器之前先跑你自己的
+`claude-bp init` 会装上一个 **pre-push 钩子**，在任何东西离开这台机器之前先跑你自己的
 `make check`——仓库没有的话就跑 doctor。免费，而且时机对：它拦下这次 push，而不是事后
 给你发一封邮件。
 
@@ -185,9 +185,9 @@ Stop gate **丢弃智能体的自述文字**，自己去运行你的测试套件
 随附的 GitHub Actions 工作流**由一个仓库变量把守**，在你主动开启之前不花一分钱：
 
 ```sh
-claude-bestpractice-ci status     # 什么在哪里跑
-claude-bestpractice-ci github     # 打开托管 CI（通过 gh 设置该变量）
-claude-bestpractice-ci off        # 移除 pre-push 钩子
+claude-bp-ci status     # 什么在哪里跑
+claude-bp-ci github     # 打开托管 CI（通过 gh 设置该变量）
+claude-bp-ci off        # 移除 pre-push 钩子
 ```
 
 两者可以并存：pre-push 钩子只约束装了它的机器，所以一个别人也会推送的仓库仍然需要托管
@@ -206,19 +206,19 @@ claude-bestpractice-ci off        # 移除 pre-push 钩子
 
 | | |
 |---|---|
-| `claude-bestpractice status` | 会话、计划、知识、记忆健康度、冲突、下一步动作 |
-| `claude-bestpractice init` | 从你的代码推导出知识层 |
+| `claude-bp status` | 会话、计划、知识、记忆健康度、冲突、下一步动作 |
+| `claude-bp init` | 从你的代码推导出知识层 |
 | `claude-bestpractice adopt` | 接管被其他工具争抢的事件 |
-| `claude-bestpractice doctor` | 通过尝试一个已知的坏动作来证明每个 gate 有效 |
-| `claude-bestpractice-plan` | 工作台账：`add`、`list`、`claim`、`done` |
-| `claude-bestpractice-decide` | 采纳一条由你自己的纠正草拟出的决策 |
-| `claude-bestpractice-ingest` | 把生产环境错误净化成带围栏的任务文件 |
-| `claude-bestpractice-knowledge` | 校验已决层，刷新其索引 |
-| `claude-bestpractice-reindex` | 丢弃并重建所有推导内容 |
-| `claude-bestpractice-ci` | 检查在哪里跑：默认本地 pre-push，托管 CI 按需开启 |
-| `claude-bestpractice-attempt` | 死路台账：试过什么、为什么没成 |
-| `claude-bestpractice-options` | 把决策记成一次按指标打分的方案比较 |
-| `claude-bestpractice-ship` | 这条分支交付了什么，写给不读代码的人（`--pr` 直接开 PR）|
+| `claude-bp doctor` | 通过尝试一个已知的坏动作来证明每个 gate 有效 |
+| `claude-bp-plan` | 工作台账：`add`、`list`、`claim`、`done` |
+| `claude-bp-decide` | 采纳一条由你自己的纠正草拟出的决策 |
+| `claude-bp-ingest` | 把生产环境错误净化成带围栏的任务文件 |
+| `claude-bp-knowledge` | 校验已决层，刷新其索引 |
+| `claude-bp-reindex` | 丢弃并重建所有推导内容 |
+| `claude-bp-ci` | 检查在哪里跑：默认本地 pre-push，托管 CI 按需开启 |
+| `claude-bp-attempt` | 死路台账：试过什么、为什么没成 |
+| `claude-bp-options` | 把决策记成一次按指标打分的方案比较 |
+| `claude-bp-ship` | 这条分支交付了什么，写给不读代码的人（`--pr` 直接开 PR）|
 
 在会话中：`/claude-bestpractice:status` · `/claude-bestpractice:plan` · `/claude-bestpractice:review`
 
@@ -277,7 +277,7 @@ Claude Code 2.1.220 上通过。
 
 **`.git/claude-bestpractice/` —— 不用管，git 本来就看不见它。** 活跃会话、文件租约、循环计数器、
 测试回执。它放在 git 公共目录里，因为那是唯一一个被同一个克隆的所有 worktree 共享、对
-git 不可见、能扛过分支切换、并随克隆一起消亡的位置。它完全可重建：`claude-bestpractice reindex`
+git 不可见、能扛过分支切换、并随克隆一起消亡的位置。它完全可重建：`claude-bp reindex`
 会从已提交的那一半重新生成它，而这条路径是被测试过的，不是假设的。
 
 两者都不需要你手动编辑。如果想彻底清除，删掉这两个目录并卸载插件即可——你机器上别的

@@ -187,7 +187,7 @@ class TestBoardRendering(PlanCase):
 class TestCli(PlanCase):
     def run_cli(self, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [sys.executable, str(BIN / "claude-bestpractice-plan"), *args],
+            [sys.executable, str(BIN / "claude-bp-plan"), *args],
             capture_output=True,
             text=True,
             cwd=str(self.repo),

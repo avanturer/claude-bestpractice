@@ -242,7 +242,7 @@ class TestSubagentBrief(KnowledgeCase):
 class TestCli(KnowledgeCase):
     def run_cli(self, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [sys.executable, str(BIN / "claude-bestpractice-knowledge"), *args],
+            [sys.executable, str(BIN / "claude-bp-knowledge"), *args],
             capture_output=True,
             text=True,
             cwd=str(self.repo),

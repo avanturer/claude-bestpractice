@@ -171,7 +171,7 @@ def validate(ctx: GitContext) -> list[Problem]:
     root = ctx.worktree_root
 
     if not layer.product.strip():
-        problems.append(Problem(f"{RULES_DIR}/{PRODUCT}", "missing — run `claude-bestpractice-knowledge init`"))
+        problems.append(Problem(f"{RULES_DIR}/{PRODUCT}", "missing — run `claude-bp-knowledge init`"))
     else:
         if _lines(layer.product) > PRODUCT_MAX_LINES:
             problems.append(

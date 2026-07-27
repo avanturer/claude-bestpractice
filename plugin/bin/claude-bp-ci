@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Choose where the checks run. Local is the default and is installed at setup.
 
-    claude-bestpractice-ci status     what runs where, and what it costs
-    claude-bestpractice-ci local      install the pre-push hook
-    claude-bestpractice-ci github     switch the hosted workflow on
-    claude-bestpractice-ci github --off
-    claude-bestpractice-ci off        remove the pre-push hook
+    claude-bp-ci status     what runs where, and what it costs
+    claude-bp-ci local      install the pre-push hook
+    claude-bp-ci github     switch the hosted workflow on
+    claude-bp-ci github --off
+    claude-bp-ci off        remove the pre-push hook
 
 The reasoning behind the default is in `claude_bestpractice.ci`.
 """

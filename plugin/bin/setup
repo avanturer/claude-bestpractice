@@ -43,8 +43,8 @@ def main() -> None:
     lines = [f"claude-bestpractice is set up. Detected stage: {resolved}."]
     if hook_installed:
         lines.append(
-            "Checks now run locally before every push (`claude-bestpractice-ci status` to see, "
-            "`claude-bestpractice-ci github` to add hosted CI)."
+            "Checks now run locally before every push (`claude-bp-ci status` to see, "
+            "`claude-bp-ci github` to add hosted CI)."
         )
         # `hook_note` was computed and thrown away, so displacing the founder's own
         # pre-push hook — husky's, lefthook's — happened without a word. It chains
@@ -62,7 +62,7 @@ def main() -> None:
             + "; ".join(gaps)
             + ". Ask the user for them when it is relevant, do not guess."
         )
-    lines.append("Run `claude-bestpractice status` to see everything at once.")
+    lines.append("Run `claude-bp status` to see everything at once.")
 
     hookio.emit_context("Setup", "\n".join(lines), limit=1_500)
 

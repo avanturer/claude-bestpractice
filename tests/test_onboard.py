@@ -192,7 +192,7 @@ class TestWorktreeCreate(RepoCase):
 class TestStatusCommand(RepoCase):
     def status(self) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [sys.executable, str(BIN / "claude-bestpractice"), "status"],
+            [sys.executable, str(BIN / "claude-bp"), "status"],
             capture_output=True,
             text=True,
             cwd=str(self.repo),
@@ -213,7 +213,7 @@ class TestStatusCommand(RepoCase):
     def test_init_derives_and_reports(self):
         self.write("models.py", "class Invoice:\n    pass\n")
         proc = subprocess.run(
-            [sys.executable, str(BIN / "claude-bestpractice"), "init"],
+            [sys.executable, str(BIN / "claude-bp"), "init"],
             capture_output=True,
             text=True,
             cwd=str(self.repo),

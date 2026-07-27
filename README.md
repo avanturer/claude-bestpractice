@@ -39,14 +39,14 @@ The two are not equivalent, and the difference matters on your first day:
 
 Claude Code puts the plugin's `bin/` on the Bash tool's PATH automatically, so on the
 marketplace path the commands below work **inside a session** and are `command not found`
-in your shell. That is worth knowing because `claude-bestpractice init` is what installs the
+in your shell. That is worth knowing because `claude-bp init` is what installs the
 pre-push gate: skip it and the gate is off while `claude plugin list` says `✓ enabled`.
 
 In any repository afterwards — from your terminal, or by asking Claude to run them:
 
 ```sh
-claude-bestpractice init      # derive what it can from your code; ask you for what it cannot
-claude-bestpractice status    # everything at once
+claude-bp init      # derive what it can from your code; ask you for what it cannot
+claude-bp status    # everything at once
 ```
 
 The installer runs the doctor **before** registering anything and refuses to install if
@@ -55,7 +55,7 @@ any gate fails to fire. Gates that silently do nothing are worse than no gates.
 Read that claim narrowly, because it is narrow: the doctor builds its own throwaway
 repository and attacks that. It proves **the gates work**, not that they are correctly
 wired into *your* project — so "All 25 checks passed" is a statement about this software,
-never a clean bill of health for your repository. `claude-bestpractice status` is the one that
+never a clean bill of health for your repository. `claude-bp status` is the one that
 looks at yours.
 
 ---
@@ -194,7 +194,7 @@ Stage is computed from the repository, never configured, and the ratchet only ti
 
 ### Checks run locally, not on someone's meter
 
-`claude-bestpractice init` installs a **pre-push hook** that runs your own `make check` — or the
+`claude-bp init` installs a **pre-push hook** that runs your own `make check` — or the
 doctor, in a repository that has none — before anything leaves the machine. Free, and in
 time to stop the push rather than to email you about it afterwards.
 
@@ -205,9 +205,9 @@ The shipped GitHub Actions workflow is **gated behind a repository variable**, s
 costs nothing until you ask for it:
 
 ```sh
-claude-bestpractice-ci status     # what runs where
-claude-bestpractice-ci github     # switch hosted CI on (sets the variable via gh)
-claude-bestpractice-ci off        # remove the pre-push hook
+claude-bp-ci status     # what runs where
+claude-bp-ci github     # switch hosted CI on (sets the variable via gh)
+claude-bp-ci off        # remove the pre-push hook
 ```
 
 Both can run at once — a pre-push hook only binds machines that installed it, so a
@@ -228,19 +228,19 @@ configuration silently.
 
 | | |
 |---|---|
-| `claude-bestpractice status` | Sessions, plan, knowledge, memory health, conflicts, next action |
-| `claude-bestpractice init` | Derive the knowledge layer from your code |
+| `claude-bp status` | Sessions, plan, knowledge, memory health, conflicts, next action |
+| `claude-bp init` | Derive the knowledge layer from your code |
 | `claude-bestpractice adopt` | Take over events another tool is contesting |
-| `claude-bestpractice doctor` | Prove each gate by attempting a known-bad action |
-| `claude-bestpractice-plan` | The work ledger: `add`, `list`, `claim`, `done` |
-| `claude-bestpractice-decide` | Accept a decision drafted from your own corrections |
-| `claude-bestpractice-ingest` | Sanitise production errors into fenced task files |
-| `claude-bestpractice-knowledge` | Validate the decided layer, refresh its index |
-| `claude-bestpractice-reindex` | Drop and rebuild everything derived |
-| `claude-bestpractice-ci` | Where the checks run: local pre-push by default, hosted CI opt-in |
-| `claude-bestpractice-attempt` | The dead-end ledger: what was tried, and why it failed |
-| `claude-bestpractice-options` | Record a decision as a scored comparison of alternatives |
-| `claude-bestpractice-ship` | What this branch delivered, for someone who never reads code (`--pr` opens one) |
+| `claude-bp doctor` | Prove each gate by attempting a known-bad action |
+| `claude-bp-plan` | The work ledger: `add`, `list`, `claim`, `done` |
+| `claude-bp-decide` | Accept a decision drafted from your own corrections |
+| `claude-bp-ingest` | Sanitise production errors into fenced task files |
+| `claude-bp-knowledge` | Validate the decided layer, refresh its index |
+| `claude-bp-reindex` | Drop and rebuild everything derived |
+| `claude-bp-ci` | Where the checks run: local pre-push by default, hosted CI opt-in |
+| `claude-bp-attempt` | The dead-end ledger: what was tried, and why it failed |
+| `claude-bp-options` | Record a decision as a scored comparison of alternatives |
+| `claude-bp-ship` | What this branch delivered, for someone who never reads code (`--pr` opens one) |
 
 In a session: `/claude-bestpractice:status` · `/claude-bestpractice:plan` · `/claude-bestpractice:review`
 
@@ -302,7 +302,7 @@ between runs, so it does not turn up as a diff every time a gate fires.
 **`.git/claude-bestpractice/` — ignore it, git already does.** Live sessions, leases, the
 loop counter, the test receipt. It lives in the git common directory because that is the
 only path shared by every worktree of one clone, invisible to git, surviving branch
-switches, and dying with the clone. It is entirely rebuildable: `claude-bestpractice reindex`
+switches, and dying with the clone. It is entirely rebuildable: `claude-bp reindex`
 regenerates it from the committed half, and that path is tested rather than assumed.
 
 You never edit either by hand. If you want the whole thing gone, delete both directories

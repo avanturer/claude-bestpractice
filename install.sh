@@ -74,9 +74,9 @@ chmod +x "$INSTALL_DIR"/plugin/bin/* 2>/dev/null || true
 bold "verifying"
 # mktemp, not a fixed /tmp path: a predictable name that an attacker (or a stale
 # symlink) already created is followed by the redirect, truncating whatever it points at.
-DOCTOR_LOG="$(mktemp -t claude-bestpractice-doctor.XXXXXX)"
+DOCTOR_LOG="$(mktemp -t claude-bp-doctor.XXXXXX)"
 trap 'rm -f "$DOCTOR_LOG" "${LOG:-}"' EXIT
-if ! "$PY" "$INSTALL_DIR/plugin/bin/claude-bestpractice-doctor" >"$DOCTOR_LOG" 2>&1; then
+if ! "$PY" "$INSTALL_DIR/plugin/bin/claude-bp-doctor" >"$DOCTOR_LOG" 2>&1; then
   cat "$DOCTOR_LOG"
   die "the doctor failed — refusing to install gates that do not fire"
 fi
@@ -175,9 +175,9 @@ fi
 # symlink is only so the commands also work in the founder's own terminal.
 LINK_DIR="$HOME/.local/bin"
 mkdir -p "$LINK_DIR"
-for command in claude-bestpractice claude-bestpractice-doctor claude-bestpractice-knowledge claude-bestpractice-plan \
-               claude-bestpractice-decide claude-bestpractice-ingest claude-bestpractice-reindex claude-bestpractice-ci \
-               claude-bestpractice-attempt claude-bestpractice-options claude-bestpractice-ship; do
+for command in claude-bestpractice claude-bp-doctor claude-bp-knowledge claude-bp-plan \
+               claude-bp-decide claude-bp-ingest claude-bp-reindex claude-bp-ci \
+               claude-bp-attempt claude-bp-options claude-bp-ship; do
   ln -sf "$INSTALL_DIR/plugin/bin/$command" "$LINK_DIR/$command"
 done
 
@@ -190,9 +190,9 @@ cat <<TEXT
   Plugin changes take effect in your NEXT session, not this one.
 
   In any repository:
-    claude-bestpractice init      derive the knowledge layer from the code that is there
-    claude-bestpractice status    what is known, in flight, planned and enforced
-    claude-bestpractice doctor    prove every gate still fires
+    claude-bp init      derive the knowledge layer from the code that is there
+    claude-bp status    what is known, in flight, planned and enforced
+    claude-bp doctor    prove every gate still fires
 
   Inside a Claude session:
     /claude-bestpractice:status   the same view, read by the agent

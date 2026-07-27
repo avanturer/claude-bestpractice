@@ -4,10 +4,10 @@
 Most of it fills itself: an unverified finish is filed automatically, because that is
 exactly the knowledge a revert destroys. This is for the rest.
 
-    claude-bestpractice-attempt add "websockets for live updates" --why "reconnect storms under
+    claude-bp-attempt add "websockets for live updates" --why "reconnect storms under
         flaky mobile networks; server ran out of file descriptors" --paths src/ws.ts
-    claude-bestpractice-attempt list
-    claude-bestpractice-attempt list --paths src/ws.ts    # what was already tried HERE
+    claude-bp-attempt list
+    claude-bp-attempt list --paths src/ws.ts    # what was already tried HERE
 """
 
 from __future__ import annotations

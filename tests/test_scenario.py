@@ -110,7 +110,7 @@ class TestFullLifecycle(Scenario):
         )
 
     def phase_plan_and_start(self) -> None:
-        self.cli("claude-bestpractice-plan", "add", "Add CSV export to billing")
+        self.cli("claude-bp-plan", "add", "Add CSV export to billing")
         self.assertEqual(plan.summary(self.ctx())["next"], 1)
 
         board_text = self.context_of(
@@ -120,7 +120,7 @@ class TestFullLifecycle(Scenario):
         self.assertIn("health:", board_text)
         self.assertIn("stage: prototype", board_text)
 
-        self.cli("claude-bestpractice-plan", "claim", "0001", "--session", "s1")
+        self.cli("claude-bp-plan", "claim", "0001", "--session", "s1")
         self.hook(
             "prompt-capture",
             session_id="s1",
@@ -175,7 +175,7 @@ class TestFullLifecycle(Scenario):
         )
         self.assertEqual(allowed.returncode, 0, allowed.stderr)
 
-        self.cli("claude-bestpractice-plan", "done", "0001")
+        self.cli("claude-bp-plan", "done", "0001")
         counts = plan.summary(self.ctx())
         self.assertEqual((counts["doing"], counts["done"]), (0, 1))
 
@@ -350,7 +350,7 @@ class TestMemoryStaysHonest(Scenario):
         self.hook("session-start", session_id="s1", hook_event_name="SessionStart")
         plan.add(self.ctx(), "durable task")
 
-        proc = self.cli("claude-bestpractice-reindex")
+        proc = self.cli("claude-bp-reindex")
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
         # Tier A survived; only derived state was dropped.
@@ -427,7 +427,7 @@ class TestConflictTakeover(Scenario):
         )
         self.write(".claude/settings.json", original)
 
-        proc = self.cli("claude-bestpractice", "adopt", "--dry-run")
+        proc = self.cli("claude-bp", "adopt", "--dry-run")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("dry run", proc.stdout)
         self.assertEqual((self.repo / ".claude" / "settings.json").read_text(), original)

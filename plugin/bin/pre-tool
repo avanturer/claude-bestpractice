@@ -319,7 +319,7 @@ def main() -> None:
         # recording the real failure. Nothing else in the plugin could tell afterwards.
         #
         # Refused rather than ignored: the founder still edits this by hand or with
-        # `claude-bestpractice ci`, and a rule the agent can see and route around beats one that
+        # `claude-bp ci`, and a rule the agent can see and route around beats one that
         # silently discards its work.
         protected = [rel for rel in writing_now if _protected_state(rel)]
         if protected:
@@ -327,7 +327,7 @@ def main() -> None:
                 f"claude-bestpractice: {protected[0]} is the plugin's own enforcement state, and the "
                 "session being enforced does not get to edit it — pointing `test_command` at "
                 "`true` would buy a green finish and erase the record of the real failure.\n"
-                "Change it with `claude-bestpractice ci`, or edit it yourself outside a session. "
+                "Change it with `claude-bp ci`, or edit it yourself outside a session. "
                 "Everything else under .claude/claude-bestpractice/ is yours to write."
             )
 

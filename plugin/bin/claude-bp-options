@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Compare options on stated numbers, then record which one won and why.
 
-    claude-bestpractice-options add "cache layer for the dashboard" \
+    claude-bp-options add "cache layer for the dashboard" \
         --metric latency --metric ops-burden --metric lock-in \
         --option 'redis:9,3,4' --option 'dict-with-ttl:7,9,9' \
         --chosen dict-with-ttl --why "200 rpm does not need a second service"
 
-    claude-bestpractice-options list
+    claude-bp-options list
 
 Scores are yours to define; the only rule is that every option is scored on every
 metric, and that choosing the lower-scoring one requires saying why.
@@ -29,12 +29,12 @@ def parse_option(raw: str, metrics: list[str]) -> options.Option:
     values = [v.strip() for v in scores.split(",") if v.strip()]
     if len(values) != len(metrics):
         raise SystemExit(
-            f"claude-bestpractice-options: {name!r} has {len(values)} score(s) for {len(metrics)} metric(s)"
+            f"claude-bp-options: {name!r} has {len(values)} score(s) for {len(metrics)} metric(s)"
         )
     try:
         numbers = [float(v) for v in values]
     except ValueError:
-        raise SystemExit(f"claude-bestpractice-options: {name!r} has a non-numeric score")
+        raise SystemExit(f"claude-bp-options: {name!r} has a non-numeric score")
     return options.Option(name.strip(), dict(zip(metrics, numbers)))
 
 
@@ -75,7 +75,7 @@ def main() -> int:
     )
     recorded, complaint = options.record(ctx, comparison)
     if recorded is None:
-        print(f"claude-bestpractice-options: not a comparison — {complaint}", file=sys.stderr)
+        print(f"claude-bp-options: not a comparison — {complaint}", file=sys.stderr)
         return 1
     print(f"recorded {recorded.path.name}: {recorded.line()}")
     return 0

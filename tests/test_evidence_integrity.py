@@ -257,7 +257,7 @@ class TestCannotTellIsNotGreen(RepoCase):
         self.assertFalse(verdict.unverified)
 
     def test_an_unverified_run_never_writes_a_green_record(self):
-        """`claude-bestpractice ship` reads that file and tells the founder "Tests: green"."""
+        """`claude-bp ship` reads that file and tells the founder "Tests: green"."""
         from claude_bestpractice import evidence
 
         self.assertIsNone(evidence.last_green(self.ctx()))

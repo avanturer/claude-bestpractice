@@ -13,7 +13,7 @@ from helpers import BIN, RepoCase
 class TestIngest(RepoCase):
     def ingest(self, payload) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [sys.executable, str(BIN / "claude-bestpractice-ingest")],
+            [sys.executable, str(BIN / "claude-bp-ingest")],
             input=json.dumps(payload),
             capture_output=True,
             text=True,
@@ -94,7 +94,7 @@ class TestIngest(RepoCase):
 
     def test_invalid_json_is_refused(self):
         proc = subprocess.run(
-            [sys.executable, str(BIN / "claude-bestpractice-ingest")],
+            [sys.executable, str(BIN / "claude-bp-ingest")],
             input="not json",
             capture_output=True,
             text=True,

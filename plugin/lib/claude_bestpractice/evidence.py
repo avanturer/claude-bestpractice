@@ -460,7 +460,7 @@ def _verify_by_declared_command(
 
     # `clear_red` returns whether it accepted this run as covering the recorded failure,
     # and that return value was DISCARDED. So a run judged too narrow to clear the red
-    # record still stamped `last-green.json` — the file `claude-bestpractice ship` reads to tell
+    # record still stamped `last-green.json` — the file `claude-bp ship` reads to tell
     # the founder "Tests: green (observed by the gate)". The gate refused and reassured
     # in the same breath, which is what turned a two-step evasion into a one-step one.
     #
@@ -991,7 +991,7 @@ def clear_red(
     `test:` target scoped to the test it just wrote; `detect_test_command` prefers
     Makefiles, so the gate switches to `make test`; that narrower command passes;
     `failing-suite.json` is deleted, `last-green.json` is written, every sibling board
-    drops its RED SUITE line and `claude-bestpractice ship` reports "Tests: green (observed by the
+    drops its RED SUITE line and `claude-bp ship` reports "Tests: green (observed by the
     gate)" — while the command that actually failed still fails.
 
     That is worse than missing the regression. The plugin manufactures positive evidence

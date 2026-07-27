@@ -67,7 +67,7 @@ nothing that runs inside the same machine as the agent is.
 ## How to check any of this yourself
 
 Every claim above is reproducible in a scratch repository in under a minute. The gate is
-`plugin/bin/evidence-gate`; it reads a JSON event on stdin. `claude-bestpractice doctor` proves the
+`plugin/bin/evidence-gate`; it reads a JSON event on stdin. `claude-bp doctor` proves the
 gates fire by attempting known-bad actions rather than by reading configuration — but note
 that it builds its own fixture repository, so it tells you the gates work, not that they
 work in *your* repository.

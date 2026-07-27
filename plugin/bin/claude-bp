@@ -79,7 +79,7 @@ def cmd_status(ctx) -> int:
     for problem in problems[:5]:
         print(f"  problem: {problem}")
     if pending:
-        print(f"  {len(pending)} decision draft(s) waiting — `claude-bestpractice-decide list`")
+        print(f"  {len(pending)} decision draft(s) waiting — `claude-bp-decide list`")
 
     heading("MEMORY HEALTH")
     stale = prov.get(provenance.SUSPECT, 0) + prov.get(provenance.GONE, 0)
@@ -99,20 +99,20 @@ def cmd_status(ctx) -> int:
     elif gaps:
         print("  Answer the placeholders in .claude/rules/product.md — nothing else derives them.")
     elif problems:
-        print("  Repair the knowledge layer: `claude-bestpractice-knowledge validate`")
+        print("  Repair the knowledge layer: `claude-bp-knowledge validate`")
     elif counts["doing"] == 0 and counts["next"] > 0:
-        print("  Claim a task: `claude-bestpractice-plan claim <id>`")
+        print("  Claim a task: `claude-bp-plan claim <id>`")
     elif pending:
-        print("  Review drafted decisions: `claude-bestpractice-decide list`")
+        print("  Review drafted decisions: `claude-bp-decide list`")
     else:
-        print("  Nothing blocking. `claude-bestpractice-doctor` proves the gates still fire.")
+        print("  Nothing blocking. `claude-bp-doctor` proves the gates still fire.")
     print()
     return 0
 
 
 def cmd_init(ctx, force: bool) -> int:
     written = onboard.write(ctx, force=force)
-    print(f"{BOLD}claude-bestpractice init{OFF}  {ctx.worktree_root}")
+    print(f"{BOLD}claude-bp init{OFF}  {ctx.worktree_root}")
     if written:
         print("\nderived from your code:")
         for rel in written:
@@ -129,12 +129,12 @@ def cmd_init(ctx, force: bool) -> int:
         print("\nwaiting on you — these cannot be derived and must not be invented:")
         for gap in gaps:
             print(f"  {gap}")
-    print("\nThen: `claude-bestpractice status`")
+    print("\nThen: `claude-bp status`")
     return 0
 
 
 def cmd_doctor(_ctx) -> int:
-    return subprocess.run([sys.executable, str(BIN / "claude-bestpractice-doctor")]).returncode
+    return subprocess.run([sys.executable, str(BIN / "claude-bp-doctor")]).returncode
 
 
 def cmd_adopt(ctx, dry_run: bool, restore: bool) -> int:
