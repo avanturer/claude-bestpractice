@@ -44,7 +44,7 @@ WORKFLOW = ".github/workflows/check.yml"
 # `make check` when the project has one, because that is the command the founder already
 # maintains and the one CI runs. The doctor otherwise, which needs no project setup at
 # all — a repository with no checks of its own still gets its gates proven.
-HOOK_BODY = f"""#!/bin/sh
+HOOK_TEMPLATE = f"""#!/bin/sh
 {MARKER}
 # Runs the project's own checks before anything leaves this machine. Bypass with
 # --no-verify when you genuinely need to push red work; that is a deliberate act and
@@ -62,6 +62,12 @@ fi
 if [ -f Makefile ] && grep -q '^check:' Makefile; then
     exec make check
 fi
+
+# The project's OWN suite, detected at install time. Without this tier the hook ran
+# `make check` or nothing but the doctor — and the doctor builds its own fixture
+# repository, so a Node or Go project with no Makefile had its push "checked" by a run
+# that never touched a line of its code. Re-run `claude-bp ci` if your runner changes.
+__TEST_COMMAND__
 
 # The project's OWN test command, resolved the same way the Stop gate resolves it. A
 # repository with a `package.json` test script or a `Cargo.toml` and no Makefile used to
@@ -81,6 +87,40 @@ fi
 echo "claude-bestpractice: no 'make check' target and no doctor on PATH — nothing to run" >&2
 exit 0
 """
+
+
+def hook_body(ctx: GitContext | None = None) -> str:
+    """The hook script, with this project's own test command baked into the middle tier.
+
+    Baked at install time rather than resolved at push time on purpose: a git hook runs
+    with a stripped environment and cannot rely on `claude-bp` being on PATH, and a hook
+    that silently finds nothing to run is the failure this whole module exists to avoid.
+    The cost is that it goes stale if the project changes runner, which `claude-bp ci`
+    fixes and the comment in the script says so.
+    """
+    from shlex import quote
+
+    command = []
+    if ctx is not None:
+        from .config import detect_test_command
+
+        command = detect_test_command(ctx.worktree_root)
+
+    if command:
+        rendered = (
+            "if command -v " + quote(command[0]) + " >/dev/null 2>&1; then\n"
+            "    exec " + " ".join(quote(part) for part in command) + "\n"
+            "fi"
+        )
+    else:
+        rendered = "# (no test runner was detectable in this project at install time)"
+    return HOOK_TEMPLATE.replace("__TEST_COMMAND__", rendered)
+
+
+# The un-substituted form, for callers that only need to recognise our hook.
+HOOK_BODY = HOOK_TEMPLATE.replace(
+    "__TEST_COMMAND__", "# (no test runner was detectable in this project at install time)"
+)
 
 
 def hooks_dir(ctx: GitContext) -> Path:
@@ -156,7 +196,7 @@ def install(ctx: GitContext) -> tuple[bool, str]:
                 _make_executable(target)
             displaced = target.name
 
-        _write_new_file(path, HOOK_BODY)
+        _write_new_file(path, hook_body(ctx))
     except OSError as exc:
         return False, f"could not install the pre-push hook: {exc}"
 

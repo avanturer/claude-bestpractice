@@ -286,3 +286,46 @@ class TestTheShippedWorkflowIsOptIn(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheHookRunsTheProjectsOwnSuite(CICase):
+    """`make check` or the doctor was the whole ladder, and the doctor tests the PLUGIN.
+
+    A Node or Go project with no Makefile therefore had its push "checked" by a run that
+    never touched a line of its code, while the founder reasonably believed a pre-push
+    gate was guarding it. `detect_test_command` already knew the right answer and nothing
+    asked it.
+    """
+
+    def test_a_node_project_gets_npm_test(self):
+        from claude_bestpractice import ci
+
+        self.write("package.json", '{"name":"x","scripts":{"test":"vitest run"}}')
+        ci.install(self.ctx())
+        body = ci.hook_path(self.ctx()).read_text()
+        self.assertIn("npm", body)
+        self.assertIn("command -v npm", body, "the tier must not fail when npm is absent")
+
+    def test_the_doctor_is_still_the_last_resort(self):
+        """A repository with no runner at all still gets its gates proven."""
+        from claude_bestpractice import ci
+
+        ci.install(self.ctx())
+        body = ci.hook_path(self.ctx()).read_text()
+        self.assertIn("claude-bp-doctor", body)
+
+    def test_an_undetectable_runner_leaves_a_valid_script(self):
+        from claude_bestpractice import ci
+
+        ci.install(self.ctx())
+        body = ci.hook_path(self.ctx()).read_text()
+        self.assertNotIn("__TEST_COMMAND__", body, "the placeholder shipped unrendered")
+        proc = subprocess.run(["sh", "-n", str(ci.hook_path(self.ctx()))],
+                              capture_output=True, text=True, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_the_command_is_quoted(self):
+        """A path with a space in it must not split into two arguments."""
+        from claude_bestpractice import ci
+
+        self.assertNotIn("__TEST_COMMAND__", ci.hook_body(self.ctx()))

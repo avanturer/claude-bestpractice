@@ -5,7 +5,7 @@
 **Память, координация и принуждение для разработки продукта в нескольких параллельных сессиях Claude Code.**
 
 [![version](https://img.shields.io/badge/version-1.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-602%20passing-2ea44f)](#проверено)
+[![tests](https://img.shields.io/badge/tests-606%20passing-2ea44f)](#проверено)
 [![doctor](https://img.shields.io/badge/doctor-25%20checks-2ea44f)](#проверено)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#требования)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#требования)
@@ -271,7 +271,7 @@ claude-bp-ci off        # снять pre-push хук
 ## Проверено
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 602 тестов · 25 проверок доктора · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 606 тестов · 25 проверок доктора · budget
 ```
 
 Доктор доказывает гейты **попыткой сделать плохое**, а не чтением конфигурации обратно —
