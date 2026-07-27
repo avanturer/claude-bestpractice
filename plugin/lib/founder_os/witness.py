@@ -19,11 +19,20 @@ and every other wrapper are cut out of the trust path entirely — a forged reci
 consulted, because the recipe is not run. The count comes back from a file the recipe has
 no name for and no reason to know about.
 
-What this still does not do, stated plainly because the README now says so too: an agent
-that edits `conftest.py`, vendors a fake `pytest` onto PATH, or writes a test that asserts
-nothing still gets a green. Those are visible in a diff and cost real work, which is the
-whole trade — this makes forgery a thing you must commit to the repository rather than a
-thing you can echo.
+Round eight then showed that taking the RECIPE out was not the same as taking the
+CONFIGURATION out. One line of `addopts = --ignore=tests/test_total.py`, a `pytest.ini` in
+the repository's PARENT directory, or `go env -w GOFLAGS=-run=TestAdd` — one command,
+outside the repo, in no diff — all narrowed the run this gate was driving. The gate had
+chosen where the report went and not what was executed. So `addopts` is blanked, the
+config file is pinned to one inside the repository, GOFLAGS is cleared, and the count is
+compared against the tree on this path too.
+
+What genuinely remains, and the earlier claim here was wrong to call it all diff-visible:
+a `conftest.py` that monkeypatches the bug away runs every test honestly and every test
+honestly passes — nothing in that run is fake, only the process is. A test that asserts
+nothing counts as a test. A vendored runner on PATH, or a `.pth` in site-packages, needs
+no repository change at all. The first two live in the diff. The third does not, and no
+amount of running the runner harder will surface it.
 
 Falls back to None whenever it cannot be sure, and the caller treats None as "could not
 witness" rather than as a pass.
@@ -120,9 +129,37 @@ def _tail(proc: subprocess.CompletedProcess) -> str:
     return "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-25:])
 
 
+def _pytest_config(root: Path, scratch: Path) -> Path:
+    """Which ini pytest is allowed to read: this repo's, or an empty one we write.
+
+    Without `-c`, pytest walks UPWARD looking for a config file — so a `pytest.ini` in the
+    repository's parent directory, a file the founder will never see in any diff, silently
+    configured the run this gate was driving. Pinning the config to something inside the
+    repository keeps every knob that shapes the run inside the thing being reviewed.
+    """
+    for name in ("pytest.ini", "pyproject.toml", "tox.ini", "setup.cfg"):
+        if (root / name).is_file():
+            return root / name
+    empty = scratch / "pytest.ini"
+    empty.write_text("[pytest]\n", encoding="utf-8")
+    return empty
+
+
 def _run_pytest(ctx: GitContext, report: Path, env: dict[str, str] | None) -> Witnessed | None:
+    # `-o addopts=` and an empty PYTEST_ADDOPTS neutralise the one-line attack: a single
+    # `addopts = -k "not price"` or `--ignore=tests/test_total.py` in a config file the
+    # gate was otherwise happy to honour narrowed the run to whatever still passed. The
+    # gate had taken the recipe out of the trust path and left the runner's CONFIGURATION
+    # in it — it chose where the report went, and not what was executed.
     proc = _spawn(
-        ctx, ["python3", "-m", "pytest", "-q", f"--junitxml={report}"], env
+        ctx,
+        [
+            "python3", "-m", "pytest", "-q",
+            "-c", str(_pytest_config(ctx.worktree_root, report.parent)),
+            "-o", "addopts=",
+            f"--junitxml={report}",
+        ],
+        {**(env or {}), "PYTEST_ADDOPTS": ""},
     )
     if proc is None or not report.is_file():
         return None
@@ -143,7 +180,11 @@ def _run_go(ctx: GitContext, env: dict[str, str] | None) -> Witnessed | None:
     the `go` binary this gate invoked, not from a recipe the project wrote, which is the
     property that matters.
     """
-    proc = _spawn(ctx, ["go", "test", "-json", "./..."], env)
+    # GOFLAGS blanked: `go env -w GOFLAGS=-run=TestAdd` is ONE command, writes
+    # ~/.config/go/env outside the repository, appears in no diff and no commit, and
+    # silently restricted the gate's own `go test` to a test that passes. Zero bytes
+    # changed inside the thing under review.
+    proc = _spawn(ctx, ["go", "test", "-json", "./..."], {**(env or {}), "GOFLAGS": ""})
     if proc is None:
         return None
 

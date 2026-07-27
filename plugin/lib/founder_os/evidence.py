@@ -487,6 +487,21 @@ def _judge_witnessed(ctx: GitContext, seen: witness.Witnessed) -> Verdict:
             f"{seen.runner} ran and executed NOTHING — every test skipped, or none "
             f"collected. A run that asserts nothing is not evidence.\n{seen.tail}",
         )
+    # The tree-count floor applies HERE TOO. It was written for the weak fallback path
+    # and never wired into this one, so the strongest path became the one asking the
+    # fewest questions: it checked that a run passed and never that the run was this
+    # tree's suite. One line of `addopts = -k "not price"` therefore walked straight
+    # through the path built to stop exactly that.
+    declared = testcount.count_tree(ctx.worktree_root)
+    if declared and not testcount.plausible(declared, seen.executed):
+        return Verdict(
+            True,
+            f"{seen.runner} passed {seen.executed} test(s), but this tree declares "
+            f"{declared}. Something narrowed the run — an `addopts` filter, a `testpaths` "
+            f"entry, a marker — so this is not a witnessed pass of your suite.\n{seen.tail}",
+            unverified=True,
+        )
+
     if clear_red(ctx, command, seen.executed) or red(ctx) is None:
         record_green(ctx, command)
     return Verdict(True, f"{seen.executed} test(s) run by the gate itself via {seen.runner}")
