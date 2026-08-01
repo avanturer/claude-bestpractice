@@ -1,5 +1,46 @@
 # Changelog
 
+## v1.0.1
+
+Two fixes, both to the push gate, both found by installing v1.0.0 the way the README tells
+you to and then looking at what was actually guarding the repository.
+
+### The gate was never installed on the documented path
+
+`Setup` fires on `--init`. Install the plugin into a repository you already have — which
+is what `/plugin install` does, and what the README leads with — and `Setup` never fires.
+The result: `claude plugin list` said `✓ enabled`, the board rendered on every session,
+the in-session gates fired, and **nothing at all guarded a push**. The headline gate was
+off in every repository that did not happen to be created through the plugin.
+
+The first session that finds no `pre-push` hook now installs one and says so once.
+`claude-bp ci off` still removes it, and the removal now persists in Tier B, so the next
+session does not put it back — an opt-out that has to be repeated is not an opt-out.
+
+Proven by `a plain install arms the push gate`, which starts a real session in an
+unguarded repository and then looks at the hook, and fails when `ensure` is stubbed out.
+
+### The gate exited 0 when it could not run your suite
+
+The generated hook baked in the project's detected test command, guarded by `command -v`.
+If the runner was gone at push time — different machine, changed PATH, rebuilt venv — the
+guard failed and the hook fell through `claude-bp-ci` (not on a marketplace user's shell
+PATH), through `claude-bp-doctor` (same), and out through `exit 0`. A project that has a
+suite pushed with nothing run, reported as checked.
+
+It now refuses, naming the missing runner and `--no-verify`. A repository with no suite at
+all is still allowed through: nothing is being skipped there, and that is a true statement
+rather than a swallowed failure.
+
+### Also
+
+- The hook script no longer carries this project's development history in its comments.
+  It lands in your repository; it should read like a tool's output, not like a commit log.
+- `tests/test_ci.py` had `unittest.main()` above its last class, so running that file
+  directly skipped those tests silently.
+
+616 tests, 26 doctor checks, always-on context unchanged at ~332 tokens.
+
 ## v1.0.0
 
 First release. What follows is written to be checked rather than believed: every claim

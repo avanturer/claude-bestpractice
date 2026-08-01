@@ -4,9 +4,9 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-1.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-602%20passing-2ea44f)](#verified)
-[![doctor](https://img.shields.io/badge/doctor-25%20checks-2ea44f)](#verified)
+[![version](https://img.shields.io/badge/version-1.0.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-616%20passing-2ea44f)](#verified)
+[![doctor](https://img.shields.io/badge/doctor-26%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
 [![context](https://img.shields.io/badge/always--on%20context-332%20tokens-blue)](#context-cost)
@@ -48,8 +48,14 @@ The two are not equivalent, and the difference matters on your first day:
 
 Claude Code puts the plugin's `bin/` on the Bash tool's PATH automatically, so on the
 marketplace path the commands below work **inside a session** and are `command not found`
-in your shell. That is worth knowing because `claude-bp init` is what installs the
-pre-push gate: skip it and the gate is off while `claude plugin list` says `✓ enabled`.
+in your shell.
+
+The push gate does not wait for either of them. The first session started in a repository
+that has no `pre-push` hook installs one, and says so on the board; after that it stays
+quiet. `claude-bp ci off` removes it and the removal sticks — the next session will not
+put it back. That is a correction, not a feature: until v1.0.1 the gate was installed only
+by `claude-bp init`, so installing the plugin the documented way left `claude plugin list`
+saying `✓ enabled` over a push path with nothing on it.
 
 In any repository afterwards — from your terminal, or by asking Claude to run them:
 
@@ -63,7 +69,7 @@ any gate fails to fire. Gates that silently do nothing are worse than no gates.
 
 Read that claim narrowly, because it is narrow: the doctor builds its own throwaway
 repository and attacks that. It proves **the gates work**, not that they are correctly
-wired into *your* project — so "All 25 checks passed" is a statement about this software,
+wired into *your* project — so "All 26 checks passed" is a statement about this software,
 never a clean bill of health for your repository. `claude-bp status` is the one that
 looks at yours.
 
@@ -203,9 +209,14 @@ Stage is computed from the repository, never configured, and the ratchet only ti
 
 ### Checks run locally, not on someone's meter
 
-`claude-bp init` installs a **pre-push hook** that runs your own `make check` — or the
-doctor, in a repository that has none — before anything leaves the machine. Free, and in
-time to stop the push rather than to email you about it afterwards.
+Your first session installs a **pre-push hook** that runs your own `make check`, or your
+project's own test command, before anything leaves the machine. Free, and in time to stop
+the push rather than to email you about it afterwards.
+
+If that command's runner is missing when you push, the hook **refuses** rather than
+falling through to a cheerful exit code: this project has a suite, so a push reported as
+checked while nothing ran is the one outcome worse than a red one. A repository with no
+suite at all is a different case and is allowed through, because nothing is being skipped.
 
 That is the default because hosted minutes are metered and this operating mode spends
 them like a small team: three to eight sessions pushing all day, billed to one account.
@@ -267,7 +278,7 @@ In a session: `/claude-bestpractice:status` · `/claude-bestpractice:plan` · `/
 | `checkpoint` | PreCompact | fails open | Extractive checkpoint, zero model calls, secrets scrubbed |
 | `evidence-gate` | Stop | **fails closed** | Scope drift, test evidence, clean re-run; harvests decision drafts |
 
-Nine entries against a self-imposed budget of twelve. Always-on context **~329 tokens**
+Nine entries against a self-imposed budget of twelve. Always-on context **~332 tokens**
 against a cap of 400 — roughly 0.1 % of a 200k window.
 
 ---
@@ -275,7 +286,7 @@ against a cap of 400 — roughly 0.1 % of a 200k window.
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 602 tests · 25 doctor checks · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 616 tests · 26 doctor checks · budget
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration

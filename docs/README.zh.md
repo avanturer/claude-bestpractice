@@ -4,9 +4,9 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-1.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-602%20passing-2ea44f)](#已验证)
-[![doctor](https://img.shields.io/badge/doctor-25%20checks-2ea44f)](#已验证)
+[![version](https://img.shields.io/badge/version-1.0.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-616%20passing-2ea44f)](#已验证)
+[![doctor](https://img.shields.io/badge/doctor-26%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#运行要求)
 [![context](https://img.shields.io/badge/常驻上下文-332%20tokens-blue)](#运行要求)
@@ -47,9 +47,13 @@ curl -fsSL https://raw.githubusercontent.com/avanturer/claude-bestpractice/HEAD/
 | 注册前先跑 doctor | 否 | 是 |
 
 Claude Code 会自动把插件的 `bin/` 加进 Bash 工具的 PATH，所以走 marketplace 路径时，
-下面这些命令在**会话内**可用，在你自己的 shell 里则是 `command not found`。这一点很重要，
-因为 pre-push gate 正是由 `claude-bp init` 安装的：跳过它，gate 就是关着的，而
-`claude plugin list` 依然显示 `✓ enabled`。
+下面这些命令在**会话内**可用，在你自己的 shell 里则是 `command not found`。
+
+push gate 并不等这两条命令。在没有 `pre-push` 钩子的仓库里启动的第一个会话会装上它，
+并在 board 上说一声；之后就不再出声。`claude-bp ci off` 可以移除它，而且这个决定会保留
+下来——下一个会话不会把它装回去。这是一处更正，不是新功能：在 v1.0.1 之前，gate 只由
+`claude-bp init` 安装，所以按文档方式安装插件的人，`claude plugin list` 显示 `✓ enabled`，
+而 push 路径上什么都没有。
 
 之后在任意仓库中——在终端里运行，或者让 Claude 替你运行：
 
@@ -184,9 +188,13 @@ Stop gate **丢弃智能体的自述文字**，自己去运行你的测试套件
 
 ### 检查在本地跑，不花别人的机时
 
-`claude-bp init` 会装上一个 **pre-push 钩子**，在任何东西离开这台机器之前先跑你自己的
-`make check`——仓库没有的话就跑 doctor。免费，而且时机对：它拦下这次 push，而不是事后
+你的第一个会话就会装上一个 **pre-push 钩子**，在任何东西离开这台机器之前先跑你自己的
+`make check`，或者你项目自己的测试命令。免费，而且时机对：它拦下这次 push，而不是事后
 给你发一封邮件。
+
+如果 push 时那个命令的运行器不在，钩子会**拒绝**，而不是一路掉到一个欢快的零退出码：
+这个项目是有测试的，那么「报告已检查、实则一行都没跑」的 push 是唯一比红色更糟的结果。
+完全没有测试的仓库是另一回事，会被放行——因为并没有什么检查被跳过。
 
 之所以把它设为默认，是因为托管机时是计费的，而这种工作方式消耗它的速度和一个小团队一样：
 三到八个会话整天在推送，账单却只有一份。
@@ -245,7 +253,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 | `checkpoint` | PreCompact | 失败放行 | 抽取式检查点，零模型调用，密钥已清洗 |
 | `evidence-gate` | Stop | **失败拦截** | 范围漂移、测试证据、干净重跑；顺带收割决策草稿 |
 
-九个条目，自设上限是十二个。常驻上下文 **约 329 tokens**，上限 400 ——
+九个条目，自设上限是十二个。常驻上下文 **约 332 tokens**，上限 400 ——
 大约是 200k 窗口的 0.1 %。
 
 ---
@@ -253,7 +261,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 ## 已验证
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 602 个测试 · 25 项 doctor 检查 · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 616 个测试 · 26 项 doctor 检查 · budget
 ```
 
 doctor 通过**真的去做那件坏事**来证明 gate 有效，而不是把配置读回来对一遍——
