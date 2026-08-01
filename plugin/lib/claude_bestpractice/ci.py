@@ -38,6 +38,10 @@ BACKUP_SUFFIX = ".claude-bestpractice.bak"
 # stopped running is the exact failure this project exists to prevent — committed by the
 # thing that prevents it.
 DISPLACED_NAME = "pre-push.claude-bestpractice-original"
+
+# Set by `claude-bp ci off`, read by `ensure`. Its whole job is to make an opt-out stick
+# across the session start that would otherwise put the hook straight back.
+DECLINED_NAME = "pre-push-declined"
 CI_VARIABLE = "CLAUDE_BESTPRACTICE_CI"
 WORKFLOW = ".github/workflows/check.yml"
 
@@ -46,14 +50,14 @@ WORKFLOW = ".github/workflows/check.yml"
 # all — a repository with no checks of its own still gets its gates proven.
 HOOK_TEMPLATE = f"""#!/bin/sh
 {MARKER}
-# Runs the project's own checks before anything leaves this machine. Bypass with
+# Runs this project's own checks before anything leaves the machine. Bypass with
 # --no-verify when you genuinely need to push red work; that is a deliberate act and
 # leaves a record, which a silently-skipped hosted run does not.
 set -e
 
-# Whatever pre-push was here before goes first, with the same stdin and arguments git
-# gave us, and its refusal is still a refusal. Displacing someone's husky hook without
-# running it would silently switch off a check they rely on.
+# A pre-push hook that was already here runs first, with the same stdin and arguments
+# git gave us, and its refusal is still a refusal. Displacing a husky or lefthook hook
+# without running it would switch off a check you rely on.
 _original="$(dirname "$0")/{DISPLACED_NAME}"
 if [ -x "$_original" ]; then
     "$_original" "$@" || exit $?
@@ -63,18 +67,11 @@ if [ -f Makefile ] && grep -q '^check:' Makefile; then
     exec make check
 fi
 
-# The project's OWN suite, detected at install time. Without this tier the hook ran
-# `make check` or nothing but the doctor — and the doctor builds its own fixture
-# repository, so a Node or Go project with no Makefile had its push "checked" by a run
-# that never touched a line of its code. Re-run `claude-bp ci` if your runner changes.
 __TEST_COMMAND__
 
-# The project's OWN test command, resolved the same way the Stop gate resolves it. A
-# repository with a `package.json` test script or a `Cargo.toml` and no Makefile used to
-# fall straight past this to the doctor — which proves the PLUGIN's gates fire and runs
-# not one line of the founder's code. So the hook reported success over a red suite, and
-# the doctor's own sandbox writes itself a Makefile, meaning the only branch under test
-# was the one most repositories do not take.
+# Nothing was baked in above, so ask the plugin directly. This resolves only when
+# claude-bp is on your shell PATH — install.sh arranges that, the marketplace install
+# does not, which is why the tier above exists at all.
 _cmd="$(claude-bp-ci --print-test-command 2>/dev/null || true)"
 if [ -n "$_cmd" ]; then
     sh -c "$_cmd" || exit $?
@@ -84,9 +81,31 @@ if command -v claude-bp-doctor >/dev/null 2>&1; then
     exec claude-bp-doctor
 fi
 
-echo "claude-bestpractice: no 'make check' target and no doctor on PATH — nothing to run" >&2
+# Allowed, and the reason is a true statement rather than a swallowed failure: this
+# project has no `make check` target and had no test runner to detect.
+echo "claude-bestpractice: nothing to run — no 'make check' target and no test runner" >&2
+echo "was detectable here. Run 'claude-bp ci' once this project has a suite." >&2
 exit 0
 """
+
+# Rendered into __TEST_COMMAND__ when a runner WAS detected. The refusal at the end is
+# the point: reaching it means this project has a suite that could not be run, and
+# falling through to the tiers below would let the push go out reported as checked while
+# nothing checked it. A gate that cannot verify must not pretend it did.
+DETECTED_TIER = """# This project's own suite, detected when the hook was installed. It is baked in
+# rather than resolved at push time because git hands a hook a stripped environment
+# in which claude-bp is usually not on PATH. Re-run `claude-bp ci` if the runner changes.
+_runner={runner}
+if command -v "$_runner" >/dev/null 2>&1; then
+    exec {command}
+fi
+
+echo "claude-bestpractice: $_runner is not on PATH, so this project's suite could not" >&2
+echo "run. Refusing the push rather than reporting a check that never happened. Fix the" >&2
+echo "environment, run 'claude-bp ci' if the runner changed, or push with --no-verify." >&2
+exit 1"""
+
+NO_RUNNER_TIER = "# (no test runner was detectable in this project at install time)"
 
 
 def hook_body(ctx: GitContext | None = None) -> str:
@@ -106,21 +125,13 @@ def hook_body(ctx: GitContext | None = None) -> str:
 
         command = detect_test_command(ctx.worktree_root)
 
+    rendered = NO_RUNNER_TIER
     if command:
-        rendered = (
-            "if command -v " + quote(command[0]) + " >/dev/null 2>&1; then\n"
-            "    exec " + " ".join(quote(part) for part in command) + "\n"
-            "fi"
+        rendered = DETECTED_TIER.format(
+            runner=quote(command[0]),
+            command=" ".join(quote(part) for part in command),
         )
-    else:
-        rendered = "# (no test runner was detectable in this project at install time)"
     return HOOK_TEMPLATE.replace("__TEST_COMMAND__", rendered)
-
-
-# The un-substituted form, for callers that only need to recognise our hook.
-HOOK_BODY = HOOK_TEMPLATE.replace(
-    "__TEST_COMMAND__", "# (no test runner was detectable in this project at install time)"
-)
 
 
 def hooks_dir(ctx: GitContext) -> Path:
@@ -172,9 +183,52 @@ def _write_new_file(path: Path, body: str) -> None:
     _make_executable(path)
 
 
+def _declined_path(ctx: GitContext):
+    from .store import tier_b
+
+    return tier_b(ctx, DECLINED_NAME)
+
+
+def declined(ctx: GitContext) -> bool:
+    """Did a human take this hook out on purpose?
+
+    Tier B, because that is exactly the lifetime of the thing it describes: a git hook
+    is per-clone and never committed, and so is the decision to be rid of one. Recording
+    it in Tier A would push one machine's opt-out onto every other checkout of the branch.
+    """
+    try:
+        return _declined_path(ctx).exists()
+    except OSError:
+        return False
+
+
+def ensure(ctx: GitContext) -> tuple[bool, str]:
+    """Arm the gate if it is absent and nobody declined it. Returns (changed, note).
+
+    `Setup` fires on `--init`, so the hook was installed only in repositories that were
+    initialised through the plugin. Install it into an existing project the ordinary way
+    — `/plugin install`, which is the way the README leads with — and `Setup` never
+    fires: `claude plugin list` says enabled, the board renders, gates fire in-session,
+    and nothing whatsoever guards a push. That is the failure this module's own docstring
+    calls worse than no gate, shipped by default.
+
+    SessionStart is the event that reliably fires, so it is the one that arms this. The
+    work is skipped outright once the hook is there, which is every session after the
+    first, and the create is O_EXCL, so eight sessions starting at once produce one hook
+    and seven no-ops rather than a torn file.
+    """
+    if installed(ctx) or declined(ctx):
+        return False, ""
+    return install(ctx)
+
+
 def install(ctx: GitContext) -> tuple[bool, str]:
     """Put the hook in place, chaining any hook already there. Returns (changed, note)."""
     path = hook_path(ctx)
+    # Asking for it back is consent, and it has to clear the opt-out or `claude-bp ci on`
+    # would appear to work and be undone by the next session start.
+    with contextlib.suppress(OSError):
+        _declined_path(ctx).unlink(missing_ok=True)
     if installed(ctx):
         return False, "pre-push hook already installed"
 
@@ -212,6 +266,17 @@ def install(ctx: GitContext) -> tuple[bool, str]:
 def remove(ctx: GitContext) -> tuple[bool, str]:
     """Take the hook out and put back whatever was there before it."""
     path = hook_path(ctx)
+
+    # Recorded before the unlink, and recorded even when there was nothing to remove, so
+    # that `off` means "stay off". Without this, SessionStart re-arms what the founder
+    # just switched off and the only way to keep it off is to keep running `off` — which
+    # is not a tool obeying its owner, it is a tool arguing with them.
+    with contextlib.suppress(OSError):
+        from . import store
+
+        store.ensure_dir(_declined_path(ctx).parent)
+        _declined_path(ctx).write_text("", encoding="utf-8")
+
     if not installed(ctx):
         return False, "no claude-bestpractice pre-push hook installed"
 

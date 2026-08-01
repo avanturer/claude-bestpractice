@@ -284,10 +284,6 @@ class TestTheShippedWorkflowIsOptIn(unittest.TestCase):
         self.assertNotIn("pip install", text)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestTheHookRunsTheProjectsOwnSuite(CICase):
     """`make check` or the doctor was the whole ladder, and the doctor tests the PLUGIN.
 
@@ -304,7 +300,54 @@ class TestTheHookRunsTheProjectsOwnSuite(CICase):
         ci.install(self.ctx())
         body = ci.hook_path(self.ctx()).read_text()
         self.assertIn("npm", body)
-        self.assertIn("command -v npm", body, "the tier must not fail when npm is absent")
+        self.assertIn("_runner=npm", body, "the tier must not fail when npm is absent")
+
+    def test_a_vanished_runner_refuses_the_push(self):
+        """The one fail-open path left in the ladder, and the worst one.
+
+        A runner detected at install time and missing at push time used to fall past
+        this tier, past `claude-bp-ci` (not on a marketplace user's shell PATH), past
+        `claude-bp-doctor` (same), and out through `exit 0` — so a project that HAS a
+        suite pushed with nothing run, reported as checked. Refuse instead: a gate that
+        cannot verify must not pretend it did.
+        """
+        import os
+        import shutil
+
+        from claude_bestpractice import ci
+
+        self.write("package.json", '{"name":"x","scripts":{"test":"vitest run"}}')
+        ci.install(self.ctx())
+
+        # A PATH with just enough to reach the tier — and no npm.
+        stub = self.repo.parent / "stubbin"
+        stub.mkdir(exist_ok=True)
+        for tool in ("sh", "dirname", "grep"):
+            found = shutil.which(tool)
+            self.assertIsNotNone(found, f"the fixture needs {tool}")
+            (stub / tool).symlink_to(found)
+
+        proc = subprocess.run(
+            ["sh", str(ci.hook_path(self.ctx()))],
+            cwd=str(self.repo), capture_output=True, text=True, timeout=60,
+            env={**os.environ, "PATH": str(stub)},
+        )
+        self.assertEqual(proc.returncode, 1, f"the push was allowed: {proc.stdout}{proc.stderr}")
+        self.assertIn("never happened", proc.stderr)
+        self.assertIn("--no-verify", proc.stderr, "refusing without naming the escape hatch")
+
+    def test_a_project_with_no_runner_still_allows_the_push(self):
+        """The other side of the same coin: nothing to run is a true statement.
+
+        Refusing every push in a repository that has no suite yet would get the hook
+        deleted within a day, and rightly — there is no check being skipped.
+        """
+        from claude_bestpractice import ci
+
+        ci.install(self.ctx())
+        body = ci.hook_path(self.ctx()).read_text()
+        self.assertNotIn("Refusing the push", body)
+        self.assertIn("exit 0", body)
 
     def test_the_doctor_is_still_the_last_resort(self):
         """A repository with no runner at all still gets its gates proven."""
@@ -329,3 +372,98 @@ class TestTheHookRunsTheProjectsOwnSuite(CICase):
         from claude_bestpractice import ci
 
         self.assertNotIn("__TEST_COMMAND__", ci.hook_body(self.ctx()))
+
+
+class TestTheGateArmsItself(CICase):
+    """`✓ enabled` and no hook guarding any push was the default install.
+
+    `Setup` fires on `--init`, so the hook reached repositories that were created through
+    the plugin and no others. Every founder who did the documented thing — install into
+    the repository they already had — got gates that fire in-session and a push path with
+    nothing on it at all.
+    """
+
+    def test_a_session_start_arms_an_unguarded_repository(self):
+        from claude_bestpractice import ci
+
+        self.assertFalse(ci.installed(self.ctx()))
+        armed, _ = ci.ensure(self.ctx())
+        self.assertTrue(armed)
+        self.assertTrue(ci.installed(self.ctx()))
+
+    def test_arming_twice_changes_nothing(self):
+        """Eight sessions start at once; seven of them must be no-ops."""
+        from claude_bestpractice import ci
+
+        ci.ensure(self.ctx())
+        before = ci.hook_path(self.ctx()).read_text()
+        armed, _ = ci.ensure(self.ctx())
+        self.assertFalse(armed)
+        self.assertEqual(before, ci.hook_path(self.ctx()).read_text())
+
+    def test_off_stays_off(self):
+        """A tool that re-arms what its owner just switched off is arguing with them."""
+        from claude_bestpractice import ci
+
+        ci.ensure(self.ctx())
+        ci.remove(self.ctx())
+        self.assertTrue(ci.declined(self.ctx()))
+
+        armed, _ = ci.ensure(self.ctx())
+        self.assertFalse(armed, "the opt-out was overridden by the next session start")
+        self.assertFalse(ci.installed(self.ctx()))
+
+    def test_asking_for_it_back_works(self):
+        """Otherwise `ci on` appears to work and the next session start undoes it."""
+        from claude_bestpractice import ci
+
+        ci.remove(self.ctx())
+        ci.install(self.ctx())
+        self.assertFalse(ci.declined(self.ctx()))
+
+        ci.remove(self.ctx())
+        ci.install(self.ctx())
+        armed, _ = ci.ensure(self.ctx())
+        self.assertFalse(armed)
+        self.assertTrue(ci.installed(self.ctx()), "the hook did not survive")
+
+    def test_the_real_session_start_gate_arms_it(self):
+        """The unit above proves `ensure`; this proves the gate actually calls it.
+
+        Verified against the shipped plugin before this existed: install into an
+        existing repository, start a session, and `.git/hooks/pre-push` was still absent.
+        """
+        from claude_bestpractice import ci
+
+        proc = self.run_hook(
+            "session-start", {"session_id": "s1", "hook_event_name": "SessionStart"}
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(ci.installed(self.ctx()), "a session started and left the push path open")
+        self.assertIn("before every push", proc.stdout)
+
+    def test_the_session_start_gate_honours_the_optout(self):
+        from claude_bestpractice import ci
+
+        ci.remove(self.ctx())
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
+        self.assertFalse(ci.installed(self.ctx()))
+
+    def test_the_second_session_says_nothing(self):
+        """The always-on context budget is 400 tokens; this line is not always-on."""
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
+        second = self.run_hook(
+            "session-start", {"session_id": "s2", "hook_event_name": "SessionStart"}
+        )
+        self.assertNotIn("before every push", second.stdout)
+
+    def test_the_optout_is_not_committed(self):
+        """One machine's opt-out must not travel to every checkout of the branch."""
+        from claude_bestpractice import ci
+
+        ci.remove(self.ctx())
+        self.assertEqual("", git(["status", "--porcelain"], self.repo).strip())
+
+
+if __name__ == "__main__":
+    unittest.main()

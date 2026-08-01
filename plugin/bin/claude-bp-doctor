@@ -622,6 +622,41 @@ def check_pushes_are_checked(repo: Path) -> Result:
     )
 
 
+def check_the_gate_arms_itself(repo: Path) -> Result:
+    """The check above installs the hook first, so it never asked who installs it.
+
+    Nobody did. `Setup` fires on `--init`, so a founder who installed the plugin into the
+    repository they already had — the path the README leads with — got `✓ enabled`, a
+    board on every session, gates firing in-session, and a push path with nothing on it.
+    Twenty-five green checks and the headline gate was off. Only starting a session in an
+    unguarded repository and then looking at the hook detects it.
+    """
+    from claude_bestpractice import ci
+    from claude_bestpractice.gitctx import resolve
+
+    ctx = resolve(repo)
+    if ci.installed(ctx):
+        return Result("a plain install arms the push gate", False, "the fixture came pre-armed")
+
+    start_session(repo, "doctor-arm")
+    armed = ci.installed(ctx)
+
+    # And the other half: switching it off has to stay off, or the only way to be rid of
+    # it is to keep switching it off, which is a tool arguing with its owner.
+    ci.remove(ctx)
+    start_session(repo, "doctor-arm-2")
+    stayed_off = not ci.installed(ctx)
+
+    ok = armed and stayed_off
+    return Result(
+        "a plain install arms the push gate",
+        ok,
+        "armed on session start, and `ci off` survived the next one"
+        if ok
+        else f"armed={armed} (must be True), opt-out held={stayed_off} (must be True)",
+    )
+
+
 def check_quiet_session_still_enforces(repo: Path) -> Result:
     """The failure this doctor was blind to while reporting twenty green checks.
 
@@ -943,6 +978,7 @@ def main() -> int:
             check_airlock_quarantine,
             check_review_finds_and_bounds,
             check_quiet_session_still_enforces,
+            check_the_gate_arms_itself,
             check_pushes_are_checked,
             check_worktree_is_required,
             check_fabricated_evidence_is_refused,

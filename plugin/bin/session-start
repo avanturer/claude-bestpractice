@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import board, config, hookio, sessions, stage, store  # noqa: E402
+from claude_bestpractice import board, ci, config, hookio, sessions, stage, store  # noqa: E402
 from claude_bestpractice.gitctx import GitContext, resolve, stash_baseline  # noqa: E402
 
 
@@ -79,6 +79,26 @@ def _autonomy_line(mode: str) -> str:
     return _AUTONOMY_LINES.get(mode, _AUTONOMY_LINES["vibecode"])
 
 
+def _armed_line(ctx: GitContext) -> str:
+    """Arm the push gate on the first session that finds it missing, and say so once.
+
+    `Setup` only fires on `--init`, so installing the plugin into an existing repository
+    — the path the README leads with — left `claude plugin list` saying enabled and no
+    hook guarding any push. This is where that gets closed.
+
+    Costs nothing against the always-on context budget: it returns empty on every session
+    after the one that installs the hook, which is all of them.
+    """
+    armed, note = ci.ensure(ctx)
+    if not armed:
+        return ""
+    line = "\nchecks now run before every push (`claude-bp ci off` if you do not want them)"
+    if "moved to" in note:
+        # A file of theirs moved. Chaining it correctly is not a licence to do it silently.
+        line += "\n" + note.split("\n", 1)[-1].strip()
+    return line
+
+
 def main() -> None:
     event = hookio.read_event()
     ctx = hookio.repo(event.cwd or os.getcwd())
@@ -97,6 +117,7 @@ def main() -> None:
     body = board.render(ctx, me, others, len(reaped), leases)
     body += f"\nstage: {resolved_stage} (computed from the repository, not configured)"
     body += "\n" + _autonomy_line(config.load(ctx).autonomy)
+    body += _armed_line(ctx)
 
     hookio.emit_context("SessionStart", body)
 
