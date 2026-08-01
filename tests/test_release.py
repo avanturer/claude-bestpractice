@@ -67,6 +67,30 @@ class TestInstallPath(unittest.TestCase):
     def test_the_installer_is_executable(self) -> None:
         self.assertTrue((REPO_ROOT / "install.sh").stat().st_mode & 0o111, "install.sh is not +x")
 
+    def test_the_installer_leaves_a_clone_clean(self) -> None:
+        """Run from a clone, `INSTALL_DIR` is the founder's own checkout.
+
+        `chmod +x plugin/bin/*` therefore chmodded twenty `.cmd` shims that nothing on
+        this platform executes, and `git status` came back dirty on twenty files the
+        moment the install finished. Caught by a stop hook complaining about uncommitted
+        changes after the installer had been run against this very repository.
+        """
+        installer = read("install.sh")
+        self.assertNotIn(
+            'chmod +x "$INSTALL_DIR"/plugin/bin/*',
+            installer,
+            "the installer chmods the .cmd shims and dirties the clone it ran from",
+        )
+        self.assertIn("! -name '*.cmd'", installer, "the .cmd shims are not excluded")
+
+    def test_the_cmd_shims_are_not_executable(self) -> None:
+        """The mode the installer must stop changing. 644 is deliberate, not an accident."""
+        for shim in (REPO_ROOT / "plugin" / "bin").glob("*.cmd"):
+            self.assertFalse(
+                shim.stat().st_mode & 0o111,
+                f"{shim.name} is +x; a Windows batch file is never executed here",
+            )
+
     def test_the_license_the_manifests_claim_exists(self) -> None:
         plugin = json.loads(read("plugin/.claude-plugin/plugin.json"))
         text = read("LICENSE")

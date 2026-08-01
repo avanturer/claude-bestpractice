@@ -66,7 +66,14 @@ else
   git clone --quiet --depth 1 "$REPO_URL" "$INSTALL_DIR"
 fi
 
-chmod +x "$INSTALL_DIR"/plugin/bin/* 2>/dev/null || true
+# The POSIX gates only. A clone made under a umask that drops the executable bit has
+# gates that cannot launch, so this is not optional — but `.cmd` shims are Windows batch
+# files that nothing here executes, and chmodding them showed up as twenty modified files
+# in `git status` when the installer was run from a founder's own clone. An installer
+# whose first act is to dirty the repository it was run from has no business shipping in
+# a product whose entire premise is state you can check.
+find "$INSTALL_DIR/plugin/bin" -maxdepth 1 -type f ! -name '*.cmd' \
+    -exec chmod +x {} + 2>/dev/null || true
 
 # ------------------------------------------------------------------ prove it works
 # The gates are proven by attempting known-bad actions BEFORE anything is registered.
