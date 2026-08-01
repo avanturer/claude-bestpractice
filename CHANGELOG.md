@@ -32,14 +32,24 @@ It now refuses, naming the missing runner and `--no-verify`. A repository with n
 all is still allowed through: nothing is being skipped there, and that is a true statement
 rather than a swallowed failure.
 
+### The installer dirtied the clone it was run from
+
+Run from a clone, `INSTALL_DIR` is your own checkout, so `chmod +x plugin/bin/*` chmodded
+all twenty `.cmd` shims — Windows batch files that nothing on a POSIX machine executes —
+and `git status` came back with twenty modified files the moment the install finished.
+The chmod is now scoped to the files that need it. It stays, because a clone made under a
+umask that drops the executable bit has gates that cannot launch.
+
 ### Also
 
 - The hook script no longer carries this project's development history in its comments.
   It lands in your repository; it should read like a tool's output, not like a commit log.
 - `tests/test_ci.py` had `unittest.main()` above its last class, so running that file
   directly skipped those tests silently.
+- The always-on token figure disagreed with itself in all three READMEs — 329 in the body
+  against 332 in the badge. `make budget` says 332.
 
-616 tests, 26 doctor checks, always-on context unchanged at ~332 tokens.
+618 tests, 26 doctor checks, always-on context unchanged at ~332 tokens.
 
 ## v1.0.0
 
