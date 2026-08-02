@@ -181,6 +181,15 @@ of the same four sessions afterwards: four records, four branches, four correct 
   shrank — append-only at ~200 bytes a session — and is now capped, newest kept, so a
   session crashed a moment ago still recovers its baseline.
 
+639 tests, 26 doctor checks, always-on context unchanged at ~332 tokens.
+
+## v1.0.4
+
+Everything in v1.0.3 plus the below. Both are the same shape, and it is the shape this
+release cycle keeps finding: a template presented as an answer, or a stale claim presented
+as current. Both were found by running the thing rather than reading it — the suite was
+green throughout, and so was the doctor.
+
 ### A dead end about code that has since been rewritten
 
 The attempts ledger — "what was tried and why it failed" — stamps every record with the
