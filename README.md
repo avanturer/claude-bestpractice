@@ -5,7 +5,7 @@
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
 [![version](https://img.shields.io/badge/version-1.0.2-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-637%20passing-2ea44f)](#verified)
+[![tests](https://img.shields.io/badge/tests-639%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-26%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
@@ -286,7 +286,7 @@ against a cap of 400 — roughly 0.1 % of a 200k window.
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 637 tests · 26 doctor checks · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 639 tests · 26 doctor checks · budget
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration
@@ -298,6 +298,23 @@ for producing it.
 The suite includes a full project lifecycle driven entirely through the real gate
 executables: onboarding an unseen repository, planning, a leaked credential, a scope
 violation, a failing suite, a green finish, and a second session reading the history.
+
+## Upgrading
+
+```sh
+claude plugin marketplace update claude-bestpractice
+claude plugin update claude-bestpractice@claude-bestpractice
+```
+
+The second command needs the **qualified** `name@marketplace` form. `install` accepts the
+short name and `update` does not — the short form fails with `Plugin "claude-bestpractice"
+not found` while the plugin is installed and enabled, which reads as a broken install
+rather than a wrong argument. Verified by upgrading 1.0.1 to 1.0.2 on a real install.
+
+Your state is untouched by an upgrade, also verified rather than assumed: a plan task
+written under 1.0.1 was still there and still readable after. It lives in your repository
+and in your git common directory, never in the plugin cache, which is what the version
+bump replaces.
 
 ## Requirements
 
