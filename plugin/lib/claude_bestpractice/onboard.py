@@ -281,7 +281,7 @@ def unanswered(ctx: GitContext) -> list[str]:
         f"{knowledge.RULES_DIR}/{knowledge.GLOSSARY}",
     ):
         text = _read(root / rel)
-        count = text.count("<ANSWER THIS") + len(re.findall(r"<[a-z][^>\n]{5,}>", text))
+        count = knowledge.placeholders(text)
         if count:
             out.append(f"{rel}: {count} placeholder(s)")
     return out

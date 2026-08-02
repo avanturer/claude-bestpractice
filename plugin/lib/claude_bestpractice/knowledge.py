@@ -324,6 +324,24 @@ def build_index(ctx: GitContext) -> str:
     return "\n".join(lines) + "\n"
 
 
+PLACEHOLDER = re.compile(r"<ANSWER THIS|<[a-z][^>\n]{5,}>")
+
+
+def placeholders(text: str) -> int:
+    """How many slots in this text are still waiting on a human.
+
+    Here rather than in `onboard` because both need it and `onboard` imports this, not
+    the other way round. Duplicating the pattern is what the slop gate exists to refuse.
+    """
+    return len(PLACEHOLDER.findall(text))
+
+
+def unanswered_only(text: str) -> bool:
+    """True when every line that says anything is a slot rather than an answer."""
+    said = [line for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    return bool(said) and all(PLACEHOLDER.search(line) for line in said)
+
+
 def subagent_brief(ctx: GitContext, max_chars: int = 2_000) -> str:
     """Non-goals and entities, verbatim, for a subagent that inherits nothing.
 
@@ -335,9 +353,16 @@ def subagent_brief(ctx: GitContext, max_chars: int = 2_000) -> str:
     parts: list[str] = []
 
     for block in layer.product.split("\n#"):
-        if "non-goal" in block.lower():
+        if "non-goal" not in block.lower():
+            continue
+        # An unanswered section is a template, and shipping a template as a briefing is
+        # worse than shipping nothing: it costs the subagent tokens, tells it nothing, and
+        # teaches it that this channel carries noise. Verified before this check existed —
+        # a subagent's entire brief was three lines reading `<ANSWER THIS — something
+        # plausible this deliberately will not do>`.
+        if not unanswered_only(block):
             parts.append("#" + block.strip() if not block.startswith("#") else block.strip())
-            break
+        break
 
     if layer.entities:
         parts.append("## Entities")

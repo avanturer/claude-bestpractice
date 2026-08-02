@@ -302,3 +302,43 @@ class TestSubagentHook(KnowledgeCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestASubagentIsNotBriefedWithATemplate(RepoCase):
+    """A subagent's entire brief was three lines reading `<ANSWER THIS — …>`.
+
+    Worse than nothing: it costs the subagent tokens, tells it nothing, and teaches it
+    that this channel carries noise. Found by firing SubagentStart on a repository whose
+    knowledge layer had been created and not yet answered — which is every repository for
+    its first hour.
+    """
+
+    def test_an_unanswered_section_is_not_injected(self):
+        from claude_bestpractice import knowledge, onboard
+
+        onboard.write(self.ctx())
+        self.assertEqual("", knowledge.subagent_brief(self.ctx()).strip())
+
+    def test_an_answered_section_is_injected_verbatim(self):
+        from claude_bestpractice import knowledge, onboard
+
+        onboard.write(self.ctx())
+        path = self.repo / knowledge.RULES_DIR / knowledge.PRODUCT
+        text = path.read_text(encoding="utf-8")
+        text = text.replace(
+            "- <ANSWER THIS — something plausible this deliberately will not do>",
+            "- Never send email; billing only",
+        )
+        path.write_text(text, encoding="utf-8")
+
+        brief = knowledge.subagent_brief(self.ctx())
+        self.assertIn("Never send email; billing only", brief)
+        self.assertNotIn("ANSWER THIS", brief, "a template rode along with the answer")
+
+    def test_the_counter_and_the_brief_agree_on_what_a_placeholder_is(self):
+        """Two patterns for one concept is how they drift apart."""
+        from claude_bestpractice import knowledge
+
+        self.assertEqual(1, knowledge.placeholders("<ANSWER THIS. Who is it for?>"))
+        self.assertTrue(knowledge.unanswered_only("- <a second one>\n- <a third one>\n"))
+        self.assertFalse(knowledge.unanswered_only("- a real answer\n- <a second one>\n"))
