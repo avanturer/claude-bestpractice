@@ -157,7 +157,23 @@ Identity is now (harness id, worktree). One session per worktree is the model al
 a resume or post-compaction restart in the same worktree still finds its own record. Re-run
 of the same four sessions afterwards: four records, four branches, four correct files.
 
-637 tests, 26 doctor checks, always-on context unchanged at ~332 tokens.
+### Verified across the rest of what could be reached here
+
+- **A Node and a Go project, end to end.** `npm test --silent` and `go test ./...`
+  detected, baked into the hook, green push allowed, red push refused. Both correct.
+- **A real 1.0.1 to 1.0.2 upgrade**, not a structural argument about one. A plan task
+  written under the old version was still there and still readable after. But
+  `claude plugin update claude-bestpractice` **fails** — `update` needs the qualified
+  `name@marketplace` form where `install` accepts the short one, and the failure reads
+  `Plugin "claude-bestpractice" not found` while the plugin is installed and enabled.
+  The README now documents the form that works.
+- **Four hundred sessions in one repository.** State grows linearly and stays small
+  (202 KB), session start stays flat at 0.19s against a 30s limit, and one session start
+  reaped 400 dead records in 1.45s. `reaped.jsonl` was the only structure that never
+  shrank — append-only at ~200 bytes a session — and is now capped, newest kept, so a
+  session crashed a moment ago still recovers its baseline.
+
+639 tests, 26 doctor checks, always-on context unchanged at ~332 tokens.
 
 ## v1.0.0
 

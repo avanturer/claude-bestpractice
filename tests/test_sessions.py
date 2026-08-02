@@ -324,3 +324,32 @@ class TestOneHarnessIdIsNotOneSession(RepoCase):
         theirs = sessions.get(resolve(other), self.event(other).session_id)
         self.assertIn("billing", mine.task_statement)
         self.assertIn("export", theirs.task_statement)
+
+
+class TestTheReapLogIsBounded(RepoCase):
+    """The one structure in Tier B that only ever grew.
+
+    Measured across 400 sessions in one repository: every other file is rewritten or
+    deleted, and this one appended ~200 bytes a session forever, with `reaped_memory`
+    scanning all of it on every resume that finds no record.
+    """
+
+    def test_it_stops_growing(self):
+        ctx = self.ctx()
+        for i in range(sessions.REAPED_LOG_MAX + 40):
+            sessions.register(ctx, record(ctx, f"dead{i}", pid=999_999_999))
+        sessions.reap(ctx)
+        kept = store.read_jsonl(store.tier_b(ctx, sessions.REAPED_LOG))
+        self.assertLessEqual(len(kept), sessions.REAPED_LOG_MAX)
+
+    def test_the_newest_reaps_are_the_ones_kept(self):
+        """A session crashed a moment ago must still recover its baseline."""
+        ctx = self.ctx()
+        for i in range(sessions.REAPED_LOG_MAX + 10):
+            sessions.register(ctx, record(ctx, f"old{i}", pid=999_999_999))
+        sessions.reap(ctx)
+        rec = record(ctx, "just-crashed", pid=999_999_999)
+        rec.baseline_commit = "cafebabe"
+        sessions.register(ctx, rec)
+        sessions.reap(ctx)
+        self.assertEqual("cafebabe", sessions.reaped_memory(ctx, "just-crashed").get("baseline_commit"))
