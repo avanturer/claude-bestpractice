@@ -13,9 +13,11 @@ Three of them account for most gates that ship enforcing nothing:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from typing import Any, Callable, NoReturn
@@ -33,6 +35,29 @@ PROVENANCE = "[claude-bestpractice — automated, generated from repository stat
 
 BLOCK = 2
 OK = 0
+
+
+_WORKTREE_CACHE: dict[str, str] = {}
+
+
+def _worktree_of(cwd: str) -> str:
+    """The worktree root for a directory, or "" outside a repository.
+
+    Cached per process: `pre-tool` reads `session_id` on every tool call, and paying a
+    `git rev-parse` each time would put a subprocess in the hottest path in the plugin.
+    """
+    if cwd in _WORKTREE_CACHE:
+        return _WORKTREE_CACHE[cwd]
+    root = ""
+    if cwd and os.path.isdir(cwd):
+        proc = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=cwd, capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=30,
+        )
+        if proc.returncode == 0:
+            root = os.path.realpath(proc.stdout.strip())
+    _WORKTREE_CACHE[cwd] = root
+    return root
 
 
 class HookInputError(ValueError):
@@ -55,7 +80,27 @@ class HookEvent:
 
     @property
     def session_id(self) -> str:
-        return str(self.raw.get("session_id") or "")
+        """The harness id, qualified by worktree — never the harness id alone.
+
+        Four `claude -p` children inherit `CLAUDE_CODE_SESSION_ID` from the process that
+        launched them, so every one of them reports the SAME session_id to every hook.
+        Keyed on that alone, four concurrent sessions on four worktrees wrote ONE record:
+        worktree from the first, branch from the third, task statement from the second.
+        Two of the four then read that task statement back as their own and rewrote a file
+        they had never been asked to touch, reverting their real work to do it. Leases came
+        out empty and every board said "this session is alone on the repository".
+
+        So the coordination layer did not merely fail to help under the load it exists for
+        — it fed sessions each other's work. Identity is therefore (harness id, worktree).
+        One session per worktree is this product's model already, and a resume or a
+        post-compaction restart in the same worktree still resolves to its own record.
+        """
+        base = str(self.raw.get("session_id") or "")
+        root = _worktree_of(self.cwd)
+        if not root:
+            return base
+        tag = hashlib.sha1(root.encode("utf-8")).hexdigest()[:8]
+        return f"{base}-{tag}" if base else f"anon-{tag}"
 
     @property
     def event_name(self) -> str:

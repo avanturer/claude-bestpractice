@@ -137,7 +137,27 @@ A passing run now checks that the package it exercised lives inside this worktre
 does not, the finish is `UNVERIFIED` and names the package and where it actually resolved.
 One interpreter start per top-level package, on the green path only.
 
-632 tests, 26 doctor checks, always-on context unchanged at ~332 tokens.
+### Four parallel sessions were one session, and it fed them each other's work
+
+The headline scenario, run for the first time: four live `claude` sessions at once, one
+per worktree, each told to change a different file.
+
+Two of the four rewrote a file they had never been asked to touch — reverting their own
+correct work to do it — because the plugin handed them another session's task statement
+as their own. Four sessions produced **one** record, and an incoherent one: worktree from
+the first, branch from the third, task from the second. No lease was ever taken. Every
+board said "this session is alone on the repository".
+
+The cause is that `claude` children inherit `CLAUDE_CODE_SESSION_ID`, so all four reported
+the same `session_id` to every hook, and identity was keyed on that alone. So under the
+exact load this product exists for, the coordination layer did not merely fail to help —
+it actively corrupted half the sessions.
+
+Identity is now (harness id, worktree). One session per worktree is the model already, and
+a resume or post-compaction restart in the same worktree still finds its own record. Re-run
+of the same four sessions afterwards: four records, four branches, four correct files.
+
+637 tests, 26 doctor checks, always-on context unchanged at ~332 tokens.
 
 ## v1.0.0
 

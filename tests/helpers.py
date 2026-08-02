@@ -153,3 +153,16 @@ def session_record_for(ctx, session_id: str, pid: int | None = None):
         started_at=now,
         heartbeat_at=now,
     )
+
+
+def sid(cwd, session_id: str) -> str:
+    """The identity a gate will actually register under, for a raw harness id.
+
+    Identity is (harness id, worktree) since four concurrent `claude -p` children were
+    found to inherit one `CLAUDE_CODE_SESSION_ID` and collapse into a single, incoherent
+    record. A test that looks a session up by the raw id is asking the wrong question.
+    """
+    sys.path.insert(0, str(REPO_ROOT / "plugin" / "lib"))
+    from claude_bestpractice.hookio import HookEvent
+
+    return HookEvent({"session_id": session_id, "cwd": str(cwd)}).session_id

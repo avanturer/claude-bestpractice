@@ -271,3 +271,56 @@ class TestCrossWorktree(RepoCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestOneHarnessIdIsNotOneSession(RepoCase):
+    """Four concurrent `claude -p` children collapsed into a single, incoherent record.
+
+    They inherit `CLAUDE_CODE_SESSION_ID`, so every one of them reported the same
+    `session_id` to every hook. Keyed on that alone, four sessions on four worktrees
+    produced one record — worktree from the first, branch from the third, task statement
+    from the second — and two of the four then read that task back as their own and
+    rewrote a file they had never been asked to touch. Leases came out empty and every
+    board said the session was alone on the repository.
+    """
+
+    def event(self, cwd, harness_id: str = "shared"):
+        from claude_bestpractice.hookio import HookEvent
+
+        return HookEvent({"session_id": harness_id, "cwd": str(cwd)})
+
+    def test_two_worktrees_sharing_a_harness_id_are_two_sessions(self):
+        other = self.add_worktree("sibling")
+        self.assertNotEqual(self.event(self.repo).session_id, self.event(other).session_id)
+
+    def test_the_same_worktree_is_the_same_session(self):
+        """Resume and post-compaction restart must still find their own record."""
+        self.assertEqual(self.event(self.repo).session_id, self.event(self.repo).session_id)
+
+    def test_the_harness_id_still_separates_sessions_in_one_worktree(self):
+        self.assertNotEqual(
+            self.event(self.repo, "alpha").session_id, self.event(self.repo, "beta").session_id
+        )
+
+    def test_outside_a_repository_the_raw_id_is_kept(self):
+        """Nothing to qualify against, and inventing a tag would be a lie about location."""
+        self.assertEqual("shared", self.event(self.tmp / "not-a-repo").session_id)
+
+    def test_each_worktree_keeps_its_own_task_statement(self):
+        """The bug as the founder met it: another session's task read back as your own."""
+        from claude_bestpractice import sessions
+
+        other = self.add_worktree("second")
+        for cwd, task in ((self.repo, "change billing.py"), (other, "change export.py")):
+            self.run_hook("session-start", {"session_id": "shared",
+                                            "hook_event_name": "SessionStart"}, cwd=cwd)
+            self.run_hook("prompt-capture", {"session_id": "shared",
+                                             "hook_event_name": "UserPromptSubmit",
+                                             "prompt": task}, cwd=cwd)
+
+        from claude_bestpractice.gitctx import resolve
+
+        mine = sessions.get(resolve(self.repo), self.event(self.repo).session_id)
+        theirs = sessions.get(resolve(other), self.event(other).session_id)
+        self.assertIn("billing", mine.task_statement)
+        self.assertIn("export", theirs.task_statement)

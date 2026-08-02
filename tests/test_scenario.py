@@ -16,7 +16,7 @@ import sys
 import time
 import unittest
 
-from helpers import BIN, RepoCase, git
+from helpers import BIN, RepoCase, git, sid
 
 from claude_bestpractice import board, conflicts, knowledge, plan, provenance, sessions
 
@@ -127,7 +127,7 @@ class TestFullLifecycle(Scenario):
             hook_event_name="UserPromptSubmit",
             prompt="Add CSV export to src/billing.js",
         )
-        record = sessions.get(self.ctx(), "s1")
+        record = sessions.get(self.ctx(), sid(self.repo, "s1"))
         self.assertEqual(record.task_statement, "Add CSV export to src/billing.js")
         self.assertIn("src/billing.js", record.task_paths)
 
@@ -145,7 +145,7 @@ class TestFullLifecycle(Scenario):
         self.assertEqual(self.decision_of(leaked), "deny")
         self.assertFalse((self.repo / "src" / "keys.js").exists())
         # A refused write never happened, so it must not appear as work done.
-        self.assertNotIn("src/keys.js", sessions.get(self.ctx(), "s1").last_touched)
+        self.assertNotIn("src/keys.js", sessions.get(self.ctx(), sid(self.repo, "s1")).last_touched)
 
     def phase_evidence_demanded(self) -> None:
         blocked = self.hook(
@@ -263,7 +263,7 @@ class TestTwoSessionsInParallel(Scenario):
 
         self.hook("session-start", session_id="alive", hook_event_name="SessionStart")
 
-        self.assertIsNone(sessions.get(ctx, "ghost"))
+        self.assertIsNone(sessions.get(ctx, sid(self.repo, "ghost")))
         self.assertEqual(plan.find(ctx, task.id).state, plan.NEXT)
         self.assertIsNone(
             self.decision_of(
