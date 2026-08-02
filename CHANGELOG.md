@@ -199,7 +199,28 @@ rewritten since — may no longer apply]`, or `[subject file is gone — kept as
 dead end about a file nobody touched is left unmarked, because a false mark teaches the
 reader to ignore the true ones.
 
-642 tests, 26 doctor checks, always-on context unchanged at ~332 tokens.
+### A subagent briefed with a template
+
+Found by firing `SubagentStart` for the first time on a repository whose knowledge layer
+had been created and not yet answered — which is every repository for its first hour. The
+subagent's entire brief was:
+
+```
+# Non-goals
+- <ANSWER THIS — something plausible this deliberately will not do>
+- <a second one>
+- <a third one>
+```
+
+Worse than nothing: it costs the subagent tokens, tells it nothing, and teaches it that
+this channel carries noise. An unanswered section is now dropped, and a brief with nothing
+left in it is not sent at all. Answered sections still go verbatim, which is load-bearing —
+the one measured decomposition method that paraphrased facts forward scored 41 % worse.
+
+The placeholder pattern moved into `knowledge` so the counter and the brief cannot drift
+apart on what a placeholder is.
+
+645 tests, 26 doctor checks, always-on context unchanged at ~332 tokens.
 
 ## v1.0.0
 
