@@ -179,3 +179,57 @@ class TestCLI(AttemptCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestADeadEndAboutRewrittenCodeIsMarked(RepoCase):
+    """The stamp was written at record time and read by nobody.
+
+    Verified on a real repository: `svc/fees.py` rewritten from floats to per-tenant
+    `Decimal`, and the board went on asserting that caching rates in a dict leaks across
+    tenants — advice about code that no longer exists, presented as current.
+
+    Suppressing it outright would be the wrong correction. "We tried X and it failed
+    because Y" stays true whatever happens to the file afterwards. What decays is its
+    bearing on the code in front of you, so that is what is said.
+    """
+
+    def test_a_rewritten_subject_is_marked_and_kept(self):
+        from claude_bestpractice import attempts
+
+        self.write("svc/fees.py", "def rate(c):\n    return c * 0.02\n")
+        self.commit()
+        attempts.record(self.ctx(), "Cache rates in a dict", "leaked across tenants",
+                        ["svc/fees.py"], outcome="failed", session_id="s1")
+
+        self.assertNotIn("may no longer apply", attempts.render_for_board(self.ctx(), []))
+
+        self.write("svc/fees.py", "from decimal import Decimal\n\n\ndef rate(c, t):\n    return Decimal(c)\n")
+        self.commit()
+        board = attempts.render_for_board(self.ctx(), [])
+        self.assertIn("Cache rates in a dict", board, "history was dropped, not marked")
+        self.assertIn("may no longer apply", board)
+        self.assertIn("svc/fees.py", board)
+
+    def test_an_untouched_subject_is_not_marked(self):
+        """A false mark is as bad as a missing one: it teaches the reader to ignore both."""
+        from claude_bestpractice import attempts
+
+        self.write("svc/other.py", "X = 1\n")
+        self.write("svc/fees.py", "Y = 1\n")
+        self.commit()
+        attempts.record(self.ctx(), "Tried a thing", "did not work",
+                        ["svc/other.py"], outcome="failed", session_id="s1")
+        self.write("svc/fees.py", "Y = 2\n")
+        self.commit()
+        self.assertNotIn("may no longer apply", attempts.render_for_board(self.ctx(), []))
+
+    def test_a_deleted_subject_says_so(self):
+        from claude_bestpractice import attempts
+
+        self.write("svc/gone.py", "X = 1\n")
+        self.commit()
+        attempts.record(self.ctx(), "Tried in gone.py", "did not work",
+                        ["svc/gone.py"], outcome="failed", session_id="s1")
+        (self.repo / "svc" / "gone.py").unlink()
+        self.commit()
+        self.assertIn("kept as history", attempts.render_for_board(self.ctx(), []))
