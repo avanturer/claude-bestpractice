@@ -265,3 +265,58 @@ class TestCannotTellIsNotGreen(RepoCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheSuiteMustHaveRunThisTree(RepoCase):
+    """A passing run of somebody else's copy of your package is not evidence.
+
+    Found on a clone of Flask with a genuine regression in `src/`: the push went out
+    green, 491 tests passing, because a `.pth` from an unrelated editable install put a
+    different copy of `flask` first on `sys.path`. The gate ran the suite itself and
+    observed exit 0 — right about the exit code, wrong about the tree. Forcing the
+    worktree onto the path instead produced 24 failures.
+    """
+
+    def test_a_package_importing_from_outside_the_worktree_is_caught(self):
+        from claude_bestpractice.evidence import _shadowed_package
+
+        # The package lives here...
+        self.write("mypkg/__init__.py", "VALUE = 'from the worktree'\n")
+        # ...and also somewhere else, earlier on sys.path.
+        elsewhere = self.tmp / "elsewhere"
+        (elsewhere / "mypkg").mkdir(parents=True)
+        (elsewhere / "mypkg" / "__init__.py").write_text("VALUE = 'from elsewhere'\n")
+
+        import os
+
+        found = _shadowed_package_with_path(self.repo, os.pathsep.join([str(elsewhere)]))
+        self.assertIsNotNone(found, "a shadowed package went undetected")
+        self.assertEqual("mypkg", found[0])
+        self.assertIn("elsewhere", found[1])
+
+        # And with nothing shadowing it, the same tree is clean.
+        self.assertIsNone(_shadowed_package(self.repo))
+
+    def test_a_repository_with_no_packages_at_all_is_not_flagged(self):
+        """A Node or Go project must not trip a Python-shaped check."""
+        from claude_bestpractice.evidence import _shadowed_package
+
+        self.write("index.js", "module.exports = 1\n")
+        self.assertIsNone(_shadowed_package(self.repo))
+
+
+def _shadowed_package_with_path(root, extra):
+    """`_shadowed_package` under a PYTHONPATH that shadows the tree."""
+    import os
+
+    from claude_bestpractice.evidence import _shadowed_package
+
+    before = os.environ.get("PYTHONPATH")
+    os.environ["PYTHONPATH"] = extra
+    try:
+        return _shadowed_package(root)
+    finally:
+        if before is None:
+            os.environ.pop("PYTHONPATH", None)
+        else:
+            os.environ["PYTHONPATH"] = before
