@@ -13,6 +13,34 @@ from claude_bestpractice import sessions, store
 record = session_record_for
 
 
+class TestTheRepositoryHasOneName(RepoCase):
+    """One repository read as two because the label came from the worktree directory.
+
+    `fuddy` in the main checkout, `fuddy-envfix` in a worktree of it. The state was
+    correctly shared the whole time — `repo_key` is the common dir — so only the label
+    lied, but it lied in the one product whose stated scene is three to eight worktrees
+    of a single repository.
+    """
+
+    def test_a_worktree_reports_the_repository_it_belongs_to(self):
+        from claude_bestpractice.gitctx import resolve
+
+        main = resolve(self.repo)
+        side = resolve(self.add_worktree("feature-branch"))
+
+        self.assertEqual(main.repo_name, side.repo_name)
+        self.assertEqual(self.repo.name, main.repo_name)
+        self.assertNotEqual(side.worktree_root.name, side.repo_name, "the fixture proves nothing")
+
+    def test_it_agrees_with_the_identity_the_state_is_keyed_by(self):
+        """A name derived from something other than `repo_key` would drift from it."""
+        from claude_bestpractice.gitctx import resolve
+
+        main = resolve(self.repo)
+        side = resolve(self.add_worktree("other-branch"))
+        self.assertEqual(main.repo_key, side.repo_key)
+
+
 class TestRegistry(RepoCase):
     def test_register_and_get(self):
         ctx = self.ctx()

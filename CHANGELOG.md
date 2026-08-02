@@ -2,8 +2,9 @@
 
 ## v1.0.1
 
-Two fixes, both to the push gate, both found by installing v1.0.0 the way the README tells
-you to and then looking at what was actually guarding the repository.
+Everything below was found the same way: by installing v1.0.0 exactly as the README says
+to, on a real machine, and then looking at what was actually there. Nothing here was found
+by reading the code, and the test suite was green throughout.
 
 ### The gate was never installed on the documented path
 
@@ -14,7 +15,7 @@ the in-session gates fired, and **nothing at all guarded a push**. The headline 
 off in every repository that did not happen to be created through the plugin.
 
 The first session that finds no `pre-push` hook now installs one and says so once.
-`claude-bp ci off` still removes it, and the removal now persists in Tier B, so the next
+`claude-bp-ci off` still removes it, and the removal now persists in Tier B, so the next
 session does not put it back — an opt-out that has to be repeated is not an opt-out.
 
 Proven by `a plain install arms the push gate`, which starts a real session in an
@@ -49,7 +50,50 @@ umask that drops the executable bit has gates that cannot launch.
 - The always-on token figure disagreed with itself in all three READMEs — 329 in the body
   against 332 in the badge. `make budget` says 332.
 
-618 tests, 26 doctor checks, always-on context unchanged at ~332 tokens.
+### Seven commands that did not exist
+
+Reported from a clean `install.sh` on a real machine, and all of one shape: prose naming
+a binary or a verb that is not there.
+
+- **The installer's symlink list was inverted.** It linked `claude-bestpractice`, which is
+  not in `plugin/bin/` — a dangling symlink — and never linked `claude-bp`, which is, and
+  is the dispatcher. Every command in the README, including the ones the installer's own
+  closing message prints, was `command not found` after a clean install. The list is now
+  derived from `bin/` instead of kept in step by hand, which is what drifted when the
+  commands were renamed.
+- `status` advised `claude-bestpractice adopt`, `adopt` advised
+  `claude-bestpractice adopt --restore`, and argparse announced itself as
+  `claude-bestpractice`. All three are `claude-bp`.
+- The READMEs documented `claude-bp ci off` and `claude-bp reindex` against a dispatcher
+  that accepts four verbs and neither of those. They are `claude-bp-ci` and
+  `claude-bp-reindex`.
+- The install-comparison table promised `claude-bestpractice` in your own terminal.
+
+A test now scans every command named in prose or printed output and fails if the binary
+is not in `plugin/bin/` or the verb is not one the dispatcher accepts. It found the
+`claude-bp reindex` one, which was not in the report.
+
+### `hosted CI: no workflow in this repository` was false
+
+Computed from a test for one file — ours. A repository with four workflows of its own was
+told it had none, one line under `stage: … CI config present`, so two lines of the same
+output contradicted each other and the wrong one sounded certain. It now counts what is
+actually in `.github/workflows/` and says so.
+
+### `status` wrote to the working tree
+
+It created `.claude/claude-bestpractice/stage/reached-<stage>.json` and left it untracked,
+so looking at the repository dirtied it. The stage ratchet still records — from the gates,
+which have a mandate to change state. A command named `status` does not.
+
+### One repository, two names
+
+The header took the label from the worktree directory, so `fuddy` and `fuddy-envfix` read
+as two repositories. The state was correctly shared throughout — `repo_key` has always
+been the common dir — but the label is now derived from the same place, so every worktree
+of a clone agrees.
+
+627 tests, 26 doctor checks, always-on context unchanged at ~332 tokens.
 
 ## v1.0.0
 

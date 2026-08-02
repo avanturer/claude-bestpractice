@@ -5,7 +5,7 @@
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
 [![version](https://img.shields.io/badge/version-1.0.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-616%20passing-2ea44f)](#verified)
+[![tests](https://img.shields.io/badge/tests-627%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-26%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
@@ -43,7 +43,7 @@ The two are not equivalent, and the difference matters on your first day:
 |  | `claude plugin install` | `install.sh` |
 |---|---|---|
 | Gates fire in a session | yes | yes |
-| `claude-bestpractice` in **your own terminal** | no | yes (symlinks into `~/.local/bin`) |
+| `claude-bp` in **your own terminal** | no | yes (symlinks into `~/.local/bin`) |
 | Doctor run before anything is registered | no | yes |
 
 Claude Code puts the plugin's `bin/` on the Bash tool's PATH automatically, so on the
@@ -52,7 +52,7 @@ in your shell.
 
 The push gate does not wait for either of them. The first session started in a repository
 that has no `pre-push` hook installs one, and says so on the board; after that it stays
-quiet. `claude-bp ci off` removes it and the removal sticks — the next session will not
+quiet. `claude-bp-ci off` removes it and the removal sticks — the next session will not
 put it back. That is a correction, not a feature: until v1.0.1 the gate was installed only
 by `claude-bp init`, so installing the plugin the documented way left `claude plugin list`
 saying `✓ enabled` over a push path with nothing on it.
@@ -237,7 +237,7 @@ hosted run does not.
 
 ### It takes over what fights it
 
-`claude-bestpractice adopt` finds other tools contesting the events this owns, quarantines their
+`claude-bp adopt` finds other tools contesting the events this owns, quarantines their
 hook entries into a labelled block with a backup, and tells you exactly which competing
 plugins to disable. Reversible with `--restore`. It never deletes another tool's
 configuration silently.
@@ -250,7 +250,7 @@ configuration silently.
 |---|---|
 | `claude-bp status` | Sessions, plan, knowledge, memory health, conflicts, next action |
 | `claude-bp init` | Derive the knowledge layer from your code |
-| `claude-bestpractice adopt` | Take over events another tool is contesting |
+| `claude-bp adopt` | Take over events another tool is contesting |
 | `claude-bp doctor` | Prove each gate by attempting a known-bad action |
 | `claude-bp-plan` | The work ledger: `add`, `list`, `claim`, `done` |
 | `claude-bp-decide` | Accept a decision drafted from your own corrections |
@@ -286,7 +286,7 @@ against a cap of 400 — roughly 0.1 % of a 200k window.
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 616 tests · 26 doctor checks · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 627 tests · 26 doctor checks · budget
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration
@@ -322,7 +322,7 @@ between runs, so it does not turn up as a diff every time a gate fires.
 **`.git/claude-bestpractice/` — ignore it, git already does.** Live sessions, leases, the
 loop counter, the test receipt. It lives in the git common directory because that is the
 only path shared by every worktree of one clone, invisible to git, surviving branch
-switches, and dying with the clone. It is entirely rebuildable: `claude-bp reindex`
+switches, and dying with the clone. It is entirely rebuildable: `claude-bp-reindex`
 regenerates it from the committed half, and that path is tested rather than assumed.
 
 You never edit either by hand. If you want the whole thing gone, delete both directories

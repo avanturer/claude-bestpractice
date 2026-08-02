@@ -39,7 +39,7 @@ BACKUP_SUFFIX = ".claude-bestpractice.bak"
 # thing that prevents it.
 DISPLACED_NAME = "pre-push.claude-bestpractice-original"
 
-# Set by `claude-bp ci off`, read by `ensure`. Its whole job is to make an opt-out stick
+# Set by `claude-bp-ci off`, read by `ensure`. Its whole job is to make an opt-out stick
 # across the session start that would otherwise put the hook straight back.
 DECLINED_NAME = "pre-push-declined"
 CI_VARIABLE = "CLAUDE_BESTPRACTICE_CI"
@@ -84,7 +84,7 @@ fi
 # Allowed, and the reason is a true statement rather than a swallowed failure: this
 # project has no `make check` target and had no test runner to detect.
 echo "claude-bestpractice: nothing to run — no 'make check' target and no test runner" >&2
-echo "was detectable here. Run 'claude-bp ci' once this project has a suite." >&2
+echo "was detectable here. Run 'claude-bp-ci local' once this project has a suite." >&2
 exit 0
 """
 
@@ -94,7 +94,7 @@ exit 0
 # nothing checked it. A gate that cannot verify must not pretend it did.
 DETECTED_TIER = """# This project's own suite, detected when the hook was installed. It is baked in
 # rather than resolved at push time because git hands a hook a stripped environment
-# in which claude-bp is usually not on PATH. Re-run `claude-bp ci` if the runner changes.
+# in which claude-bp is usually not on PATH. Re-run `claude-bp-ci` if the runner changes.
 _runner={runner}
 if command -v "$_runner" >/dev/null 2>&1; then
     exec {command}
@@ -102,7 +102,7 @@ fi
 
 echo "claude-bestpractice: $_runner is not on PATH, so this project's suite could not" >&2
 echo "run. Refusing the push rather than reporting a check that never happened. Fix the" >&2
-echo "environment, run 'claude-bp ci' if the runner changed, or push with --no-verify." >&2
+echo "environment, run 'claude-bp-ci local' if the runner changed, or push with --no-verify." >&2
 exit 1"""
 
 NO_RUNNER_TIER = "# (no test runner was detectable in this project at install time)"
@@ -114,7 +114,7 @@ def hook_body(ctx: GitContext | None = None) -> str:
     Baked at install time rather than resolved at push time on purpose: a git hook runs
     with a stripped environment and cannot rely on `claude-bp` being on PATH, and a hook
     that silently finds nothing to run is the failure this whole module exists to avoid.
-    The cost is that it goes stale if the project changes runner, which `claude-bp ci`
+    The cost is that it goes stale if the project changes runner, which `claude-bp-ci`
     fixes and the comment in the script says so.
     """
     from shlex import quote
@@ -225,7 +225,7 @@ def ensure(ctx: GitContext) -> tuple[bool, str]:
 def install(ctx: GitContext) -> tuple[bool, str]:
     """Put the hook in place, chaining any hook already there. Returns (changed, note)."""
     path = hook_path(ctx)
-    # Asking for it back is consent, and it has to clear the opt-out or `claude-bp ci on`
+    # Asking for it back is consent, and it has to clear the opt-out or `claude-bp-ci local`
     # would appear to work and be undone by the next session start.
     with contextlib.suppress(OSError):
         _declined_path(ctx).unlink(missing_ok=True)
@@ -310,6 +310,21 @@ def workflow_state(ctx: GitContext) -> str:
     return "gated" if CI_VARIABLE in text else "always"
 
 
+def _foreign_workflows(ctx: GitContext) -> int:
+    """How many workflows this repository has that are not the one we ship."""
+    directory = ctx.worktree_root / ".github" / "workflows"
+    try:
+        return sum(
+            1
+            for entry in directory.iterdir()
+            if entry.is_file()
+            and entry.suffix in (".yml", ".yaml")
+            and entry.name != Path(WORKFLOW).name
+        )
+    except OSError:
+        return 0
+
+
 def hosted_enabled(ctx: GitContext) -> bool | None:
     """Whether the hosted workflow is switched on. None when it cannot be determined."""
     if not shutil.which("gh"):
@@ -358,7 +373,18 @@ def status_lines(ctx: GitContext) -> list[str]:
 
     state = workflow_state(ctx)
     if state == "absent":
-        out.append("hosted CI:      no workflow in this repository")
+        # "no workflow in this repository" was a claim about the repository made from a
+        # test for one specific file. A repo with four workflows of its own was told it
+        # had none, one line under `stage: … CI config present` — two lines of the same
+        # output contradicting each other, and the wrong one sounded authoritative.
+        others = _foreign_workflows(ctx)
+        if others:
+            out.append(
+                f"hosted CI:      {others} workflow(s) of your own, none of them ours — "
+                "`claude-bp-ci github` adds one"
+            )
+        else:
+            out.append("hosted CI:      no workflow in this repository")
     elif state == "always":
         out.append("hosted CI:      present and UNGATED — every push spends minutes")
     else:

@@ -188,11 +188,19 @@ def recorded_stage(ctx: GitContext) -> str | None:
     return max(reached, key=lambda name: ORDER[name]) if reached else None
 
 
-def current(ctx: GitContext, override: str | None = None) -> tuple[str, StageSignals]:
+def current(
+    ctx: GitContext, override: str | None = None, record: bool = True
+) -> tuple[str, StageSignals]:
     """Resolve the stage, applying the ratchet so it never regresses.
 
     An override is honoured upward but not downward: the point of the ratchet is that
     a deleted CI file cannot silently switch off the gates it enabled.
+
+    `record=False` resolves without writing anything. `claude-bp status` needs that: it
+    was creating `.claude/claude-bestpractice/stage/reached-<stage>.json` in the working
+    tree and leaving it untracked, so merely *looking* at the repository dirtied it. A
+    command named `status` must not mutate what it reports on. The gates still record —
+    they are the ones with a mandate to change state.
     """
     sig = probe(ctx)
     detected = classify(sig)
@@ -205,16 +213,17 @@ def current(ctx: GitContext, override: str | None = None) -> tuple[str, StageSig
         resolved = previous
         sig.reasons.append(f"ratchet held at {previous} (probe said {detected})")
 
-    marker = _reached_path(ctx, resolved)
-    if not marker.exists():
-        # A constant, and deliberately so: anything varying here — a timestamp, a host,
-        # a signal dump — reintroduces the conflict this shape exists to remove.
-        store.write_json(marker, {"stage": resolved}, mode=0o644)
+    if record:
+        marker = _reached_path(ctx, resolved)
+        if not marker.exists():
+            # A constant, and deliberately so: anything varying here — a timestamp, a
+            # host, a signal dump — reintroduces the conflict this shape exists to remove.
+            store.write_json(marker, {"stage": resolved}, mode=0o644)
 
-    store.write_json(
-        store.tier_b(ctx, SIGNALS_FILE),
-        {"stage": resolved, "observed_at": time.time(), "signals": sig.to_dict()},
-    )
+        store.write_json(
+            store.tier_b(ctx, SIGNALS_FILE),
+            {"stage": resolved, "observed_at": time.time(), "signals": sig.to_dict()},
+        )
     return resolved, sig
 
 

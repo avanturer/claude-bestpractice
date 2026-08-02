@@ -374,6 +374,64 @@ class TestTheHookRunsTheProjectsOwnSuite(CICase):
         self.assertNotIn("__TEST_COMMAND__", ci.hook_body(self.ctx()))
 
 
+class TestTheStatusLineIsTrue(CICase):
+    """`hosted CI: no workflow in this repository` was a claim about the repository.
+
+    It was computed from a test for one file — ours. A repository with four workflows of
+    its own was told it had none, one line under `stage: … CI config present`, so two
+    lines of the same output contradicted each other and the wrong one sounded certain.
+    """
+
+    def test_a_repository_with_its_own_workflows_is_not_told_it_has_none(self):
+        from claude_bestpractice import ci
+
+        self.write(".github/workflows/deploy.yml", "on: push\njobs: {}\n")
+        self.write(".github/workflows/lint.yaml", "on: push\njobs: {}\n")
+        lines = "\n".join(ci.status_lines(self.ctx()))
+        self.assertNotIn("no workflow in this repository", lines)
+        self.assertIn("2 workflow(s) of your own", lines)
+
+    def test_a_repository_with_none_is_still_told_so(self):
+        from claude_bestpractice import ci
+
+        self.assertIn("no workflow in this repository", "\n".join(ci.status_lines(self.ctx())))
+
+    def test_our_own_workflow_is_not_counted_as_a_foreign_one(self):
+        from claude_bestpractice import ci
+
+        self.write(ci.WORKFLOW, f"on: push\n# {ci.CI_VARIABLE}\n")
+        lines = "\n".join(ci.status_lines(self.ctx()))
+        self.assertIn("gated on", lines)
+        self.assertNotIn("of your own", lines)
+
+
+class TestLookingDoesNotWrite(CICase):
+    """A command named `status` was creating a file and leaving it untracked."""
+
+    def test_status_leaves_the_working_tree_clean(self):
+        import subprocess
+        import sys
+
+        from helpers import BIN
+
+        proc = subprocess.run(
+            [sys.executable, str(BIN / "claude-bp"), "status"],
+            capture_output=True, text=True, cwd=str(self.repo), timeout=180,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(
+            "", git(["status", "--porcelain"], self.repo).strip(),
+            "`status` mutated the repository it was asked to report on",
+        )
+
+    def test_the_gates_still_record_the_stage(self):
+        """The write was not wrong, only its caller. Something must still ratchet."""
+        from claude_bestpractice import stage
+
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
+        self.assertTrue(stage.recorded_stage(self.ctx()), "nothing recorded the stage")
+
+
 class TestTheGateArmsItself(CICase):
     """`✓ enabled` and no hook guarding any push was the default install.
 
