@@ -4,7 +4,7 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-1.0.4-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-1.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-645%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-26%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
@@ -51,8 +51,8 @@ Claude Code 会自动把插件的 `bin/` 加进 Bash 工具的 PATH，所以走 
 
 push gate 并不等这两条命令。在没有 `pre-push` 钩子的仓库里启动的第一个会话会装上它，
 并在 board 上说一声；之后就不再出声。`claude-bp-ci off` 可以移除它，而且这个决定会保留
-下来——下一个会话不会把它装回去。这是一处更正，不是新功能：在 v1.0.1 之前，gate 只由
-`claude-bp init` 安装，所以按文档方式安装插件的人，`claude plugin list` 显示 `✓ enabled`，
+下来——下一个会话不会把它装回去。它自己装上而不等命令，是因为「只在有人想起来执行时才生效」
+的 gate 正是这个项目要替代的东西。验证过程发现的就是这种情况：安装显示 `✓ enabled`，
 而 push 路径上什么都没有。
 
 之后在任意仓库中——在终端里运行，或者让 Claude 替你运行：
