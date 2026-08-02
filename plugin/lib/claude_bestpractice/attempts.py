@@ -226,7 +226,32 @@ def render_for_board(ctx: GitContext, paths: list[str]) -> str:
         lines = ["ALREADY TRIED here recently — not filtered to your task, so check before repeating:"]
     if not hits:
         return ""
-    return "\n".join(lines + [f"  - {a.line()}" for a in hits])
+    return "\n".join(lines + [f"  - {a.line()}{_staleness(ctx, a)}" for a in hits])
+
+
+def _staleness(ctx: GitContext, attempt: Attempt) -> str:
+    """Mark a dead end whose subject has moved. Never drop it — it is history.
+
+    The stamp was written at record time and read by nobody, so a dead end about a file
+    since rewritten was still presented as current advice. Verified: `svc/fees.py`
+    rewritten from floats to per-tenant `Decimal`, and the board went on asserting that
+    caching rates in a dict leaks across tenants — possibly no longer true of the code
+    that is there now.
+
+    Suppressing it outright would be the wrong correction. "We tried X and it failed
+    because Y" stays true whatever happens to the file afterwards, and this project's own
+    rule is that a claim is marked and counted, never silently deleted. What decays is not
+    the fact but its bearing on the code in front of you, so that is what gets said.
+    """
+    stamps = store.read_json(store.tier_b(ctx, f"attempt-{attempt.id}.stamp"), default=[])
+    if not isinstance(stamps, list) or not stamps:
+        return ""
+    status, changed = provenance.check(ctx, stamps)
+    if status == provenance.GONE:
+        return "  [subject file is gone — kept as history]"
+    if status == provenance.SUSPECT:
+        return f"  [{', '.join(changed[:2])} rewritten since — may no longer apply]"
+    return ""
 
 
 def summary(ctx: GitContext) -> dict[str, int]:

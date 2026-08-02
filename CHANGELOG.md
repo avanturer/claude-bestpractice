@@ -181,7 +181,25 @@ of the same four sessions afterwards: four records, four branches, four correct 
   shrank — append-only at ~200 bytes a session — and is now capped, newest kept, so a
   session crashed a moment ago still recovers its baseline.
 
-639 tests, 26 doctor checks, always-on context unchanged at ~332 tokens.
+### A dead end about code that has since been rewritten
+
+The attempts ledger — "what was tried and why it failed" — stamps every record with the
+blob hashes of the files it was about. That stamp was written and **read by nobody**.
+
+Verified on a repository built for it: a dead end recorded against `svc/fees.py`, then the
+file rewritten from floats to per-tenant `Decimal`, and the board went on asserting that
+caching rates in a dict leaks across tenants — advice about code that no longer exists,
+presented as current, with nothing marking it.
+
+Suppressing it outright would be the wrong correction. "We tried X and it failed because
+Y" stays true whatever happens to the file afterwards, and this project's rule is that a
+claim is marked and counted, never silently deleted. What decays is not the fact but its
+bearing on the code in front of you, so that is what the board now says: `[svc/fees.py
+rewritten since — may no longer apply]`, or `[subject file is gone — kept as history]`. A
+dead end about a file nobody touched is left unmarked, because a false mark teaches the
+reader to ignore the true ones.
+
+642 tests, 26 doctor checks, always-on context unchanged at ~332 tokens.
 
 ## v1.0.0
 
