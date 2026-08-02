@@ -50,6 +50,18 @@ umask that drops the executable bit has gates that cannot launch.
 - The always-on token figure disagreed with itself in all three READMEs — 329 in the body
   against 332 in the badge. `make budget` says 332.
 
+618 tests, 26 doctor checks, always-on context unchanged at ~332 tokens.
+
+## v1.0.2
+
+Everything in v1.0.1 plus the below, and the below is why this release exists: the v1.0.1
+tag was cut one commit before these landed. Installing through the marketplace was never
+affected — it tracks the default branch — but a tarball or a `checkout v1.0.1` gets a
+plugin whose every documented command is `command not found`.
+
+Found the same way as the rest: by installing on a real machine, and by building a small
+project for the purpose and reading what the plugin printed into it.
+
 ### Seven commands that did not exist
 
 Reported from a clean `install.sh` on a real machine, and all of one shape: prose naming
