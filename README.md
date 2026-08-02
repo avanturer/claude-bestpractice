@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-1.0.4-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-1.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-645%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-26%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -53,9 +53,10 @@ in your shell.
 The push gate does not wait for either of them. The first session started in a repository
 that has no `pre-push` hook installs one, and says so on the board; after that it stays
 quiet. `claude-bp-ci off` removes it and the removal sticks — the next session will not
-put it back. That is a correction, not a feature: until v1.0.1 the gate was installed only
-by `claude-bp init`, so installing the plugin the documented way left `claude plugin list`
-saying `✓ enabled` over a push path with nothing on it.
+put it back. It arms itself rather than waiting for a command because a gate that only
+fires when someone remembers to run something is the gate this whole project exists to
+replace — and verification found exactly that, an install reporting `✓ enabled` over a
+push path with nothing on it.
 
 In any repository afterwards — from your terminal, or by asking Claude to run them:
 

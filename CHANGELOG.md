@@ -1,236 +1,5 @@
 # Changelog
 
-## v1.0.1
-
-Everything below was found the same way: by installing v1.0.0 exactly as the README says
-to, on a real machine, and then looking at what was actually there. Nothing here was found
-by reading the code, and the test suite was green throughout.
-
-### The gate was never installed on the documented path
-
-`Setup` fires on `--init`. Install the plugin into a repository you already have — which
-is what `/plugin install` does, and what the README leads with — and `Setup` never fires.
-The result: `claude plugin list` said `✓ enabled`, the board rendered on every session,
-the in-session gates fired, and **nothing at all guarded a push**. The headline gate was
-off in every repository that did not happen to be created through the plugin.
-
-The first session that finds no `pre-push` hook now installs one and says so once.
-`claude-bp-ci off` still removes it, and the removal now persists in Tier B, so the next
-session does not put it back — an opt-out that has to be repeated is not an opt-out.
-
-Proven by `a plain install arms the push gate`, which starts a real session in an
-unguarded repository and then looks at the hook, and fails when `ensure` is stubbed out.
-
-### The gate exited 0 when it could not run your suite
-
-The generated hook baked in the project's detected test command, guarded by `command -v`.
-If the runner was gone at push time — different machine, changed PATH, rebuilt venv — the
-guard failed and the hook fell through `claude-bp-ci` (not on a marketplace user's shell
-PATH), through `claude-bp-doctor` (same), and out through `exit 0`. A project that has a
-suite pushed with nothing run, reported as checked.
-
-It now refuses, naming the missing runner and `--no-verify`. A repository with no suite at
-all is still allowed through: nothing is being skipped there, and that is a true statement
-rather than a swallowed failure.
-
-### The installer dirtied the clone it was run from
-
-Run from a clone, `INSTALL_DIR` is your own checkout, so `chmod +x plugin/bin/*` chmodded
-all twenty `.cmd` shims — Windows batch files that nothing on a POSIX machine executes —
-and `git status` came back with twenty modified files the moment the install finished.
-The chmod is now scoped to the files that need it. It stays, because a clone made under a
-umask that drops the executable bit has gates that cannot launch.
-
-### Also
-
-- The hook script no longer carries this project's development history in its comments.
-  It lands in your repository; it should read like a tool's output, not like a commit log.
-- `tests/test_ci.py` had `unittest.main()` above its last class, so running that file
-  directly skipped those tests silently.
-- The always-on token figure disagreed with itself in all three READMEs — 329 in the body
-  against 332 in the badge. `make budget` says 332.
-
-618 tests, 26 doctor checks, always-on context unchanged at ~332 tokens.
-
-## v1.0.2
-
-Everything in v1.0.1 plus the below, and the below is why this release exists: the v1.0.1
-tag was cut one commit before these landed. Installing through the marketplace was never
-affected — it tracks the default branch — but a tarball or a `checkout v1.0.1` gets a
-plugin whose every documented command is `command not found`.
-
-Found the same way as the rest: by installing on a real machine, and by building a small
-project for the purpose and reading what the plugin printed into it.
-
-### Seven commands that did not exist
-
-Reported from a clean `install.sh` on a real machine, and all of one shape: prose naming
-a binary or a verb that is not there.
-
-- **The installer's symlink list was inverted.** It linked `claude-bestpractice`, which is
-  not in `plugin/bin/` — a dangling symlink — and never linked `claude-bp`, which is, and
-  is the dispatcher. Every command in the README, including the ones the installer's own
-  closing message prints, was `command not found` after a clean install. The list is now
-  derived from `bin/` instead of kept in step by hand, which is what drifted when the
-  commands were renamed.
-- `status` advised `claude-bestpractice adopt`, `adopt` advised
-  `claude-bestpractice adopt --restore`, and argparse announced itself as
-  `claude-bestpractice`. All three are `claude-bp`.
-- The READMEs documented `claude-bp ci off` and `claude-bp reindex` against a dispatcher
-  that accepts four verbs and neither of those. They are `claude-bp-ci` and
-  `claude-bp-reindex`.
-- The install-comparison table promised `claude-bestpractice` in your own terminal.
-
-A test now scans every command named in prose or printed output and fails if the binary
-is not in `plugin/bin/` or the verb is not one the dispatcher accepts. It found the
-`claude-bp reindex` one, which was not in the report.
-
-### `hosted CI: no workflow in this repository` was false
-
-Computed from a test for one file — ours. A repository with four workflows of its own was
-told it had none, one line under `stage: … CI config present`, so two lines of the same
-output contradicted each other and the wrong one sounded certain. It now counts what is
-actually in `.github/workflows/` and says so.
-
-### `status` wrote to the working tree
-
-It created `.claude/claude-bestpractice/stage/reached-<stage>.json` and left it untracked,
-so looking at the repository dirtied it. The stage ratchet still records — from the gates,
-which have a mandate to change state. A command named `status` does not.
-
-### One repository, two names
-
-The header took the label from the worktree directory, so `fuddy` and `fuddy-envfix` read
-as two repositories. The state was correctly shared throughout — `repo_key` has always
-been the common dir — but the label is now derived from the same place, so every worktree
-of a clone agrees.
-
-### The first two lines a fresh install prints
-
-Found by installing into a small project built for the purpose and reading the output.
-
-- `status` opened with `Repair the knowledge layer` on a repository where the layer had
-  never been built. Nothing was broken; nothing was there. It also named a third command,
-  so one condition produced `claude-bp-knowledge init` on one line, `validate` on the
-  next, and the README's own `claude-bp init` on neither. A missing layer now says
-  `claude-bp init`.
-- `init` listed `entities.yaml` under **derived from your code** over a file whose entire
-  content is `No types were central enough to derive automatically`. The file is honest —
-  inventing entities is the one thing onboarding must not do — and the summary above it
-  was not. Files carrying a question are now listed separately from files carrying an
-  answer.
-
-630 tests, 26 doctor checks, always-on context unchanged at ~332 tokens.
-
-## v1.0.3
-
-Everything in v1.0.2 plus the below. Two of these are the worst defects this plugin has
-had, and neither would have been found by reading anything: they needed a sixteen-year-old
-repository and four sessions running at once.
-
-### A green run of somebody else's copy of your package
-
-Found by cloning Flask — 5545 commits, sixteen years of history — installing into it, and
-pushing a genuine regression in `src/`. The push went out green with 491 tests passing,
-because a `.pth` from an unrelated editable install put a different copy of `flask` first
-on `sys.path`. Forcing the worktree onto the path instead produced 24 failures.
-
-The gate ran the suite itself and observed exit 0. It was right about the exit code and
-wrong about the tree, which is the one thing this gate exists not to be. The
-clean-checkout re-run is the defence for exactly this, but it is gated on stage, and a
-library has no deploy target so it classifies as `prototype` — meaning the defence was off
-on precisely the repositories most likely to be pip-installed.
-
-A passing run now checks that the package it exercised lives inside this worktree. When it
-does not, the finish is `UNVERIFIED` and names the package and where it actually resolved.
-One interpreter start per top-level package, on the green path only.
-
-### Four parallel sessions were one session, and it fed them each other's work
-
-The headline scenario, run for the first time: four live `claude` sessions at once, one
-per worktree, each told to change a different file.
-
-Two of the four rewrote a file they had never been asked to touch — reverting their own
-correct work to do it — because the plugin handed them another session's task statement
-as their own. Four sessions produced **one** record, and an incoherent one: worktree from
-the first, branch from the third, task from the second. No lease was ever taken. Every
-board said "this session is alone on the repository".
-
-The cause is that `claude` children inherit `CLAUDE_CODE_SESSION_ID`, so all four reported
-the same `session_id` to every hook, and identity was keyed on that alone. So under the
-exact load this product exists for, the coordination layer did not merely fail to help —
-it actively corrupted half the sessions.
-
-Identity is now (harness id, worktree). One session per worktree is the model already, and
-a resume or post-compaction restart in the same worktree still finds its own record. Re-run
-of the same four sessions afterwards: four records, four branches, four correct files.
-
-### Verified across the rest of what could be reached here
-
-- **A Node and a Go project, end to end.** `npm test --silent` and `go test ./...`
-  detected, baked into the hook, green push allowed, red push refused. Both correct.
-- **A real 1.0.1 to 1.0.2 upgrade**, not a structural argument about one. A plan task
-  written under the old version was still there and still readable after. But
-  `claude plugin update claude-bestpractice` **fails** — `update` needs the qualified
-  `name@marketplace` form where `install` accepts the short one, and the failure reads
-  `Plugin "claude-bestpractice" not found` while the plugin is installed and enabled.
-  The README now documents the form that works.
-- **Four hundred sessions in one repository.** State grows linearly and stays small
-  (202 KB), session start stays flat at 0.19s against a 30s limit, and one session start
-  reaped 400 dead records in 1.45s. `reaped.jsonl` was the only structure that never
-  shrank — append-only at ~200 bytes a session — and is now capped, newest kept, so a
-  session crashed a moment ago still recovers its baseline.
-
-639 tests, 26 doctor checks, always-on context unchanged at ~332 tokens.
-
-## v1.0.4
-
-Everything in v1.0.3 plus the below. Both are the same shape, and it is the shape this
-release cycle keeps finding: a template presented as an answer, or a stale claim presented
-as current. Both were found by running the thing rather than reading it — the suite was
-green throughout, and so was the doctor.
-
-### A dead end about code that has since been rewritten
-
-The attempts ledger — "what was tried and why it failed" — stamps every record with the
-blob hashes of the files it was about. That stamp was written and **read by nobody**.
-
-Verified on a repository built for it: a dead end recorded against `svc/fees.py`, then the
-file rewritten from floats to per-tenant `Decimal`, and the board went on asserting that
-caching rates in a dict leaks across tenants — advice about code that no longer exists,
-presented as current, with nothing marking it.
-
-Suppressing it outright would be the wrong correction. "We tried X and it failed because
-Y" stays true whatever happens to the file afterwards, and this project's rule is that a
-claim is marked and counted, never silently deleted. What decays is not the fact but its
-bearing on the code in front of you, so that is what the board now says: `[svc/fees.py
-rewritten since — may no longer apply]`, or `[subject file is gone — kept as history]`. A
-dead end about a file nobody touched is left unmarked, because a false mark teaches the
-reader to ignore the true ones.
-
-### A subagent briefed with a template
-
-Found by firing `SubagentStart` for the first time on a repository whose knowledge layer
-had been created and not yet answered — which is every repository for its first hour. The
-subagent's entire brief was:
-
-```
-# Non-goals
-- <ANSWER THIS — something plausible this deliberately will not do>
-- <a second one>
-- <a third one>
-```
-
-Worse than nothing: it costs the subagent tokens, tells it nothing, and teaches it that
-this channel carries noise. An unanswered section is now dropped, and a brief with nothing
-left in it is not sent at all. Answered sections still go verbatim, which is load-bearing —
-the one measured decomposition method that paraphrased facts forward scored 41 % worse.
-
-The placeholder pattern moved into `knowledge` so the counter and the brief cannot drift
-apart on what a placeholder is.
-
-645 tests, 26 doctor checks, always-on context unchanged at ~332 tokens.
-
 ## v1.0.0
 
 First release. What follows is written to be checked rather than believed: every claim
@@ -256,36 +25,125 @@ defeated the artifact-reading version of this gate before it was replaced.
 
 ### How this release was verified
 
-Six rounds of independent adversarial verification, each one a fresh set of agents whose
+Rounds of independent adversarial verification, each one a fresh set of agents whose
 instructions were to break the plugin by executing it and who were told explicitly not to
-trust the test suite or the doctor.
+trust the test suite or the doctor. Then a final pass that installed the plugin the way
+the README says to, on real repositories, and looked at what was actually there.
 
-That instruction earned its place. Across five rounds, **every severe defect was found by
-running the software and none by reading it** — while 572 tests reported OK and the
-doctor reported "All 25 checks passed" inside the very repositories the verifiers had
-just broken. Rounds four and five each found that the previous round's fixes had
-introduced new defects.
+That instruction earned its place. **Every severe defect was found by running the software
+and none by reading it** — while the suite reported OK and the doctor reported all checks
+passed inside the very repositories that were broken.
 
-The defects those rounds found, and this release fixes, include: a green finish certified
-over a genuinely red suite by four separate routes; the dead-end ledger never reaching a
-session that was not present when the dead end was hit; the work ledger being
-per-worktree in a product whose premise is many worktrees; one non-UTF-8 filename
-permanently wedging a fail-closed gate; the installer bricking itself on any version
-bump; and — found on a verifier's very first task, unprompted — writing the test the gate
-demands being counted as scope drift, so correct, tested, passing work was blocked four
-times and filed as a permanent failure.
+### What verification found, and this release fixes
+
+Listed because the list is the evidence. Each of these was live in a build that was green.
+
+**The push gate was not installed on the documented path.** `Setup` fires on `--init`, so
+the pre-push hook reached only repositories created through the plugin. Install into a
+repository you already have — which is what `/plugin install` does — and `claude plugin
+list` said `✓ enabled` over a push path with nothing on it. The first session that finds
+no hook now installs one and says so once; `claude-bp-ci off` removes it and the removal
+persists, because an opt-out that has to be repeated is not an opt-out.
+
+**The push gate exited 0 when it could not run your suite.** The baked test command was
+guarded by `command -v`; when that guard failed the hook fell through every fallback and
+out through `exit 0`. A project that *has* a suite pushed with nothing run, reported as
+checked. It now refuses and names the missing runner. A repository with no suite at all is
+still allowed through — nothing is being skipped there.
+
+**A green run of somebody else's copy of your package.** Found on a clone of Flask, 5545
+commits and sixteen years of history: a genuine regression in `src/` pushed green with 491
+tests passing, because a `.pth` from an unrelated editable install put a different copy of
+`flask` first on `sys.path`. Forcing the worktree onto the path produced 24 failures. The
+gate was right about the exit code and wrong about the tree. A passing run now checks that
+the package it exercised lives inside this worktree.
+
+**Four parallel sessions were one session, and it fed them each other's work.** The
+headline scenario, run for the first time: four live sessions, one per worktree, each told
+to change a different file. Two of the four rewrote a file they had never been asked to
+touch, reverting their own correct work to do it. Four sessions produced one record —
+worktree from the first, branch from the third, task from the second — because `claude`
+children inherit `CLAUDE_CODE_SESSION_ID` and identity was keyed on that alone. Identity
+is now (harness id, worktree). Re-run: four records, four branches, four correct files.
+
+**Seven commands that did not exist.** The installer's symlink list linked
+`claude-bestpractice`, which is not in `plugin/bin/`, and never linked `claude-bp`, which
+is and is the dispatcher — so after a clean install every command in the README, including
+the ones the installer's own closing message prints, was `command not found`. Five more of
+the same shape in printed output and docs. A test now scans every command named in prose
+or output against `plugin/bin/` and the dispatcher's verbs; it found one nobody reported.
+
+**Three outputs that were not true.** `hosted CI: no workflow in this repository` was
+computed from a test for one file — ours — so a repository with four workflows of its own
+was told it had none, one line under `stage: … CI config present`. `status` created a
+stage marker in the working tree and left it untracked, so looking at a repository dirtied
+it. And one repository read as two because the header took its label from the worktree
+directory rather than the git common dir.
+
+**A subagent briefed with a template.** On any repository whose knowledge layer had been
+created and not yet answered — every repository for its first hour — a subagent's entire
+brief was three lines reading `<ANSWER THIS — …>`. Worse than nothing: it costs tokens,
+tells it nothing, and teaches it that the channel carries noise. Unanswered sections are
+dropped and an empty brief is not sent; answered ones still go verbatim, which is
+load-bearing.
+
+**A dead end about code that had since been rewritten.** The attempts ledger stamps every
+record with the blob hashes of the files it was about, and nothing read the stamp. A dead
+end recorded against a file since rewritten was still presented as current advice. Marked
+rather than suppressed — "we tried X and it failed because Y" stays true whatever happens
+to the file, so what is said is that its bearing on the current code may have changed.
+
+**The first two lines a fresh install printed.** `status` opened with `Repair the
+knowledge layer` on a repository where the layer had never been built, and named a third
+command while doing it. `init` listed `entities.yaml` under **derived from your code** over
+a file whose entire content is `No types were central enough to derive automatically`.
+
+**The installer dirtied the clone it was run from.** Run from a clone, `INSTALL_DIR` is
+your own checkout, so `chmod +x plugin/bin/*` chmodded twenty Windows `.cmd` shims and
+`git status` came back dirty the moment the install finished.
+
+**Also.** `claude plugin update <name>` fails with `Plugin not found` while the plugin is
+installed — `update` needs the qualified `name@marketplace` form where `install` does not,
+so the README documents the one that works. `reaped.jsonl` was the only structure in Tier B
+that never shrank and is now capped. And earlier rounds fixed: a green finish certified
+over a genuinely red suite by four separate routes; the work ledger being per-worktree in
+a product whose premise is many worktrees; one non-UTF-8 filename permanently wedging a
+fail-closed gate; and writing the test the gate demands being counted as scope drift, so
+correct, tested, passing work was blocked four times and filed as a permanent failure.
+
+### What was measured, not assumed
+
+- **Four hundred sessions in one repository.** State grows linearly and stays small — 202
+  KB — and session start stays flat at 0.19s against a 30s limit. One session start then
+  reaped 400 dead records in 1.45s.
+- **A sixteen-year-old repository.** Every gate inside its timeout, entity derivation
+  finding the real entities with correct file anchors, an existing husky `pre-push`
+  symlinked at a tracked script moved rather than written through and chained so its
+  refusal still refuses.
+- **A real version upgrade.** State written under an older install was still there and
+  still readable after — it lives in your repository and in your git common directory,
+  never in the plugin cache.
+- **Node and Go end to end.** `npm test --silent` and `go test ./...` detected, baked into
+  the hook, green push allowed, red push refused.
+- **A prompt-injection payload arriving as a production signal.** Quarantined, fenced,
+  marked as never an instruction, and the fence not broken by the payload's own backticks.
+  Live secrets in the same payload did not survive into the written file.
 
 ### Known limits, stated rather than discovered
 
 - **The doctor proves the gates work, not that your repository is safe.** It builds a
-  throwaway repository and attacks that. "All 25 checks passed" is a statement about this
+  throwaway repository and attacks that. "All 26 checks passed" is a statement about this
   software. `claude-bp status` is the one that looks at yours.
+- **Linux only, by evidence.** macOS and Windows have never executed this — not once. The
+  twenty `.cmd` shims are untested everywhere. See `docs/LIMITS.md`.
+- **A false green is still possible on purpose.** The agent writes your code, your tests,
+  your test command and your build files. A `conftest.py` monkeypatch, a test that asserts
+  nothing, a runner shadowed on PATH — all still work. This gate raises the cost and leaves
+  a record; it does not make forgery impossible. `docs/LIMITS.md` names each attack.
 - **The two install paths are not equivalent.** `claude plugin install` puts the gates in
-  your sessions; only `install.sh` puts the `claude-bestpractice` commands in your own terminal.
-  `claude-bp init` installs the pre-push gate, so on the marketplace path you must run
-  it from inside a session or the gate stays off.
-- **`.claude/claude-bestpractice/` is yours to commit.** State travels with a branch only once
-  committed; nothing here commits it for you.
+  your sessions; only `install.sh` puts the `claude-bp` commands in your own terminal.
+- **`.claude/claude-bestpractice/` is yours to commit.** State travels with a branch only
+  once committed; nothing here commits it for you.
 - **This is not for teams.** Every trade-off assumes one owner and no reviewer.
 - **The enforcement surface is Claude Code specific.** The portable half would be the
   advisory half, which is the useless half.
@@ -296,3 +154,5 @@ Not a memory engine — the harness stores memory, this curates it. Not a code r
 several first-party review paths exist; pick one. Not a task manager — the native task
 system is subsumed and gated, never replaced. No daemon, no vector store, no graph
 database, no second model watching the first.
+
+645 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.
