@@ -15,7 +15,7 @@ import time
 import unittest
 from pathlib import Path
 
-from helpers import BIN, RepoCase
+from helpers import BIN, RepoCase, sid
 
 JUNIT_PASS = '<?xml version="1.0"?><testsuite name="s" tests="4" failures="0" errors="0"></testsuite>'
 
@@ -70,7 +70,7 @@ class TestSessionStart(GateCase):
         self.start("registered")
         from claude_bestpractice import sessions
 
-        self.assertIsNotNone(sessions.get(self.ctx(), "registered"))
+        self.assertIsNotNone(sessions.get(self.ctx(), sid(self.repo, "registered")))
 
     def test_second_session_sees_the_first(self):
         self.start("first")
@@ -83,10 +83,10 @@ class TestSessionStart(GateCase):
         self.start("keeper")
         from claude_bestpractice import sessions
 
-        first = sessions.get(self.ctx(), "keeper").baseline_commit
+        first = sessions.get(self.ctx(), sid(self.repo, "keeper")).baseline_commit
         self.write("noise.py", "x = 1\n")
         self.start("keeper")
-        self.assertEqual(sessions.get(self.ctx(), "keeper").baseline_commit, first)
+        self.assertEqual(sessions.get(self.ctx(), sid(self.repo, "keeper")).baseline_commit, first)
 
     def test_survives_an_unborn_branch(self):
         from helpers import make_repo
@@ -119,7 +119,7 @@ class TestPromptCapture(GateCase):
         )
         from claude_bestpractice import sessions
 
-        rec = sessions.get(self.ctx(), "s1")
+        rec = sessions.get(self.ctx(), sid(self.repo, "s1"))
         self.assertEqual(rec.task_statement, "Fix the login bug in src/auth.py")
         self.assertIn("src/auth.py", rec.task_paths)
 
@@ -141,7 +141,7 @@ class TestPromptCapture(GateCase):
             )
         from claude_bestpractice import sessions
 
-        self.assertEqual(sessions.get(self.ctx(), "s1").task_statement, "original task")
+        self.assertEqual(sessions.get(self.ctx(), sid(self.repo, "s1")).task_statement, "original task")
 
     def test_prose_mentions_do_not_become_task_paths(self):
         self.start()
@@ -155,7 +155,7 @@ class TestPromptCapture(GateCase):
         )
         from claude_bestpractice import sessions
 
-        self.assertEqual(sessions.get(self.ctx(), "s1").task_paths, [])
+        self.assertEqual(sessions.get(self.ctx(), sid(self.repo, "s1")).task_paths, [])
 
 
 class TestPreTool(GateCase):
@@ -305,9 +305,9 @@ class TestPreTool(GateCase):
 
         from claude_bestpractice import sessions
 
-        self.assertEqual(sessions.leases_held_by(self.ctx(), "alpha"), ["src/shared.py"])
+        self.assertEqual(sessions.leases_held_by(self.ctx(), sid(self.repo, "alpha")), ["src/shared.py"])
         self.stop("alpha")  # nothing changed, so the gate allows and releases
-        self.assertEqual(sessions.leases_held_by(self.ctx(), "alpha"), [])
+        self.assertEqual(sessions.leases_held_by(self.ctx(), sid(self.repo, "alpha")), [])
         self.assertIsNone(self.decision(self.gate("pre-tool", self.edit_event("beta", "src/shared.py"))))
 
     def test_dead_session_lease_does_not_block_forever(self):
@@ -345,7 +345,7 @@ class TestPreTool(GateCase):
         )
         from claude_bestpractice import sessions
 
-        self.assertIn("src/x.py", sessions.get(self.ctx(), "s1").last_touched)
+        self.assertIn("src/x.py", sessions.get(self.ctx(), sid(self.repo, "s1")).last_touched)
 
 
 class TestEvidenceGate(GateCase):
@@ -420,7 +420,7 @@ class TestEvidenceGate(GateCase):
 
         markers = store.read_jsonl(store.tier_b(self.ctx(), "unverified.jsonl"))
         self.assertEqual(len(markers), 1)
-        self.assertEqual(markers[0]["session_id"], "s1")
+        self.assertEqual(markers[0]["session_id"], sid(self.repo, "s1"))
 
     def test_unverified_finish_surfaces_on_the_next_board(self):
         self.start()
@@ -442,7 +442,7 @@ class TestEvidenceGate(GateCase):
 
         from claude_bestpractice import sessions
 
-        rec = sessions.get(self.ctx(), "s1")
+        rec = sessions.get(self.ctx(), sid(self.repo, "s1"))
         self.assertEqual(rec.tool_signatures.get("_consecutive_blocks"), 0)
 
 
@@ -553,7 +553,7 @@ class TestDoctorAndReindex(GateCase):
         self.assertEqual(proc.returncode, 0)
         from claude_bestpractice import sessions
 
-        self.assertIsNotNone(sessions.get(self.ctx(), "keepme"))
+        self.assertIsNotNone(sessions.get(self.ctx(), sid(self.repo, "keepme")))
 
 
 if __name__ == "__main__":

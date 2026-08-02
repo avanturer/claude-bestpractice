@@ -90,7 +90,11 @@ class TestAQuietSessionKeepsEnforcing(DisarmCase):
         self.start("sibling")
 
         names = [p.name for p in self.session_files()]
-        self.assertIn("victim.json", names, "a live session was deleted for being quiet")
+        # Identity is (harness id, worktree), so the record carries a worktree tag;
+        # asserting the bare filename would be asserting the key that let four
+        # concurrent sessions collapse into one record.
+        self.assertTrue(any(n.startswith("victim") for n in names),
+                        "a live session was deleted for being quiet")
         self.assertTrue(
             self.secret_write_denied("victim"),
             "a quiet session stopped refusing credential writes",

@@ -690,7 +690,9 @@ def check_quiet_session_still_enforces(repo: Path) -> Result:
         denied = json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
     except (json.JSONDecodeError, KeyError, TypeError):
         denied = False
-    survived = (sessions_dir / "doctor-quiet.json").exists()
+    # Not `doctor-quiet.json`: identity is (harness id, worktree), so the record carries a
+    # worktree tag. Asserting the bare filename would be asserting the old, broken key.
+    survived = any(p.name.startswith("doctor-quiet") for p in sessions_dir.glob("*.json"))
     return Result(
         "a quiet session is not disarmed",
         denied and survived,
