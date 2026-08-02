@@ -120,6 +120,14 @@ Found by installing into a small project built for the purpose and reading the o
   was not. Files carrying a question are now listed separately from files carrying an
   answer.
 
+630 tests, 26 doctor checks, always-on context unchanged at ~332 tokens.
+
+## v1.0.3
+
+Everything in v1.0.2 plus the below. Two of these are the worst defects this plugin has
+had, and neither would have been found by reading anything: they needed a sixteen-year-old
+repository and four sessions running at once.
+
 ### A green run of somebody else's copy of your package
 
 Found by cloning Flask — 5545 commits, sixteen years of history — installing into it, and
