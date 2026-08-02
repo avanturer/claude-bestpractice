@@ -120,7 +120,24 @@ Found by installing into a small project built for the purpose and reading the o
   was not. Files carrying a question are now listed separately from files carrying an
   answer.
 
-630 tests, 26 doctor checks, always-on context unchanged at ~332 tokens.
+### A green run of somebody else's copy of your package
+
+Found by cloning Flask — 5545 commits, sixteen years of history — installing into it, and
+pushing a genuine regression in `src/`. The push went out green with 491 tests passing,
+because a `.pth` from an unrelated editable install put a different copy of `flask` first
+on `sys.path`. Forcing the worktree onto the path instead produced 24 failures.
+
+The gate ran the suite itself and observed exit 0. It was right about the exit code and
+wrong about the tree, which is the one thing this gate exists not to be. The
+clean-checkout re-run is the defence for exactly this, but it is gated on stage, and a
+library has no deploy target so it classifies as `prototype` — meaning the defence was off
+on precisely the repositories most likely to be pip-installed.
+
+A passing run now checks that the package it exercised lives inside this worktree. When it
+does not, the finish is `UNVERIFIED` and names the package and where it actually resolved.
+One interpreter start per top-level package, on the green path only.
+
+632 tests, 26 doctor checks, always-on context unchanged at ~332 tokens.
 
 ## v1.0.0
 

@@ -34,6 +34,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import xml.etree.ElementTree as ET
@@ -502,9 +503,60 @@ def _judge_witnessed(ctx: GitContext, seen: witness.Witnessed) -> Verdict:
             unverified=True,
         )
 
+    shadow = _shadowed_package(ctx.worktree_root)
+    if shadow:
+        name, elsewhere = shadow
+        return Verdict(
+            True,
+            f"{seen.runner} passed {seen.executed} test(s), but `import {name}` resolves to "
+            f"{elsewhere} — outside this worktree. The suite ran against code that is not "
+            "the code here, so a passing run says nothing about this tree. Usually a stale "
+            "editable install: `pip install -e .` from this directory fixes it.",
+            unverified=True,
+        )
+
     if clear_red(ctx, command, seen.executed) or red(ctx) is None:
         record_green(ctx, command)
     return Verdict(True, f"{seen.executed} test(s) run by the gate itself via {seen.runner}")
+
+
+def _shadowed_package(root: Path) -> tuple[str, str] | None:
+    """A package that exists here but imports from somewhere else. Name and where.
+
+    Found on a real repository: a clone of Flask with a genuine regression in `src/`
+    pushed green, 491 tests passing, because a `.pth` from an unrelated editable install
+    put a different copy of the same package first on `sys.path`. The gate ran the suite
+    itself, observed exit 0, and was right about the exit code and wrong about the tree.
+
+    This is the failure the clean-checkout re-run exists for, but that is gated on stage
+    and every library is `prototype`, so on exactly the repositories most likely to be
+    pip-installed the defence was off. This costs one interpreter start per top-level
+    package, on the green path only.
+    """
+    candidates = []
+    for parent in (root, root / "src"):
+        try:
+            entries = sorted(parent.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            if (entry / "__init__.py").is_file() and not entry.name.startswith((".", "_", "test")):
+                candidates.append(entry.name)
+
+    for name in candidates[:3]:
+        proc = subprocess.run(
+            [sys.executable, "-c", f"import {name},os;print(os.path.dirname({name}.__file__))"],
+            capture_output=True, encoding="utf-8", errors="surrogateescape",
+            cwd=str(root.parent), timeout=60,
+        )
+        where = proc.stdout.strip()
+        if proc.returncode != 0 or not where:
+            continue
+        try:
+            Path(where).resolve().relative_to(root.resolve())
+        except ValueError:
+            return name, where
+    return None
 
 
 def _first_artifact(root: Path, globs: list[str]) -> Artifact | None:
