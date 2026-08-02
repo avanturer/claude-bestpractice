@@ -93,7 +93,22 @@ as two repositories. The state was correctly shared throughout — `repo_key` ha
 been the common dir — but the label is now derived from the same place, so every worktree
 of a clone agrees.
 
-627 tests, 26 doctor checks, always-on context unchanged at ~332 tokens.
+### The first two lines a fresh install prints
+
+Found by installing into a small project built for the purpose and reading the output.
+
+- `status` opened with `Repair the knowledge layer` on a repository where the layer had
+  never been built. Nothing was broken; nothing was there. It also named a third command,
+  so one condition produced `claude-bp-knowledge init` on one line, `validate` on the
+  next, and the README's own `claude-bp init` on neither. A missing layer now says
+  `claude-bp init`.
+- `init` listed `entities.yaml` under **derived from your code** over a file whose entire
+  content is `No types were central enough to derive automatically`. The file is honest —
+  inventing entities is the one thing onboarding must not do — and the summary above it
+  was not. Files carrying a question are now listed separately from files carrying an
+  answer.
+
+630 tests, 26 doctor checks, always-on context unchanged at ~332 tokens.
 
 ## v1.0.0
 

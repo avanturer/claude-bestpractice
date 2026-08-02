@@ -243,6 +243,34 @@ def write(ctx: GitContext, force: bool = False) -> list[str]:
     return written
 
 
+def awaiting_you(ctx: GitContext, written: list[str]) -> list[str]:
+    """Of the files just written, the ones that carry a question rather than an answer.
+
+    `render_entities` emits a commented template when nothing in the repository was
+    central enough to name — correct, since inventing entities is the one thing this must
+    not do — but `init` announced the whole set as "derived from your code", including
+    that one. The file is honest and the summary above it was not.
+    """
+    root = ctx.worktree_root
+    out = []
+    for rel in written:
+        text = _read(root / rel).strip()
+        if text and all(line.startswith("#") or not line.strip() for line in text.splitlines()):
+            out.append(rel)
+    return out
+
+
+def present(ctx: GitContext) -> bool:
+    """Has the knowledge layer been built at all?
+
+    A missing layer and a broken one need different advice, and `status` gave the broken
+    one to both: `Repair the knowledge layer` was the first line a fresh install printed,
+    about something that had never existed.
+    """
+    root = ctx.worktree_root
+    return (root / knowledge.RULES_DIR / knowledge.PRODUCT).exists()
+
+
 def unanswered(ctx: GitContext) -> list[str]:
     """Placeholders still waiting on a human. Surfaced, never invented."""
     root = ctx.worktree_root

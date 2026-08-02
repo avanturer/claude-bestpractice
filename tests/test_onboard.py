@@ -120,6 +120,39 @@ class TestWriting(RepoCase):
         self.assertEqual(onboard.unanswered(self.ctx()), [])
 
 
+class TestTheFirstThingAFreshInstallSays(RepoCase):
+    """Two small untruths in the output a founder reads before anything else."""
+
+    def cli(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(BIN / "claude-bp"), *args],
+            capture_output=True, text=True, cwd=str(self.repo), timeout=300,
+        )
+
+    def test_a_layer_that_was_never_built_is_not_called_broken(self):
+        """`Repair the knowledge layer` was printed about something that did not exist."""
+        out = self.cli("status").stdout
+        self.assertIn("`claude-bp init`", out)
+        self.assertNotIn("Repair the knowledge layer", out)
+
+    def test_a_built_layer_is_no_longer_offered_the_build_advice(self):
+        self.cli("init")
+        out = self.cli("status").stdout
+        self.assertNotIn("Build the knowledge layer", out)
+
+    def test_a_template_is_not_announced_as_derived(self):
+        """`render_entities` emits a commented template when nothing was central enough.
+
+        Honest file, dishonest summary: `init` listed it under "derived from your code".
+        """
+        self.write("app.py", "def add(a, b):\n    return a + b\n")
+        out = self.cli("init").stdout
+        self.assertIn("nothing could be derived", out)
+        derived, _, awaiting = out.partition("nothing could be derived")
+        self.assertIn("entities.yaml", awaiting)
+        self.assertNotIn("entities.yaml", derived)
+
+
 class TestSetupHook(RepoCase):
     def setup_hook(self):
         return self.run_hook("setup", {"session_id": "s1", "hook_event_name": "Setup"})

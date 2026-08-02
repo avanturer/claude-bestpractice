@@ -101,6 +101,13 @@ def cmd_status(ctx) -> int:
         print("  Another tool contests an event we own: `claude-bp adopt`")
     elif gaps:
         print("  Answer the placeholders in .claude/rules/product.md — nothing else derives them.")
+    elif not onboard.present(ctx):
+        # "Repair the knowledge layer" was the first thing a fresh install printed, about
+        # a layer that had never been built. Nothing was broken; nothing was there. It
+        # also named a third command, so one condition produced `claude-bp-knowledge
+        # init` on one line and `claude-bp-knowledge validate` on the next, and the
+        # README's own `claude-bp init` on neither.
+        print("  Build the knowledge layer from this repository: `claude-bp init`")
     elif problems:
         print("  Repair the knowledge layer: `claude-bp-knowledge validate`")
     elif counts["doing"] == 0 and counts["next"] > 0:
@@ -117,9 +124,20 @@ def cmd_init(ctx, force: bool) -> int:
     written = onboard.write(ctx, force=force)
     print(f"{BOLD}claude-bp init{OFF}  {ctx.worktree_root}")
     if written:
-        print("\nderived from your code:")
-        for rel in written:
-            print(f"  {rel}")
+        # "derived from your code" over a file reading "No types were central enough to
+        # derive automatically" is a small untruth, and small untruths in this output are
+        # how a founder stops reading it. Say which files carry an answer and which
+        # carry a question.
+        empty = onboard.awaiting_you(ctx, written)
+        derived = [rel for rel in written if rel not in empty]
+        if derived:
+            print("\nderived from your code:")
+            for rel in derived:
+                print(f"  {rel}")
+        if empty:
+            print("\ncreated, but nothing could be derived — they say what they need:")
+            for rel in empty:
+                print(f"  {rel}")
     else:
         print("\nknowledge layer already present (use --force to regenerate)")
 
