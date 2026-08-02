@@ -5,7 +5,7 @@
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
 [![version](https://img.shields.io/badge/version-1.0.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-616%20passing-2ea44f)](#已验证)
+[![tests](https://img.shields.io/badge/tests-627%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-26%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#运行要求)
@@ -43,14 +43,14 @@ curl -fsSL https://raw.githubusercontent.com/avanturer/claude-bestpractice/HEAD/
 |  | `claude plugin install` | `install.sh` |
 |---|---|---|
 | gate 在会话中生效 | 是 | 是 |
-| `claude-bestpractice` 在**你自己的终端**里可用 | 否 | 是（软链到 `~/.local/bin`）|
+| `claude-bp` 在**你自己的终端**里可用 | 否 | 是（软链到 `~/.local/bin`）|
 | 注册前先跑 doctor | 否 | 是 |
 
 Claude Code 会自动把插件的 `bin/` 加进 Bash 工具的 PATH，所以走 marketplace 路径时，
 下面这些命令在**会话内**可用，在你自己的 shell 里则是 `command not found`。
 
 push gate 并不等这两条命令。在没有 `pre-push` 钩子的仓库里启动的第一个会话会装上它，
-并在 board 上说一声；之后就不再出声。`claude-bp ci off` 可以移除它，而且这个决定会保留
+并在 board 上说一声；之后就不再出声。`claude-bp-ci off` 可以移除它，而且这个决定会保留
 下来——下一个会话不会把它装回去。这是一处更正，不是新功能：在 v1.0.1 之前，gate 只由
 `claude-bp init` 安装，所以按文档方式安装插件的人，`claude plugin list` 显示 `✓ enabled`，
 而 push 路径上什么都没有。
@@ -213,7 +213,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 
 ### 它会接管与它冲突的东西
 
-`claude-bestpractice adopt` 会找出争抢本插件所拥有事件的其他工具，把它们的 hook 条目移入一个
+`claude-bp adopt` 会找出争抢本插件所拥有事件的其他工具，把它们的 hook 条目移入一个
 带标记的区块并留下备份，然后明确告诉你该禁用哪些竞争插件。可用 `--restore` 撤销。
 它绝不会悄悄删除别的工具的配置。
 
@@ -225,7 +225,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 |---|---|
 | `claude-bp status` | 会话、计划、知识、记忆健康度、冲突、下一步动作 |
 | `claude-bp init` | 从你的代码推导出知识层 |
-| `claude-bestpractice adopt` | 接管被其他工具争抢的事件 |
+| `claude-bp adopt` | 接管被其他工具争抢的事件 |
 | `claude-bp doctor` | 通过尝试一个已知的坏动作来证明每个 gate 有效 |
 | `claude-bp-plan` | 工作台账：`add`、`list`、`claim`、`done` |
 | `claude-bp-decide` | 采纳一条由你自己的纠正草拟出的决策 |
@@ -261,7 +261,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 ## 已验证
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 616 个测试 · 26 项 doctor 检查 · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 627 个测试 · 26 项 doctor 检查 · budget
 ```
 
 doctor 通过**真的去做那件坏事**来证明 gate 有效，而不是把配置读回来对一遍——
@@ -294,7 +294,7 @@ Claude Code 2.1.220 上通过。
 
 **`.git/claude-bestpractice/` —— 不用管，git 本来就看不见它。** 活跃会话、文件租约、循环计数器、
 测试回执。它放在 git 公共目录里，因为那是唯一一个被同一个克隆的所有 worktree 共享、对
-git 不可见、能扛过分支切换、并随克隆一起消亡的位置。它完全可重建：`claude-bp reindex`
+git 不可见、能扛过分支切换、并随克隆一起消亡的位置。它完全可重建：`claude-bp-reindex`
 会从已提交的那一半重新生成它，而这条路径是被测试过的，不是假设的。
 
 两者都不需要你手动编辑。如果想彻底清除，删掉这两个目录并卸载插件即可——你机器上别的

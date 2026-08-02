@@ -70,6 +70,24 @@ class GitContext:
         """Stable identity for this clone, shared by all its worktrees."""
         return self.common_dir.resolve().as_posix()
 
+    @property
+    def repo_name(self) -> str:
+        """What to call this repository, identically from every one of its worktrees.
+
+        The worktree directory name is the wrong answer and was the one being printed:
+        one repository showed up as `fuddy` in the main checkout and `fuddy-envfix` in a
+        worktree, reading as two repositories in a product whose whole stated scene is
+        three to eight worktrees of one. The state was correctly shared the whole time —
+        only the label lied.
+
+        Derived from the common dir, which every worktree of a clone agrees on.
+        """
+        common = self.common_dir.resolve()
+        if common.name == ".git":
+            return common.parent.name
+        # A bare clone, or `--separate-git-dir`: the directory is `fuddy.git` itself.
+        return common.name[:-4] if common.name.endswith(".git") else common.name
+
 
 def resolve(cwd: Path | str | None = None) -> GitContext:
     cwd = Path(cwd or os.getcwd())

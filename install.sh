@@ -182,10 +182,20 @@ fi
 # symlink is only so the commands also work in the founder's own terminal.
 LINK_DIR="$HOME/.local/bin"
 mkdir -p "$LINK_DIR"
-for command in claude-bestpractice claude-bp-doctor claude-bp-knowledge claude-bp-plan \
-               claude-bp-decide claude-bp-ingest claude-bp-reindex claude-bp-ci \
-               claude-bp-attempt claude-bp-options claude-bp-ship; do
-  ln -sf "$INSTALL_DIR/plugin/bin/$command" "$LINK_DIR/$command"
+# Derived from what is actually in bin/, never from a list kept in step by hand. The
+# hand-kept list is how this shipped linking `claude-bestpractice`, which does not exist
+# — a dangling symlink — while never linking `claude-bp`, which does and is the
+# dispatcher. Every command the installer's own closing message tells you to run was
+# `command not found`. The list had simply not been updated when the commands were
+# renamed, and nothing checked that a link pointed at a real file.
+#
+# The rule is the naming convention: user commands are `claude-bp` and `claude-bp-*`,
+# gates are bare event names (`pre-tool`, `session-start`) that nobody should invoke by
+# hand and that have no business on a founder's PATH.
+for target in "$INSTALL_DIR"/plugin/bin/claude-bp "$INSTALL_DIR"/plugin/bin/claude-bp-*; do
+  case "$target" in *.cmd) continue ;; esac
+  [ -f "$target" ] || continue
+  ln -sf "$target" "$LINK_DIR/$(basename "$target")"
 done
 
 echo

@@ -31,7 +31,10 @@ def heading(text: str) -> None:
 
 
 def cmd_status(ctx) -> int:
-    resolved_stage, signals = stage.current(ctx)
+    # `record=False`: reading the status must not write a stage marker into the working
+    # tree. It did, and left it untracked, so `git status` came back dirty after a
+    # command whose entire job is to look.
+    resolved_stage, signals = stage.current(ctx, record=False)
     counts = plan.summary(ctx)
     live = sessions.live_sessions(ctx)
     items = board.open_items(ctx)
@@ -41,7 +44,7 @@ def cmd_status(ctx) -> int:
     gaps = onboard.unanswered(ctx)
     pending = drafts.pending(ctx)
 
-    print(f"{BOLD}claude-bestpractice {__version__}{OFF}  {ctx.worktree_root.name} @ {ctx.branch}")
+    print(f"{BOLD}claude-bestpractice {__version__}{OFF}  {ctx.repo_name} @ {ctx.branch}")
     print(f"{DIM}stage: {resolved_stage} — {'; '.join(signals.reasons[:3]) or 'no signals yet'}{OFF}")
 
     heading("CHECKS")
@@ -91,11 +94,11 @@ def cmd_status(ctx) -> int:
         heading("CONFLICTS")
         for conflict in found[:6]:
             print(f"  {conflict}")
-        print(f"  {DIM}`claude-bestpractice adopt` neutralises what can be neutralised{OFF}")
+        print(f"  {DIM}`claude-bp adopt` neutralises what can be neutralised{OFF}")
 
     heading("NEXT ACTION")
     if found and any(c.action == "quarantine" for c in found):
-        print("  Another tool contests an event we own: `claude-bestpractice adopt`")
+        print("  Another tool contests an event we own: `claude-bp adopt`")
     elif gaps:
         print("  Answer the placeholders in .claude/rules/product.md — nothing else derives them.")
     elif problems:
@@ -164,7 +167,7 @@ def cmd_adopt(ctx, dry_run: bool, restore: bool) -> int:
         print(f"\nquarantined {moved} contesting hook entr{'y' if moved == 1 else 'ies'}")
         for backup in backups:
             print(f"  backup: {backup}")
-        print("  undo with `claude-bestpractice adopt --restore`")
+        print("  undo with `claude-bp adopt --restore`")
 
     excludes = conflicts.exclusion_settings(found)
     if excludes:
@@ -180,7 +183,7 @@ def cmd_adopt(ctx, dry_run: bool, restore: bool) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(prog="claude-bestpractice", description="claude-bestpractice control plane")
+    parser = argparse.ArgumentParser(prog="claude-bp", description="claude-bestpractice control plane")
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("status", help="what is known, in flight, planned and enforced (default)")
     init = sub.add_parser("init", help="derive the knowledge layer from this repository")

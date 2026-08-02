@@ -67,6 +67,51 @@ class TestInstallPath(unittest.TestCase):
     def test_the_installer_is_executable(self) -> None:
         self.assertTrue((REPO_ROOT / "install.sh").stat().st_mode & 0o111, "install.sh is not +x")
 
+    def test_every_command_named_anywhere_exists(self) -> None:
+        """Six bugs in one shape: prose naming a binary that is not there.
+
+        The installer linked `claude-bestpractice` (dangling) and not `claude-bp` (the
+        dispatcher), so every command in the README was `command not found` after a clean
+        install — including the ones the installer's own closing message printed. `status`
+        advised `claude-bestpractice adopt`; `adopt` advised `claude-bestpractice adopt
+        --restore`; the README documented `claude-bp ci off` against a dispatcher that
+        accepts four verbs and not that one.
+
+        Every one is a name written by hand and never checked against `plugin/bin/`. So
+        check it mechanically, once, for every file that can carry such a name.
+        """
+        import re
+
+        bin_dir = REPO_ROOT / "plugin" / "bin"
+        real = {p.name for p in bin_dir.iterdir() if p.is_file()}
+        verbs = {"status", "init", "doctor", "adopt"}  # what the dispatcher accepts
+
+        # Prose and printed output only. `install.sh` refers to these paths as shell
+        # globs and in comments about this very bug, and has its own structural test.
+        sources = [*bin_dir.glob("claude-bp*"), REPO_ROOT / "README.md"]
+        named = re.compile(r"`(claude-b[\w-]*)((?: [a-z-]+)?)")
+
+        problems = []
+        for path in sources:
+            if path.suffix == ".cmd":
+                continue
+            for binary, verb in named.findall(path.read_text(encoding="utf-8")):
+                if binary not in real:
+                    problems.append(f"{path.name}: `{binary}` is not in plugin/bin/")
+                elif binary == "claude-bp" and verb.strip() and verb.strip() not in verbs:
+                    problems.append(f"{path.name}: `claude-bp {verb.strip()}` is not a verb")
+        self.assertEqual([], problems, "\n".join(problems))
+
+    def test_the_installer_links_every_command_and_no_gate(self) -> None:
+        """Derived from bin/, never a hand-kept list — the list is what drifted."""
+        installer = read("install.sh")
+        self.assertIn('"$INSTALL_DIR"/plugin/bin/claude-bp ', installer)
+        self.assertIn('"$INSTALL_DIR"/plugin/bin/claude-bp-*', installer)
+        for gate in ("pre-tool", "session-start", "evidence-gate"):
+            self.assertNotIn(
+                f"/plugin/bin/{gate}", installer, f"{gate} is a hook handler, not a command"
+            )
+
     def test_the_installer_leaves_a_clone_clean(self) -> None:
         """Run from a clone, `INSTALL_DIR` is the founder's own checkout.
 

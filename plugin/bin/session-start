@@ -92,7 +92,7 @@ def _armed_line(ctx: GitContext) -> str:
     armed, note = ci.ensure(ctx)
     if not armed:
         return ""
-    line = "\nchecks now run before every push (`claude-bp ci off` if you do not want them)"
+    line = "\nchecks now run before every push (`claude-bp-ci off` if you do not want them)"
     if "moved to" in note:
         # A file of theirs moved. Chaining it correctly is not a licence to do it silently.
         line += "\n" + note.split("\n", 1)[-1].strip()
