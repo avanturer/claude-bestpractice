@@ -75,18 +75,35 @@ class TestRatchet(RepoCase):
     def test_stage_is_recorded_in_tier_a(self):
         from claude_bestpractice import store
 
+        self.write("package.json", '{"dependencies": {"stripe": "^14.0.0"}}')
         ctx = self.ctx()
         stage.current(ctx)
-        self.assertTrue(store.tier_a(ctx, stage.STAGE_DIR, "reached-prototype.json").exists())
+        self.assertTrue(store.tier_a(ctx, stage.STAGE_DIR, "reached-revenue.json").exists())
+
+    def test_the_floor_is_never_recorded(self):
+        """`prototype` is order 0, so its marker can hold nothing back.
+
+        There is nothing below the floor to regress to, so `reached-prototype.json` was
+        never doing the ratchet's job — it was only putting an untracked file into the
+        working tree of every repository that merely started a session. Reported from a
+        real install, in a repository whose own rules require `git status` to be clean.
+        """
+        stage.current(self.ctx())
+        untracked = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=str(self.repo), capture_output=True, text=True, timeout=30,
+        ).stdout
+        self.assertEqual(untracked.strip(), "", untracked)
 
     def test_the_committed_marker_holds_nothing_that_varies(self):
         """A timestamp or a signal dump in here is what made merges conflict."""
         from claude_bestpractice import store
 
+        self.write("package.json", '{"dependencies": {"stripe": "^14.0.0"}}')
         ctx = self.ctx()
         stage.current(ctx)
-        body = store.read_json(store.tier_a(ctx, stage.STAGE_DIR, "reached-prototype.json"))
-        self.assertEqual(body, {"stage": stage.PROTOTYPE})
+        body = store.read_json(store.tier_a(ctx, stage.STAGE_DIR, "reached-revenue.json"))
+        self.assertEqual(body, {"stage": stage.REVENUE})
 
     def test_the_volatile_half_is_not_committed(self):
         from claude_bestpractice import store
@@ -121,8 +138,10 @@ class TestRatchet(RepoCase):
         Two sessions that each merely ran a gate — no stage change, nothing deliberate —
         used to come back with a conflict in a file the founder has never heard of.
         """
-        ctx = self.ctx()
-        stage.current(ctx)
+        # The signal goes in the base commit and the marker does not, so each branch
+        # creates the marker itself. That is add/add against real git — the case that
+        # conflicted — rather than two branches inheriting one already-committed file.
+        self.write("package.json", '{"dependencies": {"stripe": "^14.0.0"}}')
         git(["add", "-A"], self.repo)
         git(["commit", "-qm", "base"], self.repo)
 

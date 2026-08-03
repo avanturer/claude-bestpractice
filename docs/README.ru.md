@@ -5,7 +5,7 @@
 **Память, координация и принуждение для разработки продукта в нескольких параллельных сессиях Claude Code.**
 
 [![version](https://img.shields.io/badge/version-1.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-655%20passing-2ea44f)](#проверено)
+[![tests](https://img.shields.io/badge/tests-660%20passing-2ea44f)](#проверено)
 [![doctor](https://img.shields.io/badge/doctor-26%20checks-2ea44f)](#проверено)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#требования)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#требования)
@@ -31,6 +31,18 @@
 claude plugin marketplace add avanturer/claude-bestpractice
 claude plugin install claude-bestpractice@claude-bestpractice
 ```
+
+Если первая строка полезет в `git@github.com:` и упрётся в отсутствующий SSH-ключ —
+передайте URL вместо короткой формы. Это не гипотеза: на реальной установке короткая
+форма разрешилась в SSH на машине без ключа.
+
+```sh
+claude plugin marketplace add https://github.com/avanturer/claude-bestpractice
+```
+
+Чего это не починит: глобальный `url.git@github.com:.insteadOf https://github.com/` в
+вашем собственном git-конфиге перепишет и этот URL. Проверить —
+`git config --get-regexp '^url\.'`.
 
 Либо так — чтобы гейты были проверены на вашей машине **до** того, как что-либо
 зарегистрируется:
@@ -293,7 +305,7 @@ claude-bp-ci off        # снять pre-push хук
 ## Проверено
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 655 тестов · 26 проверок доктора · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 660 тестов · 26 проверок доктора · budget
 ```
 
 Доктор доказывает гейты **попыткой сделать плохое**, а не чтением конфигурации обратно —
