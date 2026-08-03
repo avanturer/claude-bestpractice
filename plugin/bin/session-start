@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import board, ci, config, hookio, sessions, stage, store  # noqa: E402
+from claude_bestpractice import board, ci, config, hookio, onboard, sessions, stage, store  # noqa: E402
 from claude_bestpractice.gitctx import GitContext, resolve, stash_baseline  # noqa: E402
 
 
@@ -99,6 +99,26 @@ def _armed_line(ctx: GitContext) -> str:
     return line
 
 
+def _knowledge_line(ctx: GitContext) -> str:
+    """Say so when this repository has no knowledge layer. Once, and then never.
+
+    `Setup` fires on `--init`, and `claude-bp status` is a command the founder runs, so on
+    the ordinary install path nothing ever told a session the layer was missing. Verified:
+    a fresh session on a fresh repository went and edited code, and the layer was still
+    absent afterwards — the mechanism that asks the founder the three things only they know
+    was correct and never reached.
+
+    Costs nothing after the layer exists, which is every session but the first few.
+    """
+    if onboard.present(ctx):
+        return ""
+    return (
+        "\nno knowledge layer here yet: run `claude-bp init`, then ASK THE FOUNDER for the "
+        "placeholders it leaves — what this is, who it is for, its non-goals. Those cannot "
+        "be derived from code and must not be invented."
+    )
+
+
 def main() -> None:
     event = hookio.read_event()
     ctx = hookio.repo(event.cwd or os.getcwd())
@@ -118,6 +138,7 @@ def main() -> None:
     body += f"\nstage: {resolved_stage} (computed from the repository, not configured)"
     body += "\n" + _autonomy_line(config.load(ctx).autonomy)
     body += _armed_line(ctx)
+    body += _knowledge_line(ctx)
 
     hookio.emit_context("SessionStart", body)
 

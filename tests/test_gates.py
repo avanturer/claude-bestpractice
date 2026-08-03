@@ -558,3 +558,32 @@ class TestDoctorAndReindex(GateCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheBoardAsksForWhatOnlyAFounderKnows(GateCase):
+    """The layer that asks the founder three questions was never reached.
+
+    `Setup` fires on `--init`; `claude-bp status` is a command the founder runs. On the
+    ordinary install path nothing told a session the knowledge layer was missing.
+    Verified before this existed: a fresh session on a fresh repository went and edited
+    code, and the layer was still absent afterwards.
+    """
+
+    def board(self) -> str:
+        proc = self.run_hook(
+            "session-start", {"session_id": "b1", "hook_event_name": "SessionStart"}
+        )
+        return proc.stdout
+
+    def test_a_repository_without_a_layer_is_told_so(self):
+        out = self.board()
+        self.assertIn("no knowledge layer here yet", out)
+        self.assertIn("claude-bp init", out)
+        self.assertIn("ASK THE FOUNDER", out, "it must not be left to guess them")
+
+    def test_a_repository_with_a_layer_hears_nothing(self):
+        """It is one line on the first sessions and silence forever after."""
+        from claude_bestpractice import onboard
+
+        onboard.write(self.ctx())
+        self.assertNotIn("no knowledge layer here yet", self.board())
