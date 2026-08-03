@@ -195,9 +195,19 @@ class TestGates(unittest.TestCase):
 
 
 class TestConfigDetection(RepoCase):
-    def test_detects_pytest_from_a_tests_directory(self):
-        (self.repo / "tests").mkdir()
+    def test_detects_pytest_from_python_test_files(self):
+        """A file, not a directory name — this assertion used to encode the defect.
+
+        It asserted that an empty directory called `tests` meant pytest, which is what
+        baked `python3 -m pytest -q` into Jekyll's pre-push hook and refused every push
+        out of a Ruby repository.
+        """
+        self.write("tests/test_thing.py", "def test_x():\n    assert True\n")
         self.assertEqual(config.detect_test_command(self.repo)[:3], ["python3", "-m", "pytest"])
+
+    def test_an_empty_tests_directory_is_not_evidence_of_python(self):
+        (self.repo / "tests").mkdir()
+        self.assertEqual([], config.detect_test_command(self.repo))
 
     def test_detects_cargo(self):
         self.write("Cargo.toml", "[package]\nname='x'\n")
