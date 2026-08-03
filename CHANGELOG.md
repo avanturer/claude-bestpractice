@@ -106,6 +106,22 @@ of that repository was refused, permanently, over a command naming no file in it
 cloning eleven real repositories across six ecosystems, installing into each, and pushing.
 A language is now inferred from test files, not from a directory name.
 
+**Nothing ever told a session the knowledge layer was missing.** The layer exists to ask
+the founder the three things only they know — what this is, who it is for, its non-goals.
+`Setup` fires on `--init` and `claude-bp status` is a command the founder runs, so on the
+ordinary install path the question was never asked. Verified: a fresh session on a fresh
+repository, told only "get started", went and edited code and left the layer absent. It now
+runs `claude-bp init` itself and asks the five questions in plain language.
+
+**`adopt` wrote a dead product name into your own settings.** The quarantine key was
+`_founderOsQuarantined`, a name this project shed before it ever shipped, landing in the
+founder's `.claude/settings.json` where a reader has no way to tell what wrote it. Found by
+running `adopt` against a realistic competing installation for the first time; an earlier
+grep for the old name had missed it because the identifier is camelCase. Renamed with no
+compatibility path — the rename predates the first release, so no settings file carries the
+old key, and this project's own slop gate refused the compat shim when the fix first tried
+to add one.
+
 **The installer dirtied the clone it was run from.** Run from a clone, `INSTALL_DIR` is
 your own checkout, so `chmod +x plugin/bin/*` chmodded twenty Windows `.cmd` shims and
 `git status` came back dirty the moment the install finished.
@@ -163,4 +179,4 @@ several first-party review paths exist; pick one. Not a task manager — the nat
 system is subsumed and gated, never replaced. No daemon, no vector store, no graph
 database, no second model watching the first.
 
-651 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.
+655 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.
