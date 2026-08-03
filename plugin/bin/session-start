@@ -92,7 +92,32 @@ def _armed_line(ctx: GitContext) -> str:
     armed, note = ci.ensure(ctx)
     if not armed:
         return ""
-    line = "\nchecks now run before every push (`claude-bp-ci off` if you do not want them)"
+
+    # Name what will actually run, or say that nothing will. The line used to read "checks
+    # now run before every push" in every repository — including one with no `make check`
+    # target and no detectable runner, where the hook reaches `claude-bp-ci` and
+    # `claude-bp-doctor` by name, finds neither on a marketplace user's PATH, and exits 0.
+    # A promise larger than the fact is the exact failure this project is written against,
+    # and it was this project making it. Reported from a real install.
+    from claude_bestpractice.config import detect_test_command
+
+    makefile = ctx.worktree_root / "Makefile"
+    if makefile.is_file() and any(
+        line.startswith("check:") for line in makefile.read_text(
+            encoding="utf-8", errors="replace").splitlines()
+    ):
+        what = "`make check`"
+    else:
+        command = detect_test_command(ctx.worktree_root)
+        what = "`" + " ".join(command) + "`" if command else ""
+
+    if not what:
+        return (
+            "\na pre-push hook is installed, but this repository has no `make check` target "
+            "and no detectable test runner, so it will refuse nothing until it does. "
+            "`claude-bp-ci status` to see."
+        )
+    line = f"\n{what} now runs before every push (`claude-bp-ci off` if you do not want it)"
     if "moved to" in note:
         # A file of theirs moved. Chaining it correctly is not a licence to do it silently.
         line += "\n" + note.split("\n", 1)[-1].strip()

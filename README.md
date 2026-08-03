@@ -5,7 +5,7 @@
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
 [![version](https://img.shields.io/badge/version-1.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-655%20passing-2ea44f)](#verified)
+[![tests](https://img.shields.io/badge/tests-660%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-26%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
@@ -31,6 +31,18 @@ From a terminal, the same thing:
 claude plugin marketplace add avanturer/claude-bestpractice
 claude plugin install claude-bestpractice@claude-bestpractice
 ```
+
+If that first line reaches for `git@github.com:` and stops on a missing SSH key, pass the
+URL instead of the shorthand — reported from a real install, where the shorthand resolved
+to SSH on a machine that had no key:
+
+```sh
+claude plugin marketplace add https://github.com/avanturer/claude-bestpractice
+```
+
+One thing that will not fix: a global `url.git@github.com:.insteadOf https://github.com/`
+in your own git config rewrites this URL too. `git config --get-regexp '^url\.'` says
+whether you have one.
 
 Or, to have the gates proven on your machine **before** anything is registered:
 
@@ -298,7 +310,7 @@ against a cap of 400 — roughly 0.1 % of a 200k window.
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 655 tests · 26 doctor checks · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 660 tests · 26 doctor checks · budget
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration

@@ -428,8 +428,22 @@ class TestLookingDoesNotWrite(CICase):
         """The write was not wrong, only its caller. Something must still ratchet."""
         from claude_bestpractice import stage
 
+        self.write("package.json", '{"dependencies": {"stripe": "^14.0.0"}}')
         self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
-        self.assertTrue(stage.recorded_stage(self.ctx()), "nothing recorded the stage")
+        self.assertEqual(stage.recorded_stage(self.ctx()), stage.REVENUE)
+
+    def test_a_session_start_leaves_a_prototype_clean_too(self):
+        """`status` was fixed and the gates were not, so the file came back anyway.
+
+        Reported from a real install: `git status` in a repository that had done nothing
+        but start a session came back with `?? .claude/claude-bestpractice/stage/`. The
+        floor marker records a stage nothing can regress below, so it was pure residue.
+        """
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
+        self.assertEqual(
+            "", git(["status", "--porcelain", "--untracked-files=all"], self.repo).strip(),
+            "a session start dirtied the working tree",
+        )
 
 
 class TestTheGateArmsItself(CICase):
@@ -493,12 +507,44 @@ class TestTheGateArmsItself(CICase):
         """
         from claude_bestpractice import ci
 
+        self.write("tests/test_x.py", "def test_x():\n    assert True\n")
         proc = self.run_hook(
             "session-start", {"session_id": "s1", "hook_event_name": "SessionStart"}
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertTrue(ci.installed(self.ctx()), "a session started and left the push path open")
         self.assertIn("before every push", proc.stdout)
+
+    def test_the_line_names_the_command_it_is_promising(self):
+        """"Checks now run" is not checkable, and the founder cannot tell which checks."""
+        self.write("tests/test_x.py", "def test_x():\n    assert True\n")
+        proc = self.run_hook(
+            "session-start", {"session_id": "s1", "hook_event_name": "SessionStart"}
+        )
+        self.assertIn("pytest", proc.stdout)
+
+    def test_a_make_check_target_is_named_ahead_of_the_runner(self):
+        self.write("Makefile", "check:\n\t@echo ok\n")
+        self.write("tests/test_x.py", "def test_x():\n    assert True\n")
+        proc = self.run_hook(
+            "session-start", {"session_id": "s1", "hook_event_name": "SessionStart"}
+        )
+        self.assertIn("make check", proc.stdout)
+        self.assertNotIn("pytest", proc.stdout)
+
+    def test_it_does_not_promise_a_check_that_will_not_run(self):
+        """The board said "checks now run before every push" in every repository.
+
+        Including one with no `make check` target and no detectable runner, where the
+        hook reaches `claude-bp-ci` by name, does not find it on a marketplace user's
+        PATH, and exits 0. A promise larger than the fact is the exact failure this
+        project is written against, and it was this project making it.
+        """
+        proc = self.run_hook(
+            "session-start", {"session_id": "s1", "hook_event_name": "SessionStart"}
+        )
+        self.assertNotIn("before every push", proc.stdout)
+        self.assertIn("refuse nothing", proc.stdout)
 
     def test_the_session_start_gate_honours_the_optout(self):
         from claude_bestpractice import ci

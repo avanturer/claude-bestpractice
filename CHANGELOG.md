@@ -126,7 +126,26 @@ to add one.
 your own checkout, so `chmod +x plugin/bin/*` chmodded twenty Windows `.cmd` shims and
 `git status` came back dirty the moment the install finished.
 
-**Also.** `claude plugin update <name>` fails with `Plugin not found` while the plugin is
+**Starting a session dirtied your working tree.** `status` was fixed for this and the
+gates were not, so `.claude/claude-bestpractice/stage/reached-prototype.json` came back
+untracked in every repository that had done nothing but start a session. `prototype` is
+the floor, order 0, so that marker could never hold a ratchet — there is nothing below it
+to regress to. It was pure residue, and it landed in a repository whose own rules require
+`git status` to be clean. Nothing is written at the floor now. A marker above it is real
+state, and is yours to commit.
+
+**The board promised a check that would not run.** The line arming the push gate read
+"checks now run before every push" in every repository — including one with no `make check`
+target and no detectable runner, where the hook reaches `claude-bp-ci` by name, does not
+find it on a marketplace user's PATH, and exits 0. A promise larger than the fact is the
+exact failure this project is written against, and this was the project making it. The line
+now names the command it means — `make check`, or the runner that was detected — or says
+plainly that the hook will refuse nothing until this repository has one.
+
+**Also.** `claude plugin marketplace add <owner>/<repo>` resolved to `git@github.com:` on a
+machine with no SSH key and stopped there, so the README now gives the HTTPS URL to pass
+instead — and says what that does not fix, which is a global `insteadOf` rewrite in your own
+git config. `claude plugin update <name>` fails with `Plugin not found` while the plugin is
 installed — `update` needs the qualified `name@marketplace` form where `install` does not,
 so the README documents the one that works. `reaped.jsonl` was the only structure in Tier B
 that never shrank and is now capped. And earlier rounds fixed: a green finish certified
@@ -179,4 +198,4 @@ several first-party review paths exist; pick one. Not a task manager — the nat
 system is subsumed and gated, never replaced. No daemon, no vector store, no graph
 database, no second model watching the first.
 
-655 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.
+660 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.

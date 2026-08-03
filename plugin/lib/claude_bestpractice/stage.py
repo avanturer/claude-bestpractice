@@ -215,7 +215,12 @@ def current(
 
     if record:
         marker = _reached_path(ctx, resolved)
-        if not marker.exists():
+        # Never for the floor. `prototype` is order 0, so a `reached-prototype.json` cannot
+        # prevent a regression — there is nothing below it to regress to — and writing one
+        # put an untracked file into the working tree of every repository that merely
+        # started a session. Reported from a real install where `git status` must be clean.
+        # A marker above the floor is real state, and is yours to commit.
+        if ORDER[resolved] > 0 and not marker.exists():
             # A constant, and deliberately so: anything varying here — a timestamp, a
             # host, a signal dump — reintroduces the conflict this shape exists to remove.
             store.write_json(marker, {"stage": resolved}, mode=0o644)
