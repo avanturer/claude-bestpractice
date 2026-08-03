@@ -184,19 +184,30 @@ It also escalates rather than wedging: after four blocked attempts it records an
 unverified finish and lets the turn end, because a gate that blocks a founder's workflow
 forever is a gate that gets uninstalled.
 
-### Code written for the next model to read
+### Slop caught mechanically — in your repository
 
-Docstrings must carry non-derivable information. `Args:` / `Returns:` / `:param:` are
-banned outright — types already say it. A signature change with an unchanged docstring
-**fails the commit**.
+On the lines this turn added, the commit reviewer flags seven classes: swallowed
+exceptions, bare excepts, debug leftovers, disabled verification, skipped tests, shell
+injection and SQL interpolation — plus anything shaped like a credential. Pre-existing
+matches are ignored, so it never bills you for someone else's history.
+
+It **reports**, it does not block. A reviewer that refuses a commit over style is a
+reviewer you switch off in a week, and a switched-off reviewer catches nothing.
+
+### And the stricter rules, which are this project's own
+
+`Args:` / `Returns:` / `:param:` banned outright because types already say it; a signature
+change with an unchanged docstring failing the build; single-caller abstractions, compat
+shims with no consumers, duplicate blocks and unused parameters at a permanent budget of
+zero; complexity and length ratcheted downward only.
+
+**Those run against this repository, not against yours.** They live in `tools/` and are
+enforced by this project's own `make check`. They are here to be read, checked against the
+source you are about to install, and copied if you want them — not because your code is
+exempt, but because a plugin that imposed its author's style on your build is a plugin
+that gets uninstalled on day one.
 
 > If you are about to write a comment describing what a value is, write a type instead.
-
-### Slop caught mechanically
-
-Swallowed exceptions, single-caller abstractions, compat shims with no consumers,
-duplicate blocks, unused parameters — **permanent budget of zero**. Complexity and
-length are ratcheted: baselined once, then only downward.
 
 ### Rigor that scales itself
 
