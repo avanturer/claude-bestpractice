@@ -98,6 +98,14 @@ knowledge layer` on a repository where the layer had never been built, and named
 command while doing it. `init` listed `entities.yaml` under **derived from your code** over
 a file whose entire content is `No types were central enough to derive automatically`.
 
+**A Ruby project could not push at all.** The fallback that guesses a test command asked
+whether a directory named `test` or `tests` existed and concluded Python. Jekyll, gson and
+guzzle each have one and none of them is Python, so `python3 -m pytest -q` went into a Ruby
+repository's push hook — and pytest exits 5 for "no tests ran", which meant every push out
+of that repository was refused, permanently, over a command naming no file in it. Found by
+cloning eleven real repositories across six ecosystems, installing into each, and pushing.
+A language is now inferred from test files, not from a directory name.
+
 **The installer dirtied the clone it was run from.** Run from a clone, `INSTALL_DIR` is
 your own checkout, so `chmod +x plugin/bin/*` chmodded twenty Windows `.cmd` shims and
 `git status` came back dirty the moment the install finished.
@@ -155,4 +163,4 @@ several first-party review paths exist; pick one. Not a task manager — the nat
 system is subsumed and gated, never replaced. No daemon, no vector store, no graph
 database, no second model watching the first.
 
-645 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.
+651 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.

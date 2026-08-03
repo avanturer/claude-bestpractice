@@ -137,10 +137,27 @@ def detect_test_command(root: Path) -> list[str]:
 
 
 def _has_tests(root: Path) -> bool:
-    for candidate in ("tests", "test"):
-        if (root / candidate).is_dir():
-            return True
-    return any(root.glob("test_*.py")) or any(root.glob("*_test.py"))
+    """Python test FILES, not merely a directory named `test`.
+
+    A directory called `test` or `tests` says nothing about language. Jekyll, gson and
+    guzzle each have one and none of them is Python, and matching on the name alone baked
+    `python3 -m pytest -q` into a Ruby project's pre-push hook. pytest exits 5 for "no
+    tests ran", so every push out of that repository was refused — permanently, over a
+    command naming no file in it. Found by installing into eleven real repositories and
+    pushing from each.
+    """
+    for pattern in (
+        "test_*.py", "*_test.py",
+        "tests/**/test_*.py", "tests/**/*_test.py",
+        "test/**/test_*.py", "test/**/*_test.py",
+        "*/tests/**/test_*.py", "src/**/test_*.py",
+    ):
+        try:
+            if any(root.glob(pattern)):
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def _make_has_test(root: Path) -> bool:

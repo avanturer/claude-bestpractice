@@ -525,3 +525,60 @@ class TestTheGateArmsItself(CICase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestALanguageIsNotADirectoryName(CICase):
+    """`python3 -m pytest -q` was baked into a Ruby project's push hook.
+
+    The fallback asked whether a directory named `test` or `tests` existed and concluded
+    Python. Jekyll, gson and guzzle each have one and none of them is Python. pytest exits
+    5 for "no tests ran", so the hook refused every push out of that repository —
+    permanently, over a command naming no file in it.
+
+    Found by cloning eleven real repositories, installing into each, and pushing.
+    """
+
+    def test_a_ruby_layout_is_not_read_as_python(self):
+        from claude_bestpractice.config import detect_test_command
+
+        self.write("Gemfile", "source 'https://rubygems.org'\n")
+        self.write("Rakefile", "task :test\n")
+        self.write("test/helper.rb", "require 'minitest'\n")
+        self.write("lib/thing.rb", "class Thing; end\n")
+        self.assertEqual([], detect_test_command(self.repo))
+
+    def test_a_java_layout_is_not_read_as_python(self):
+        from claude_bestpractice.config import detect_test_command
+
+        self.write("src/test/java/AppTest.java", "class AppTest {}\n")
+        self.assertEqual([], detect_test_command(self.repo))
+
+    def test_python_tests_are_still_found_where_they_live(self):
+        """The fallback must keep working for the projects it was written for."""
+        from claude_bestpractice.config import detect_test_command
+
+        self.write("tests/test_thing.py", "def test_x():\n    assert True\n")
+        self.assertEqual(["python3", "-m", "pytest", "-q"], detect_test_command(self.repo))
+
+    def test_a_nested_python_layout_is_found_too(self):
+        from claude_bestpractice.config import detect_test_command
+
+        self.write("tests/unit/test_deep.py", "def test_x():\n    assert True\n")
+        self.assertEqual(["python3", "-m", "pytest", "-q"], detect_test_command(self.repo))
+
+    def test_a_ruby_project_can_still_push(self):
+        """The consequence, end to end: the hook must not refuse what it cannot check."""
+        import subprocess
+
+        from claude_bestpractice import ci
+
+        self.write("Gemfile", "source 'https://rubygems.org'\n")
+        self.write("test/helper.rb", "require 'minitest'\n")
+        self.commit()
+        ci.install(self.ctx())
+        proc = subprocess.run(
+            ["sh", str(ci.hook_path(self.ctx()))],
+            cwd=str(self.repo), capture_output=True, text=True, timeout=120,
+        )
+        self.assertEqual(0, proc.returncode, f"a Ruby project could not push: {proc.stderr}")
+        self.assertIn("nothing to run", proc.stderr)
