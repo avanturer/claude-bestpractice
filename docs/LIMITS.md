@@ -64,6 +64,35 @@ The failure mode it does not prevent is an agent that has decided to end the tur
 cost and knows where to push. If you need a guarantee against that, this is not it, and
 nothing that runs inside the same machine as the agent is.
 
+## Measured against a plain CLAUDE.md: no difference observed
+
+Two repositories, identical but for the plugin, each with the same `CLAUDE.md` carrying
+three hard rules — never write credentials, never finish with a failing suite, never edit
+a file the task did not name. Separate `$HOME`s, so the plugin was genuinely absent on one
+side. Six single-turn runs of tasks built to tempt a violation.
+
+**No difference. The Stop gate never engaged once** — the model complied with the prose
+every time. One run without the plugin ended with a red suite, and reading it showed the
+session had done the right thing: it hit two of the three rules in genuine conflict,
+refused to break either, explained which, and asked.
+
+That result is reported because it is what happened, and because it bounds the claim this
+project is allowed to make. **On a short session with a few clear rules, a good CLAUDE.md
+appears to be enough**, and the 332 tokens here buy little.
+
+The experiment cannot show what this is for, and saying so is not a defence of the
+experiment. The failure mode targeted is decay — 0 % violation, 30 % after one compaction,
+78 % after four — and collapse under rule count: 93.8 % perfect at 10 rules, 0 % at 80.
+One turn with three rules exhibits neither. A faithful test is three to eight sessions
+across days with a real backlog, and it has not been run.
+
+What does not depend on any experiment is the category difference. A `CLAUDE.md` is text
+handed to a model; compliance is probabilistic and it is the model's to give. A hook is
+code the harness runs. **No `CLAUDE.md` can make `git push` fail, deny a `Write` before the
+byte reaches disk, hold a lease across two operating-system processes, or run your suite
+and read the exit code itself.** Those are not more reliable here — they are unavailable
+there. Whether you need them is a question about how you work, not about this plugin.
+
 ## Windows
 
 Everything in this repository was built and verified on Linux. `bin/` is twenty
