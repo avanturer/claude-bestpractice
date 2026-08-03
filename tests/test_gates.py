@@ -587,3 +587,44 @@ class TestTheBoardAsksForWhatOnlyAFounderKnows(GateCase):
 
         onboard.write(self.ctx())
         self.assertNotIn("no knowledge layer here yet", self.board())
+
+
+class TestAdoptDoesNotWriteADeadProductNameIntoYourSettings(GateCase):
+    """The quarantine key was `_founderOsQuarantined` — a name this project shed.
+
+    It lands in the founder's own `.claude/settings.json`, where a reader has no way to
+    tell what wrote it or what it belongs to. Found by running `adopt` against a realistic
+    competing installation for the first time; a grep for the old name had missed it
+    because the identifier is camelCase.
+    """
+
+    def settings(self) -> dict:
+        import json
+
+        return json.loads((self.repo / ".claude" / "settings.json").read_text())
+
+    def contested(self) -> None:
+        import json
+
+        path = self.repo / ".claude" / "settings.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"hooks": {
+            "SessionStart": [{"hooks": [{"type": "command", "command": "./theirs.sh"}]}],
+            "PostToolUse": [{"hooks": [{"type": "command", "command": "./log.sh"}]}],
+        }}))
+
+    def test_the_key_names_this_project(self):
+        from claude_bestpractice import conflicts
+
+        self.contested()
+        conflicts.quarantine_loose_hooks(self.ctx())
+        keys = [k for k in self.settings() if k != "hooks"]
+        self.assertEqual([conflicts.QUARANTINE_KEY], keys)
+        self.assertNotIn("founderOs", keys[0])
+
+    def test_an_uncontested_event_is_left_alone(self):
+        from claude_bestpractice import conflicts
+
+        self.contested()
+        conflicts.quarantine_loose_hooks(self.ctx())
+        self.assertEqual(["PostToolUse"], list(self.settings()["hooks"].keys()))

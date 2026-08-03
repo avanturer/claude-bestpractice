@@ -32,7 +32,13 @@ from pathlib import Path
 from . import store
 from .gitctx import GitContext
 
-QUARANTINE_KEY = "_founderOsQuarantined"
+# Written into the founder's own `.claude/settings.json`, so it has to name the thing
+# that wrote it. It said `_founderOsQuarantined` — a name this project shed before it ever
+# shipped, leaving a reader of their own configuration with no way to tell what put it
+# there. No legacy reader: the rename predates the first release, so no settings file
+# anywhere carries the old key, and a compat path for a format that never shipped is what
+# this project's own slop gate refuses — as it did, when this fix first tried to add one.
+QUARANTINE_KEY = "_claudeBestpracticeQuarantined"
 SETTINGS_FILES = (".claude/settings.json", ".claude/settings.local.json")
 
 # Tools that own the same territory. Presence is not a problem by itself; two systems
