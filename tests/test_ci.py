@@ -587,6 +587,70 @@ class TestTheGateArmsItself(CICase):
         )
         self.assertNotIn("before every push", second.stdout)
 
+    def age_the_hook(self) -> None:
+        """Restamp the installed hook as if an older plugin had written it."""
+        from claude_bestpractice import __version__, ci
+
+        path = ci.hook_path(self.ctx())
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                f"{ci.STAMP} {__version__}", f"{ci.STAMP} 0.9.0"),
+            encoding="utf-8",
+        )
+
+    def test_an_older_hook_is_updated_by_the_new_plugin(self):
+        """The hook was written once and then never again, so every fix to it reached new
+        repositories only. v1.0.0 shipped a serious one — an `exit 0` where a project WITH
+        a suite pushed with nothing run — and anyone already using the plugin kept the
+        buggy hook forever, with no way to know. Updating the plugin has to update what
+        the plugin installed.
+        """
+        from claude_bestpractice import __version__, ci
+
+        ci.ensure(self.ctx())
+        self.age_the_hook()
+        self.assertEqual(ci.stamped_version(self.ctx()), "0.9.0")
+
+        changed, note = ci.ensure(self.ctx())
+        self.assertTrue(changed)
+        self.assertEqual(note, "refreshed")
+        self.assertEqual(ci.stamped_version(self.ctx()), __version__)
+
+    def test_a_current_hook_is_left_alone(self):
+        """Rewriting it every session start would churn a file the founder may have read."""
+        from claude_bestpractice import ci
+
+        ci.ensure(self.ctx())
+        before = ci.hook_path(self.ctx()).read_text(encoding="utf-8")
+        self.assertEqual(ci.ensure(self.ctx()), (False, ""))
+        self.assertEqual(ci.hook_path(self.ctx()).read_text(encoding="utf-8"), before)
+
+    def test_refreshing_does_not_eat_the_hook_it_displaced(self):
+        """`install()` moves whatever is at this path aside and chains it. Reusing that
+        path on a refresh would move OUR hook onto the founder's husky script — the one
+        thing this module has always refused to do."""
+        from claude_bestpractice import __version__, ci
+
+        theirs = ci.hooks_dir(self.ctx())
+        theirs.mkdir(parents=True, exist_ok=True)
+        (theirs / "pre-push").write_text("#!/bin/sh\necho theirs\n", encoding="utf-8")
+        ci.ensure(self.ctx())
+
+        displaced = theirs / ci.DISPLACED_NAME
+        self.assertIn("echo theirs", displaced.read_text(encoding="utf-8"))
+
+        self.age_the_hook()
+        ci.ensure(self.ctx())
+        self.assertIn("echo theirs", displaced.read_text(encoding="utf-8"))
+
+    def test_an_optout_still_beats_a_refresh(self):
+        from claude_bestpractice import ci
+
+        ci.ensure(self.ctx())
+        ci.remove(self.ctx())
+        self.assertEqual(ci.ensure(self.ctx())[0], False)
+        self.assertFalse(ci.installed(self.ctx()))
+
     def test_the_optout_is_not_committed(self):
         """One machine's opt-out must not travel to every checkout of the branch."""
         from claude_bestpractice import ci

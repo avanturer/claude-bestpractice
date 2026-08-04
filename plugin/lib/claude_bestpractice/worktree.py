@@ -120,6 +120,39 @@ def record(ctx: GitContext, slug: str, absolute: str, branch: str, trusted: bool
     return body
 
 
+# Conventional Commits types, keyed by what the founder actually types. Russian included
+# because that is what they write, and a plugin that only understands English instructions
+# would silently label every one of their branches `feat/`.
+#
+# Order matters: the first type whose word appears wins, so the more specific verbs are
+# checked before the general ones. Anything unrecognised is `feat`, which is the honest
+# default — not knowing is not a reason to guess `chore`.
+_BRANCH_TYPES = (
+    ("fix", ("fix", "repair", "bug", "broken", "почини", "исправ", "поправ", "фикс", "чини")),
+    ("docs", ("docs", "doc ", "readme", "changelog", "документ", "доки", "докум")),
+    ("refactor", ("refactor", "rewrite", "clean up", "cleanup", "рефактор", "перепиш", "почист")),
+    ("test", ("test", "coverage", "тест", "покрой", "покрыт")),
+    ("perf", ("perf", "optimi", "faster", "speed up", "ускор", "оптимиз", "производительн")),
+    ("chore", ("bump", "upgrade dep", "dependenc", "зависимост")),
+)
+
+DEFAULT_BRANCH_TYPE = "feat"
+
+
+def branch_type(task: str) -> str:
+    """The `<type>` half of `<type>/<topic>`, read off the instruction.
+
+    Every branch was `feat/` regardless of what the session was asked to do, which is a
+    convention this plugin was imposing rather than following. Reported by a founder whose
+    project uses the ordinary `<type>/<topic>` shape.
+    """
+    lowered = task.lower()
+    for name, words in _BRANCH_TYPES:
+        if any(word in lowered for word in words):
+            return name
+    return DEFAULT_BRANCH_TYPE
+
+
 def session_slug(task: str, session_id: str) -> str:
     """Task-derived, and unique per session — because sharing one is the whole failure.
 
@@ -219,15 +252,16 @@ def provision(ctx: GitContext, task: str = "", session_id: str = "") -> Path | N
     gate over a convenience.
     """
     slug = session_slug(task, session_id)
+    branch = f"{branch_type(task)}/{slug}"
     target = target_for(ctx, slug)
     absolute = str(target)
 
     if target.is_dir():
-        record(ctx, slug, absolute, f"feat/{slug}", trust(absolute), session_id)
+        record(ctx, slug, absolute, branch, trust(absolute), session_id)
         return target
 
     proc = subprocess.run(
-        ["git", "worktree", "add", "-b", f"feat/{slug}", absolute],
+        ["git", "worktree", "add", "-b", branch, absolute],
         cwd=str(ctx.worktree_root), capture_output=True,
         encoding="utf-8", errors="surrogateescape", timeout=120,
     )
@@ -235,12 +269,12 @@ def provision(ctx: GitContext, task: str = "", session_id: str = "") -> Path | N
         # A branch of that name already exists is the common one, and it is recoverable:
         # attach a worktree to the branch instead of creating it again.
         attach = subprocess.run(
-            ["git", "worktree", "add", absolute, f"feat/{slug}"],
+            ["git", "worktree", "add", absolute, branch],
             cwd=str(ctx.worktree_root), capture_output=True,
             encoding="utf-8", errors="surrogateescape", timeout=120,
         )
         if attach.returncode != 0:
             return None
 
-    record(ctx, slug, absolute, f"feat/{slug}", trust(absolute), session_id)
+    record(ctx, slug, absolute, branch, trust(absolute), session_id)
     return target

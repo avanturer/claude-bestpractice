@@ -1,5 +1,61 @@
 # Changelog
 
+## v1.0.8
+
+Two things: branches follow your convention instead of this plugin's, and **updating the
+plugin on a repository that is already using it is now something this suite proves rather
+than something nobody checks.**
+
+### `<type>/<topic>`, read off the instruction
+
+Every branch was `feat/` regardless of what the session had been asked to do — a convention
+this plugin was imposing rather than following. The type now comes from the prompt, in
+Russian as well as English, because understanding only English would label a Russian
+founder's entire history `feat`:
+
+| prompt | branch |
+|---|---|
+| `почини парсер штрихкодов` | `fix/pochini-parser-shtrikhkodov-…` |
+| `отрефактори модуль оплаты` | `refactor/otrefaktori-modul-oplaty-…` |
+| `обнови readme` | `docs/obnovi-readme-…` |
+| `напиши тесты` | `test/napishi-testy-…` |
+| `ускорь запрос` | `perf/uskor-zapros-…` |
+| `добавь csv экспорт` | `feat/dobav-csv-eksport-…` |
+
+Unrecognised means `feat`, which is the honest default — not knowing is not a reason to
+guess `chore`.
+
+### An upgrade could not update the hook it had installed
+
+`ci.ensure` skipped the moment it found a hook, so the body was written once and **never
+again**. Every fix to it reached new repositories only. v1.0.0 shipped a serious one — an
+`exit 0` where a project *with* a suite pushed with nothing run — and anyone already using
+the plugin kept the broken hook indefinitely, with no way to find out.
+
+The hook now carries the version that wrote it and is rewritten in place when that is
+older. In place, and only over our own file: `install()` displaces whatever was at that
+path into `pre-push.claude-bestpractice-original` and chains it, so reusing that path on a
+refresh would move our hook onto the founder's husky script — the one thing this module has
+always refused to do. Asserted directly. An opt-out still beats a refresh, and a
+current hook is left untouched rather than rewritten every session start.
+
+### Every released version's state, read by the code that is here now
+
+The method that has failed in this project every single time is reading the code and
+reasoning about whether it is fine. So this does the other thing.
+
+`tests/test_upgrade_compat.py` checks out **each released tag**, runs *that* version's hooks
+against a real repository to produce state in that version's own format, then points the
+**current** hooks at the result and requires the board to render and the gates to still
+fire. Nothing in it is a hand-written fixture: a fixture is a belief about what v1.0.2
+wrote, and v1.0.2 is what v1.0.2 wrote.
+
+All eight releases pass. From here, an upgrade that would break a repository already using
+the plugin fails the build instead — and it costs one more test to keep that true for every
+release after this one, which is the point.
+
+720 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.
+
 ## v1.0.7
 
 **The sweep said nothing.** Reported from a real run of v1.0.6: six worktrees became five

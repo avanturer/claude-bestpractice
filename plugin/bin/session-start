@@ -92,6 +92,14 @@ def _armed_line(ctx: GitContext) -> str:
     armed, note = ci.ensure(ctx)
     if not armed:
         return ""
+    if note == "refreshed":
+        # A different fact from arming, and saying "now runs before every push" here would
+        # be false — it already did. What changed is that it is no longer the old version's
+        # copy, which matters because one of those had an `exit 0` in it.
+        return (
+            "\nthe pre-push hook was updated to this version of the plugin "
+            "(`claude-bp-ci status` to see what it runs)"
+        )
 
     # Name what will actually run, or say that nothing will. The line used to read "checks
     # now run before every push" in every repository — including one with no `make check`

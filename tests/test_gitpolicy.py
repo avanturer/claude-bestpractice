@@ -349,6 +349,32 @@ class TestWorktreeNamesAndCleanup(PolicyCase):
         self.assertEqual(worktree.slugify(".git/config"), "git-config")
         self.assertEqual(worktree.slugify("--force"), "force")
 
+    def test_the_branch_type_follows_the_instruction(self):
+        """Every branch was `feat/` whatever the session was asked to do — a convention
+        this plugin imposed rather than followed. Russian included, because that is what
+        this founder types, and understanding only English would label all of it `feat`."""
+        from claude_bestpractice import worktree
+
+        for task, expected in (
+            ("почини парсер штрихкодов", "fix"),
+            ("fix the barcode parser", "fix"),
+            ("добавь csv экспорт", "feat"),
+            ("add csv export", "feat"),
+            ("отрефактори модуль оплаты", "refactor"),
+            ("обнови readme", "docs"),
+            ("напиши тесты", "test"),
+            ("ускорь запрос", "perf"),
+            ("", "feat"),
+        ):
+            self.assertEqual(worktree.branch_type(task), expected, task)
+
+    def test_the_provisioned_branch_carries_that_type(self):
+        from claude_bestpractice import worktree
+
+        worktree.provision(self.ctx(), "почини парсер", "s1")
+        branches = git(["branch", "--format=%(refname:short)"], self.repo)
+        self.assertIn("fix/pochini-parser-", branches)
+
     def test_two_sessions_never_share_a_tree(self):
         """The last remaining path to the failure this whole subsystem exists to prevent.
 
