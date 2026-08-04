@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import board, ci, config, hookio, onboard, sessions, stage, store, upgrade  # noqa: E402
+from claude_bestpractice import board, ci, config, hookio, onboard, sessions, stage, store, upgrade, worktree  # noqa: E402
 from claude_bestpractice.gitctx import GitContext, resolve, stash_baseline  # noqa: E402
 
 
@@ -155,6 +155,13 @@ def main() -> None:
     sessions.register(ctx, me)
 
     others = sessions.live_sessions(ctx, exclude=me.session_id)
+
+    # The plugin creates worktrees unasked, so clearing away the ones nobody is in is the
+    # plugin's job too — nine accumulated on one repository in a single run, each an empty
+    # branch over an empty directory. Only trees it provisioned, only for sessions that are
+    # gone, and only via `git worktree remove` and `git branch -d`, both of which refuse
+    # rather than destroy when there is anything there.
+    worktree.reap_unused(ctx, {rec.session_id for rec in others} | {me.session_id})
     leases = {rec.session_id: sessions.leases_held_by(ctx, rec.session_id) for rec in others}
 
     resolved_stage, _signals = stage.current(ctx, config.load(ctx).stage_override)

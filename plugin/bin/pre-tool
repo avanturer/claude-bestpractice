@@ -456,7 +456,7 @@ def main() -> None:
     # this gate fires on things that do not matter.
     ours = [p for p in absolute if gitpolicy.owned_by_session(ctx, p)]
     if writing and ours and (cfg.require_worktree or cfg.protect_trunk):
-        breaches = gitpolicy.violations(ctx, rec.task_statement)
+        breaches = gitpolicy.violations(ctx, rec.task_statement, rec.session_id)
         if not cfg.require_worktree:
             breaches = [b for b in breaches if "main checkout" not in b]
         if not cfg.protect_trunk:

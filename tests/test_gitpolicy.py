@@ -47,6 +47,13 @@ class PolicyCase(RepoCase):
         )
         return _verdict(proc)
 
+    def provisioned(self):
+        """The tree the gate made for us. Found by prefix: the name carries a session
+        suffix, because two sessions sharing one tree is the failure this all prevents."""
+        found = [p for p in self.repo.parent.iterdir()
+                 if p.is_dir() and p.name.startswith(f"{self.repo.name}-")]
+        return found[0] if len(found) == 1 else None
+
     def worktree(self, branch: str):
         target = self.repo.parent / f"wt-{branch.replace('/', '-')}"
         subprocess.run(
@@ -74,8 +81,8 @@ class TestWorktreeIsMandatory(PolicyCase):
         decision, reason = self.decision()
         self.assertEqual(decision, "deny")
 
-        made = self.repo.parent / f"{self.repo.name}-work"
-        self.assertTrue(made.is_dir(), "the refusal did not create the worktree it names")
+        made = self.provisioned()
+        self.assertIsNotNone(made, "the refusal did not create the worktree it names")
         self.assertIn(str(made), reason)
         self.assertIn(f"cd {made}", reason)
 
@@ -88,7 +95,7 @@ class TestWorktreeIsMandatory(PolicyCase):
         """Otherwise a session refused twice accumulates worktrees it never asked for."""
         self.decision()
         _, reason = self.decision()
-        made = self.repo.parent / f"{self.repo.name}-work"
+        made = self.provisioned()
         self.assertIn(str(made), reason)
         siblings = [p for p in self.repo.parent.iterdir() if p.name.startswith(f"{self.repo.name}-")]
         self.assertEqual(len(siblings), 1, siblings)
@@ -96,7 +103,7 @@ class TestWorktreeIsMandatory(PolicyCase):
     def test_the_created_worktree_is_outside_the_repository(self):
         """One inside the working tree shows up in every status, glob and scan."""
         self.decision()
-        made = self.repo.parent / f"{self.repo.name}-work"
+        made = self.provisioned()
         self.assertFalse(str(made).startswith(str(self.repo) + "/"))
         self.assertEqual(git(["status", "--porcelain"], self.repo).strip(), "")
 
@@ -306,6 +313,105 @@ class TestGitItselfReachesIntoOtherTrees(PolicyCase):
             mine = self.worktree("feat/mine")
             command = f"""python3 -c "open('{Path(tmp) / 'x.txt'}','w').write('x')" """
             self.assertEqual(self.bash(mine, command)[0], "allow")
+
+
+class TestWorktreeNamesAndCleanup(PolicyCase):
+    """Three findings from a real run, all of them about what provisioning leaves behind."""
+
+    def test_a_slug_is_always_ascii(self):
+        """`str.isalnum()` is true for Cyrillic, so a Russian prompt produced a Cyrillic
+        directory AND a Cyrillic branch. Git takes both, and then the branch reaches the
+        remote on the first push, `git worktree list` prints it octal-escaped, and macOS
+        normalises the directory name differently from Linux."""
+        from claude_bestpractice import worktree
+
+        for text in ("почини парсер штрихкодов", "🚀🎉", "日本語のみ", "ok fine"):
+            self.assertTrue(worktree.slugify(text).isascii(), text)
+
+    def test_cyrillic_is_transliterated_rather_than_dropped(self):
+        """A branch called `work` says nothing, and this founder writes Russian prompts."""
+        from claude_bestpractice import worktree
+
+        self.assertEqual(
+            worktree.slugify("почини парсер штрихкодов"), "pochini-parser-shtrikhkodov"
+        )
+
+    def test_a_script_with_no_transliteration_falls_back(self):
+        from claude_bestpractice import worktree
+
+        self.assertEqual(worktree.slugify("日本語のみ"), "work")
+        self.assertEqual(worktree.slugify(""), "work")
+
+    def test_hostile_input_cannot_escape_the_name(self):
+        from claude_bestpractice import worktree
+
+        self.assertEqual(worktree.slugify("../../../../tmp/pwned"), "tmp-pwned")
+        self.assertEqual(worktree.slugify(".git/config"), "git-config")
+        self.assertEqual(worktree.slugify("--force"), "force")
+
+    def test_two_sessions_never_share_a_tree(self):
+        """The last remaining path to the failure this whole subsystem exists to prevent.
+
+        Two sessions with no recorded prompt both slugged to `work`, and two given the same
+        instruction both slugged the same — and `provision` returns an existing directory,
+        so the second would have been sent into the first one's tree BY THE GATE. Reported
+        as a naming nit; it is the silent overwrite, arrived at from the other side.
+        """
+        from claude_bestpractice import worktree
+
+        self.assertNotEqual(worktree.session_slug("", "A"), worktree.session_slug("", "B"))
+        self.assertNotEqual(
+            worktree.session_slug("add csv export", "A"),
+            worktree.session_slug("add csv export", "B"),
+        )
+
+    def test_the_same_session_keeps_its_tree(self):
+        from claude_bestpractice import worktree
+
+        self.assertEqual(worktree.session_slug("add csv", "A"), worktree.session_slug("add csv", "A"))
+
+    def test_an_abandoned_empty_tree_is_reaped(self):
+        """One per task phrasing, left behind even when the refusal was the only thing that
+        ever happened — nine on one repository in a single run. The plugin made them
+        unasked, so removing them is the plugin's job too."""
+        from claude_bestpractice import worktree
+
+        ctx = self.ctx()
+        made = worktree.provision(ctx, "abandoned work", "dead-session")
+        self.assertTrue(made.is_dir())
+
+        removed = worktree.reap_unused(ctx, live=set())
+        self.assertEqual(removed, [str(made)])
+        self.assertFalse(made.is_dir())
+        self.assertNotIn("feat/abandoned-work", git(["branch", "--format=%(refname:short)"], self.repo))
+
+    def test_a_tree_holding_work_is_never_reaped(self):
+        """Built out of commands that refuse — `git worktree remove` without `--force` and
+        `git branch -d` — so the safety is git's, not a condition of ours."""
+        from claude_bestpractice import worktree
+
+        ctx = self.ctx()
+        made = worktree.provision(ctx, "real work", "dead-session")
+        (made / "newfile.py").write_text("y = 2\n", encoding="utf-8")
+
+        self.assertEqual(worktree.reap_unused(ctx, live=set()), [])
+        self.assertTrue(made.is_dir())
+
+    def test_a_live_session_keeps_its_tree(self):
+        from claude_bestpractice import worktree
+
+        ctx = self.ctx()
+        made = worktree.provision(ctx, "in progress", "alive")
+        self.assertEqual(worktree.reap_unused(ctx, live={"alive"}), [])
+        self.assertTrue(made.is_dir())
+
+    def test_it_never_touches_a_tree_it_did_not_make(self):
+        """A worktree the founder created by hand is not this plugin's to remove."""
+        from claude_bestpractice import worktree
+
+        theirs = self.worktree("feat/by-hand")
+        self.assertEqual(worktree.reap_unused(self.ctx(), live=set()), [])
+        self.assertTrue(theirs.is_dir())
 
 
 class TestTheTrunkIsProtected(PolicyCase):

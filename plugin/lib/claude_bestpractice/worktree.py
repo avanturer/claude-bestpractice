@@ -18,6 +18,7 @@ do not race on one dev server.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import re
@@ -41,9 +42,35 @@ def derive_db_name(repo_name: str, branch: str) -> str:
     return safe[:60] or "claude_bestpractice_dev"
 
 
+# `str.isalnum()` is true for Cyrillic, so a Russian prompt produced a Cyrillic directory
+# AND a Cyrillic branch. Git accepts both and then: the branch goes to the remote on the
+# first push, `git worktree list` prints it octal-escaped (\320\277\320\276…), and macOS
+# normalises the directory name differently from Linux, so the same repository on two
+# machines disagrees about whether the tree exists. Reported from a real run.
+#
+# Transliterated rather than dropped, because the founder writes Russian prompts and a
+# branch called `work` says nothing. Anything with no ASCII left after this falls back.
+_TRANSLIT = {
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh",
+    "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o",
+    "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f", "х": "kh", "ц": "ts",
+    "ч": "ch", "ш": "sh", "щ": "shch", "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu",
+    "я": "ya",
+}
+
+
 def slugify(text: str, fallback: str = "work") -> str:
-    words = "".join(c.lower() if c.isalnum() else " " for c in text).split()[:5]
-    return "-".join(words) or fallback
+    """An ASCII, git-safe, filesystem-safe slug — or the fallback when nothing survives."""
+    out = []
+    for char in text.lower():
+        if char in _TRANSLIT:
+            out.append(_TRANSLIT[char])
+        elif char.isascii() and char.isalnum():
+            out.append(char)
+        else:
+            out.append(" ")
+    words = "".join(out).split()[:5]
+    return "-".join(words)[:60].strip("-") or fallback
 
 
 def trust(path: str) -> bool:
@@ -76,16 +103,39 @@ def trust(path: str) -> bool:
     return True
 
 
-def record(ctx: GitContext, slug: str, absolute: str, branch: str, trusted: bool) -> dict:
+def record(ctx: GitContext, slug: str, absolute: str, branch: str, trusted: bool,
+           session_id: str = "") -> dict:
     body = {
         "path": absolute,
         "branch": branch,
         "port": derive_port(absolute),
         "database": derive_db_name(ctx.worktree_root.name, slug),
         "trusted": trusted,
+        # Who it was made for, and the fact that WE made it. Both are read by the reaper:
+        # it may only remove trees this plugin provisioned, for sessions that are gone.
+        "session_id": session_id,
+        "provisioned_by_plugin": True,
     }
     store.write_json(store.tier_b(ctx, "worktrees", f"{slug}.json"), body)
     return body
+
+
+def session_slug(task: str, session_id: str) -> str:
+    """Task-derived, and unique per session — because sharing one is the whole failure.
+
+    Two sessions with no recorded prompt both slugged to `work`, and two sessions given the
+    same instruction both slugged the same. `provision` returns an existing directory, so
+    the second session would have been sent into the first one's tree — by the gate whose
+    entire purpose is to stop exactly that. Reported as a naming nit; it is the silent
+    overwrite, arrived at from the other side.
+
+    The suffix is short and derived from the session, so the same session refused twice is
+    still sent to the same place.
+    """
+    base = slugify(task)
+    if not session_id:
+        return base
+    return f"{base}-{hashlib.sha256(session_id.encode()).hexdigest()[:8]}"
 
 
 def target_for(ctx: GitContext, slug: str) -> Path:
@@ -94,7 +144,71 @@ def target_for(ctx: GitContext, slug: str) -> Path:
     return ctx.worktree_root.parent / f"{ctx.worktree_root.name}-{slug}"
 
 
-def provision(ctx: GitContext, task: str = "") -> Path | None:
+def reap_unused(ctx: GitContext, live: set) -> list[str]:
+    """Remove trees this plugin made for sessions that are gone and that hold no work.
+
+    They accumulated one per task phrasing and stayed even when the refusal was the only
+    thing that ever happened in them — nine on one test repository in a single run, each
+    with an empty branch and an empty directory. The plugin made them unasked, so cleaning
+    them up is the plugin's job too.
+
+    Deliberately built out of commands that REFUSE rather than checks that decide:
+    `git worktree remove` without `--force` will not touch a tree with modifications, and
+    `git branch -d` will not delete an unmerged branch. If either has anything to say, the
+    tree stays. Nothing here passes a flag that overrides a refusal, and that is the whole
+    safety argument — not the conditions below, which are only there to avoid asking.
+    """
+    removed: list[str] = []
+    directory = store.tier_b(ctx, "worktrees")
+    try:
+        records = sorted(directory.glob("*.json"))
+    except OSError:
+        return removed
+
+    for path in records:
+        tree = _abandoned(ctx, store.read_json(path, default={}) or {}, live)
+        if tree and _release(ctx, tree, path):
+            removed.append(tree[0])
+    return removed
+
+
+def _abandoned(ctx: GitContext, body: dict, live: set) -> tuple | None:
+    """(path, branch) when this record describes a tree we made and nobody is in."""
+    if not body.get("provisioned_by_plugin"):
+        return None
+    owner = str(body.get("session_id") or "")
+    if not owner or owner in live:
+        return None
+    tree = str(body.get("path") or "")
+    if not tree or Path(tree).resolve() == ctx.worktree_root.resolve():
+        return None
+    return tree, str(body.get("branch") or "")
+
+
+def _release(ctx: GitContext, tree: tuple, record_path: Path) -> bool:
+    path, branch = tree
+    gone = subprocess.run(
+        ["git", "worktree", "remove", path],
+        cwd=str(ctx.worktree_root), capture_output=True,
+        encoding="utf-8", errors="surrogateescape", timeout=60,
+    )
+    if gone.returncode != 0:
+        return False
+
+    if branch:
+        # -d, never -D: an unmerged branch is work somebody did, and the fact that its
+        # session died does not make it disposable.
+        subprocess.run(
+            ["git", "branch", "-d", branch],
+            cwd=str(ctx.worktree_root), capture_output=True,
+            encoding="utf-8", errors="surrogateescape", timeout=60,
+        )
+    with contextlib.suppress(OSError):
+        record_path.unlink()
+    return True
+
+
+def provision(ctx: GitContext, task: str = "", session_id: str = "") -> Path | None:
     """Create the worktree this session should be working in, or None if git refused.
 
     Returns the existing path when it is already there, so a session that is refused twice
@@ -104,12 +218,12 @@ def provision(ctx: GitContext, task: str = "") -> Path | None:
     which is where this started. Better to say something true than to crash a fail-closed
     gate over a convenience.
     """
-    slug = slugify(task)
+    slug = session_slug(task, session_id)
     target = target_for(ctx, slug)
     absolute = str(target)
 
     if target.is_dir():
-        record(ctx, slug, absolute, f"feat/{slug}", trust(absolute))
+        record(ctx, slug, absolute, f"feat/{slug}", trust(absolute), session_id)
         return target
 
     proc = subprocess.run(
@@ -128,5 +242,5 @@ def provision(ctx: GitContext, task: str = "") -> Path | None:
         if attach.returncode != 0:
             return None
 
-    record(ctx, slug, absolute, f"feat/{slug}", trust(absolute))
+    record(ctx, slug, absolute, f"feat/{slug}", trust(absolute), session_id)
     return target
