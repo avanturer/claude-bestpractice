@@ -368,6 +368,32 @@ class TestWorktreeNamesAndCleanup(PolicyCase):
         ):
             self.assertEqual(worktree.branch_type(task), expected, task)
 
+    def test_both_languages_agree_on_the_type(self):
+        """Every type held in both languages except `docs`, which fired only in Russian.
+
+        `документ` is a prefix and catches документацию/задокументируй; the English side
+        wanted `doc ` with a trailing space, which cannot match `document`,
+        `documentation` or `documented` — the actual words an English prompt uses, so an
+        English documentation task landed on `feat/`. Reported as issue #35 with these
+        pairs measured.
+        """
+        from claude_bestpractice import worktree
+
+        for russian, english in (
+            ("напиши документацию к API", "document the public API"),
+            ("задокументируй модуль", "write documentation for the module"),
+            ("обнови README", "update the README"),
+            ("почини падающий тест", "fix the failing test"),
+            ("добавь тесты на парсер", "add tests for the parser"),
+            ("обнови зависимости", "bump the dependencies"),
+            ("ускорь запрос к базе", "speed up the database query"),
+            ("удали мёртвый код", "remove the dead code"),
+        ):
+            self.assertEqual(
+                worktree.branch_type(russian), worktree.branch_type(english),
+                f"{russian!r} and {english!r} disagree",
+            )
+
     def test_the_provisioned_branch_carries_that_type(self):
         from claude_bestpractice import worktree
 

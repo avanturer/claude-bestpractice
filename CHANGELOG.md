@@ -1,5 +1,40 @@
 # Changelog
 
+## v1.0.10
+
+Two issues against v1.0.8 — #34 and #35 — both of them defects I introduced in that
+release, and both found by cloning it rather than by reading it.
+
+### `make check` was red on every release commit (#34)
+
+The version guard added in v1.0.8 asked only whether `v{__version__}` appeared among the
+tags. On a release commit it must, by definition. So the suite was red on **exactly the tree
+a user clones and installs**, and the pre-push hook — which runs `make check` — refused to
+push out of a fresh release until somebody bumped the version.
+
+It went unnoticed because the hosted `check` workflow is off by default, a deliberate trade
+that makes the local `make check` the only gate. Which is precisely why it being red on a
+release is expensive rather than cosmetic.
+
+Released-and-at-rest is not the same state as shipping over a release, and the condition the
+docstring always meant is: the tag exists **and** the tree has moved past it. Verified in
+both directions on a real clone of v1.0.9 — passes with the tag on `HEAD`, and still fails
+the moment a commit lands on top without a bump.
+
+### `docs` only fired in Russian (#35)
+
+Every branch type held in both languages except `docs`. The Russian marker `документ` is a
+prefix, so it caught документацию and задокументируй; the English side wanted `doc ` **with
+a trailing space**, which cannot match `document`, `documentation` or `documented` — the
+actual words an English prompt uses. `readme` was covering the rest by accident, which is
+why `update the README` worked and `document the public API` did not.
+
+All eight paired prompts from the report now agree across the two languages, asserted as
+pairs rather than as separate expectations — the property is symmetry, so that is what the
+test says.
+
+728 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.
+
 ## v1.0.9
 
 Three issues filed against v1.0.7 — #30, #31, #32. All three are real, and #32 is a working
