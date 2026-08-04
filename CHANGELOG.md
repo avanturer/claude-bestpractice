@@ -1,5 +1,51 @@
 # Changelog
 
+## v1.0.6
+
+Three findings from a real run of v1.0.5, all about what provisioning leaves behind. The
+second one was reported as a naming nit and is not one — it is the silent overwrite this
+whole subsystem exists to prevent, arrived at from the other side.
+
+### Two sessions could be handed the same worktree
+
+Two sessions with no recorded prompt both slugged to `work`. Two given the same instruction
+both slugged the same. `provision()` returns an existing directory when it finds one — so
+the second session would have been sent into the first one's tree **by the gate whose entire
+purpose is to stop exactly that**.
+
+The name now carries a short per-session suffix. The same session refused twice still gets
+the same tree; two sessions never do.
+
+### A Russian prompt produced a Cyrillic branch
+
+`str.isalnum()` is true for Cyrillic, so "почини парсер штрихкодов" gave a directory *and* a
+branch in Cyrillic. Git accepts both, and then the branch reaches the remote on the first
+push, `git worktree list` prints it octal-escaped (`\320\277\320\276…`), and macOS normalises
+the directory name differently from Linux — so the same repository on two machines disagrees
+about whether the tree exists.
+
+Transliterated rather than dropped, because the founder writes Russian prompts and a branch
+called `work` says nothing: `почини парсер штрихкодов` → `pochini-parser-shtrikhkodov`.
+Anything with no ASCII left after that falls back — `🚀` and `日本語のみ` both give `work`,
+using the mechanism that already existed for emoji. Every slug is now ASCII, asserted.
+
+### The trees were never cleaned up
+
+One per task phrasing, left behind even when the refusal was the only thing that ever
+happened in them — nine on one repository in a single run, each an empty branch over an
+empty directory. The plugin creates them unasked, so clearing them is the plugin's job too.
+Session start now removes the ones nobody is in.
+
+**Built out of commands that refuse rather than checks that decide.** `git worktree remove`
+without `--force` will not touch a tree with modifications; `git branch -d` will not delete
+an unmerged branch. Nothing here passes a flag that overrides a refusal, and that is the
+whole safety argument — not the conditions, which only exist to avoid asking. It also only
+ever touches trees whose record says this plugin made them, so a worktree the founder
+created by hand is never a candidate. Verified: a tree with one uncommitted file survives
+with its branch intact while an empty sibling is removed.
+
+710 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.
+
 ## v1.0.5
 
 **The gate stopped handing the agent a command and started handing it a worktree.**

@@ -78,7 +78,7 @@ def worktree_advice(ctx: GitContext, task: str = "") -> str:
     return f"git worktree add -b feat/{slug} {target}"
 
 
-def worktree_refusal(ctx: GitContext, task: str = "") -> str:
+def worktree_refusal(ctx: GitContext, task: str = "", session_id: str = "") -> str:
     """Refuse the write, having already done the thing that resolves it.
 
     This used to hand the agent `git worktree add …` to run, and a command the agent runs
@@ -94,7 +94,7 @@ def worktree_refusal(ctx: GitContext, task: str = "") -> str:
     """
     from . import worktree
 
-    ready = worktree.provision(ctx, task)
+    ready = worktree.provision(ctx, task, session_id)
     if ready is None:
         # Falling back to naming the command is where this started, and it is still better
         # than a fail-closed gate crashing over a convenience.
@@ -119,7 +119,7 @@ def worktree_refusal(ctx: GitContext, task: str = "") -> str:
     )
 
 
-def violations(ctx: GitContext, task: str = "") -> list[str]:
+def violations(ctx: GitContext, task: str = "", session_id: str = "") -> list[str]:
     """Refusals for this write, each with the command that resolves it.
 
     Empty on a repository with no commits: the first session in a fresh project has
@@ -130,7 +130,7 @@ def violations(ctx: GitContext, task: str = "") -> list[str]:
 
     out: list[str] = []
     if not ctx.is_worktree:
-        out.append(worktree_refusal(ctx, task))
+        out.append(worktree_refusal(ctx, task, session_id))
     if on_trunk(ctx):
         out.append(
             f"claude-bestpractice: {ctx.branch} is the trunk. Work on a branch so it can be "

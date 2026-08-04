@@ -572,8 +572,11 @@ def check_worktree_is_required(repo: Path) -> Result:
     except (json.JSONDecodeError, KeyError, TypeError):
         denied, reason = False, ""
 
-    made = strict.parent / f"{strict.name}-work"
-    actionable = made.is_dir() and str(made) in reason
+    # Found by prefix, not by name: the name carries a per-session suffix so that two
+    # sessions can never be handed the same tree.
+    siblings = [p for p in strict.parent.iterdir()
+                if p.is_dir() and p.name.startswith(f"{strict.name}-")]
+    actionable = len(siblings) == 1 and str(siblings[0]) in reason
     return Result(
         "the main checkout is refused",
         denied and actionable,
