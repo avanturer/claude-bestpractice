@@ -1,5 +1,51 @@
 # Changelog
 
+## v1.0.5
+
+**The gate stopped handing the agent a command and started handing it a worktree.**
+
+Reported as a chip in the chat asking the founder whether to use a worktree — which is a
+question this plugin should never cause. The refusal named `git worktree add …` for the
+agent to run, and a command the agent runs is a question the founder gets asked: either as
+a permission prompt for the command, or as the agent stopping to ask whether it should.
+
+Creating a worktree is not money, legal exposure or product direction, which is the list
+this plugin's own autonomy line says to interrupt the founder for. It is the plugin's own
+rule being satisfied. A hook runs without a permission prompt, so the plugin now does it:
+
+```
+claude-bestpractice: this is the main checkout, not a worktree. …
+  A worktree has been created for you at /path/to/repo-add-csv-export — `cd …` and redo
+  this write there.
+  This is not a question for the founder: do not ask whether to use a worktree, just move.
+```
+
+The last line is there because the measured failure was the agent being polite rather than
+the agent being unable.
+
+Provisioning is the **same code** the `WorktreeCreate` hook already used, extracted rather
+than reimplemented, so the two paths cannot drift into disagreeing about naming, trust or
+ports: outside the repository so it never shows up in a status or a glob, trusted at birth
+or project settings and hooks silently never load, and a port and database name derived per
+tree. A second refusal reuses the tree rather than accumulating them, and the name follows
+the task, so parallel sessions do not collide on one directory.
+
+It cannot make things worse when git refuses: provisioning that fails falls back to naming
+the command, which is where this started, rather than crashing a fail-closed gate over a
+convenience.
+
+**The doctor now checks this against the filesystem rather than against a string.** It used
+to assert that the refusal contained the words `git worktree add`; it asserts that the
+directory the refusal names exists. A phrase is not a fact, and this is the third gate in
+this project caught asserting one.
+
+Not available, and worth stating rather than implying: a plugin cannot ship permission
+rules. The manifest accepts `commands`, `agents`, `skills`, `hooks` and `outputStyles` and
+nothing else, so allow-listing the command was never an option — checked in the CLI rather
+than assumed.
+
+700 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.
+
 ## v1.0.4
 
 **Git destroys a working tree without ever naming a file in it**, so every rule keyed on
