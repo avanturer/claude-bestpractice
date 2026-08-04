@@ -560,18 +560,26 @@ def check_worktree_is_required(repo: Path) -> Result:
         },
         strict,
     )
+    # Asserted against the filesystem rather than against a string. The refusal used to
+    # name a command for the agent to run, and a command the agent runs is a permission
+    # prompt or a question put to the founder — reported as a chip in the chat asking
+    # whether to use a worktree. It now provisions one and says where; "actionable" is
+    # therefore a directory that exists, which is a fact rather than a phrase.
     try:
         out = json.loads(proc.stdout)["hookSpecificOutput"]
         denied = out.get("permissionDecision") == "deny"
-        actionable = "git worktree add" in out.get("permissionDecisionReason", "")
+        reason = out.get("permissionDecisionReason", "")
     except (json.JSONDecodeError, KeyError, TypeError):
-        denied = actionable = False
+        denied, reason = False, ""
+
+    made = strict.parent / f"{strict.name}-work"
+    actionable = made.is_dir() and str(made) in reason
     return Result(
         "the main checkout is refused",
         denied and actionable,
-        "refused, and named the command that fixes it"
+        "refused, and handed over a worktree that already exists"
         if denied and actionable
-        else f"denied={denied}, actionable={actionable}",
+        else f"denied={denied}, worktree_ready={actionable}",
     )
 
 

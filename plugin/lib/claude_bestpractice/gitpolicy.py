@@ -78,6 +78,47 @@ def worktree_advice(ctx: GitContext, task: str = "") -> str:
     return f"git worktree add -b feat/{slug} {target}"
 
 
+def worktree_refusal(ctx: GitContext, task: str = "") -> str:
+    """Refuse the write, having already done the thing that resolves it.
+
+    This used to hand the agent `git worktree add …` to run, and a command the agent runs
+    is a question the founder gets asked — as a permission prompt, or as the agent stopping
+    to ask whether it should. Reported as exactly that: a chip in the chat asking whether to
+    use a worktree.
+
+    Creating a worktree is not a decision the founder owns. This plugin's own autonomy line
+    says to ask them for money, legal exposure and product direction; this is the plugin's
+    own rule being satisfied. A hook runs without a permission prompt, so the plugin does it
+    and says where to go. The last line is there because the measured failure was the agent
+    being polite rather than the agent being unable.
+    """
+    from . import worktree
+
+    ready = worktree.provision(ctx, task)
+    if ready is None:
+        # Falling back to naming the command is where this started, and it is still better
+        # than a fail-closed gate crashing over a convenience.
+        return (
+            "claude-bestpractice: this is the main checkout, not a worktree. Several sessions "
+            "sharing one working tree overwrite each other silently — git does not notice, "
+            "and neither will you.\n"
+            f"  {worktree_advice(ctx, task)}\n"
+            "then work there, and do not ask the founder about it — run it yourself. Set "
+            "`require_worktree: false` in .claude/claude-bestpractice/config.json if this "
+            "repository is genuinely single-session."
+        )
+    return (
+        "claude-bestpractice: this is the main checkout, not a worktree. Several sessions "
+        "sharing one working tree overwrite each other silently — git does not notice, and "
+        "neither will you.\n"
+        f"  A worktree has been created for you at {ready} — `cd {ready}` and redo this "
+        "write there.\n"
+        "  This is not a question for the founder: do not ask whether to use a worktree, "
+        "just move. Set `require_worktree: false` in "
+        ".claude/claude-bestpractice/config.json if this repository is genuinely single-session."
+    )
+
+
 def violations(ctx: GitContext, task: str = "") -> list[str]:
     """Refusals for this write, each with the command that resolves it.
 
@@ -89,14 +130,7 @@ def violations(ctx: GitContext, task: str = "") -> list[str]:
 
     out: list[str] = []
     if not ctx.is_worktree:
-        out.append(
-            "claude-bestpractice: this is the main checkout, not a worktree. Several sessions "
-            "sharing one working tree overwrite each other silently — git does not "
-            "notice, and neither will you.\n"
-            f"  {worktree_advice(ctx, task)}\n"
-            "then work there. Set `require_worktree: false` in "
-            ".claude/claude-bestpractice/config.json if this repository is genuinely single-session."
-        )
+        out.append(worktree_refusal(ctx, task))
     if on_trunk(ctx):
         out.append(
             f"claude-bestpractice: {ctx.branch} is the trunk. Work on a branch so it can be "

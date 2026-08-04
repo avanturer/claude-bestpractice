@@ -26,56 +26,14 @@ worktree anyway.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import os
-import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import hookio, store  # noqa: E402
+from claude_bestpractice import hookio, worktree  # noqa: E402
 from claude_bestpractice.gitctx import resolve  # noqa: E402
-
-PORT_BASE = 41000
-PORT_RANGE = 900
-
-
-def derive_port(worktree_path: str) -> int:
-    digest = hashlib.sha256(worktree_path.encode()).hexdigest()
-    return PORT_BASE + (int(digest[:8], 16) % PORT_RANGE)
-
-
-def derive_db_name(repo_name: str, branch: str) -> str:
-    safe = re.sub(r"[^a-z0-9_]", "_", f"{repo_name}_{branch}".lower())
-    return safe[:60] or "claude_bestpractice_dev"
-
-
-def trust_worktree(path: str) -> bool:
-    """Mark the new worktree trusted so project settings and hooks actually load."""
-    config = Path.home() / ".claude.json"
-    try:
-        data = json.loads(config.read_text(encoding="utf-8")) if config.exists() else {}
-    except (OSError, json.JSONDecodeError):
-        return False
-    if not isinstance(data, dict):
-        return False
-
-    projects = data.setdefault("projects", {})
-    if not isinstance(projects, dict):
-        return False
-    entry = projects.setdefault(path, {})
-    if not isinstance(entry, dict):
-        return False
-    entry["hasTrustDialogAccepted"] = True
-
-    try:
-        store.atomic_write(config, json.dumps(data, indent=2), mode=0o600)
-    except OSError:
-        return False
-    return True
-
 
 def main() -> None:
     event = hookio.read_event()
@@ -83,32 +41,15 @@ def main() -> None:
 
     requested = str(event.raw.get("path") or event.raw.get("worktreePath") or "")
     branch = str(event.raw.get("branch") or event.raw.get("ref") or "").strip() or "work"
-    slug = re.sub(r"[^A-Za-z0-9._-]", "-", branch)[:60]
+    slug = worktree.slugify(branch)
 
-    if requested:
-        target = Path(requested)
-    else:
-        # Outside the repository by construction: a worktree inside the working tree
-        # shows up in every status, every glob and every scan the sibling sessions run.
-        target = ctx.worktree_root.parent / "wt" / f"{ctx.worktree_root.name}-{slug}"
-
+    target = Path(requested) if requested else worktree.target_for(ctx, slug)
     target.parent.mkdir(parents=True, exist_ok=True)
-    absolute = str(target.resolve())
+    absolute = str(target)
 
-    trusted = trust_worktree(absolute)
-    port = derive_port(absolute)
-    db = derive_db_name(ctx.worktree_root.name, slug)
-
-    store.write_json(
-        store.tier_b(ctx, "worktrees", f"{slug}.json"),
-        {
-            "path": absolute,
-            "branch": branch,
-            "port": port,
-            "database": db,
-            "trusted": trusted,
-        },
-    )
+    # Same provisioning the gate uses when it refuses a write in the main checkout, so the
+    # two paths cannot drift into disagreeing about naming, trust or ports.
+    worktree.record(ctx, slug, absolute, branch, worktree.trust(absolute))
 
     # The harness takes the path from stdout. Everything else is a side effect.
     sys.stdout.write(absolute)

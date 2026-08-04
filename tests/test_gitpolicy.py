@@ -62,10 +62,43 @@ class TestWorktreeIsMandatory(PolicyCase):
         self.assertEqual(decision, "deny")
         self.assertIn("main checkout", reason)
 
-    def test_the_refusal_carries_the_command_that_fixes_it(self):
-        """A rule that only says no is one the agent learns to route around."""
+    def test_the_refusal_hands_over_a_worktree_that_already_exists(self):
+        """It used to hand over a command, and a command the agent runs is a question.
+
+        Reported from a real session: a chip in the chat asking the founder whether to use
+        a worktree. Either the agent stopped to ask, or `git worktree add` needed a
+        permission prompt — both are the founder being asked about the plugin's own rule.
+        Creating a worktree is not money, legal exposure or product direction, which is the
+        list this plugin's own autonomy line says to interrupt them for.
+        """
+        decision, reason = self.decision()
+        self.assertEqual(decision, "deny")
+
+        made = self.repo.parent / f"{self.repo.name}-work"
+        self.assertTrue(made.is_dir(), "the refusal did not create the worktree it names")
+        self.assertIn(str(made), reason)
+        self.assertIn(f"cd {made}", reason)
+
+    def test_it_says_not_to_ask_the_founder(self):
+        """The measured failure was the agent being polite, not the agent being unable."""
         _, reason = self.decision()
-        self.assertIn("git worktree add", reason)
+        self.assertIn("not a question for the founder", reason)
+
+    def test_a_second_refusal_reuses_the_same_tree(self):
+        """Otherwise a session refused twice accumulates worktrees it never asked for."""
+        self.decision()
+        _, reason = self.decision()
+        made = self.repo.parent / f"{self.repo.name}-work"
+        self.assertIn(str(made), reason)
+        siblings = [p for p in self.repo.parent.iterdir() if p.name.startswith(f"{self.repo.name}-")]
+        self.assertEqual(len(siblings), 1, siblings)
+
+    def test_the_created_worktree_is_outside_the_repository(self):
+        """One inside the working tree shows up in every status, glob and scan."""
+        self.decision()
+        made = self.repo.parent / f"{self.repo.name}-work"
+        self.assertFalse(str(made).startswith(str(self.repo) + "/"))
+        self.assertEqual(git(["status", "--porcelain"], self.repo).strip(), "")
 
     def test_a_worktree_is_allowed(self):
         target = self.worktree("feat/x")
