@@ -132,16 +132,125 @@ class TestPromptCapture(GateCase):
         )
         self.assertNotIn("additionalContext", proc.stdout)
 
-    def test_later_prompts_do_not_overwrite_the_task(self):
+    def after_prompts(self, *prompts: str):
+        """Drive the real hook once per prompt and return the session record."""
+        from claude_bestpractice import sessions
+
         self.start()
-        for prompt in ("original task", "now do something else"):
+        for prompt in prompts:
             self.gate(
                 "prompt-capture",
                 {"session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": prompt},
             )
+        return sessions.get(self.ctx(), sid(self.repo, "s1"))
+
+    def test_the_task_follows_the_founder(self):
+        """Reversed deliberately: this used to freeze on the first prompt and never move.
+
+        Reported from a real session — the gate was still measuring against "посмотри
+        заново бд я перезапустил д" many turns after new instructions, and quoted it back
+        in every refusal. An anchor nobody can move is not an anchor, it is a stale claim.
+        """
+        rec = self.after_prompts("original task", "now do something else")
+        self.assertEqual(rec.task_statement, "now do something else")
+
+    def test_paths_accumulate_where_the_statement_replaces(self):
+        """Dropping the first instruction's files would make them drift on the second."""
+        self.write("first.py", "x = 1\n")
+        self.write("second.py", "y = 2\n")
+        rec = self.after_prompts("edit first.py", "now also edit second.py")
+        self.assertEqual(rec.task_paths, ["first.py", "second.py"])
+
+    def test_what_the_ide_opened_is_not_the_task(self):
+        """The whole reported defect, end to end through the real hook.
+
+        Claude Code injects `<ide_opened_file>` into the prompt, and it carries a path —
+        the one thing this hook mines a prompt for. On a real machine it named
+        `/tmp/readonly/Bash tool output (aeqikl)`, that became the entire task scope, and
+        every genuine project file was therefore drift. Eight consecutive blocks on
+        correct work, with the escalation counter recording an unverified finish twice.
+
+        The block says of itself that it "may or may not be related to the current task",
+        which is a definition of not being it.
+        """
+        from claude_bestpractice import evidence, sessions
+
+        self.start()
+        self.gate(
+            "prompt-capture",
+            {
+                "session_id": "s1",
+                "hook_event_name": "UserPromptSubmit",
+                "prompt": (
+                    "<ide_opened_file>The user opened the file /tmp/readonly/Bash tool "
+                    "output (aeqikl) in the IDE. This may or may not be related to the "
+                    "current task.</ide_opened_file>"
+                ),
+            },
+        )
+        rec = sessions.get(self.ctx(), sid(self.repo, "s1"))
+        self.assertEqual(rec.task_paths, [], "the IDE's path became the task scope")
+        # Empty scope disables the check rather than blocking everything, which is the
+        # safety valve the injected path was walking straight past.
+        self.assertEqual(evidence.scope_drift(["src/real.py"], rec.task_paths, []), [])
+
+    def test_an_ide_block_naming_a_real_file_is_still_not_the_task(self):
+        """Containment alone would not catch this one, so it is asserted separately.
+
+        A file the founder happened to open in their editor is inside the repository and
+        passes every "is this a real path" test there is. It would silently become the
+        task scope, and then every other file in the change is drift.
+        """
         from claude_bestpractice import sessions
 
-        self.assertEqual(sessions.get(self.ctx(), sid(self.repo, "s1")).task_statement, "original task")
+        self.write("opened.py", "x = 1\n")
+        self.start()
+        self.gate(
+            "prompt-capture",
+            {
+                "session_id": "s1",
+                "hook_event_name": "UserPromptSubmit",
+                "prompt": "<ide_opened_file>The user opened the file opened.py in the IDE."
+                          "</ide_opened_file>fix other.py",
+            },
+        )
+        rec = sessions.get(self.ctx(), sid(self.repo, "s1"))
+        self.assertNotIn("opened.py", rec.task_paths)
+
+    def test_a_path_outside_the_worktree_is_never_a_task_path(self):
+        """`root / "/tmp/x"` is `/tmp/x` — an absolute token discards the root entirely.
+
+        The directory fallback then accepted anything whose parent existed anywhere on
+        the machine, up to and including `/`, which is why the closing tag itself
+        (`/ide_opened_file`) was kept with no help from the filesystem at all. These
+        paths are compared against repository-relative names, so one that is not in the
+        repository cannot match anything and turns the check into "all of it is drift".
+        """
+        from claude_bestpractice import sessions
+
+        self.start()
+        self.gate(
+            "prompt-capture",
+            {
+                "session_id": "s1",
+                "hook_event_name": "UserPromptSubmit",
+                "prompt": "compare against /etc/hosts and /ide_opened_file please",
+            },
+        )
+        rec = sessions.get(self.ctx(), sid(self.repo, "s1"))
+        self.assertEqual(rec.task_paths, [])
+
+    def test_xml_the_founder_typed_is_left_alone(self):
+        """Stripping is by name, not by angle bracket: pasted XML is asking to be read."""
+        import importlib.machinery
+        import importlib.util
+
+        loader = importlib.machinery.SourceFileLoader("pc", str(BIN / "prompt-capture"))
+        module = importlib.util.module_from_spec(importlib.util.spec_from_loader("pc", loader))
+        loader.exec_module(module)
+
+        text = "<config><name>x</name></config> fix README.md"
+        self.assertEqual(module.strip_envelopes(text), text)
 
     def test_prose_mentions_do_not_become_task_paths(self):
         self.start()

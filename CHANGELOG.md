@@ -1,5 +1,69 @@
 # Changelog
 
+## v1.0.2
+
+**Scope drift was firing on correct work, and the cause was a path the founder never
+typed.** Reported from a real session: eight consecutive blocks on the same change, each
+one listing every modified file as out of scope.
+
+### What the IDE opened was becoming the task
+
+Claude Code injects a block into the prompt that the founder did not write:
+
+```
+<ide_opened_file>The user opened the file /tmp/readonly/Bash tool output (aeqikl) in the
+IDE. This may or may not be related to the current task.</ide_opened_file>
+```
+
+It carries a path, and a path is the one thing `prompt-capture` mines a prompt for. So the
+task scope became `/tmp/readonly/Bash` — non-empty, and matching nothing in the repository.
+Every real file was therefore drift.
+
+The safety valve that should have caught this is `test_empty_task_disables_the_check`, whose
+docstring reads *"No captured task is our failure, not the agent's. Do not block on it."* An
+injected path walks straight past it, because the scope is not empty — it is wrong. That
+distinction is the whole bug.
+
+**Two leaks, not one**, and the second needed no help from the filesystem. `root / "/tmp/x"`
+is `/tmp/x` — an absolute token discards the root entirely — and the directory fallback then
+accepted any token whose parent existed *anywhere on the machine*, up to and including `/`.
+So the closing tag itself, `</ide_opened_file>`, was extracted as the path `/ide_opened_file`
+and kept, in every session where such a block appeared. Both reproduced before fixing.
+
+Three things now hold, each with a test:
+
+- **Envelope blocks are not the task.** `ide_opened_file`, `ide_selection` and
+  `system-reminder` are stripped before capture — including an unclosed opener, which would
+  otherwise leave a path-shaped tag behind. Stripped **by name**, never by angle bracket: a
+  founder pasting XML is asking for it to be read.
+- **A task path must be inside the worktree.** These paths are compared against
+  repository-relative filenames, so one that is not in the repository cannot match anything
+  and turns the check into "all of it is drift".
+- **An IDE block naming a real repository file is still not the task.** Containment alone
+  would not catch that one — the file exists and passes every test for a genuine path — and
+  it would silently redefine scope to whatever the founder happened to have open.
+
+### The task no longer goes stale
+
+It was captured once and never again, so a session that had long since moved on was still
+being measured against its opening line, and every refusal quoted it back. The statement now
+follows the founder. Paths **accumulate** where the statement replaces: a later instruction
+naming more files genuinely widens what is in scope, and dropping the earlier ones would turn
+the files first asked for into drift. Bounded at 64.
+
+### A refusal that named a remedy which does nothing
+
+The message said *"Revert what is out of scope, or state why it was necessary"* two lines
+above *"Your description of what you did is not evidence and was not read"*. Nothing reads
+prose here — that is decision 0002 — so an agent whose work was correct and whose scope
+reading was wrong had exactly one available move: revert correct work. The message now names
+the remedies that exist, including the config key that switches the check off.
+
+For the record, the gate was not only wrong: in the same session it caught a real defect —
+`make test` in a worktree running against `main`'s code rather than the branch's.
+
+685 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.
+
 ## v1.0.1
 
 **If you installed v1.0.0, this is the release that can actually reach you — and finding
