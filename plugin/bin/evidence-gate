@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import attempts, board, config, discipline, drafts, evidence, hookio, options, sessions, stage, store  # noqa: E402
+from claude_bestpractice import attempts, board, config, discipline, drafts, evidence, hookio, options, pullrequest, sessions, stage, store  # noqa: E402
 from claude_bestpractice.gitctx import changed_files, resolve  # noqa: E402
 
 BLOCK_COUNTER = "_consecutive_blocks"
@@ -170,6 +170,31 @@ def main() -> None:
         _bump_blocks(ctx, rec, 0)
         sys.stderr.write("claude-bestpractice: finishing UNVERIFIED — continuation ceiling reached.\n")
         _allow(ctx, rec)
+    # A pull request this session opened and then walked away from. Checked before the
+    # change list, because the whole failure is a turn that ends with nothing left to do
+    # and a PR still sitting there — `changed` is empty in exactly that turn.
+    #
+    # Raised at most ONCE per pull request, and the hand-off is written before the block
+    # rather than after: a session that ignores this, crashes, or hits the escalation
+    # ceiling must not meet it again on its next Stop. One unignorable interruption is the
+    # entire budget. Past that the board carries it, which is what stops it being
+    # forgotten across sessions without wedging the one in front of us.
+    if cfg.manage_pull_requests:
+        waiting = pullrequest.unhanded(ctx, ctx.branch)
+        if waiting is not None:
+            blocking = pullrequest.blockers(ctx, str(waiting.get("base") or "main"))
+            pullrequest.hand_off(ctx, waiting, blocking)
+            board.add_open_item(
+                ctx,
+                item_id=f"pr-{ctx.branch}-{int(time.time())}",
+                text=(f"PULL REQUEST open on {ctx.branch}: "
+                      + (f"blocked by {blocking[0][:150]}" if blocking else "ready to merge")),
+                branch=ctx.branch,
+                session_id=rec.session_id,
+                subject_paths=[],
+            )
+            hookio.block(pullrequest.stop_demand(waiting, blocking))
+
     # The test artifact is exempt from scope drift because THIS GATE demands it. Without
     # this the two checks deadlock: finish without evidence and you are blocked for the
     # missing artifact, produce it and you are blocked for touching a file the task did

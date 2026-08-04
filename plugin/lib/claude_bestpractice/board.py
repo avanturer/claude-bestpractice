@@ -221,9 +221,18 @@ def _alerts(ctx: GitContext) -> list[str]:
     unfinished merge leaves a tree that reads as normal while half of it is conflict
     markers — a session that is not told will commit them.
     """
-    from . import delivery
+    from . import delivery, pullrequest
 
-    return [line for line in (red_suite_line(ctx).strip(), delivery.merge_state(ctx).render()) if line]
+    return [
+        line for line in (
+            red_suite_line(ctx).strip(),
+            delivery.merge_state(ctx).render(),
+            # A pull request nobody comes back to is the one piece of state that looks
+            # finished from inside the session that made it. It follows the repository,
+            # not the session, so every later session is told until it is merged or closed.
+            pullrequest.line(ctx),
+        ) if line
+    ]
 
 
 def render(

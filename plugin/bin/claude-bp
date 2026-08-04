@@ -17,7 +17,7 @@ from pathlib import Path
 BIN = Path(__file__).resolve().parent
 sys.path.insert(0, str(BIN.parent / "lib"))
 
-from claude_bestpractice import __version__, board, ci, conflicts, delivery, drafts, hookio, knowledge, onboard  # noqa: E402
+from claude_bestpractice import __version__, board, ci, conflicts, delivery, drafts, hookio, knowledge, onboard, pullrequest  # noqa: E402
 from claude_bestpractice import plan, provenance, sessions, stage, upgrade  # noqa: E402
 from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
 
@@ -71,6 +71,15 @@ def cmd_status(ctx) -> int:
                 print(f"      holds: {', '.join(held[:4])}")
     else:
         print("  none live")
+
+    waiting = pullrequest.outstanding(ctx)
+    if waiting:
+        heading("PULL REQUESTS")
+        for row in waiting:
+            named = f"#{row['number']}" if row.get("number") else row.get("branch", "")
+            reasons = row.get("blockers") or []
+            state = f"BLOCKED — {reasons[0][:90]}" if reasons else "ready to merge"
+            print(f"  {named:<24} {state}")
 
     heading("PLAN")
     print(f"  {counts['doing']} in flight · {counts['next']} next · {counts['done']} done")

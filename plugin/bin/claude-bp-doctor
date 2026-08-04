@@ -1015,6 +1015,57 @@ def check_sessions_see_each_other(repo: Path) -> Result:
     )
 
 
+def check_a_pull_request_is_merged_or_reported(repo: Path) -> Result:
+    """Opened, judged, and either merged or handed over — never left hanging.
+
+    Both halves are attempted, because either one alone is the wrong product. A gate that
+    only refuses turns every merge into a conversation the founder did not ask for; a gate
+    that only merges is an auto-merge button with no brakes.
+    """
+    sys.path.insert(0, str(BIN.parent / "lib"))
+    from claude_bestpractice import evidence, pullrequest
+    from claude_bestpractice.gitctx import resolve
+
+    for argv in (["checkout", "-q", "-b", "feat/doctor"], ["add", "-A"]):
+        subprocess.run(["git", *argv], cwd=repo, timeout=60)
+    (repo / "app.py").write_text("x = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, timeout=60)
+    subprocess.run(["git", "commit", "-qm", "add the app module"], cwd=repo, timeout=60)
+    evidence.record_green(resolve(repo), ["pytest"])
+    start_session(repo, "doctor-pr")
+
+    def call(tool: str, tool_input: dict) -> bool:
+        """True when the gate refused the call."""
+        proc = run_gate("pre-tool", {
+            "session_id": "doctor-pr", "cwd": str(repo),
+            "hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": tool_input,
+        }, repo)
+        try:
+            payload = json.loads(proc.stdout or "{}")
+        except json.JSONDecodeError:
+            return False
+        return payload.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+
+    call("mcp__github__create_pull_request", {"base": "main"})
+    recorded = len(pullrequest.outstanding(resolve(repo))) == 1
+
+    evidence.record_red(resolve(repo), ["pytest"], "1 failed")
+    refused = call("mcp__github__merge_pull_request", {"pullNumber": 1})
+
+    evidence.clear_red(resolve(repo), ["pytest"])
+    merged = not call("mcp__github__merge_pull_request", {"pullNumber": 1})
+    settled = pullrequest.outstanding(resolve(repo)) == []
+
+    ok = recorded and refused and merged and settled
+    return Result(
+        "a pull request is merged or reported, never left open",
+        ok,
+        "refused over a red suite, merged once green, obligation discharged"
+        if ok
+        else f"recorded={recorded} refused={refused} merged={merged} settled={settled}",
+    )
+
+
 def main() -> int:
     print(f"{DIM}claude-bp doctor {__version__}{OFF}")
     print(f"{DIM}Proving gates by attempting known-bad actions, not by reading config.{OFF}\n")
@@ -1048,6 +1099,7 @@ def main() -> int:
             check_worktree_provisioning,
             check_reap,
             check_sessions_see_each_other,
+            check_a_pull_request_is_merged_or_reported,
         ):
             repo = make_repo(Path(tempfile.mkdtemp(prefix="claude-bestpractice-case-", dir=tmp)))
             try:

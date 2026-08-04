@@ -1,5 +1,63 @@
 # Changelog
 
+## v1.0.14
+
+A pull request is now an obligation rather than a notification.
+
+The failure it closes: the session and the founder agree on a change, the session opens a
+pull request — and then stops, waiting for an approval nobody asked it to wait for. The PR
+sits. The session ends. Nothing in the repository remembers it, so the next session does
+not pick it up either, and the work is finished in every sense except the one that counts.
+
+An obligation is discharged in exactly one of two ways, and there is no third:
+
+**Merged, by the session that opened it.** No approval step, because there is no reviewer
+— that is the operating mode this whole plugin is built for. A session whose branch passes
+the final check merges its own pull request, and a turn that tries to end with one still
+open is interrupted once and told to.
+
+**Handed to the founder, with the blockers named.** When the final check finds something,
+the merge is REFUSED — not negotiated, not repaired. That half is deliberate and it is the
+reason the first half is safe to have. A model asked to make a branch mergeable will make
+it mergeable, and at merge time the available moves are weakening an assertion, widening a
+tolerance, or reverting the change that surfaced the problem. All three satisfy the letter.
+Which one is acceptable is the founder's decision, so the gate stops there and says so:
+
+> refusing to merge #48 — the final check found 2 thing(s):
+>   - the test suite is red
+>   - 1 review finding(s): secret in src/config.py
+> Tell the founder exactly this and stop. Do NOT merge, and do NOT push changes to make
+> the check pass.
+
+The final check is the same one `claude-bp-ship --pr` already ran before opening a pull
+request — unfinished merge, no commits, red suite, never-verified branch, unverified
+finish, uncommitted work — plus the review findings already on the board. All local, all
+free: this runs inside a PreToolUse hook, and a gate that costs a network round trip on
+every tool call is a gate that gets switched off.
+
+Both spellings are watched. `gh pr create` and `gh pr merge` reach the same API as the
+structured tools, and a gate that only sees the structured tool is one an agent walks past
+on its first `Bash` call.
+
+### Interrupted once, then carried
+
+The Stop gate raises an open pull request exactly once, and the hand-off is written
+*before* the block rather than after — so a session that ignores it, crashes, or hits the
+escalation ceiling does not meet it again. One unignorable interruption is the whole
+budget. Past that it lives on the board and in `claude-bp status`, which is what keeps it
+from being forgotten across sessions rather than merely across turns.
+
+Turn it all off with `{"manage_pull_requests": false}`.
+
+### Fixed on the way: the gates' own state read as uncommitted work
+
+`delivery.ready` called `git status --porcelain` and treated any output as "there are
+uncommitted changes". `.claude/` holds the stage marker, the green ledger and the config,
+all written by the gates themselves and all untracked in a repository that has never
+committed them — so every session made its own tree read as dirty within seconds of
+starting, and `claude-bp-ship --pr` reported that as a reason not to ship. The evidence
+gate has exempted the same prefix all along.
+
 ## v1.0.13
 
 Issues #43, #44, #45 and #47. All four are the same shape: state that accumulated in a
