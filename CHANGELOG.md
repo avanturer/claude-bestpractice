@@ -1,5 +1,47 @@
 # Changelog
 
+## v1.0.16
+
+The escalation ceiling counted blocks without looking at the clock, so it fired on an
+interruption as readily as on a loop.
+
+Four blocked Stops minutes apart is the thing the ceiling exists to stop: a session
+retrying the same failure forever, burning turns. Four blocked Stops spread across an
+afternoon are four separate attempts by a founder who went away in between — and the
+commonest reason they went away is that Claude stopped answering. The five-hour usage
+limit lands mid-turn, the session resumes hours later with the counter exactly where it
+was, and one more block filed an UNVERIFIED finish plus a permanent `outcome: failed`
+attempt against work whose only fault was being interrupted.
+
+A block now records when it happened, and a gap of more than an hour starts the streak
+over. A record written before this existed carries no timestamp and keeps counting, so an
+in-flight streak is not reset by the upgrade itself.
+
+Found by auditing what survives a session that stops mid-flight, not from a report.
+
+### What that audit checked, and what it found
+
+The plugin makes **no network calls and no model calls** — verified mechanically across
+the shipped tree. Its gates are Python subprocesses over git and the filesystem, so a
+usage limit, an API outage or an expired token cannot reach them. Everything else held:
+
+- a hook `SIGKILL`ed while holding the state lock is reclaimed by the next hook in 0.1s,
+  by asking the kernel whether the holder's pid still exists rather than waiting out a
+  timeout;
+- truncated `sessions/*.json`, `leases.json`, `open-items.jsonl` and `pull-requests.jsonl`
+  are all survived — the gates run, they do not wedge;
+- a session idle for five hours stays live and keeps its baseline, so the diff anchor
+  does not move under it;
+- a session whose window is closed is reaped, its baseline is remembered for a resume, and
+  its file leases are handed back;
+- work committed in the turn the limit interrupted is still demanded by the next Stop —
+  the anchor is the baseline, not the turn.
+
+The one remaining cost is named rather than fixed: a session interrupted while holding
+file leases keeps them for up to their 30-minute TTL, so a sibling wanting those exact
+paths waits that long. It clears itself with nobody acting.
+
+
 ## v1.0.15
 
 Issues #50 and #51. Both are the same failure of imagination: code that was correct for

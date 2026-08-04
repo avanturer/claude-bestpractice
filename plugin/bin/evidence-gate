@@ -28,14 +28,30 @@ from claude_bestpractice.gitctx import changed_files, resolve  # noqa: E402
 BLOCK_COUNTER = "_consecutive_blocks"
 FAILURE_MARKER = "unverified.jsonl"
 
-
-def _blocks(rec: sessions.SessionRecord) -> int:
-    value = rec.tool_signatures.get(BLOCK_COUNTER)
-    return value if isinstance(value, int) else 0
-
-
 BLOCK_REASON = "_last_block_reason"
 BLOCK_PATHS = "_last_block_paths"
+BLOCK_AT = "_last_block_at"
+
+# A gap this long between blocks is not the thing the ceiling exists to stop. The ceiling
+# catches a session looping — block, retry, block, retry, minutes apart — and lets it
+# finish UNVERIFIED rather than burning turns forever. Four blocks spread across an
+# afternoon are four separate attempts by a founder who went away in between, and the
+# commonest reason they went away is that Claude stopped answering: the five-hour usage
+# limit lands mid-turn, and the session resumes hours later with the counter exactly where
+# it was. One more block then filed an UNVERIFIED finish and a permanent `outcome: failed`
+# attempt against work whose only crime was being interrupted.
+BLOCK_STREAK_SECONDS = 3600.0
+
+
+def _blocks(rec: sessions.SessionRecord) -> int:
+    """Blocks in the current streak. A long enough silence starts a new one."""
+    value = rec.tool_signatures.get(BLOCK_COUNTER)
+    if not isinstance(value, int) or value <= 0:
+        return 0
+    last = rec.tool_signatures.get(BLOCK_AT)
+    if isinstance(last, (int, float)) and (time.time() - last) > BLOCK_STREAK_SECONDS:
+        return 0
+    return value
 
 
 def _bump_blocks(ctx, rec: sessions.SessionRecord, value: int,
@@ -50,6 +66,7 @@ def _bump_blocks(ctx, rec: sessions.SessionRecord, value: int,
     """
     payload = dict(rec.tool_signatures)
     payload[BLOCK_COUNTER] = value
+    payload[BLOCK_AT] = time.time()
     if reason:
         payload[BLOCK_REASON] = reason[:2000]
         payload[BLOCK_PATHS] = list(changed or [])[:64]
