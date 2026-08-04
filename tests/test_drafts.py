@@ -275,3 +275,78 @@ class TestThePluginDoesNotQuoteItselfBackAsADecision(RepoCase):
         )
         self.assertFalse(drafts.is_synthetic(quoted))
         self.assertEqual("decision", drafts.classify(quoted))
+
+
+class TestBothLanguagesOrNeither(unittest.TestCase):
+    """The classifier was English-only, so a Russian founder's inbox was reliably EMPTY.
+
+    Worse than the noise #44 removed: an empty inbox reads exactly like a session that
+    made no decisions, so there is nothing to notice. Measured five markers out of five
+    silent on instructions whose English translations all classified correctly.
+
+    Asserted as a table in both languages, mirroring the branch-type tests, so the
+    asymmetry cannot quietly come back the next time a marker is edited.
+    """
+
+    SAME_THING_TWICE = [
+        ("decision",
+         "мы решили использовать Decimal вместо float для денег",
+         "we decided to use Decimal instead of float for money"),
+        ("rejection",
+         "никогда не используй float для денег, только Decimal",
+         "never use float for money, only Decimal"),
+        ("correction",
+         "нет, не так — бери timestamp из source_products",
+         "no, take the timestamp from source_products instead"),
+        ("constraint",
+         "КБЖУ должно быть всегда на 100 г, иначе скоры поедут",
+         "the values must always be per 100g, or the scores break"),
+        ("constraint",
+         "так нельзя, потому что сломается прод — упадут все скоры",
+         "we cannot do that because it will break prod"),
+    ]
+
+    def test_every_marker_fires_in_russian_and_in_english(self):
+        for marker, russian, english in self.SAME_THING_TWICE:
+            with self.subTest(marker=marker):
+                self.assertEqual(marker, drafts.classify(russian), russian)
+                self.assertEqual(marker, drafts.classify(english), english)
+
+    def test_a_rejection_phrased_the_way_people_phrase_it(self):
+        """`never` wanted a verb after it, so the natural wording scored nothing.
+
+        Anchored on the comma, which is what carries the rejection — "I have never seen
+        this before" is not one and must stay unclassified.
+        """
+        self.assertEqual(
+            "rejection", drafts.classify("always use Decimal here, never float, because money")
+        )
+        self.assertIsNone(drafts.classify("I have never seen this behaviour before now"))
+
+    def test_russian_pleasantries_are_still_noise(self):
+        for turn in ("нет, спасибо, это не нужно сейчас делать",
+                     "не сейчас, давай позже вернёмся к этому вопросу",
+                     "ладно, забудь про это, не будем сейчас трогать"):
+            with self.subTest(turn=turn):
+                self.assertIsNone(drafts.classify(turn))
+
+    def test_e_and_yo_are_both_accepted(self):
+        """Both spellings come off a Russian keyboard; a marker must not depend on it."""
+        self.assertEqual("decision", drafts.classify("остановились на Postgres, берем его"))
+        self.assertEqual("decision", drafts.classify("остановились на Postgres, берём его"))
+
+
+class TestARussianTurnReachesTheInbox(RepoCase):
+    """End to end: the reported case was a transcript that produced an empty inbox."""
+
+    def test_a_correction_in_russian_becomes_a_draft(self):
+        transcript = self.repo / "transcript.jsonl"
+        turn = "нет, не так — бери timestamp из source_products, а не из snapshot"
+        transcript.write_text(
+            json.dumps({"type": "user", "message": {"content": turn}}), encoding="utf-8"
+        )
+        turns = drafts.user_turns(str(transcript))
+        made = drafts.extract(turns, "main", "s1", [])
+        self.assertEqual(1, len(made))
+        self.assertEqual("correction", made[0].marker)
+        self.assertIn("source_products", made[0].quote)

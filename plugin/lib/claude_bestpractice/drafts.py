@@ -33,24 +33,67 @@ MAX_DRAFTS_PER_TURN = 2
 
 # Ordered by strength. A turn matching a strong marker is far more likely to carry a
 # durable decision than one matching a weak one, and only the strongest match is kept.
-_MARKERS: list[tuple[str, re.Pattern[str]]] = [
-    ("decision", re.compile(r"(?i)\b(?:we (?:decided|agreed|settled on)|let'?s go with|going with)\b")),
-    ("rejection", re.compile(r"(?i)\b(?:don'?t|do not|never|stop) (?:use|using|do|doing|add|adding)\b")),
+#
+# Each marker carries its vocabulary in both languages, side by side, because the
+# alternative was measured: the classifier was English-only, so a founder working in
+# Russian had an inbox that was reliably EMPTY rather than reliably wrong — five markers
+# out of five silent on the same instructions their English translations classified
+# correctly. That is worse than the noise #44 removed, because an empty inbox reads
+# exactly like a session that made no decisions.
+#
+# `\b` is Unicode-aware on `str` patterns, so it works on Cyrillic unchanged. `[её]`
+# spellings are both accepted; Russian keyboards produce either.
+_VOCABULARY: list[tuple[str, str]] = [
+    (
+        "decision",
+        r"\b(?:we (?:decided|agreed|settled on)|let'?s go with|going with)\b"
+        r"|\b(?:реш(?:или|ил|ила|ено)|договорились|остановились на|останов(?:имся|ились)|"
+        r"бер[её]м|ид[её]м с|выбрали|выбираем|оста[её]мся на)\b",
+    ),
+    (
+        # The English branch wanted `never` to be followed by a verb from a fixed list, so
+        # "use Decimal here, never float" — the most natural way to say it — scored None.
+        # A comma before `never` is the shape that carries the rejection, and it does not
+        # fire on "I have never seen this".
+        "rejection",
+        r"\b(?:don'?t|do not|never|stop) (?:use|using|do|doing|add|adding)\b"
+        r"|,\s*never\s+\w+"
+        r"|\b(?:никогда не|больше не|не (?:использу(?:й|йте|ем)|надо|нужно|делай|дела(?:ем|йте))|"
+        r"перестань|прекрати)\b",
+    ),
     # The word boundary lives inside each branch. A trailing \b after a comma never
     # matches — comma to space is not a boundary — which silently kills the branch.
     (
         "correction",
-        re.compile(r"(?i)(?:^|[\s(])(?:no,|actually,|not that\b|instead of\b|rather than\b)"),
+        r"(?:^|[\s(«\"])(?:no,|actually,|not that\b|instead of\b|rather than\b)"
+        r"|(?:^|[\s(«\"])(?:нет,|не так\b|вместо (?:этого|того)\b|наоборот\b|не то\b)",
     ),
-    ("constraint", re.compile(r"(?i)\b(?:must (?:always|never)|cannot|has to be|required to)\b")),
-    ("rationale", re.compile(r"(?i)\bbecause\b.{0,120}\b(?:cost|slow|break|broke|fail|risk|ops|team|legal)\b")),
+    (
+        "constraint",
+        r"\b(?:must (?:always|never)|cannot|has to be|required to)\b"
+        r"|\b(?:должн(?:о|а|ы|ен) быть|обязательно|нельзя|только через)\b",
+    ),
+    (
+        "rationale",
+        r"\bbecause\b.{0,120}\b(?:cost|slow|break|broke|fail|risk|ops|team|legal)\b"
+        r"|\b(?:потому что|иначе|из-за)\b.{0,120}"
+        r"\b(?:слома|упад[её]т|поед(?:ет|ут)|пад[её]т|дорого|медленно|риск|тормоз)",
+    ),
 ]
+
+_MARKERS: list[tuple[str, re.Pattern[str]]] = [
+    (name, re.compile(pattern, re.I)) for name, pattern in _VOCABULARY
+]
+
 
 # Turns that look like corrections but carry no durable decision. Filtering these is
 # what keeps the inbox worth opening.
 _NOISE = re.compile(
-    r"(?i)^(?:no,? (?:thanks|thank you|worries|problem)|not (?:now|yet|today)|"
-    r"actually,? never ?mind|stop\.?$|wait\.?$)"
+    r"^(?:no,? (?:thanks|thank you|worries|problem)|not (?:now|yet|today)|"
+    r"actually,? never ?mind|stop\.?$|wait\.?$"
+    r"|нет,? спасибо|не сейчас|неважно|не важно|ладно,? забудь|"
+    r"стоп\.?$|погоди\.?$|подожди\.?$)",
+    re.I,
 )
 
 # Not everything the transcript files under `type: "user"` came from a user. Claude Code

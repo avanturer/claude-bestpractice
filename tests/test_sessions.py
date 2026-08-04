@@ -376,11 +376,22 @@ class TestTheWatchedProcessIsTheRightOne(RepoCase):
     def _shim(self, body: str) -> str:
         """Run `body` under a process actually named `claude`, one shell down.
 
-        A copy of the interpreter would not do: the walk identifies the CLI by argv, so
-        the ancestor has to genuinely be called `claude` for this to prove anything.
+        The ancestor has to genuinely be called `claude`, because that is what the walk
+        reads: `/proc/<pid>/cmdline`, first two arguments, basename.
+
+        It is a script rather than a relocated interpreter, and that is the whole point of
+        this helper. Copying `sys.executable` to a new name is how the first version did
+        it, and it broke `make check` for anyone running the project the ordinary way —
+        under a virtualenv, a copied interpreter has no `pyvenv.cfg` beside it and no way
+        back to its own stdlib, so it cannot start at all. Reported as issue #50, and the
+        second failure of this shape in this suite. A shebang script needs nothing
+        relocated: the kernel runs it as `sh <path-to-claude> …`, which puts the name in
+        argv exactly where the walk looks for it.
+
+        `exec` is deliberately absent. Exec'ing would replace the `claude`-named process
+        with the interpreter and erase the very name being tested.
         """
         import os
-        import shutil
         import subprocess
         import sys
         import textwrap
@@ -388,7 +399,7 @@ class TestTheWatchedProcessIsTheRightOne(RepoCase):
         shim = self.repo / "bin"
         shim.mkdir(exist_ok=True)
         claude = shim / "claude"
-        shutil.copy2(sys.executable, claude)
+        claude.write_text(f'#!/bin/sh\n"{sys.executable}" "$@"\n', encoding="utf-8")
         claude.chmod(0o755)
 
         script = self.repo / "probe.py"
@@ -410,7 +421,11 @@ class TestTheWatchedProcessIsTheRightOne(RepoCase):
         out = subprocess.run(
             [str(claude), str(script)], capture_output=True, text=True, env=env, timeout=60
         )
-        self.assertEqual(0, out.returncode, out.stderr)
+        # Named separately from what the tests assert: a shim that cannot start is a
+        # broken fixture, and reporting it as a failed liveness rule sends the reader
+        # looking in the wrong file. That is precisely what issue #50 had to be diagnosed
+        # through — `AssertionError: 0 != 1` over a stdlib that could not be found.
+        self.assertEqual(0, out.returncode, f"the `claude` shim did not run: {out.stderr}")
         return out.stdout.strip()
 
     def test_the_owner_is_found_through_the_shell_that_spawned_the_hook(self):
