@@ -737,3 +737,60 @@ class TestAdoptDoesNotWriteADeadProductNameIntoYourSettings(GateCase):
         self.contested()
         conflicts.quarantine_loose_hooks(self.ctx())
         self.assertEqual(["PostToolUse"], list(self.settings()["hooks"].keys()))
+
+
+class TestTheEnforcementStateIsNotTheAgentsToEdit(GateCase):
+    """`config.json` was refused as "the plugin's own enforcement state" while the OTHER
+    half — session records, the baseline the diff is measured from, the block counter —
+    stayed writable, and the Stop gate trusts all of it. Reported as issue #32 with two
+    working bypasses of a gate that was actively blocking a red suite.
+
+    The threat model is not a malicious founder. It is an agent blocked four times looking
+    for the shortest way to end the turn, in a directory whose path this plugin prints on
+    its own board, holding plain JSON whose field names say what they do.
+    """
+
+    def decide(self, tool: str, tool_input: dict) -> str:
+        proc = self.gate(
+            "pre-tool",
+            {"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": tool,
+             "tool_input": tool_input, "cwd": str(self.repo)},
+        )
+        try:
+            return json.loads(proc.stdout)["hookSpecificOutput"].get("permissionDecision", "allow")
+        except (json.JSONDecodeError, KeyError, TypeError):
+            return "allow"
+
+    def test_the_session_record_cannot_be_rewritten(self):
+        """Route 1, the serious one: commit the broken change, point `baseline_commit` at
+        the new HEAD, and `changed_files` comes back empty — the suite is never run and
+        NOTHING is recorded. The next session sees a clean history."""
+        from claude_bestpractice import store
+
+        self.start()
+        target = store.tier_b(self.ctx(), "sessions", "s1.json")
+        self.assertEqual(self.decide("Write", {"file_path": str(target), "content": "{}"}), "deny")
+
+    def test_the_state_directory_cannot_be_deleted(self):
+        from claude_bestpractice import store
+
+        self.start()
+        self.assertEqual(
+            self.decide("Bash", {"command": f"rm -rf {store.tier_b(self.ctx())}"}), "deny")
+
+    def test_the_push_hook_cannot_be_deleted(self):
+        from claude_bestpractice import ci
+
+        self.start()
+        self.assertEqual(
+            self.decide("Bash", {"command": f"rm -f {ci.hook_path(self.ctx())}"}), "deny")
+
+    def test_ordinary_work_is_untouched(self):
+        """A rule that also refuses the founder's own files is one they switch off."""
+        self.start()
+        self.assertEqual(
+            self.decide("Write", {"file_path": str(self.repo / "a.py"), "content": "x = 2\n"}),
+            "allow",
+        )
+        task = self.repo / ".claude" / "claude-bestpractice" / "plan" / "next" / "0001.md"
+        self.assertEqual(self.decide("Write", {"file_path": str(task), "content": "task"}), "allow")
