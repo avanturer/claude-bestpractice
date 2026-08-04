@@ -444,6 +444,17 @@ def _verify_by_declared_command(
         # an unrunnable command is a setup problem, not evidence of a bug.
         return None
 
+    missing = _missing_runner(code, tail)
+    if missing:
+        # NOT recorded as a red suite: nothing about the code was observed, and filing it
+        # as a failure would leave a ledger entry that no amount of fixing the code clears.
+        return Verdict(
+            False,
+            f"Could not run the suite — {missing}.\n$ {' '.join(command)}\n{tail}\n"
+            "This is an environment problem, not a code failure. Fix the runner, then the "
+            "gate can judge the code.",
+        )
+
     if code != 0:
         record_red(ctx, command, tail)
         return Verdict(
@@ -911,6 +922,49 @@ def detect_loop(signatures: list[str], n: int = 3, repeats: int = 3) -> str | No
         if tail[i * n : (i + 1) * n] != first:
             return None
     return " -> ".join(first)
+
+
+# 127 is the shell's "command not found", and make relays it verbatim. The message text is
+# checked too because a wrapper can swallow the code while still printing the reason.
+# Three shapes, because three shells say it three ways and `make` relays a fourth:
+#   /bin/sh: 1: pytest: not found
+#   bash: pytest: command not found
+#   make: definitely-not-a-real-runner: No such file or directory
+#   FileNotFoundError: ... 'pytest'
+# The third was found by the test for this fix, not by the report — the report only had
+# the first, and a pattern built from one sample is a pattern that fits one sample.
+_NOT_FOUND = re.compile(
+    r"(?:^|[\s:])(?P<tool>[\w.+-]+)\s*:\s*(?:command\s+)?not found"
+    r"|(?:^|[\s:])(?P<tool2>[\w.+-]+)\s*:\s*No such file or directory"
+    r"|No such file or directory:\s*'?(?P<alt>[\w.+-]+)'?",
+    re.I | re.M,
+)
+
+
+def _missing_runner(code: int, tail: str) -> str:
+    """Name the tool that is absent, or "" when the suite genuinely ran.
+
+    "The suite FAILS on the code as it stands" is a claim about the CODE, and it was
+    printed verbatim when the suite never ran at all — a bare `pytest` in a Makefile that
+    only resolves inside an activated virtualenv, so interactive shells had it and the
+    gate's did not. Zero tests executed, zero failures, and a founder sent looking for a
+    defect that was not there. Reported as issue #40.
+
+    The two situations need opposite responses: one is "fix your environment", the other is
+    "fix your code". Blocking the turn is right either way; only the diagnosis was wrong.
+    """
+    found = _NOT_FOUND.search(tail or "")
+    tool = ""
+    if found:
+        tool = found.group("tool") or found.group("tool2") or found.group("alt") or ""
+        # `make` names itself before naming the tool it could not run.
+        if tool in ("make", "sh", "bash", "zsh"):
+            tool = ""
+    if tool:
+        return f"`{tool}` not found on PATH (exit {code})"
+    if code == 127:
+        return f"the runner is not on PATH (exit {code})"
+    return ""
 
 
 def scope_drift(changed: list[str], task_paths: list[str], exempt: list[str]) -> list[str]:

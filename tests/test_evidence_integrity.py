@@ -376,3 +376,44 @@ class TestTheCeilingCarriesTheReason(RepoCase):
             last.get("subject_paths"),
             "no subjects, so this warning can never be retired when the code is rewritten",
         )
+
+
+class TestAMissingRunnerIsNotACodeFailure(RepoCase):
+    """"The suite FAILS on the code as it stands" is a claim about the CODE.
+
+    It was printed verbatim when the suite never ran at all — a bare `pytest` in a Makefile
+    that only resolves inside an activated virtualenv, so interactive shells had it and the
+    gate's did not. Zero tests executed, zero failures, and a founder sent looking for a
+    defect that was not there. Reported as issue #40.
+    """
+
+    def test_it_names_the_missing_tool(self):
+        from claude_bestpractice import evidence
+
+        tail = "/bin/sh: 1: pytest: not found\nmake: *** [Makefile:21: test] Error 127"
+        self.assertIn("pytest", evidence._missing_runner(2, tail))
+        self.assertIn("not found on PATH", evidence._missing_runner(2, tail))
+
+    def test_a_bare_127_is_enough(self):
+        from claude_bestpractice import evidence
+
+        self.assertIn("not on PATH", evidence._missing_runner(127, "opaque wrapper output"))
+
+    def test_a_genuine_failure_is_still_a_code_failure(self):
+        """The whole point is that the two stay distinguishable."""
+        from claude_bestpractice import evidence
+
+        self.assertEqual(evidence._missing_runner(1, "1 failed, 3 passed in 0.4s"), "")
+        self.assertEqual(evidence._missing_runner(0, "4 passed"), "")
+
+    def test_an_unrunnable_suite_is_not_filed_as_a_red_suite(self):
+        """A ledger entry no amount of fixing the code can clear."""
+        from claude_bestpractice import evidence
+
+        self.write("Makefile", "test:\n\t@definitely-not-a-real-runner\n")
+        self.commit("makefile")
+        verdict = evidence._verify_by_running(self.ctx(), [], ["make", "test"])
+        self.assertIsNotNone(verdict)
+        self.assertFalse(verdict.ok)
+        self.assertIn("environment problem", verdict.reason)
+        self.assertIsNone(evidence.red(self.ctx()), "an unrunnable suite was filed as red")

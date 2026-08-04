@@ -43,7 +43,10 @@ _NOISE = {"e.g.", "i.e.", "etc.", "vs."}
 #
 # Named rather than pattern-matched on angle brackets: a founder pasting XML is asking for
 # it to be read, not stripped.
-_ENVELOPES = ("ide_opened_file", "ide_selection", "system-reminder")
+_ENVELOPES = (
+    "ide_opened_file", "ide_selection", "ide_diagnostics", "system-reminder",
+    "background-task", "command-name", "command-message", "local-command-stdout",
+)
 _ENVELOPE_BLOCK = re.compile(
     r"<(" + "|".join(_ENVELOPES) + r")\b[^>]*>.*?</\1\s*>", re.S | re.I
 )
@@ -131,10 +134,16 @@ def main() -> None:
         # the files the founder first asked for into drift. Bounded, because unbounded
         # growth in a session record is how a fail-closed gate gets slow.
         merged = sorted(set(rec.task_paths) | set(extract_paths(prompt, ctx.worktree_root)))
+        # Marked when cut, because the drift refusal quotes this back as "Task was:" and a
+        # fragment presented as the whole instruction is a claim the founder cannot check.
+        # Reported as issue #41, where "…перезапустил д" was shown as the task.
+        statement = safe[:MAX_TASK_CHARS]
+        if len(safe) > MAX_TASK_CHARS:
+            statement += " […truncated; this is not the whole instruction]"
         sessions.touch(
             ctx,
             event.session_id,
-            task_statement=safe[:MAX_TASK_CHARS],
+            task_statement=statement,
             # Paths from the ORIGINAL: redaction rewrites credential-shaped tokens, and a
             # filename is not a credential. Scrubbing first would lose real paths.
             task_paths=merged[:MAX_TASK_PATHS],

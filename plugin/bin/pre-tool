@@ -149,8 +149,23 @@ SED_IN_PLACE = re.compile(r"\bsed\s+(?:-\S+\s+|'[^']*'\s+|\"[^\"]*\"\s+)*(?P<pat
 #
 # Every path-shaped argument of these verbs counts, because `rm -rf a b c` names three.
 BASH_REMOVES = re.compile(
-    r"\b(?:rm|unlink|shred|truncate|mv|cp|install|ln)\b(?P<args>(?:\s+(?:-\S+|[\w./@+~-]+))+)"
+    r"\b(?:rm|unlink|shred|truncate)\b(?P<args>(?:\s+(?:-\S+|[\w./@+~-]+))+)"
 )
+
+# `cp`, `mv`, `install` and `ln` write their LAST argument and READ the rest. Taking every
+# path-shaped argument meant a source was judged as a write: `cp <main>/.env .env` from a
+# worktree was refused for touching the main checkout, when the main checkout is where the
+# bytes came FROM and the destination was inside our own tree. Reading a sibling checkout —
+# an `.env`, a shared key, a diff — is routine. Reported as issue #42.
+BASH_COPIES = re.compile(
+    r"\b(?:mv|cp|install|ln)\b(?P<args>(?:\s+(?:-\S+|[\w./@+~-]+))+)"
+)
+
+# A heredoc body is DATA. `select … where n_live_tup > 0` inside one looks exactly like a
+# redirect to a file named `0`, and the guard duly refused a write to `<cwd>/0` — a path
+# that does not exist and was never named, so the message gave no way to find the real
+# problem. Blanked like quoted spans, and for the same reason.
+_HEREDOC = re.compile(r"<<-?\s*(['\"]?)(?P<tag>\w+)\1.*?^\s*(?P=tag)\s*$", re.S | re.M)
 _ARG = re.compile(r"[\w./@+~-]+")
 
 
@@ -267,7 +282,8 @@ def bash_write_targets(command: str, cwd: Path) -> list[Path]:
     # Blank out quoted spans first. `echo "a > b"` and `grep -q "x>y" f` contain no
     # redirect, but a naive scan read one and claimed a lease on a path that does not
     # exist — which denies a sibling session for a file nobody is editing.
-    scannable = _QUOTED.sub(lambda m: " " * len(m.group(0)), command)
+    scannable = _HEREDOC.sub(lambda m: " " * len(m.group(0)), command)
+    scannable = _QUOTED.sub(lambda m: " " * len(m.group(0)), scannable)
 
     out: list[Path] = []
 
@@ -290,8 +306,17 @@ def bash_write_targets(command: str, cwd: Path) -> list[Path]:
         for match in BASH_REMOVES.finditer(segment):
             raws += [a for a in _ARG.findall(match.group("args")) if not a.startswith("-")]
 
+        # Destination only. The sources are reads, and refusing a read is how a guard
+        # stops being about safety and starts being about obedience.
+        for match in BASH_COPIES.finditer(segment):
+            operands = [a for a in _ARG.findall(match.group("args")) if not a.startswith("-")]
+            if operands:
+                raws.append(operands[-1])
+
         for raw in raws:
-            if not raw.strip("\"'") or raw.strip("\"'").startswith("/dev/"):
+            token = raw.strip("\"'")
+            # `2>&1`, `> 0`, `>1`: file descriptors and comparisons, never filenames.
+            if not token or token.startswith("/dev/") or token.isdigit():
                 continue
             resolved = _resolve(here, raw)
             if resolved is not None and resolved not in out:
