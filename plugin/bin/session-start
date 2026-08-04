@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import board, ci, config, hookio, onboard, sessions, stage, store  # noqa: E402
+from claude_bestpractice import board, ci, config, hookio, onboard, sessions, stage, store, upgrade  # noqa: E402
 from claude_bestpractice.gitctx import GitContext, resolve, stash_baseline  # noqa: E402
 
 
@@ -164,6 +164,9 @@ def main() -> None:
     body += "\n" + _autonomy_line(config.load(ctx).autonomy)
     body += _armed_line(ctx)
     body += _knowledge_line(ctx)
+    # Empty on every session that is running what is installed, which is all of them
+    # except the ones that just updated and did not restart.
+    body += upgrade.stale_line()
 
     hookio.emit_context("SessionStart", body)
 

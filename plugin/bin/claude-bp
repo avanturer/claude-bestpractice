@@ -18,7 +18,7 @@ BIN = Path(__file__).resolve().parent
 sys.path.insert(0, str(BIN.parent / "lib"))
 
 from claude_bestpractice import __version__, board, ci, conflicts, delivery, drafts, hookio, knowledge, onboard  # noqa: E402
-from claude_bestpractice import plan, provenance, sessions, stage  # noqa: E402
+from claude_bestpractice import plan, provenance, sessions, stage, upgrade  # noqa: E402
 from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
 
 BOLD = "\033[1m" if sys.stdout.isatty() else ""
@@ -46,6 +46,15 @@ def cmd_status(ctx) -> int:
 
     print(f"{BOLD}claude-bestpractice {__version__}{OFF}  {ctx.repo_name} @ {ctx.branch}")
     print(f"{DIM}stage: {resolved_stage} — {'; '.join(signals.reasons[:3]) or 'no signals yet'}{OFF}")
+
+    # Only when the running copy is not the installed one. `claude plugin update` says
+    # "Restart to apply changes" once and is never heard from again, so a session can run
+    # superseded code indefinitely with nothing anywhere saying so.
+    newer = upgrade.superseded_by()
+    if newer:
+        print(f"  {newer} is installed but NOT running — restart Claude Code to pick it up")
+    elif upgrade.orphaned():
+        print("  this copy has been superseded — restart Claude Code to pick up the new one")
 
     heading("CHECKS")
     for line in ci.status_lines(ctx):
