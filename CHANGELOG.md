@@ -1,5 +1,60 @@
 # Changelog
 
+## v1.0.1
+
+**If you installed v1.0.0, this is the release that can actually reach you — and finding
+out why is what this release is.**
+
+### The version string is the update key
+
+`claude plugin update` compares the installed version against the marketplace's and stops
+there. It does not look at the code. Measured against the real CLI rather than inferred
+from its help text: a local marketplace, an install, a changed file with the version left
+alone, then
+
+```
+$ claude plugin update claude-bestpractice@claude-bestpractice
+claude-bestpractice is already at the latest version (1.0.0).
+```
+
+The changed file never reached the cache. Twenty-one commits of fixes — every defect listed
+under v1.0.0 below — sat behind that line, and there is **no observable difference between
+"up to date" and "permanently stranded"**: both print a tick and exit 0. Running update
+again, restarting, re-adding the marketplace all report success and change nothing.
+
+Bumping the version and repeating the experiment fetched the change immediately, with no
+marketplace refresh needed. So:
+
+- **This release bumps to 1.0.1**, which is what makes every v1.0.0 fix reachable.
+- **`tools/check_shipped.py` now fails the build** when anything under `plugin/` differs
+  from the default branch and the version does not. It names the changed files and the five
+  places the version lives. Scoped to `plugin/` deliberately — that is exactly the tree the
+  marketplace copies, confirmed by installing and listing it, so a README change still
+  reaches an `install.sh` user by `git pull` and needs no bump. The gate caught its own
+  first miss: `git diff` does not see a file that has never been added, and a new module is
+  the most consequential thing that can appear under `plugin/`.
+
+### A session can run code that is no longer installed
+
+`claude plugin update` answers `Restart to apply changes.` once and never mentions it
+again. The new version is unpacked into a sibling directory, the old one is marked
+`.orphaned_at` and left in place, and every session already running keeps executing the old
+copy for as long as it lives. Nothing said so. A founder who updates to get a fix and does
+not get it had no way to tell which of two things went wrong.
+
+A session that is running a superseded copy now says so on its own board, and
+`claude-bp status` says it too. Purely local — the version is the name of the directory the
+code is in and the alternatives are its siblings, so this costs no network call and prints
+nothing on the sessions that are running what is installed, which is all of them.
+
+### Also
+
+- All three READMEs now have an **Upgrading** section. Two of them had none at all.
+- It states the restart, the qualified `name@marketplace` form, that the version is the
+  update key, and that an `install.sh` install updates by `git pull` instead.
+
+674 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.
+
 ## v1.0.0
 
 First release. What follows is written to be checked rather than believed: every claim
@@ -198,4 +253,4 @@ several first-party review paths exist; pick one. Not a task manager — the nat
 system is subsumed and gated, never replaced. No daemon, no vector store, no graph
 database, no second model watching the first.
 
-660 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.
+674 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.

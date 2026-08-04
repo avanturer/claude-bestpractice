@@ -4,8 +4,8 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-1.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-660%20passing-2ea44f)](#已验证)
+[![version](https://img.shields.io/badge/version-1.0.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-674%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-26%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#运行要求)
@@ -280,7 +280,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 ## 已验证
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 660 个测试 · 26 项 doctor 检查 · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 674 个测试 · 26 项 doctor 检查 · budget
 ```
 
 doctor 通过**真的去做那件坏事**来证明 gate 有效，而不是把配置读回来对一遍——
@@ -291,6 +291,39 @@ doctor 通过**真的去做那件坏事**来证明 gate 有效，而不是把配
 测试套件包含一整条项目生命周期，全程通过真实的 gate 可执行文件驱动：接管一个从未见过
 的仓库、做计划、泄露一个凭据、一次范围越界、一次测试失败、一次绿色收尾，以及第二个
 会话读取这段历史。
+
+## 升级
+
+```sh
+claude plugin marketplace update claude-bestpractice
+claude plugin update claude-bestpractice@claude-bestpractice
+```
+
+然后**重启 Claude Code**。更新会落到一个新目录里，而所有已经在运行的会话在重启之前
+都还在执行旧的那份副本——CLI 只说一次 `Restart to apply changes.`，之后再也不提。
+正在运行被取代副本的会话现在会自己在 board 上说出来，这也是你唯一能发现它的地方。
+
+第二条命令需要**带限定**的 `name@marketplace` 形式。`install` 接受短名，`update` 不接受：
+在插件已安装且已启用的情况下，短名会返回 `Plugin "claude-bestpractice" not found`，
+读起来像是安装坏了，而不是参数写错了。已在真实安装上把 1.0.1 升到 1.0.2 验证过。
+
+**版本字符串就是更新的键，值得知道这一点，因为它会悄悄把你冻住。**
+`claude plugin update` 只比较已安装版本和 marketplace 上的版本，然后就停下。
+这是实测出来的，不是推断的：一个本地 marketplace、一次安装、改一个文件但不动版本号，然后
+
+```
+$ claude plugin update claude-bestpractice@claude-bestpractice
+claude-bestpractice is already at the latest version (1.0.0).
+```
+
+改动根本没有进到缓存里。「已是最新」和「永久搁浅」之间没有任何可观察的差别——两者都打一个勾。
+所以现在，`plugin/` 下的改动如果没有提升版本号，就会**让本项目自己的构建失败**，
+由 `tools/check_shipped.py` 把关。这个 gate 存在的理由是：另一种结果是修复永远到不了需要它的人手里。
+
+升级不会动你的状态，这同样是验证过而不是假设的：在 1.0.1 下写的一条计划任务，升级后仍在原处、仍可读。
+它存在于你的仓库和 git 公共目录里，而不在插件缓存里——被版本号替换掉的正是后者。
+
+用 `install.sh` 装的？那是一个克隆，所以在你克隆的目录里 `git pull` 就能更新，不需要提升版本号。
 
 ## 运行要求
 

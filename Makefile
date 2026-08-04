@@ -1,4 +1,4 @@
-.PHONY: check test doctor lint budget docs knowledge slop ratchet clean help
+.PHONY: check test doctor lint budget docs knowledge slop ratchet shipped clean help
 
 PY := python3
 
@@ -10,14 +10,21 @@ help:
 	@echo "make docs    - the LLM-first documentation gate"
 	@echo "make slop    - catch the code an LLM writes that a person would not"
 	@echo "make ratchet - lower the structural budgets to what is actually there"
+	@echo "make shipped - refuse a change to plugin/ that no installed copy could receive"
 	@echo "make knowledge - validate the decided layer and refresh its index"
 	@echo "make budget  - assert the always-on context budget is not exceeded"
 
 # One definition of done, identical in every session, with no --no-verify path.
 # Eight parallel sessions must not converge on eight notions of finished.
-check: lint docs slop polyglot knowledge test doctor budget
+check: lint docs slop polyglot knowledge shipped test doctor budget
 	@echo ""
 	@echo "check: all green"
+
+# `claude plugin update` compares version strings and fetches nothing when they match, so
+# a change under plugin/ that keeps the version is a change no installed copy can ever
+# receive — while every attempt to get it reports success.
+shipped:
+	@$(PY) tools/check_shipped.py
 
 # Defect classes have a permanent budget of zero. Structural debt is baselined on the
 # first run and may only fall after that — a ratchet seeded at zero can never be
