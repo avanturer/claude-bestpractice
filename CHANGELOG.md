@@ -47,13 +47,45 @@ A session that is running a superseded copy now says so on its own board, and
 code is in and the alternatives are its siblings, so this costs no network call and prints
 nothing on the sessions that are running what is installed, which is all of them.
 
+### The release cuts itself
+
+This entry is the first release body this repository did not publish by hand, and the
+reason is a boundary rather than a preference. An agent session pushes through a git proxy
+that answers a tag with:
+
+```
+ERR push contains a ref outside refs/heads/*; only branch updates are permitted.
+```
+
+Branch updates, nothing else. So every release needed a person at a keyboard, and the
+observable consequence was already sitting in this repository: `v1.0.0` pointed at a commit
+**twenty-one commits behind** the code its own notes described, because the tag was cut once
+and the fixes kept landing.
+
+`.github/workflows/release.yml` moves the tag and the release onto the one event an agent
+can cause — a merge to the default branch — and leaves the credentials on GitHub's side
+rather than in the session. It reads the version from `plugin/.claude-plugin/plugin.json`,
+does nothing if that release exists, and otherwise **runs `make check` before publishing
+anything**. That last part is not ceremony: a merge is made through the API, so the pre-push
+hook that guarded the branch never saw the commit being released, and a release nobody
+executed would be this project's own thesis broken by its own release mechanism.
+
+Unlike `check.yml` it is **not** gated behind `CLAUDE_BESTPRACTICE_CI`. That variable exists
+so a repository does not spend metered minutes re-running gates that already ran locally.
+The same gate on a release means the release silently never happens, which is the failure
+class this project is written against. It runs only when the version changed.
+
+The notes come from this file, matched on the exact heading — so `1.0.1` is never answered
+by `## v1.0.10`, and a version with no entry is a **refusal**, not an empty release body. A
+test asserts the current version has notes, one merge before the workflow would have to.
+
 ### Also
 
 - All three READMEs now have an **Upgrading** section. Two of them had none at all.
 - It states the restart, the qualified `name@marketplace` form, that the version is the
   update key, and that an `install.sh` install updates by `git pull` instead.
 
-674 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.
+679 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.
 
 ## v1.0.0
 
@@ -253,4 +285,4 @@ several first-party review paths exist; pick one. Not a task manager — the nat
 system is subsumed and gated, never replaced. No daemon, no vector store, no graph
 database, no second model watching the first.
 
-674 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.
+655 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.

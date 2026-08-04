@@ -1,0 +1,112 @@
+name: release
+
+# A tag is a ref outside `refs/heads/*`, and the git proxy an agent session pushes
+# through permits branch updates and nothing else:
+#
+#   ERR push contains a ref outside refs/heads/*; only branch updates are permitted.
+#
+# So every release needed a human at a keyboard, which meant `v1.0.0` sat twenty-one
+# commits behind the code its own notes described until somebody noticed. This moves the
+# tag and the release to the one event an agent can cause — a merge to the default
+# branch — and leaves the credentials on GitHub's side rather than in the session.
+#
+# Not gated behind CLAUDE_BESTPRACTICE_CI, unlike `check.yml`. That variable exists so a
+# repository does not spend metered minutes re-running gates that already ran locally on
+# every push. A release is different in kind: gating it means the release silently does
+# not happen, and a mechanism that quietly does nothing is the exact failure this project
+# is written against. It runs only when the version changed, which is a handful of times.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Tags are the state this job reads to decide whether there is anything to do.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Read the version the marketplace will serve
+        id: version
+        run: |
+          version=$(python -c "import json;print(json.load(open('plugin/.claude-plugin/plugin.json'))['version'])")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Declared version: $version"
+
+      - name: Is it already released
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "release=yes" >> "$GITHUB_OUTPUT"
+            echo "v${{ steps.version.outputs.version }} is already released — nothing to do."
+          else
+            echo "release=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Everything below is skipped on the overwhelming majority of pushes to main, which
+      # do not change the version. That is what keeps this cheap.
+
+      - name: Identify git
+        if: steps.existing.outputs.release == 'no'
+        run: |
+          git config --global user.email "ci@claude-bestpractice"
+          git config --global user.name "ci"
+          git config --global init.defaultBranch main
+
+      # The whole thesis of this project is that a claim is worth nothing without the run
+      # behind it. Publishing a release nobody executed would be that failure, committed
+      # by the release mechanism. A merge is made through the API, so the pre-push hook
+      # that guarded the branch never saw this commit.
+      - name: Prove it before publishing it
+        if: steps.existing.outputs.release == 'no'
+        run: make check
+
+      - name: Notes, or refuse
+        if: steps.existing.outputs.release == 'no'
+        run: |
+          python tools/release_notes.py "${{ steps.version.outputs.version }}" > /tmp/notes.md
+          echo "--- release body ---"
+          head -20 /tmp/notes.md
+
+      - name: Tag and release
+        if: steps.existing.outputs.release == 'no'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # `gh release create` creates the tag at this commit when it does not exist, so
+          # the tag can never point at anything but the code that was just proven.
+          if gh release create "v${{ steps.version.outputs.version }}" \
+               --target "${{ github.sha }}" \
+               --title "v${{ steps.version.outputs.version }}" \
+               --notes-file /tmp/notes.md; then
+            echo "Released v${{ steps.version.outputs.version }} at ${{ github.sha }}"
+            exit 0
+          fi
+
+          # A bare 403 here reads as a broken workflow and is a settings checkbox. The
+          # `permissions:` block above asks for contents:write; an organization or
+          # repository configured to withhold it wins, and says so only in a status code.
+          echo "::error title=Release refused::gh release create failed."
+          cat >&2 <<'WHY'
+
+          If that was a 403, GITHUB_TOKEN does not have write access here. Fix it at
+              Settings -> Actions -> General -> Workflow permissions
+                  -> Read and write permissions
+          The `permissions: contents: write` block in this file cannot grant what the
+          repository withholds. Nothing was tagged, so re-running after the change is
+          safe: this job is a no-op once the release exists.
+          WHY
+          exit 1
