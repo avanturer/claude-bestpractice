@@ -124,6 +124,24 @@ def _armed_line(ctx: GitContext) -> str:
     return line
 
 
+def _swept_line(removed: list) -> str:
+    """Say what was deleted. Deleting directories is the only destructive thing this
+    plugin does on its own initiative, and it was the only one it did not report — while
+    it announces every worktree it CREATES. Reported from a real run: the count went from
+    six to five with nothing said anywhere.
+
+    To someone returning to a tree they had committed in, a directory that is simply gone
+    reads as lost work, so the line leads with the part that makes that false. Empty on
+    every session that swept nothing, which is nearly all of them.
+    """
+    if not removed:
+        return ""
+    return (
+        f"\nremoved {len(removed)} unused worktree(s) no live session was in — their "
+        "branches are kept, so nothing committed is gone; `git branch` lists them."
+    )
+
+
 def _knowledge_line(ctx: GitContext) -> str:
     """Say so when this repository has no knowledge layer. Once, and then never.
 
@@ -161,7 +179,7 @@ def main() -> None:
     # branch over an empty directory. Only trees it provisioned, only for sessions that are
     # gone, and only via `git worktree remove` and `git branch -d`, both of which refuse
     # rather than destroy when there is anything there.
-    worktree.reap_unused(ctx, {rec.session_id for rec in others} | {me.session_id})
+    swept = worktree.reap_unused(ctx, {rec.session_id for rec in others} | {me.session_id})
     leases = {rec.session_id: sessions.leases_held_by(ctx, rec.session_id) for rec in others}
 
     resolved_stage, _signals = stage.current(ctx, config.load(ctx).stage_override)
@@ -170,6 +188,7 @@ def main() -> None:
     body += f"\nstage: {resolved_stage} (computed from the repository, not configured)"
     body += "\n" + _autonomy_line(config.load(ctx).autonomy)
     body += _armed_line(ctx)
+    body += _swept_line(swept)
     body += _knowledge_line(ctx)
     # Empty on every session that is running what is installed, which is all of them
     # except the ones that just updated and did not restart.
