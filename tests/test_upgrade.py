@@ -91,6 +91,25 @@ class TestTheVersionIsTheUpdateKey(unittest.TestCase):
             self.assertIn("plugin.json", proc.stderr)
             self.assertIn(json.loads(manifest.read_text(encoding="utf-8"))["version"], proc.stderr)
 
+    def test_a_default_branch_with_a_slash_is_still_compared(self):
+        """`refs/remotes/origin/claude/x` rsplit on the last slash gives `x`.
+
+        That ref does not exist, so the gate reported "not fetched, NOT verified" and
+        waved the change through — failing open on the one repository convention this
+        project actually uses for every branch it makes. Found by these tests the moment
+        the branch under them had a slash in its name.
+        """
+        with _clone() as repo:
+            git(["checkout", "-q", "-b", "team/release"], repo)
+            git(["update-ref", "refs/remotes/origin/team/release", "HEAD"], repo)
+            git(["symbolic-ref", "refs/remotes/origin/HEAD",
+                 "refs/remotes/origin/team/release"], repo)
+            (repo / "plugin" / "lib" / "claude_bestpractice" / "probe.py").write_text(
+                "X = 1\n", encoding="utf-8")
+            proc = _run(repo)
+            self.assertNotIn("NOT verified", proc.stdout)
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+
     def test_no_remote_fails_open_and_says_so(self):
         """A founder offline must still be able to run `make check`, and must not be
         told this was verified when nothing was compared."""

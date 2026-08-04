@@ -48,11 +48,18 @@ def _git(*args: str) -> tuple[int, str]:
     return proc.returncode, proc.stdout.strip()
 
 
+REMOTE_PREFIX = "refs/remotes/origin/"
+
+
 def _default_branch() -> str | None:
     """Whatever `origin/HEAD` points at, never a branch name assumed to be `main`."""
     code, out = _git("symbolic-ref", "--quiet", "refs/remotes/origin/HEAD")
-    if code == 0 and out:
-        return out.rsplit("/", 1)[-1]
+    if code == 0 and out.startswith(REMOTE_PREFIX):
+        # Strip the prefix, never `rsplit` on the last slash: a branch name may contain
+        # one — `claude/…` is this repository's own convention — and taking the last
+        # segment produced a ref that does not exist, which made the gate report "not
+        # fetched, NOT verified" and wave the change through. Found by its own tests.
+        return out[len(REMOTE_PREFIX):]
     for candidate in ("main", "master"):
         if _git("rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{candidate}")[0] == 0:
             return candidate

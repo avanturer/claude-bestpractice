@@ -53,7 +53,7 @@ nothing on the sessions that are running what is installed, which is all of them
 - It states the restart, the qualified `name@marketplace` form, that the version is the
   update key, and that an `install.sh` install updates by `git pull` instead.
 
-673 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.
+674 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.
 
 ## v1.0.0
 
@@ -253,4 +253,4 @@ several first-party review paths exist; pick one. Not a task manager — the nat
 system is subsumed and gated, never replaced. No daemon, no vector store, no graph
 database, no second model watching the first.
 
-673 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.
+674 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.
