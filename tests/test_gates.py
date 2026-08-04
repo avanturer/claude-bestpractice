@@ -32,6 +32,18 @@ class GateCase(RepoCase):
             timeout=timeout,
         )
 
+    def after_prompts(self, *prompts: str):
+        """Drive the real hook once per prompt and return the session record."""
+        from claude_bestpractice import sessions
+
+        self.start()
+        for prompt in prompts:
+            self.gate(
+                "prompt-capture",
+                {"session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": prompt},
+            )
+        return sessions.get(self.ctx(), sid(self.repo, "s1"))
+
     def start(self, session_id: str = "s1") -> subprocess.CompletedProcess:
         return self.gate(
             "session-start",
@@ -132,17 +144,6 @@ class TestPromptCapture(GateCase):
         )
         self.assertNotIn("additionalContext", proc.stdout)
 
-    def after_prompts(self, *prompts: str):
-        """Drive the real hook once per prompt and return the session record."""
-        from claude_bestpractice import sessions
-
-        self.start()
-        for prompt in prompts:
-            self.gate(
-                "prompt-capture",
-                {"session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": prompt},
-            )
-        return sessions.get(self.ctx(), sid(self.repo, "s1"))
 
     def test_the_task_follows_the_founder(self):
         """Reversed deliberately: this used to freeze on the first prompt and never move.
@@ -429,6 +430,8 @@ class TestPreTool(GateCase):
             sessions.SessionRecord(
                 session_id="ghost",
                 pid=999_999_999,
+                # The pid is only evidence when it is the CLI's own; see helpers.record.
+                pid_trust=sessions.PID_TRUST_OWNER,
                 worktree=ctx.worktree_root.as_posix(),
                 branch=ctx.branch,
                 baseline_commit=ctx.head,
@@ -794,3 +797,62 @@ class TestTheEnforcementStateIsNotTheAgentsToEdit(GateCase):
         )
         task = self.repo / ".claude" / "claude-bestpractice" / "plan" / "next" / "0001.md"
         self.assertEqual(self.decide("Write", {"file_path": str(task), "content": "task"}), "allow")
+
+
+class TestANodIsNotATaskStatement(GateCase):
+    """The statement took the last turn unconditionally, so a task became «Делай».
+
+    Most turns in a real session are continuations, so the field that names what a
+    session is doing ended up holding the least informative sentence the founder typed —
+    and that sentence reaches the sibling board, `claude-bp status`, every scope-drift
+    refusal, the provisioned branch name, and the attempt filed on an unverified finish,
+    which is committed. Measured on a live repository, three concurrent sessions whose
+    tasks read «Делай», «обнови» and a merge question, the second of them working on a
+    branch called `feat/obnovi-70e44134`.
+
+    Following the founder is right and stays. What was wrong is that a nod counted as
+    following.
+    """
+
+    def statement_after(self, *prompts: str) -> str:
+        return self.after_prompts(*prompts).task_statement
+
+    REAL = "перепиши merge.py так, чтобы при конфликте побеждало значение с более свежим timestamp"
+
+    def test_a_continuation_does_not_replace_the_instruction(self):
+        self.write("merge.py", "x = 1\n")
+        for nod in ("Делай", "ок", "обнови", "go ahead", "continue", "давай"):
+            with self.subTest(nod=nod):
+                self.assertEqual(self.REAL, self.statement_after(self.REAL, nod))
+
+    def test_a_new_instruction_still_replaces_the_old_one(self):
+        self.write("merge.py", "x = 1\n")
+        second = "теперь почини экспорт CSV, он падает на пустом наборе"
+        self.assertEqual(second, self.statement_after(self.REAL, second))
+
+    def test_paths_from_a_continuation_turn_are_still_collected(self):
+        """Only the statement is filtered. A nod that names a file still widens scope."""
+        from claude_bestpractice import sessions
+
+        self.write("merge.py", "x = 1\n")
+        self.write("export.py", "y = 2\n")
+        self.statement_after(self.REAL, "ок, export.py тоже")
+        rec = sessions.get(self.ctx(), sid(self.repo, "s1"))
+        self.assertEqual(["export.py", "merge.py"], rec.task_paths)
+
+    def test_a_short_prompt_that_names_a_file_is_a_statement(self):
+        self.write("merge.py", "x = 1\n")
+        self.write("export.py", "y = 2\n")
+        self.assertEqual("fix export.py", self.statement_after(self.REAL, "fix export.py"))
+
+    def test_the_first_thing_the_founder_says_is_always_kept(self):
+        """With nothing recorded yet, «Делай» beats a blank board — and only then."""
+        self.assertEqual("Делай", self.statement_after("Делай"))
+
+    def test_the_branch_is_no_longer_named_after_a_nod(self):
+        """«Делай» transliterates to `delay`, an English word meaning the opposite."""
+        from claude_bestpractice import worktree
+
+        self.write("merge.py", "x = 1\n")
+        statement = self.statement_after(self.REAL, "Делай")
+        self.assertNotIn("delay", worktree.session_slug(statement, "70e44134"))

@@ -147,6 +147,13 @@ def session_record_for(ctx, session_id: str, pid: int | None = None):
     return sessions.SessionRecord(
         session_id=session_id,
         pid=pid if pid is not None else os.getpid(),
+        # A pid is only evidence of life or death when it was resolved to the CLI itself.
+        # Tests that hand in a dead pid are asserting about a session whose owner died,
+        # so they have to say the pid was the owner's — the default, an unresolved pid,
+        # deliberately proves nothing. This is the distinction the fleet-wide invisibility
+        # bug hid behind: under test the hook's parent is the test runner, which stays
+        # alive, so watching the wrong process looked exactly like watching the right one.
+        pid_trust=sessions.PID_TRUST_OWNER,
         worktree=ctx.worktree_root.as_posix(),
         branch=ctx.branch,
         baseline_commit=ctx.head,

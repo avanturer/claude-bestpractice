@@ -26,13 +26,17 @@ def build_record(ctx: GitContext, event: hookio.HookEvent) -> sessions.SessionRe
     existing = sessions.get(ctx, event.session_id)
     now = time.time()
     baseline = stash_baseline(ctx)
+    pid, pid_trust = sessions.resolve_owner()
 
     if existing:
         # A resume or post-compaction restart keeps its identity, its task statement
         # and its baseline. Re-deriving the baseline here would silently move the
         # review anchor and make the diff since "start of work" wrong.
         existing.heartbeat_at = now
-        existing.pid = sessions.owning_pid()
+        existing.pid = pid
+        # Re-stamped, never merged: this is what upgrades a record written by a version
+        # that recorded the hook's shell wrapper and called it the session's owner.
+        existing.pid_trust = pid_trust
         existing.branch = ctx.branch
         return existing
 
@@ -43,7 +47,8 @@ def build_record(ctx: GitContext, event: hookio.HookEvent) -> sessions.SessionRe
 
     return sessions.SessionRecord(
         session_id=event.session_id or f"anon-{os.getpid()}",
-        pid=sessions.owning_pid(),
+        pid=pid,
+        pid_trust=pid_trust,
         worktree=ctx.worktree_root.as_posix(),
         branch=ctx.branch,
         baseline_commit=str(remembered.get("baseline_commit") or baseline),

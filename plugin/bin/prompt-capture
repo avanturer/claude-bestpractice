@@ -65,6 +65,49 @@ def strip_envelopes(text: str) -> str:
     return _ENVELOPE_OPEN.sub(" ", text).strip()
 
 
+# Most turns in a real session are not statements of work — they are the founder saying
+# "keep going". Taking the last turn unconditionally meant the field that names what a
+# session is doing held the least informative sentence they typed. Measured on a live
+# repository: three concurrent sessions whose tasks read «Делай», «обнови», and a merge
+# question, with the second provisioning a branch called `feat/obnovi-70e44134`. The
+# transliteration is its own trap — «Делай» renders as `delay`, an English word meaning
+# the opposite of what the session was doing.
+# The deny-list carries the work; the floor is only a backstop for acknowledgements
+# nobody thought of. Set where it clears every entry on the list and still admits a
+# terse but real instruction ("почини баг в auth").
+MIN_STATEMENT_CHARS = 16
+
+_CONTINUATION = re.compile(
+    r"(?i)^(?:"
+    r"делай|давай|сделай|поехали|начинай|продолжай|продолжи|дальше|ещё|еще|"
+    r"обнови|обновись|проверь|исправь|го|ок|окей|окей\.|ага|да|ну|хорошо|"
+    r"супер|отлично|спасибо|пж|плиз|"
+    r"go|go ahead|ok|okay|k|yes|yep|yeah|sure|please|thanks|thx|"
+    r"continue|proceed|next|do it|just do it|keep going|carry on|"
+    r"fix it|update|retry|again|more"
+    r")$"
+)
+
+
+def is_statement_of_work(prompt: str, paths: list[str]) -> bool:
+    """Does this prompt say what the session is doing, or only that it should carry on?
+
+    Naming a file settles it: a prompt that points at code is about that code however
+    short it is. Otherwise a bare continuation is rejected outright, and everything else
+    has to clear a length floor — a rule that cannot be exactly right and does not need
+    to be, because the cost of a wrong answer is asymmetric. Rejecting a real instruction
+    leaves the previous one standing, which is stale; accepting «ок» destroys the only
+    record of what this session is for, and that record is committed on an unverified
+    finish.
+    """
+    text = " ".join(prompt.split())
+    if paths:
+        return True
+    if _CONTINUATION.match(text.strip(" .!?,…").lower()):
+        return False
+    return len(text) >= MIN_STATEMENT_CHARS
+
+
 def extract_paths(text: str, root: Path) -> list[str]:
     """Paths the task actually refers to, and only ones inside this worktree.
 
@@ -124,30 +167,34 @@ def main() -> None:
         # Control characters go too: this text is rendered into an injected block, and an
         # ANSI escape or an RTL override in it is a way to make the board lie.
         safe = redact.scrub(redact.strip_control(prompt))
-        # The statement follows the founder rather than freezing at the first thing they
-        # said. It used to be written once and never again, so a session that had long
-        # since moved on was still being measured against "посмотри заново бд" — and every
-        # drift message quoted it back. Reported from a real session.
-        #
         # Paths ACCUMULATE where the statement replaces. A later instruction naming more
         # files genuinely widens what is in scope, and dropping the earlier ones would make
         # the files the founder first asked for into drift. Bounded, because unbounded
         # growth in a session record is how a fail-closed gate gets slow.
-        merged = sorted(set(rec.task_paths) | set(extract_paths(prompt, ctx.worktree_root)))
-        # Marked when cut, because the drift refusal quotes this back as "Task was:" and a
-        # fragment presented as the whole instruction is a claim the founder cannot check.
-        # Reported as issue #41, where "…перезапустил д" was shown as the task.
-        statement = safe[:MAX_TASK_CHARS]
-        if len(safe) > MAX_TASK_CHARS:
-            statement += " […truncated; this is not the whole instruction]"
-        sessions.touch(
-            ctx,
-            event.session_id,
-            task_statement=statement,
-            # Paths from the ORIGINAL: redaction rewrites credential-shaped tokens, and a
-            # filename is not a credential. Scrubbing first would lose real paths.
-            task_paths=merged[:MAX_TASK_PATHS],
-        )
+        fresh = extract_paths(prompt, ctx.worktree_root)
+        merged = sorted(set(rec.task_paths) | set(fresh))
+        updates: dict[str, object] = {"task_paths": merged[:MAX_TASK_PATHS]}
+        # The statement follows the founder rather than freezing at the first thing they
+        # said. It used to be written once and never again, so a session that had long
+        # since moved on was still being measured against "посмотри заново бд" — and every
+        # drift message quoted it back. But "follows the founder" was implemented as
+        # "takes the last turn unconditionally", which is how a session's task became
+        # «Делай». It follows the founder's *instructions*; a nod is not one.
+        # The `or` is for a session that has no statement at all — a first turn, or one
+        # resumed with nothing remembered. There, «Делай» is still better than a blank
+        # board, and it is the only case that can still yield a branch named after a
+        # continuation.
+        if is_statement_of_work(safe, fresh) or not rec.task_statement:
+            # Marked when cut, because the drift refusal quotes this back as "Task was:"
+            # and a fragment presented as the whole instruction is a claim the founder
+            # cannot check. Reported as issue #41, where "…перезапустил д" was shown.
+            statement = safe[:MAX_TASK_CHARS]
+            if len(safe) > MAX_TASK_CHARS:
+                statement += " […truncated; this is not the whole instruction]"
+            updates["task_statement"] = statement
+        # Paths from the ORIGINAL: redaction rewrites credential-shaped tokens, and a
+        # filename is not a credential. Scrubbing first would lose real paths.
+        sessions.touch(ctx, event.session_id, **updates)
     else:
         sessions.touch(ctx, event.session_id)
 

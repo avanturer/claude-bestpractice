@@ -213,3 +213,65 @@ class TestGateIntegration(RepoCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestThePluginDoesNotQuoteItselfBackAsADecision(RepoCase):
+    """The inbox filled with the gate's own refusals, and the loop fed itself.
+
+    Claude Code writes hook feedback into the transcript as a `type: "user"` record, and
+    this plugin's refusals are full of the words `classify` looks for — "not done yet",
+    "must", a list of paths. So every blocked Stop filed the gate's message as a founder
+    decision, and the more the gate blocked the more "decisions" appeared. Measured on a
+    live repository: 96 drafts, 57 of them the gate quoting itself, 39 the compaction
+    preamble, and not one thing a person said.
+    """
+
+    GATE_FEEDBACK = (
+        "Stop hook feedback: [${CLAUDE_PLUGIN_ROOT}/bin/evidence-gate]: claude-bestpractice "
+        "[1/4] — not done yet. Scope drift: backend/src/fuddy/db/migrations/0007_add.py, "
+        "backend/src/fuddy/api/orders.py"
+    )
+    COMPACTION = (
+        "This session is being continued from a previous conversation that ran out of "
+        "context. The summary below covers the earlier portion of the conversation."
+    )
+    INTERRUPT = "[Request interrupted by user for tool use]"
+    HUMAN = "No, not Postgres — we already tried that and the ops burden killed us"
+
+    def test_the_gates_own_refusal_is_not_a_decision(self):
+        self.assertTrue(drafts.is_synthetic(self.GATE_FEEDBACK))
+        self.assertIsNone(drafts.classify(self.GATE_FEEDBACK))
+
+    def test_the_compaction_preamble_is_not_a_decision(self):
+        self.assertTrue(drafts.is_synthetic(self.COMPACTION))
+        self.assertIsNone(drafts.classify(self.COMPACTION))
+
+    def test_an_interrupt_marker_is_not_a_decision(self):
+        self.assertTrue(drafts.is_synthetic(self.INTERRUPT))
+
+    def test_a_founder_correction_still_becomes_a_draft(self):
+        """The filter has to be specific, or it takes the inbox's only real content."""
+        self.assertFalse(drafts.is_synthetic(self.HUMAN))
+        self.assertEqual("correction", drafts.classify(self.HUMAN))
+
+    def test_a_transcript_of_the_measured_repository_yields_only_the_human_turn(self):
+        transcript = self.repo / "transcript.jsonl"
+        rows = [self.GATE_FEEDBACK] * 5 + [self.COMPACTION] * 3 + [self.HUMAN]
+        transcript.write_text(
+            "\n".join(
+                json.dumps({"type": "user", "message": {"content": body}}) for body in rows
+            ),
+            encoding="utf-8",
+        )
+        turns = drafts.user_turns(str(transcript))
+        self.assertEqual([self.HUMAN], turns)
+        self.assertEqual(1, len(drafts.extract(turns, "main", "s1", [])))
+
+    def test_the_phrase_is_only_a_prefix_so_a_founder_quoting_it_is_still_heard(self):
+        """Anchored at the start, because a human may well be talking *about* a block."""
+        quoted = (
+            "We decided to keep the gate: when it says not done yet, that is the point, "
+            "even though the stop hook feedback is noisy"
+        )
+        self.assertFalse(drafts.is_synthetic(quoted))
+        self.assertEqual("decision", drafts.classify(quoted))

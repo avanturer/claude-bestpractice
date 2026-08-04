@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 import unittest
 
-from helpers import RepoCase, session_record_for
+from helpers import LIB, RepoCase, session_record_for, sid
 
 from claude_bestpractice import sessions, store
 
@@ -189,6 +189,10 @@ class TestLeases(RepoCase):
                 "src/x.py": {
                     "session_id": "ghost",
                     "pid": 999_999_999,
+                    # Without this the lease says nothing about whose process that pid
+                    # was, and an unattributed pid is not grounds for taking a path off
+                    # another session — see `_holder_stands`.
+                    "pid_trust": sessions.PID_TRUST_OWNER,
                     "acquired_at": time.time(),
                     "expires_at": time.time() + 9999,
                 }
@@ -353,3 +357,151 @@ class TestTheReapLogIsBounded(RepoCase):
         sessions.register(ctx, rec)
         sessions.reap(ctx)
         self.assertEqual("cafebabe", sessions.reaped_memory(ctx, "just-crashed").get("baseline_commit"))
+
+
+class TestTheWatchedProcessIsTheRightOne(RepoCase):
+    """The pid recorded for liveness was the hook's shell wrapper, not the CLI.
+
+    Claude Code spawns hooks through `/bin/bash -c …`, which exits with the hook, so
+    `os.getppid()` named a process that was dead milliseconds later. Every session then
+    read every other as dead. Measured on a repository with three active chats: the
+    board said `OTHER LIVE SESSIONS: none`, `reaped.jsonl` held 122 entries for 3 real
+    sessions, and a file lease was released as soon as it was taken.
+
+    The suite did not catch it for five releases because under test the hook's parent is
+    the test runner, which stays alive for the assertion. So these tests spawn the way
+    the harness does, and the record now carries how its pid was obtained.
+    """
+
+    def _shim(self, body: str) -> str:
+        """Run `body` under a process actually named `claude`, one shell down.
+
+        A copy of the interpreter would not do: the walk identifies the CLI by argv, so
+        the ancestor has to genuinely be called `claude` for this to prove anything.
+        """
+        import os
+        import shutil
+        import subprocess
+        import sys
+        import textwrap
+
+        shim = self.repo / "bin"
+        shim.mkdir(exist_ok=True)
+        claude = shim / "claude"
+        shutil.copy2(sys.executable, claude)
+        claude.chmod(0o755)
+
+        script = self.repo / "probe.py"
+        script.write_text(
+            textwrap.dedent(
+                f"""
+                import subprocess, sys
+                # One shell between the CLI and the hook, exactly as Claude Code runs
+                # them. The trailing statement stops the shell exec'ing in place.
+                print(subprocess.run(
+                    ["sh", "-c", sys.executable + " -c " + repr({body!r}) + "; exit 0"],
+                    capture_output=True, text=True,
+                ).stdout, end="")
+                """
+            ),
+            encoding="utf-8",
+        )
+        env = {**os.environ, "PYTHONPATH": str(LIB)}
+        out = subprocess.run(
+            [str(claude), str(script)], capture_output=True, text=True, env=env, timeout=60
+        )
+        self.assertEqual(0, out.returncode, out.stderr)
+        return out.stdout.strip()
+
+    def test_the_owner_is_found_through_the_shell_that_spawned_the_hook(self):
+        probe = (
+            "import os,sys;from claude_bestpractice import sessions;"
+            "pid,trust=sessions.resolve_owner();"
+            "print(pid, trust, os.getppid())"
+        )
+        pid, trust, parent = self._shim(probe).split()
+        self.assertEqual(sessions.PID_TRUST_OWNER, trust)
+        self.assertNotEqual(parent, pid, "resolved the shell wrapper, which is the bug")
+
+    def test_a_pid_that_was_never_resolved_to_the_cli_is_not_evidence_of_death(self):
+        """This is the whole fix: an unattributed dead pid must not reap anything.
+
+        Where the process tree cannot be read — anywhere without /proc, macOS included —
+        the parent is all there is, and the parent is a wrapper that is *supposed* to be
+        gone. Reading that as death is what made three live chats invisible to each other.
+        """
+        ctx = self.ctx()
+        rec = record(ctx, "wrapper-gone", pid=999_999_999)
+        rec.pid_trust = sessions.PID_TRUST_PARENT
+        self.assertFalse(sessions.pid_alive(rec.pid))
+        self.assertTrue(sessions.is_live(ctx, rec))
+
+    def test_a_resolved_pid_still_decides_immediately(self):
+        ctx = self.ctx()
+        rec = record(ctx, "cli-gone", pid=999_999_999)
+        self.assertEqual(sessions.PID_TRUST_OWNER, rec.pid_trust, "the fixture proves nothing")
+        self.assertFalse(sessions.is_live(ctx, rec))
+
+    def test_a_record_from_before_the_fix_is_retired_once_it_falls_silent(self):
+        """Upgrading must clear the corpses the bug left, and only those.
+
+        A record written by an older version carries a wrapper pid and no trust stamp.
+        Honouring it forever would hand the founder a board full of phantom sessions for
+        a day and a half after the upgrade; reaping it on sight would delete a session
+        that is simply mid-think. It is retired only once it has also stopped
+        heart-beating, which a genuinely live session never does for long.
+        """
+        ctx = self.ctx()
+        legacy = record(ctx, "legacy", pid=999_999_999)
+        legacy.pid_trust = ""
+        self.assertTrue(sessions.is_live(ctx, legacy), "a fresh heartbeat outranks a wrapper pid")
+
+        legacy.heartbeat_at = time.time() - (sessions.HEARTBEAT_STALE_SECONDS + 60)
+        self.assertFalse(sessions.is_live(ctx, legacy))
+
+    def test_a_live_session_re_stamps_its_own_legacy_record(self):
+        """The upgrade path: one hook turns a pre-fix record into a trusted one."""
+        ctx = self.ctx()
+        identity = sid(self.repo, "legacy")
+        legacy = record(ctx, identity, pid=999_999_999)
+        legacy.pid_trust = ""
+        sessions.register(ctx, legacy)
+
+        self.run_hook("session-start", {"session_id": "legacy", "hook_event_name": "SessionStart"})
+
+        after = sessions.get(ctx, identity)
+        self.assertIn(after.pid_trust, (sessions.PID_TRUST_OWNER, sessions.PID_TRUST_PARENT))
+        self.assertNotEqual(999_999_999, after.pid)
+
+
+class TestALeaseSurvivesItsHooksExiting(RepoCase):
+    """`pid_alive(holder['pid'])` released a lease as soon as it was taken.
+
+    The contended-file refusal is one of this plugin's headline behaviours and it could
+    not fire between two real chats, because the pid stamped on the lease was the hook's
+    shell wrapper. The doctor check for it passed the whole time — it holds the lease
+    inside one live process, where the wrapper happens to still exist.
+    """
+
+    def held_by_a_sibling(self, ttl: float) -> None:
+        """Seed a lease taken by a session whose hook process is long gone."""
+        ctx = self.ctx()
+        with store.guarded_json(store.tier_b(ctx, sessions.LEASES_FILE), default={}) as box:
+            box[0] = {
+                "src/x.py": {
+                    "session_id": "sibling",
+                    "pid": 999_999_999,
+                    "pid_trust": sessions.PID_TRUST_PARENT,
+                    "acquired_at": time.time() - 1,
+                    "expires_at": time.time() + ttl,
+                }
+            }
+
+    def test_a_lease_stamped_with_an_unresolved_pid_still_holds(self):
+        self.held_by_a_sibling(ttl=9999)
+        self.assertEqual("sibling", sessions.acquire_lease(self.ctx(), "me", "src/x.py"))
+
+    def test_an_expired_lease_is_still_taken_over(self):
+        """The TTL is the half that was always load-bearing; it must keep working."""
+        self.held_by_a_sibling(ttl=-10)
+        self.assertIsNone(sessions.acquire_lease(self.ctx(), "me", "src/x.py"))

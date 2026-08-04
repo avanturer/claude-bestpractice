@@ -16,6 +16,14 @@ So death is: the process is gone, or the pid was recycled by a different process
 the worktree is no longer registered with git. A quiet heartbeat is grounds for death
 only past a ceiling far longer than any think, and only as a backstop against records
 that outlived a reboot.
+
+The second worst defect was the mirror of the first, and it hid behind a green suite for
+five releases: the pid being watched was the wrong process. Claude Code runs hooks
+through a shell that exits with them, so "the process is gone" was true of every session
+the instant it registered, and every session read every other as dead. Under test the
+hook's parent is the test runner, which stays alive for the assertion — so the rule and
+its proof disagreed only in the environment that ships. A pid is now recorded with how
+it was obtained, and one that was never resolved to the CLI is not evidence of anything.
 """
 
 from __future__ import annotations
@@ -23,7 +31,7 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass, asdict, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from . import store
@@ -41,19 +49,22 @@ HEARTBEAT_DEAD_SECONDS = 36 * 3600.0
 
 SESSIONS_DIR = "sessions"
 
+# How the recorded pid was arrived at, and therefore how much it is worth as evidence.
+# OWNER: the CLI process itself was found by walking the process tree — its death is the
+# session's death. PARENT: the walk failed and the hook's immediate parent was recorded
+# instead, which under Claude Code is a shell that exits with the hook, so its death
+# means nothing at all. Empty: written before this field existed; see `_pid_says_dead`.
+PID_TRUST_OWNER = "owner"
+PID_TRUST_PARENT = "parent"
 
-def owning_pid() -> int:
-    """The process to watch for liveness: the one that SPAWNED this hook.
+# Hops up the process tree to search. Deep enough for a shell wrapper, a launcher and a
+# node shim; bounded because this reads a file per hop on a path that runs in every hook.
+OWNER_SEARCH_HOPS = 8
 
-    A hook is a short-lived subprocess — it exits milliseconds after it runs, so
-    recording its own pid would mark every session dead almost immediately and the
-    next session would reap it. The parent is the Claude Code process that owns the
-    session, which is the thing whose death actually means the session is over.
+# argv[0] of the CLI, or of the interpreter running it.
+_CLI_NAMES = {"claude"}
+_CLI_PACKAGE = "claude-code"
 
-    The heartbeat is still the primary signal; this only catches a hard crash before
-    the heartbeat goes stale.
-    """
-    return os.getppid()
 LEASES_FILE = "leases.json"
 REAPED_LOG = "reaped.jsonl"
 
@@ -73,6 +84,7 @@ class SessionRecord:
     started_at: float
     heartbeat_at: float
     pid_fingerprint: str = ""
+    pid_trust: str = ""
     task_statement: str = ""
     task_paths: list[str] = field(default_factory=list)
     model: str = ""
@@ -123,6 +135,15 @@ def pid_alive(pid: int) -> bool:
     return True
 
 
+def _proc_stat_fields(pid: int) -> list[bytes]:
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as handle:
+            # The comm field can itself contain ')', so split from the right.
+            return handle.read().rsplit(b")", 1)[1].split()
+    except (OSError, IndexError):
+        return []
+
+
 def pid_fingerprint(pid: int) -> str:
     """Tell a still-running process apart from a stranger wearing its pid.
 
@@ -130,22 +151,97 @@ def pid_fingerprint(pid: int) -> str:
     pid. Empty where the kernel does not expose it, and an empty fingerprint is never
     treated as a mismatch — an unsupported platform must not start reaping live work.
     """
+    fields = _proc_stat_fields(pid)
     try:
-        with open(f"/proc/{pid}/stat", "rb") as handle:
-            # The comm field can itself contain ')', so split from the right.
-            fields = handle.read().rsplit(b")", 1)[1].split()
         return fields[19].decode("ascii")
-    except (OSError, IndexError, UnicodeDecodeError):
+    except (IndexError, UnicodeDecodeError):
         return ""
 
 
-def is_live(ctx: GitContext, rec: SessionRecord, known_worktrees: set[str] | None = None) -> bool:
-    if not pid_alive(rec.pid):
+def _proc_ppid(pid: int) -> int:
+    fields = _proc_stat_fields(pid)
+    try:
+        return int(fields[1])
+    except (IndexError, ValueError):
+        return 0
+
+
+def _looks_like_cli(pid: int) -> bool:
+    """Is this process the Claude Code CLI?
+
+    Read from argv rather than `comm`, which the kernel truncates to 15 bytes and which
+    is the interpreter (`node`) as often as it is the tool. Both launch shapes are
+    matched: `claude --resume=…`, and an interpreter handed the package's entry script.
+    """
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as handle:
+            argv = handle.read().split(b"\0")[:2]
+    except OSError:
         return False
-    # Only a POSITIVE mismatch kills. Both sides empty means we cannot tell, and "cannot
-    # tell" must resolve to live, because the cost of a wrong reap is a disarmed session.
-    current = pid_fingerprint(rec.pid)
-    if rec.pid_fingerprint and current and current != rec.pid_fingerprint:
+    for raw in argv:
+        arg = raw.decode("utf-8", "replace")
+        if PurePosixPath(arg).name in _CLI_NAMES or _CLI_PACKAGE in arg:
+            return True
+    return False
+
+
+def resolve_owner() -> tuple[int, str]:
+    """The process whose death ends this session, and how sure we are that it is.
+
+    Claude Code spawns a hook through an intermediate shell, so `os.getppid()` is a
+    `/bin/bash -c …` wrapper that exits with the hook itself. Recording it marked every
+    session dead milliseconds after it registered — measured on a repository with three
+    active chats, the board read "OTHER LIVE SESSIONS: none", `reaped.jsonl` held 122
+    entries for 3 real sessions, and a file lease was released as soon as it was taken.
+
+    So walk up the process tree to the CLI. Where the tree cannot be read — anywhere
+    without `/proc`, which includes macOS — the parent is returned with PARENT trust,
+    and the caller must then not treat its death as evidence of anything. No subprocess
+    is spawned to do better: this runs inside the lease path on every tool call.
+    """
+    parent = os.getppid()
+    pid = parent
+    for _ in range(OWNER_SEARCH_HOPS):
+        if pid <= 1:
+            break
+        if _looks_like_cli(pid):
+            return pid, PID_TRUST_OWNER
+        pid = _proc_ppid(pid)
+    return parent, PID_TRUST_PARENT
+
+
+def owning_pid() -> int:
+    return resolve_owner()[0]
+
+
+def _pid_says_dead(rec: SessionRecord) -> bool:
+    """Positive evidence that the process behind this record is gone.
+
+    Only a POSITIVE mismatch kills. Both fingerprints empty means we cannot tell, and
+    "cannot tell" must resolve to live, because the cost of a wrong reap is a disarmed
+    session.
+
+    What the pid is worth depends on what it points at. An OWNER pid is the CLI, so its
+    death is the session's death and decides immediately. A PARENT pid is the hook's
+    shell wrapper, which is *supposed* to be gone — it proves nothing, and the heartbeat
+    ceiling is the only backstop left. A record with no trust field at all was written
+    before the walk existed, so its pid is a wrapper that the old code was reading as
+    death on every pass; it decides only once the record has also fallen silent, which
+    retires the corpses that bug left behind without touching a session still working.
+    """
+    gone = not pid_alive(rec.pid)
+    if not gone:
+        current = pid_fingerprint(rec.pid)
+        gone = bool(rec.pid_fingerprint and current and current != rec.pid_fingerprint)
+    if not gone or rec.pid_trust == PID_TRUST_PARENT:
+        return False
+    if rec.pid_trust == PID_TRUST_OWNER:
+        return True
+    return (time.time() - rec.heartbeat_at) > HEARTBEAT_STALE_SECONDS
+
+
+def is_live(ctx: GitContext, rec: SessionRecord, known_worktrees: set[str] | None = None) -> bool:
+    if _pid_says_dead(rec):
         return False
     if (time.time() - rec.heartbeat_at) > HEARTBEAT_DEAD_SECONDS:
         return False
@@ -214,9 +310,11 @@ def adopt(ctx: GitContext, session_id: str) -> SessionRecord:
     under-reports — and for a fail-closed gate, demanding evidence for slightly too much
     is the survivable direction.
     """
+    pid, trust = resolve_owner()
     rec = SessionRecord(
-        session_id=session_id or f"anon-{owning_pid()}",
-        pid=owning_pid(),
+        session_id=session_id or f"anon-{pid}",
+        pid=pid,
+        pid_trust=trust,
         worktree=ctx.worktree_root.as_posix(),
         branch=ctx.branch,
         baseline_commit=branch_point(ctx),
@@ -375,6 +473,23 @@ def _lease_table(box_value: object) -> dict[str, dict]:
     }
 
 
+def _holder_stands(holder: dict, now: float) -> bool:
+    """Does another session's claim on this path still hold?
+
+    The TTL is the load-bearing half. The pid is only a way to hand a path back early
+    when its holder crashed — and only when that pid is the CLI's, because a lease
+    stamped with the hook's shell wrapper reads as dead the instant it is written. That
+    is how the contended-file refusal came to be unfireable between two real chats while
+    the doctor check for it passed: the check holds the lease inside one live process,
+    where the wrapper happens to still be alive.
+    """
+    if holder.get("expires_at", 0) <= now:
+        return False
+    if holder.get("pid_trust") != PID_TRUST_OWNER:
+        return True
+    return pid_alive(int(holder.get("pid", -1)))
+
+
 def acquire_lease(ctx: GitContext, session_id: str, relpath: str, ttl: float = 1800.0) -> str | None:
     """Claim exclusive intent to edit a path.
 
@@ -383,16 +498,16 @@ def acquire_lease(ctx: GitContext, session_id: str, relpath: str, ttl: float = 1
     taken over rather than respected.
     """
     now = time.time()
+    pid, trust = resolve_owner()
     with store.guarded_json(_leases_path(ctx), default={}) as box:
         table = _lease_table(box[0])
         holder = table.get(relpath)
-        if holder and holder.get("session_id") != session_id:
-            expires = holder.get("expires_at", 0)
-            if expires > now and pid_alive(int(holder.get("pid", -1))):
-                return str(holder.get("session_id"))
+        if holder and holder.get("session_id") != session_id and _holder_stands(holder, now):
+            return str(holder.get("session_id"))
         table[relpath] = {
             "session_id": session_id,
-            "pid": owning_pid(),
+            "pid": pid,
+            "pid_trust": trust,
             "acquired_at": now,
             "expires_at": now + ttl,
         }
