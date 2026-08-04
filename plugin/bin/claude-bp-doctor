@@ -871,6 +871,9 @@ def check_plan_ledger(repo: Path) -> Result:
         sessions.SessionRecord(
             session_id="doctor-ghost",
             pid=999_999_999,
+            # See check_reap: an unstamped pid is not evidence of death, so a ghost
+            # that wants to be reaped has to claim its pid was the CLI's.
+            pid_trust=sessions.PID_TRUST_OWNER,
             worktree=ctx.worktree_root.as_posix(),
             branch=ctx.branch,
             baseline_commit=ctx.head,
@@ -952,6 +955,10 @@ def check_reap(repo: Path) -> Result:
     ghost = sessions.SessionRecord(
         session_id="doctor-ghost",
         pid=999_999_999,
+        # The trust stamp is the point: a pid is only grounds for reaping when it was
+        # resolved to the CLI itself. A ghost without it is indistinguishable from a
+        # live session whose hook ran under a shell that has since exited.
+        pid_trust=sessions.PID_TRUST_OWNER,
         worktree=ctx.worktree_root.as_posix(),
         branch=ctx.branch,
         baseline_commit=ctx.head,
@@ -965,6 +972,46 @@ def check_reap(repo: Path) -> Result:
         "reaper removes a dead session",
         ok,
         "ghost reaped" if ok else "ghost survived — dead sessions accumulate forever",
+    )
+
+
+def check_sessions_see_each_other(repo: Path) -> Result:
+    """Two sessions registered the way Claude Code registers them must see each other.
+
+    Every other liveness check in this file spawns hooks as direct children of the
+    doctor, which stays alive for the assertion — so the recorded parent is alive, and
+    the check passes no matter what pid is being watched. Claude Code does not do that:
+    it runs each hook under a shell that exits with it. This check reproduces that, and
+    is the one that fails on the bug where a repository with three live chats reported
+    `OTHER LIVE SESSIONS: none` and no file lease could ever hold.
+    """
+    sys.path.insert(0, str(BIN.parent / "lib"))
+    from claude_bestpractice import sessions
+    from claude_bestpractice.gitctx import resolve
+
+    for name in ("doctor-peer-a", "doctor-peer-b"):
+        event = json.dumps({"session_id": name, "cwd": str(repo), "hook_event_name": "SessionStart"})
+        # The trailing `exit` is load-bearing: a shell handed one simple command execs
+        # it in place, which would leave the hook's parent as this still-live process
+        # and reproduce nothing. A second statement forces the fork, so the wrapper is
+        # a real intermediate that is gone before liveness is asked about.
+        subprocess.run(
+            ["sh", "-c", f'"{sys.executable}" "{BIN / "session-start"}"; exit 0'],
+            input=event, capture_output=True, text=True, cwd=repo, timeout=60,
+        )
+
+    ctx = resolve(repo)
+    live = [r.session_id for r in sessions.load_all(ctx) if sessions.is_live(ctx, r)]
+    held = sessions.acquire_lease(ctx, "doctor-peer-a", "contended.py")
+    refused = sessions.acquire_lease(ctx, "doctor-peer-b", "contended.py")
+    ok = len(live) == 2 and held is None and refused == "doctor-peer-a"
+    return Result(
+        "sessions spawned through a shell stay visible",
+        ok,
+        "both live, lease held against a sibling"
+        if ok
+        else f"live={sorted(live)} lease={held!r} refusal={refused!r} — "
+        "a session whose hook ran under a shell reads as dead",
     )
 
 
@@ -1000,6 +1047,7 @@ def main() -> int:
             check_plan_ledger,
             check_worktree_provisioning,
             check_reap,
+            check_sessions_see_each_other,
         ):
             repo = make_repo(Path(tempfile.mkdtemp(prefix="claude-bestpractice-case-", dir=tmp)))
             try:

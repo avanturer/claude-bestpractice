@@ -53,6 +53,42 @@ _NOISE = re.compile(
     r"actually,? never ?mind|stop\.?$|wait\.?$)"
 )
 
+# Not everything the transcript files under `type: "user"` came from a user. Claude Code
+# feeds hook output, compaction preambles and interrupt markers back into the
+# conversation as user records, and this plugin's own refusals are full of the words
+# `classify` looks for — "not done yet", "must", a list of paths. So a blocked Stop wrote
+# the gate's message into the inbox as a founder decision, and the loop fed itself: the
+# more the gate blocked, the more "decisions" appeared. Measured on a live repository, 96
+# drafts — 57 the gate quoting itself, 39 compaction boilerplate, 0 from a human.
+_SYNTHETIC = re.compile(
+    r"(?i)^(?:"
+    r"stop hook feedback\b|"
+    r"\[[^\]]*hook[^\]]*\]|"
+    r"this session is being continued from a previous conversation\b|"
+    r"\[request interrupted\b|"
+    r"caveat: the messages below\b|"
+    r"<(?:command-name|command-message|local-command-stdout|system-reminder|"
+    r"user-prompt-submit-hook|bash-input|bash-stdout|bash-stderr)\b"
+    r")"
+)
+
+# The plugin must never file its own voice as something the founder said, wherever in the
+# turn it appears — a hook message quoted mid-record still has this in it.
+_OWN_VOICE = "claude-bestpractice"
+
+
+def is_synthetic(turn: str) -> bool:
+    """Was this `type: "user"` record written by the harness rather than by a person?
+
+    Deliberately textual. The transcript format is internal and a structural flag on
+    injected records is not guaranteed to exist or to keep its name, so this degrades to
+    string rules rather than raising — and the rules are anchored at the start of the
+    record, where the harness puts its own prefixes, so a founder quoting one of these
+    phrases mid-sentence is still heard.
+    """
+    stripped = turn.lstrip()
+    return bool(_SYNTHETIC.match(stripped)) or _OWN_VOICE in turn.lower()
+
 
 @dataclass
 class Draft:
@@ -112,14 +148,14 @@ def user_turns(transcript_path: str) -> list[str]:
         else:
             continue
         body = body.strip()
-        if body:
+        if body and not is_synthetic(body):
             turns.append(body)
     return turns
 
 
 def classify(turn: str) -> str | None:
     """The strongest marker this turn matches, or None."""
-    if len(turn) < 25 or _NOISE.match(turn.strip()):
+    if len(turn) < 25 or _NOISE.match(turn.strip()) or is_synthetic(turn):
         return None
     for name, pattern in _MARKERS:
         if pattern.search(turn):

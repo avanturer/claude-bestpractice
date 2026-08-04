@@ -18,6 +18,7 @@ Selection rules, each one a correction of an observed failure:
 
 from __future__ import annotations
 
+import hashlib
 import time
 from pathlib import Path
 from typing import Any
@@ -62,26 +63,36 @@ def open_items(
     session's plan entirely.
     """
     now = time.time()
-    latest: dict[str, dict[str, Any]] = {}
-    for rec in store.read_jsonl(store.tier_b(ctx, OPEN_ITEMS_FILE)):
-        if not isinstance(rec, dict) or not rec.get("id"):
-            continue
-        latest[str(rec["id"])] = rec
-
     out = []
-    for rec in latest.values():
+    for rec in _latest_by_id(ctx).values():
         if rec.get("closed"):
             continue
         if branch and rec.get("branch") and rec["branch"] != branch:
             continue
-        created = float(rec.get("created_at", 0))
-        if now - created > OPEN_ITEM_MAX_AGE_SECONDS:
+        if now - _last_seen(rec) > OPEN_ITEM_MAX_AGE_SECONDS:
             continue
         out.append(rec)
 
-    out.sort(key=lambda r: float(r.get("created_at", 0)), reverse=True)
+    out.sort(key=_last_seen, reverse=True)
     out = out[:MAX_OPEN_ITEMS]
     return provenance.annotate(ctx, out) if with_provenance else out
+
+
+def _latest_by_id(ctx: GitContext) -> dict[str, dict[str, Any]]:
+    latest: dict[str, dict[str, Any]] = {}
+    for rec in store.read_jsonl(store.tier_b(ctx, OPEN_ITEMS_FILE)):
+        if isinstance(rec, dict) and rec.get("id"):
+            latest[str(rec["id"])] = rec
+    return latest
+
+
+def _last_seen(rec: dict[str, Any]) -> float:
+    """When this item was last asserted, not when it was first written.
+
+    Age-gating on first sight retired a finding that is still being re-derived from the
+    code every time it is reviewed, which is the opposite of what the gate is for.
+    """
+    return float(rec.get("last_seen_at") or rec.get("created_at") or 0)
 
 
 def add_open_item(
@@ -96,19 +107,48 @@ def add_open_item(
 
     The stamp is what lets a later session tell a still-true item from one whose
     subject has been rewritten underneath it.
+
+    Re-sighting an item that is already open counts it rather than filing it again. The
+    caller's `item_id` carries a timestamp, so identical findings could never collide by
+    construction: measured on a live repository, `open-items.jsonl` held 70 entries and 4
+    distinct texts, one review finding stored 34 times. That is not untidiness — the
+    board asserts each copy separately, each has to be retired separately when its
+    subject moves, and the four rows that said something new were unfindable among the
+    repeats.
     """
-    store.append_jsonl(
-        store.tier_b(ctx, OPEN_ITEMS_FILE),
-        {
-            "id": item_id,
-            "text": text[:280],
-            "branch": branch,
-            "session_id": session_id,
-            "created_at": time.time(),
-            "closed": False,
-            "subject_paths": provenance.stamp(ctx, subject_paths or []),
-        },
-    )
+    now = time.time()
+    paths = list(subject_paths or [])
+    key = _item_key(text, branch, paths)
+    prior = _open_with_key(ctx, key)
+    record = {
+        "id": prior["id"] if prior else item_id,
+        "key": key,
+        "text": text[:280],
+        "branch": branch,
+        "session_id": session_id,
+        "created_at": float(prior["created_at"]) if prior else now,
+        "last_seen_at": now,
+        "seen": int(prior.get("seen", 1)) + 1 if prior else 1,
+        "closed": False,
+        # Re-stamped on every sighting, not carried over. The claim was just re-derived
+        # from what the files hold now, so pinning it to the content it was first seen
+        # against would suppress a finding that is currently, demonstrably true.
+        "subject_paths": provenance.stamp(ctx, paths),
+    }
+    store.append_jsonl(store.tier_b(ctx, OPEN_ITEMS_FILE), record)
+
+
+def _item_key(text: str, branch: str, paths: list[str]) -> str:
+    """What makes two sightings the same item: the claim, where, and about what."""
+    payload = "\x00".join([" ".join(text.split())[:280].lower(), branch, *sorted(paths)])
+    return hashlib.sha256(payload.encode("utf-8", "replace")).hexdigest()[:16]
+
+
+def _open_with_key(ctx: GitContext, key: str) -> dict[str, Any] | None:
+    for rec in _latest_by_id(ctx).values():
+        if rec.get("key") == key and not rec.get("closed") and rec.get("created_at"):
+            return rec
+    return None
 
 
 def close_open_item(ctx: GitContext, item_id: str) -> None:
@@ -223,7 +263,11 @@ def render(
         lines.append("")
         lines.append("OPEN ITEMS on this branch:")
         for item in items:
-            lines.append(f"  - [{item['id'][:8]}] {item.get('text', '')[:160]}")
+            # The repeat count replaces the repeats. It is also the more useful signal:
+            # a finding re-derived thirty times is one that thirty reviews agreed on.
+            seen = int(item.get("seen", 1))
+            again = f" (seen {seen}×, first {_age(now - float(item.get('created_at', now)))})" if seen > 1 else ""
+            lines.append(f"  - [{item['id'][:8]}] {item.get('text', '')[:160]}{again}")
 
     from . import plan
 

@@ -1,5 +1,87 @@
 # Changelog
 
+## v1.0.13
+
+Issues #43, #44, #45 and #47. All four are the same shape: state that accumulated in a
+real repository over two days of parallel work, where each individual write looked
+correct and the pile did not. Three sessions that could not see each other, an inbox of
+96 decisions with no human in it, 70 open items with four distinct texts, and a session
+whose recorded task was «Делай».
+
+### Sessions never saw each other (#43)
+
+The pid watched for liveness was `os.getppid()`, documented as "the Claude Code process
+that owns the session". It is not. Claude Code spawns hooks through a shell that exits
+with the hook, so the recorded pid was dead milliseconds later and **every session read
+every other as dead**. In a repository with three active chats:
+
+```
+OTHER LIVE SESSIONS: none. This session is alone on the repository.
+claude-bp status: SESSIONS — none live, 0 live claim(s), 5 stale
+reaped.jsonl: 122 entries for 3 real sessions
+```
+
+The contended-file refusal — one of this plugin's headline behaviours — could not fire
+between two real chats, because a lease is gated on its holder's pid and that pid was a
+wrapper that had already exited.
+
+It survived five releases behind a green suite and a passing doctor check for the exact
+behaviour, because under test the hook's parent is the test runner, which stays alive for
+the assertion. The rule and its proof disagreed only in the environment that ships.
+
+Two changes. The owner is now found by walking the process tree to the CLI itself, and
+the record says how its pid was obtained — a pid that was never resolved to the CLI is
+not evidence of death, so nothing is reaped on it. The doctor gained the check that would
+have caught this: spawn two sessions the way Claude Code does, through a shell that
+exits, and assert they can still see each other and hold a lease against each other.
+It fails on v1.0.12 with `live=[]`.
+
+Upgrading clears the records the bug left behind — a pre-fix record is retired once it
+has also stopped heart-beating, which a live session never does for long.
+
+### The decision inbox filled with the plugin's own voice (#44)
+
+96 drafts: 57 the gate's own refusals quoted back at itself, 39 the compaction preamble,
+0 from a human. Claude Code writes hook feedback into the transcript as a `type: "user"`
+record, and this plugin's refusals are full of the words the classifier looks for — "not
+done yet", "must", a list of paths. So every blocked Stop filed the gate's message as a
+founder decision, and the loop fed itself: the more the gate blocked, the more
+"decisions" appeared.
+
+Synthetic records are now dropped before classification. The rules are anchored at the
+start of the record, where the harness puts its prefixes, so a founder talking *about* a
+block is still heard.
+
+### 70 open items, 4 distinct (#45)
+
+One review finding was stored 34 times, another 31. The caller's item id carries a
+timestamp, so identical findings could never collide by construction, and a
+commit-triggered review filed a fresh row every time it ran. The board asserted each copy
+separately to every session, each had to be retired separately when its subject moved,
+and the four rows that said something new were unfindable.
+
+A sighting of an item that is already open now counts it instead of filing it again, and
+the board prints `(seen 34×, first 2d ago)` — shorter than the repeats and strictly more
+informative. Currency is now judged on last-seen rather than first-seen, so a finding the
+code still has stops ageing out from under the founder.
+
+### A session's task became «Делай» (#47)
+
+The statement followed the founder by taking the last turn unconditionally. Most turns in
+a real session are continuations, so the field that names what a session is doing held
+the least informative sentence they typed — and it reaches the sibling board,
+`claude-bp status`, every scope-drift refusal, the provisioned branch name, and the
+attempt filed on an unverified finish, which is committed. Three concurrent sessions
+read «Делай», «обнови», and a merge question; the second was working on a branch called
+`feat/obnovi-70e44134`, where the transliteration of «Делай» is `delay` — an English word
+meaning the opposite of what the session was doing.
+
+A prompt now has to plausibly be a statement of work to replace the standing one: naming
+a file settles it, a bare continuation in either language is rejected, and everything else
+clears a short length floor. Paths still accumulate from every turn, including the nods —
+only the statement is filtered. The first thing a founder says is always kept, because
+«Делай» still beats a blank board when there is nothing at all.
+
 ## v1.0.12
 
 Issues #40, #41 and #42. Two are wrong diagnoses — the gate blocking correctly and then
