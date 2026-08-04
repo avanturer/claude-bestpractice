@@ -173,6 +173,25 @@ def foreign_refusal(target: Path, owner: Path, ctx: GitContext) -> str:
     )
 
 
+def foreign_git_refusal(owner: Path, ctx: GitContext) -> str:
+    """A git command aimed at somebody else's working tree.
+
+    Separate from the file refusal because the loss is a different shape and the founder
+    should be told which one happened: no path is named, nothing appears in a diff, and
+    `reset --hard` or `clean -fd` takes uncommitted work that was never written anywhere
+    else. Every rule keyed on "which files does this write" saw nothing at all here.
+    """
+    kind = "the main checkout" if owner == ctx.common_dir.parent.resolve() else "another session's worktree"
+    return (
+        f"claude-bestpractice: this git command operates on {kind} ({owner}), not on this "
+        f"session's working tree ({ctx.worktree_root}).\n"
+        "  reset, checkout, switch, clean and stash discard uncommitted work and move the "
+        "HEAD another session is standing on. Nothing names a file, so nothing shows up in "
+        "a diff and no lease covers it.\n"
+        "  Run it in your own tree, or let the session that owns that one run it."
+    )
+
+
 def worktree_paths_in_use(ctx: GitContext) -> dict[str, str]:
     """branch -> worktree path, so the board can name where each session is."""
     proc = subprocess.run(
