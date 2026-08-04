@@ -1,5 +1,50 @@
 # Changelog
 
+## v1.0.4
+
+**Git destroys a working tree without ever naming a file in it**, so every rule keyed on
+"which paths does this write" saw nothing at all. Reported as the boundary v1.0.3 did not
+reach, and named as the incident that made worktree-first a rule in the first place.
+
+From a session in one worktree, aimed at another tree, all of these were permitted:
+
+```
+git -C <other> reset --hard HEAD~1      discards uncommitted work that exists nowhere else
+git -C <other> clean -fd                deletes it outright
+git -C <other> checkout -b feat/…       moves a HEAD another session is standing on
+cd <other> && git reset --hard          the same, by another route
+```
+
+Nothing appears in a diff, and no lease covers it — a lease is about a file somebody is
+holding, and none of these are about a file.
+
+There are exactly three ways to point git at a working tree and all three are explicit,
+which is the only reason this is worth doing statically: `-C <path>`, `--work-tree <path>`,
+and the directory the command runs in — which the `cd` tracking added in v1.0.3 already
+resolves. `git worktree remove <path>` names its victim as a plain argument and is covered
+too. Reads are untouched: `status`, `log`, `diff`, `add`, `commit` and `fetch` either only
+look, or only move things the index and the object store already own.
+
+**These targets are deliberately kept out of the path rules rather than exempted from
+them.** `git switch -c` is the command that resolves a trunk violation and `git worktree
+add` resolves the worktree violation — a gate that refuses the fix for its own complaint is
+a trap, and the way to not build one is to never let those commands near the rule.
+
+### Interpreters, with the limit stated
+
+`node -e "fs.writeFileSync('<other>/CLAUDE.md','x')"` and `python3 -c "open(…, 'w')"` are
+now caught in their literal one-liner form, which is the shape that actually reaches around
+a path rule. **Anything computed still gets through, and this is not claimed as a general
+defence** — an interpreter is not statically analysable, and pretending otherwise would be
+the kind of promise this project exists to refuse. Matched against the raw command rather
+than the quote-blanked copy, because an interpreter's path is always quoted and the blanked
+copy contains nothing to find.
+
+Twenty-two command forms are asserted end to end through the real hook, in a repository
+with a main checkout and two worktrees — eleven that must be refused, eleven that must not.
+
+697 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.
+
 ## v1.0.3
 
 **The one-session-per-working-tree rule was enforced by asking where the session sat, not

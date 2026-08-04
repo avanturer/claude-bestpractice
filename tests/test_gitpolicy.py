@@ -177,6 +177,104 @@ class TestTheRuleIsAboutTheTargetNotTheSession(PolicyCase):
             self.assertEqual(_verdict(proc)[0], "allow")
 
 
+class TestGitItselfReachesIntoOtherTrees(PolicyCase):
+    """`reset --hard` names no file, so every rule keyed on paths saw nothing at all.
+
+    Reported as the incident that made worktree-first a rule in the first place:
+    `git -C <other> reset --hard` discards a sibling session's uncommitted work,
+    `clean -fd` deletes it outright, and `checkout`/`switch` move a HEAD that session is
+    standing on. Nothing appears in a diff, and no lease covers it — a lease is about a
+    file somebody is holding, and none of these are about a file.
+
+    Three ways to point git at a tree, all of them explicit, which is the only reason this
+    is worth doing statically: `-C <path>`, `--work-tree <path>`, and the directory the
+    command runs in, which the `cd` tracking already resolves.
+    """
+
+    def bash(self, cwd, command) -> tuple[str, str]:
+        proc = self.run_hook(
+            "pre-tool",
+            {
+                "session_id": "s1",
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Bash",
+                "tool_input": {"command": command},
+                "cwd": str(cwd),
+            },
+            cwd=cwd,
+        )
+        return _verdict(proc)
+
+    def test_every_way_of_naming_another_tree_is_refused(self):
+        mine = self.worktree("feat/mine")
+        theirs = self.worktree("feat/theirs")
+        for command in (
+            f"git -C {self.repo} reset --hard HEAD~1",
+            f"git -C {self.repo} checkout -b feat/x",
+            f"git -C {self.repo} stash",
+            f"git -C {self.repo} clean -fd",
+            f"cd {self.repo} && git reset --hard",
+            f"git --work-tree={self.repo} checkout .",
+            f"git -C {theirs} switch main",
+            f"git worktree remove {theirs}",
+        ):
+            decision, reason = self.bash(mine, command)
+            self.assertEqual(decision, "deny", f"{command} -> {reason}")
+
+    def test_the_same_commands_are_free_in_our_own_tree(self):
+        """A rule that fires on the founder's own work is one they switch off."""
+        mine = self.worktree("feat/mine")
+        for command in (
+            "git reset --hard HEAD~1",
+            "git clean -fd",
+            f"git -C {mine} stash",
+            "git status",
+            "git log --oneline -5",
+            "git fetch origin",
+        ):
+            self.assertEqual(self.bash(mine, command)[0], "allow", command)
+
+    def test_it_does_not_block_the_command_that_fixes_a_violation(self):
+        """`git switch -c` resolves the trunk rule and `git worktree add` resolves the
+        worktree rule. A gate that refuses the fix for its own complaint is a trap, so
+        these targets are kept out of the path rules entirely rather than exempted."""
+        self.assertEqual(self.bash(self.repo, "git switch -c feat/new")[0], "allow")
+        target = self.repo.parent / "wt-brand-new"
+        self.assertEqual(
+            self.bash(self.repo, f"git worktree add -b feat/brand-new {target}")[0], "allow"
+        )
+
+    def test_a_git_command_outside_every_working_tree_is_not_ours_to_judge(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            mine = self.worktree("feat/mine")
+            self.assertEqual(
+                self.bash(mine, f"cd {tmp} && git init -q r && cd r && git reset --hard")[0],
+                "allow",
+            )
+
+    def test_an_interpreter_writing_a_literal_path_is_caught(self):
+        """Not a general defence and not claimed as one: an interpreter is not statically
+        analysable, and anything computed still gets through. This matches the literal
+        one-liner form, which is the shape that actually reaches around a path rule."""
+        mine = self.worktree("feat/mine")
+        target = self.repo / "a.py"
+        for command in (
+            f"""node -e "require('fs').writeFileSync('{target}','x')" """,
+            f"""python3 -c "open('{target}','w').write('x')" """,
+        ):
+            self.assertEqual(self.bash(mine, command)[0], "deny", command)
+
+    def test_and_the_same_interpreter_write_outside_is_allowed(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            mine = self.worktree("feat/mine")
+            command = f"""python3 -c "open('{Path(tmp) / 'x.txt'}','w').write('x')" """
+            self.assertEqual(self.bash(mine, command)[0], "allow")
+
+
 class TestTheTrunkIsProtected(PolicyCase):
     def test_the_trunk_is_refused_even_inside_a_worktree(self):
         """The worktree rule and the trunk rule are independent failures."""

@@ -140,6 +140,86 @@ _ARG = re.compile(r"[\w./@+-]+")
 _CD = re.compile(r"^\s*cd\s+(?P<path>[\"']?[\w./@+~-]+[\"']?)\s*$")
 _SEGMENTS = re.compile(r"&&|\|\||;|\n")
 
+# Git destroys a working tree without ever naming a file in it, so every rule here keyed
+# on "which paths does this write" saw nothing at all. `git -C ../main reset --hard HEAD~1`
+# discards a sibling session's uncommitted work; `clean -fd` deletes it outright; `checkout`
+# and `switch` move a HEAD that session is standing on. Reported as the incident that made
+# worktree-first a rule in the first place.
+#
+# These are the subcommands that touch a working tree or the HEAD it follows. `status`,
+# `log`, `diff`, `add`, `commit` and `fetch` are deliberately absent: they either only read,
+# or they only move things the index and the object store already own.
+GIT_TREE_VERBS = {
+    "reset", "checkout", "switch", "restore", "clean", "stash", "rm", "mv",
+    "apply", "am", "revert", "merge", "rebase", "cherry-pick", "pull", "worktree",
+}
+_GIT_C = re.compile(r"(?:^|\s)-C\s+(?P<path>[\"']?[\w./@+~-]+[\"']?)")
+_GIT_WORK_TREE = re.compile(r"--work-tree(?:=|\s+)(?P<path>[\"']?[\w./@+~-]+[\"']?)")
+_GIT_VERB = re.compile(r"\bgit\b(?P<rest>.*)", re.S)
+_WORKTREE_REMOVE = re.compile(r"\bworktree\s+(?:remove|prune)\b(?P<args>(?:\s+(?:-\S+|[\w./@+-]+))*)")
+
+# An interpreter is not statically analysable in general and this does not pretend to be.
+# It matches the literal one-liner form only — the shape actually used to reach around a
+# path rule — and misses anything computed, which is stated rather than implied.
+_INTERPRETER_WRITE = re.compile(
+    r"""writeFileSync\s*\(\s*['"](?P<a>[^'"]+)['"]"""
+    r"""|(?:^|\W)open\s*\(\s*['"](?P<b>[^'"]+)['"]\s*,\s*['"][wax]""",
+    re.M,
+)
+
+
+def _segments_with_cwd(scannable: str, cwd: Path):
+    """Each shell segment paired with the directory it would actually run in."""
+    here = cwd
+    for segment in _SEGMENTS.split(scannable):
+        moved = _CD.match(segment)
+        if moved:
+            # Tracked, never executed. `cd` into a path that does not exist still changes
+            # what the rest of the line means to this scanner, and guessing wrong here
+            # only costs a target that lands outside every tree, which is ignored anyway.
+            here = (here / moved.group("path").strip("\"'")).expanduser()
+            continue
+        yield segment, here
+
+
+def _resolve(base: Path, raw: str) -> Path | None:
+    try:
+        return (base / raw.strip("\"'")).expanduser().resolve()
+    except (OSError, RuntimeError):
+        return None
+
+
+def git_tree_targets(command: str, cwd: Path) -> list[Path]:
+    """Working trees a git command would mutate, however it was pointed at them.
+
+    Three ways to name one, and all three are explicit, which is why this is worth doing
+    statically at all: `-C <path>`, `--work-tree <path>`, or the directory the command runs
+    in — which `cd` already tracks for redirects.
+    """
+    scannable = _QUOTED.sub(lambda m: " " * len(m.group(0)), command)
+    out: list[Path] = []
+    for segment, here in _segments_with_cwd(scannable, cwd):
+        found = _GIT_VERB.search(segment)
+        if not found:
+            continue
+        rest = found.group("rest")
+        if not (GIT_TREE_VERBS & set(_ARG.findall(rest))):
+            continue
+
+        bases = [_resolve(here, m.group("path"))
+                 for m in list(_GIT_C.finditer(rest)) + list(_GIT_WORK_TREE.finditer(rest))]
+        # `git worktree remove <path>` destroys a tree named as a plain argument.
+        for removal in _WORKTREE_REMOVE.finditer(rest):
+            bases += [_resolve(here, a) for a in _ARG.findall(removal.group("args"))
+                      if not a.startswith("-")]
+        if not bases:
+            bases = [_resolve(here, ".")]
+
+        for base in bases:
+            if base is not None and base not in out:
+                out.append(base)
+    return out
+
 
 def bash_write_targets(command: str, cwd: Path) -> list[Path]:
     """Absolute paths a shell command appears to write, resolved as the shell would.
@@ -157,16 +237,15 @@ def bash_write_targets(command: str, cwd: Path) -> list[Path]:
     scannable = _QUOTED.sub(lambda m: " " * len(m.group(0)), command)
 
     out: list[Path] = []
-    here = cwd
-    for segment in _SEGMENTS.split(scannable):
-        moved = _CD.match(segment)
-        if moved:
-            # Tracked, never executed. `cd` into a path that does not exist still changes
-            # what the rest of the line means to this scanner, and guessing wrong here
-            # only costs a target that lands outside every tree, which is ignored anyway.
-            here = (here / moved.group("path").strip("\"'")).expanduser()
-            continue
 
+    # On the RAW command, because `_QUOTED` blanks quoted spans and an interpreter's path
+    # is always quoted — scanning the blanked copy would find nothing, every time.
+    for match in _INTERPRETER_WRITE.finditer(command):
+        resolved = _resolve(cwd, match.group("a") or match.group("b") or "")
+        if resolved is not None and resolved not in out:
+            out.append(resolved)
+
+    for segment, here in _segments_with_cwd(scannable, cwd):
         matches = list(BASH_WRITE_TARGETS.finditer(segment))
         if "sed" in segment and " -i" in segment:
             matches += list(SED_IN_PLACE.finditer(segment))
@@ -179,14 +258,10 @@ def bash_write_targets(command: str, cwd: Path) -> list[Path]:
             raws += [a for a in _ARG.findall(match.group("args")) if not a.startswith("-")]
 
         for raw in raws:
-            raw = raw.strip("\"'")
-            if not raw or raw.startswith("/dev/"):
+            if not raw.strip("\"'") or raw.strip("\"'").startswith("/dev/"):
                 continue
-            try:
-                resolved = (here / raw).expanduser().resolve()
-            except (OSError, RuntimeError):
-                continue
-            if resolved not in out:
+            resolved = _resolve(here, raw)
+            if resolved is not None and resolved not in out:
                 out.append(resolved)
     return out
 
@@ -364,6 +439,17 @@ def main() -> None:
             owner = gitpolicy.foreign_tree(ctx, path)
             if owner is not None:
                 hookio.deny_tool(gitpolicy.foreign_refusal(path, owner, ctx))
+
+    # Kept out of `absolute` on purpose, so these never reach the worktree and trunk rules
+    # below. `git switch -c` is the command that RESOLVES a trunk violation, and a gate
+    # that refuses the fix for the thing it is complaining about is a trap the agent learns
+    # to route around. Pointed at somebody else's tree it is a different act entirely, and
+    # that is the only thing checked here.
+    if cfg.require_worktree and event.tool_name == "Bash":
+        for path in git_tree_targets(str(ti.get("command", "")), session_cwd):
+            owner = gitpolicy.foreign_tree(ctx, path)
+            if owner is not None:
+                hookio.deny_tool(gitpolicy.foreign_git_refusal(owner, ctx))
 
     # Outside every working tree of this repository there is no rule to apply: a scratch
     # file in /tmp is not somebody else's work, and refusing it only taught the agent that
