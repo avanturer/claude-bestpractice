@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import subprocess
 import unittest
+from pathlib import Path
 
 from helpers import RepoCase, git
 
@@ -73,6 +74,107 @@ class TestWorktreeIsMandatory(PolicyCase):
     def test_it_can_be_switched_off_for_a_single_session_repo(self):
         self.configure(require_worktree=False, protect_trunk=False)
         self.assertEqual(self.decision()[0], "allow")
+
+
+class TestTheRuleIsAboutTheTargetNotTheSession(PolicyCase):
+    """The rule held in exactly one direction, and the wrong one was the unsafe one.
+
+    Reported from a real machine with the table filled in. `violations()` asks where the
+    SESSION sits — `ctx.is_worktree` — so a session in the main checkout was refused
+    correctly, while a session in a worktree could write into the main checkout, or into a
+    sibling session's tree, and nothing said a word. That is verbatim the failure the
+    refusal text warns about: "one session's edit vanishing under another's, with neither
+    told", printed by the gate that was permitting it.
+
+    Leases cover part of the same ground, but only for a file another session is holding
+    at that moment. An unheld file went straight through.
+    """
+
+    def write_from(self, session_root, target_file) -> tuple[str, str]:
+        proc = self.run_hook(
+            "pre-tool",
+            {
+                "session_id": "s1",
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Write",
+                "tool_input": {"file_path": str(target_file), "content": "y = 1\n"},
+                "cwd": str(session_root),
+            },
+            cwd=session_root,
+        )
+        return _verdict(proc)
+
+    def test_a_worktree_may_not_write_into_the_main_checkout(self):
+        mine = self.worktree("feat/mine")
+        decision, reason = self.write_from(mine, self.repo / "a.py")
+        self.assertEqual(decision, "deny", reason)
+        self.assertIn("main checkout", reason)
+
+    def test_a_worktree_may_not_write_into_a_sibling_worktree(self):
+        mine = self.worktree("feat/mine")
+        theirs = self.worktree("feat/theirs")
+        decision, reason = self.write_from(mine, theirs / "a.py")
+        self.assertEqual(decision, "deny", reason)
+        self.assertIn("worktree", reason)
+
+    def test_a_shell_redirect_into_another_tree_is_refused_too(self):
+        """`touched` holds only paths inside OUR tree, so writing elsewhere emptied it and
+        the check was skipped entirely — the one case that most needed to reach it."""
+        mine = self.worktree("feat/mine")
+        proc = self.run_hook(
+            "pre-tool",
+            {
+                "session_id": "s1",
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Bash",
+                "tool_input": {"command": f"printf x > {self.repo / 'a.py'}"},
+                "cwd": str(mine),
+            },
+            cwd=mine,
+        )
+        self.assertEqual(_verdict(proc)[0], "deny")
+
+    def test_a_worktree_writes_to_its_own_tree_freely(self):
+        mine = self.worktree("feat/mine")
+        self.assertEqual(self.write_from(mine, mine / "a.py")[0], "allow")
+
+    def test_outside_every_working_tree_there_is_no_rule_to_apply(self):
+        """A scratch file in /tmp is not somebody else's work.
+
+        This fired from the main checkout on any Write at all, including into the
+        plugin's own scratch directory — so checking the plugin was blocked by the
+        plugin. Refusing things that do not matter is how a gate teaches an agent to
+        route around it.
+        """
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            outside = Path(tmp) / "scratch.txt"
+            self.assertEqual(self.write_from(self.repo, outside)[0], "allow")
+            mine = self.worktree("feat/mine")
+            self.assertEqual(self.write_from(mine, outside)[0], "allow")
+
+    def test_a_relative_redirect_is_resolved_where_the_shell_would(self):
+        """`cd /tmp/x && printf > a.py` writes /tmp/x/a.py, not <repo>/a.py.
+
+        It was resolved against the repository root regardless, so the command was
+        refused as a write to a file it never touched.
+        """
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self.run_hook(
+                "pre-tool",
+                {
+                    "session_id": "s1",
+                    "hook_event_name": "PreToolUse",
+                    "tool_name": "Bash",
+                    "tool_input": {"command": f"cd {tmp} && printf x > a.py"},
+                    "cwd": str(self.repo),
+                },
+                cwd=self.repo,
+            )
+            self.assertEqual(_verdict(proc)[0], "allow")
 
 
 class TestTheTrunkIsProtected(PolicyCase):

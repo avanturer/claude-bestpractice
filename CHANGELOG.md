@@ -1,5 +1,60 @@
 # Changelog
 
+## v1.0.3
+
+**The one-session-per-working-tree rule was enforced by asking where the session sat, not
+where the write landed — so it held in exactly one direction, and the direction it missed
+was the unsafe one.** Reported from a real machine, with the table filled in.
+
+### A session in a worktree could write into any other tree
+
+`gitpolicy.violations()` asked `ctx.is_worktree`, a fact about the session's own directory.
+A session in the main checkout was refused, correctly. A session in a worktree could write
+into the main checkout — `CLAUDE.md` included — or into a sibling session's worktree, and
+nothing said a word.
+
+That is verbatim the failure the refusal text warns about, printed by the gate that was
+permitting it:
+
+> Several sessions sharing one working tree overwrite each other silently — git does not
+> notice, and neither will you.
+
+Leases cover part of the same ground, but only for a file some other session is holding at
+that moment. An unheld file went straight through.
+
+### And it refused writes that were nobody's business
+
+The same question, asked the same wrong way, denied a `Write` to `/tmp` because the session
+happened to be in the main checkout — including into this plugin's own scratch directory, so
+checking the plugin was blocked by the plugin. A gate that fires on things that do not
+matter is one an agent learns to route around.
+
+Underneath were two errors in resolving where a write actually goes, one in each direction:
+
+- **An absolute path outside the repository was dropped silently.** `(root / "/tmp/x")` is
+  `/tmp/x`, and `.relative_to(root)` raises — the target vanished, so the write went
+  unexamined by every rule keyed on what it touches.
+- **A relative path was resolved against the wrong base.** `cd /tmp/x && printf > a.py`
+  writes `/tmp/x/a.py`; it was read as `<repo>/a.py` and refused as a write to a file the
+  command never touched. `cd` was not being read at all.
+
+### What holds now
+
+The decision is made on the **target**, resolved as the shell would resolve it:
+
+| Target | Decision |
+|---|---|
+| Inside this session's own working tree | the existing rules — worktree, trunk |
+| Inside another working tree of this repository | **refused**, naming the tree that owns it |
+| Outside every working tree | no opinion — not this gate's business |
+
+Nine cases from the report are asserted end to end through the real hook, in a repository
+with a main checkout and two worktrees. One consequence worth naming: a scratch file outside
+the repository no longer takes a **lease** either, which had let one session deny another a
+`/tmp` path the two of them do not share.
+
+691 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.
+
 ## v1.0.2
 
 **Scope drift was firing on correct work, and the cause was a path the founder never

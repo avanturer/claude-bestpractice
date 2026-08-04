@@ -107,6 +107,72 @@ def violations(ctx: GitContext, task: str = "") -> list[str]:
     return out
 
 
+def working_trees(ctx: GitContext) -> list[Path]:
+    """Every working tree sharing this repository's object store, main checkout first."""
+    proc = subprocess.run(
+        ["git", "worktree", "list", "--porcelain"],
+        cwd=str(ctx.worktree_root), capture_output=True,
+        encoding="utf-8", errors="surrogateescape", timeout=30,
+    )
+    out: list[Path] = []
+    for line in proc.stdout.splitlines():
+        if line.startswith("worktree "):
+            try:
+                out.append(Path(line.split(" ", 1)[1]).resolve())
+            except OSError:
+                continue
+    return out
+
+
+def foreign_tree(ctx: GitContext, target: Path) -> Path | None:
+    """The working tree that owns `target`, when that tree is not this session's.
+
+    The rule this file opens with — one session per working tree — was enforced by asking
+    where the SESSION sat, never where the write landed. So it held in exactly one
+    direction. A session in the main checkout was refused, correctly; a session in a
+    worktree could write into the main checkout, or into a sibling session's tree, and
+    nothing said a word. That is the failure the refusal text describes, committed by the
+    gate that prints it: "one session's edit vanishing under another's, with neither
+    told."
+
+    Reported from a real machine. Leases cover part of it, but only for a file some other
+    session is holding at that moment; an unheld file went straight through.
+
+    Cheap first: a target inside our own tree is a path comparison and asks git nothing,
+    which is the overwhelmingly common case on a hook that runs on every tool call.
+    """
+    if _within(target, ctx.worktree_root):
+        return None
+    for tree in working_trees(ctx):
+        if tree != ctx.worktree_root.resolve() and _within(target, tree):
+            return tree
+    return None
+
+
+def owned_by_session(ctx: GitContext, target: Path) -> bool:
+    """Does this write land in the tree this session is working in?"""
+    return _within(target, ctx.worktree_root)
+
+
+def _within(target: Path, root: Path) -> bool:
+    try:
+        target.resolve().relative_to(root.resolve())
+    except (ValueError, OSError):
+        return False
+    return True
+
+
+def foreign_refusal(target: Path, owner: Path, ctx: GitContext) -> str:
+    kind = "the main checkout" if owner == ctx.common_dir.parent.resolve() else "another session's worktree"
+    return (
+        f"claude-bestpractice: {target} belongs to {kind} ({owner}), not to this session's "
+        f"working tree ({ctx.worktree_root}).\n"
+        "  Editing across working trees is the exact silent overwrite worktrees exist to "
+        "prevent — git does not notice, and neither would you.\n"
+        "  Make the change in your own tree and merge it, or start a session there."
+    )
+
+
 def worktree_paths_in_use(ctx: GitContext) -> dict[str, str]:
     """branch -> worktree path, so the board can name where each session is."""
     proc = subprocess.run(
