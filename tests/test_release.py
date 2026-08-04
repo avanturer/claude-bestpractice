@@ -111,6 +111,28 @@ class TestTheReleaseCutsItself(unittest.TestCase):
             "the suite must run before the release is published",
         )
 
+    def test_every_workflow_that_runs_the_suite_installs_a_runner_for_it(self):
+        """Three tests drive a real pytest over a throwaway project; a bare runner has none.
+
+        This was latent for as long as the repository existed: `check.yml` is gated behind
+        a variable and had never executed, so nothing had ever run `make check` on a clean
+        machine. The release workflow was the first, and it failed exactly here — which is
+        the gate refusing to publish something it could not prove, working as intended.
+        """
+        # `check.yml` runs the gates as separate steps and never says `make check`, so each
+        # workflow is checked against the target it actually invokes.
+        for rel, target in (
+            (".github/workflows/check.yml", "make test"),
+            (".github/workflows/release.yml", "make check"),
+        ):
+            body = read(rel)
+            self.assertIn(target, body, rel)
+            self.assertIn("pip install", body, f"{rel} runs the suite with no pytest")
+            self.assertLess(
+                body.index("pip install"), body.index(target),
+                f"{rel} installs the runner after it needs it",
+            )
+
     def test_the_release_workflow_is_not_gated_off(self):
         """`check.yml` is gated on a variable so it costs nothing until switched on.
         The same gate on a release means the release silently never happens."""

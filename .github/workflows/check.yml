@@ -41,10 +41,19 @@ jobs:
           git config --global user.name "ci"
           git config --global init.defaultBranch main
 
-      - name: No dependencies to install
+      # The plugin has no dependencies, and `tools/check_stdlib_only.py` enforces that over
+      # `plugin/` on every run. Its TEST SUITE is a different thing and this step used to
+      # blur the two: three tests build a throwaway Python project and require the gate to
+      # actually drive `python3 -m pytest` over it. A runner with no pytest cannot witness
+      # anything, so the gate correctly declines and those three fail.
+      #
+      # Latent until the release workflow became the first thing to run `make check` on a
+      # clean runner — this job is gated behind a variable and had never executed.
+      - name: A test runner for the gate to drive
         run: |
-          echo "stdlib only by constraint — enforced by tools/check_stdlib_only.py"
           python -c "import sys; print(sys.version)"
+          python -m pip install --quiet --disable-pip-version-check pytest
+          echo "pytest is a test-environment dependency; the plugin itself imports only the stdlib"
 
       - name: Lint
         run: make lint
