@@ -278,10 +278,36 @@ class TestTheShippedWorkflowIsOptIn(unittest.TestCase):
         for target in ("make lint", "make docs", "make slop", "make test", "make doctor"):
             self.assertIn(target, text, f"hosted CI does not run `{target}`")
 
-    def test_ci_installs_no_dependencies(self):
-        """The stdlib-only constraint is void if CI quietly pip-installs the difference."""
+    def test_ci_installs_nothing_the_plugin_could_import(self):
+        """Narrowed from "installs nothing at all", and the narrowing is load-bearing.
+
+        The original reason was "the stdlib-only constraint is void if CI quietly
+        pip-installs the difference", and that is not how the constraint is enforced.
+        `tools/check_stdlib_only.py` reads the source, so it refuses `import requests` in
+        `plugin/` whether or not requests is installed — verified by adding one and
+        watching it fail with both requests and pytest present in the environment. This
+        assertion was belt to that braces, and the belt was the wrong size: it also
+        forbade the one install the suite genuinely needs.
+
+        Three tests build a throwaway Python project and require the gate to actually
+        execute pytest over it. A bare runner has none, the gate correctly declines, and
+        those three fail — which is what happened the first time anything ran `make check`
+        on a clean machine. So exactly one install is permitted, it is named here, and the
+        plugin may not import it.
+        """
+        import re
+
         text = (REPO_ROOT / ".github" / "workflows" / "check.yml").read_text(encoding="utf-8")
-        self.assertNotIn("pip install", text)
+        installs = re.findall(r"pip install.*", text)
+        self.assertEqual(len(installs), 1, f"unexpected install step(s): {installs}")
+        self.assertIn("pytest", installs[0])
+
+        offenders = [
+            path.name
+            for path in (REPO_ROOT / "plugin" / "lib" / "claude_bestpractice").glob("*.py")
+            if re.search(r"^\s*(import|from)\s+pytest\b", path.read_text(encoding="utf-8"), re.M)
+        ]
+        self.assertEqual(offenders, [], "the plugin imports what CI installs")
 
 
 class TestTheHookRunsTheProjectsOwnSuite(CICase):

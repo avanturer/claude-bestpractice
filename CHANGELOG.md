@@ -79,13 +79,29 @@ The notes come from this file, matched on the exact heading — so `1.0.1` is ne
 by `## v1.0.10`, and a version with no entry is a **refusal**, not an empty release body. A
 test asserts the current version has notes, one merge before the workflow would have to.
 
+**Its first run refused to publish, and it was right.** `make check` failed on the runner
+with three failures that pass on every developer machine. `check.yml` is gated behind
+`CLAUDE_BESTPRACTICE_CI` and had therefore never executed, so this was the first time
+anything ran the suite on a clean machine — and three tests build a throwaway Python project
+and require the gate to *actually execute pytest over it*. A bare runner has no pytest, the
+gate correctly declines to witness anything, and those three fail. Reproduced locally by
+blocking the import rather than guessed at.
+
+Both workflows now install a test runner, and the assertion that forbade it is narrowed
+rather than deleted. Its reason — "the stdlib-only constraint is void if CI quietly
+pip-installs the difference" — turned out not to describe the enforcement:
+`tools/check_stdlib_only.py` reads the source, so it refuses `import requests` under
+`plugin/` whether or not requests is installed. Verified by adding one and watching it fail
+with both requests and pytest present. Exactly one install is permitted now, it is named,
+and the plugin may not import it.
+
 ### Also
 
 - All three READMEs now have an **Upgrading** section. Two of them had none at all.
 - It states the restart, the qualified `name@marketplace` form, that the version is the
   update key, and that an `install.sh` install updates by `git pull` instead.
 
-679 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.
+680 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.
 
 ## v1.0.0
 

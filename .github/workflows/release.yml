@@ -70,6 +70,14 @@ jobs:
       # behind it. Publishing a release nobody executed would be that failure, committed
       # by the release mechanism. A merge is made through the API, so the pre-push hook
       # that guarded the branch never saw this commit.
+      # Three tests build a throwaway Python project and require the gate to actually drive
+      # `python3 -m pytest` over it. A runner with no pytest cannot witness anything, so the
+      # gate correctly declines and those three fail. This is a test-environment dependency;
+      # the plugin imports only the stdlib and `tools/check_stdlib_only.py` enforces it.
+      - name: A test runner for the gate to drive
+        if: steps.existing.outputs.release == 'no'
+        run: python -m pip install --quiet --disable-pip-version-check pytest
+
       - name: Prove it before publishing it
         if: steps.existing.outputs.release == 'no'
         run: make check
