@@ -1,5 +1,27 @@
 # Changelog
 
+## v1.0.7
+
+**The sweep said nothing.** Reported from a real run of v1.0.6: six worktrees became five
+and no line anywhere mentioned it.
+
+Removing directories is the only destructive thing this plugin does on its own initiative,
+and it was the only one it did not report — while it announces every worktree it *creates*
+("A worktree has been created for you at …"). To someone returning to a tree they had
+committed in, a directory that is simply gone reads as lost work, even though the branch is
+still there. Silence about a deletion is the one place this project cannot afford it.
+
+```
+removed 5 unused worktree(s) no live session was in — their branches are kept,
+so nothing committed is gone; `git branch` lists them.
+```
+
+It leads with the part that makes "my work is gone" false, because that is the thought the
+line exists to answer. Empty on every session that swept nothing, which is nearly all of
+them, so it costs nothing against the 400-token ceiling.
+
+712 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.
+
 ## v1.0.6
 
 Three findings from a real run of v1.0.5, all about what provisioning leaves behind. The

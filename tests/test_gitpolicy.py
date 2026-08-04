@@ -405,6 +405,37 @@ class TestWorktreeNamesAndCleanup(PolicyCase):
         self.assertEqual(worktree.reap_unused(ctx, live={"alive"}), [])
         self.assertTrue(made.is_dir())
 
+    def test_the_sweep_is_announced_on_the_board(self):
+        """Deleting directories is the only destructive thing this plugin does on its own
+        initiative, and it was the only one it did not report — while it announces every
+        worktree it creates. Reported from a real run: six trees became five, silently.
+
+        To someone returning to a tree they had committed in, a directory that is simply
+        gone reads as lost work.
+        """
+        from claude_bestpractice import worktree
+
+        worktree.provision(self.ctx(), "abandoned", "dead-session")
+        proc = self.run_hook(
+            "session-start",
+            {"session_id": "fresh", "hook_event_name": "SessionStart", "cwd": str(self.repo)},
+            cwd=self.repo,
+        )
+        body = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("removed 1 unused worktree", body)
+        self.assertIn("branches are kept", body)
+
+    def test_it_says_nothing_when_it_swept_nothing(self):
+        """Which is nearly every session, and the context budget is 400 tokens."""
+        proc = self.run_hook(
+            "session-start",
+            {"session_id": "fresh", "hook_event_name": "SessionStart", "cwd": str(self.repo)},
+            cwd=self.repo,
+        )
+        self.assertNotIn(
+            "unused worktree", json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
+        )
+
     def test_it_never_touches_a_tree_it_did_not_make(self):
         """A worktree the founder created by hand is not this plugin's to remove."""
         from claude_bestpractice import worktree
