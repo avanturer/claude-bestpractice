@@ -133,15 +133,29 @@ class TestStateFromEveryReleaseStillLoads(unittest.TestCase):
                     f"{tag} -> current: the protected-state gate stopped firing",
                 )
 
-    def test_the_current_version_is_tagged_or_unreleased(self):
-        """A guard on this test's own premise: it compares against released tags, so it is
-        worth knowing when the working tree's version is one of them."""
+    def test_changes_are_not_shipped_over_a_released_version(self):
+        """Released-and-at-rest is not the same state as shipping over a release.
+
+        The first version of this asked only whether `v{__version__}` was among the tags,
+        which it must be, by definition, on every release commit — so `make check` was red
+        on exactly the tree a user clones and installs, and the pre-push hook refused to
+        push out of a fresh release. Reported as issue #34.
+
+        The condition the docstring always meant is: the tag exists AND the tree has moved
+        past it.
+        """
         from claude_bestpractice import __version__
 
         self.assertTrue(self.tags, "no tags to compare against")
-        self.assertNotIn(
-            f"v{__version__}", self.tags,
-            "this version is already released; bump before shipping more changes",
+        tag = f"v{__version__}"
+        if tag not in self.tags:
+            return
+
+        at_tag = git(["rev-parse", f"{tag}^{{commit}}"], REPO_ROOT).stdout.strip()
+        head = git(["rev-parse", "HEAD"], REPO_ROOT).stdout.strip()
+        self.assertEqual(
+            at_tag, head,
+            f"{tag} is released and HEAD has moved past it; bump before shipping more changes",
         )
 
 

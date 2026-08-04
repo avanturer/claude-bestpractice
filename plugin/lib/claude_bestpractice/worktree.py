@@ -129,7 +129,12 @@ def record(ctx: GitContext, slug: str, absolute: str, branch: str, trusted: bool
 # default — not knowing is not a reason to guess `chore`.
 _BRANCH_TYPES = (
     ("fix", ("fix", "repair", "bug", "broken", "почини", "исправ", "поправ", "фикс", "чини")),
-    ("docs", ("docs", "doc ", "readme", "changelog", "документ", "доки", "докум")),
+    # `document` and not `doc `: the Russian marker `документ` is a prefix and catches
+    # документацию / задокументируй, while the English side required a trailing space and
+    # so could not match `document`, `documentation` or `documented` — the actual words an
+    # English prompt uses. `readme` was covering the rest by accident. Every other type was
+    # symmetric across the two languages; this one was not. Reported as issue #35.
+    ("docs", ("docs", "doc ", "document", "readme", "changelog", "документ", "доки", "докум")),
     ("refactor", ("refactor", "rewrite", "clean up", "cleanup", "рефактор", "перепиш", "почист")),
     ("test", ("test", "coverage", "тест", "покрой", "покрыт")),
     ("perf", ("perf", "optimi", "faster", "speed up", "ускор", "оптимиз", "производительн")),
