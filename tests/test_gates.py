@@ -856,3 +856,70 @@ class TestANodIsNotATaskStatement(GateCase):
         self.write("merge.py", "x = 1\n")
         statement = self.statement_after(self.REAL, "Делай")
         self.assertNotIn("delay", worktree.session_slug(statement, "70e44134"))
+
+
+class TestTheCeilingCountsALoopNotAnAfternoon(GateCase):
+    """Four blocks minutes apart is a loop. Four blocks across five hours is not.
+
+    The commonest reason a session goes quiet mid-block is that Claude stopped answering:
+    the five-hour usage limit lands in the middle of a turn and the session resumes hours
+    later with the counter exactly where it was. One more block then filed an UNVERIFIED
+    finish and a permanent `outcome: failed` attempt against work whose only fault was
+    being interrupted — the ceiling firing on a founder's lunch rather than on a loop.
+    """
+
+    def blocked_work(self):
+        """A committed change with no evidence, and the ceiling constant to measure against."""
+        from claude_bestpractice import evidence
+
+        self.start()
+        self.write("feature.py", "def go():\n    return 1\n")
+        self.commit("add the feature module")
+        return evidence.MAX_CONSECUTIVE_BLOCKS
+
+    def counter(self) -> dict:
+        from claude_bestpractice import sessions
+
+        return sessions.get(self.ctx(), sid(self.repo, "s1")).tool_signatures
+
+    def age_the_last_block(self, seconds: float) -> None:
+        from claude_bestpractice import sessions
+
+        payload = dict(self.counter())
+        payload["_last_block_at"] = time.time() - seconds
+        sessions.touch(self.ctx(), sid(self.repo, "s1"), tool_signatures=payload)
+
+    def test_blocks_in_quick_succession_still_reach_the_ceiling(self):
+        """The ceiling has to keep working, or a wedged session burns turns forever."""
+        ceiling = self.blocked_work()
+        codes = [self.stop().returncode for _ in range(ceiling + 1)]
+        self.assertEqual([2] * ceiling, codes[:-1])
+        self.assertEqual(0, codes[-1], "the ceiling stopped firing")
+
+    def test_a_long_silence_starts_the_streak_over(self):
+        ceiling = self.blocked_work()
+        for _ in range(ceiling):
+            self.assertEqual(2, self.stop().returncode)
+        self.assertEqual(ceiling, self.counter().get("_consecutive_blocks"))
+
+        self.age_the_last_block(6 * 3600)
+        proc = self.stop()
+        self.assertEqual(2, proc.returncode, "the interrupted session was finished UNVERIFIED")
+        self.assertIn(f"[1/{ceiling}]", proc.stderr)
+
+    def test_a_short_pause_is_still_the_same_streak(self):
+        """A founder reading for ten minutes has not started a new attempt."""
+        ceiling = self.blocked_work()
+        self.stop()
+        self.age_the_last_block(600)
+        self.assertIn(f"[2/{ceiling}]", self.stop().stderr)
+
+    def test_a_record_written_before_this_existed_is_not_reset(self):
+        """No timestamp means an in-flight streak from an older version; keep counting."""
+        from claude_bestpractice import sessions
+
+        ceiling = self.blocked_work()
+        self.stop()
+        payload = {k: v for k, v in self.counter().items() if k != "_last_block_at"}
+        sessions.touch(self.ctx(), sid(self.repo, "s1"), tool_signatures=payload)
+        self.assertIn(f"[2/{ceiling}]", self.stop().stderr)
