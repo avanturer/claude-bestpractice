@@ -72,6 +72,7 @@ def strip_envelopes(text: str) -> str:
 # question, with the second provisioning a branch called `feat/obnovi-70e44134`. The
 # transliteration is its own trap — «Делай» renders as `delay`, an English word meaning
 # the opposite of what the session was doing.
+#
 # The deny-list carries the work; the floor is only a backstop for acknowledgements
 # nobody thought of. Set where it clears every entry on the list and still admits a
 # terse but real instruction ("почини баг в auth").
