@@ -712,9 +712,36 @@ class TestALanguageIsNotADirectoryName(CICase):
         self.write("test/helper.rb", "require 'minitest'\n")
         self.commit()
         ci.install(self.ctx())
+
+        # WITH the plugin on PATH, which is where a marketplace install puts it. This
+        # assertion used to hold only for someone who does not use this plugin: the hook
+        # fell through to a `claude-bp-doctor` tier that resolved whenever `bin/` was on
+        # PATH, so "nothing to run" was never reached and CI was green for the same
+        # reason the founder's machine was red. Reported as issue #30.
+        import os
+
+        env = dict(os.environ, PATH=f"{BIN}{os.pathsep}{os.environ.get('PATH', '')}")
         proc = subprocess.run(
             ["sh", str(ci.hook_path(self.ctx()))],
-            cwd=str(self.repo), capture_output=True, text=True, timeout=120,
+            cwd=str(self.repo), capture_output=True, text=True, timeout=120, env=env,
         )
         self.assertEqual(0, proc.returncode, f"a Ruby project could not push: {proc.stderr}")
         self.assertIn("nothing to run", proc.stderr)
+
+    def test_the_push_gate_never_runs_this_plugins_own_doctor(self):
+        """Proving THIS PLUGIN's gates fire says nothing about the code being pushed.
+
+        A doctor failure caused by the environment rejected a push of healthy code, ~40s
+        of self-test ran in place of the repository's own checks, and in this repository
+        it closed a loop: claude-bestpractice refused to let claude-bestpractice be pushed
+        from a session.
+        """
+        from claude_bestpractice import ci
+
+        # Executable lines only. The comment explaining the removal names the command, and
+        # a test that cannot tell a comment from a call would forbid saying why.
+        runnable = [
+            line for line in ci.hook_body(self.ctx()).splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        self.assertNotIn("claude-bp-doctor", "\n".join(runnable))

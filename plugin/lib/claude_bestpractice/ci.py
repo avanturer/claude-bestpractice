@@ -89,9 +89,17 @@ if [ -n "$_cmd" ]; then
     sh -c "$_cmd" || exit $?
 fi
 
-if command -v claude-bp-doctor >/dev/null 2>&1; then
-    exec claude-bp-doctor
-fi
+# There used to be a `claude-bp-doctor` tier here, and it was wrong twice over. Proving
+# THIS PLUGIN's gates fire is not evidence about the code being pushed, so a push of
+# healthy code was rejected whenever the doctor tripped on the environment, and ~40s of
+# self-test ran in place of anything belonging to the repository. And because a
+# marketplace install puts the plugin's `bin/` on PATH, the tier fired exactly for the
+# people who use this — while the test asserting the honest "nothing to run" line could
+# only pass for someone who does not. CI was green for that reason.
+#
+# In this repository it closed a loop: pre-push found `check:`, `make check` was red
+# inside a session for the reason above, so claude-bestpractice refused to let
+# claude-bestpractice be pushed from a Claude Code session. Reported as issue #30.
 
 # Allowed, and the reason is a true statement rather than a swallowed failure: this
 # project has no `make check` target and had no test runner to detect.

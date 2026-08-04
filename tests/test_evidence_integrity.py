@@ -320,3 +320,59 @@ def _shadowed_package_with_path(root, extra):
             os.environ.pop("PYTHONPATH", None)
         else:
             os.environ["PYTHONPATH"] = before
+
+
+class TestTheCeilingCarriesTheReason(RepoCase):
+    """The ceiling is how an unverified finish actually happens, and it said nothing.
+
+    Reported as issue #31: the branch wrote the literal string "continuation ceiling
+    reached" over the real reason and passed an empty path list — which also skipped the
+    attempts record entirely (it is under `if changed:`) and left the open item with no
+    subjects, so provenance could never retire it. The warning outlived the code it was
+    about. The other ceiling exit, at the end of `main`, always passed both.
+    """
+
+    def seed_red(self) -> None:
+        self.write("a.py", "def add(a, b):\n    return a - b\n")
+        self.write("tests/test_add.py", "from a import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n")
+        self.commit("suite")
+        self.write("a.py", "def add(a, b):\n    return a - b - 1\n")
+
+    def hit_the_ceiling(self) -> None:
+        """A red suite, then Stop until the escalation ceiling lets the turn end."""
+        from claude_bestpractice import evidence
+
+        self.seed_red()
+        for _ in range(evidence.MAX_CONSECUTIVE_BLOCKS + 1):
+            self.run_hook(
+                "evidence-gate",
+                {"session_id": "s1", "hook_event_name": "Stop",
+                 "stop_hook_active": True, "cwd": str(self.repo)},
+            )
+
+    def test_it_names_the_failure_and_the_files(self):
+        import json
+
+        from claude_bestpractice import store
+
+        self.hit_the_ceiling()
+
+        marker = store.tier_b(self.ctx(), "unverified.jsonl")
+        self.assertTrue(marker.exists(), "no unverified record at all")
+        last = json.loads(marker.read_text(encoding="utf-8").strip().splitlines()[-1])
+        self.assertIn("continuation ceiling", last["reason"])
+        self.assertIn("suite FAILS", last["reason"], "the real reason was dropped")
+
+    def test_the_open_item_can_be_retired_by_provenance(self):
+        import json
+
+        from claude_bestpractice import store
+
+        self.hit_the_ceiling()
+
+        items = store.tier_b(self.ctx(), "open-items.jsonl")
+        last = json.loads(items.read_text(encoding="utf-8").strip().splitlines()[-1])
+        self.assertTrue(
+            last.get("subject_paths"),
+            "no subjects, so this warning can never be retired when the code is rewritten",
+        )

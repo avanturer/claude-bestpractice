@@ -1,5 +1,75 @@
 # Changelog
 
+## v1.0.9
+
+Three issues filed against v1.0.7 — #30, #31, #32. All three are real, and #32 is a working
+bypass of the gate this project is built around.
+
+### The enforcement state was half-guarded (#32)
+
+`pre-tool` refused writes to `.claude/claude-bestpractice/config.json` as "the plugin's own
+enforcement state". The **other half** — session records, the baseline the diff is measured
+from, the block counter the Stop gate reads — sat under the git common directory and was
+writable, and `evidence-gate` trusts all of it. Two working routes past a gate that was
+actively blocking a red suite:
+
+1. **Commit the broken change, then point `baseline_commit` at the new HEAD.**
+   `changed_files` comes back empty, the suite is never run, and **nothing is recorded** —
+   no unverified entry, no open item. The next session sees a clean history. This is the
+   serious one: the only way found to finish over a red suite leaving no trace at all.
+2. **Set the block counter to the ceiling.** One integer, and the turn ends as "finishing
+   UNVERIFIED after 4 blocked attempts" — indistinguishable from an honest session.
+
+The threat model is not a malicious founder. It is an agent that has been blocked four
+times looking for the shortest way to end the turn, in a directory whose path this plugin
+**prints on its own board**, holding plain JSON whose field names say what they do.
+
+Both are refused now, along with `rm -rf` of the state directory and of the push hook
+itself. Matched on the resolved path rather than a repo-relative one, because in a worktree
+the common directory lives in the main checkout and no relative rule would ever see it.
+
+*Not done:* the reporter's second suggestion — recovering `baseline_commit` from the reflog
+rather than trusting the file, and treating disagreement as a signal. The deny closes both
+routes; that would be defence in depth, and saying it is missing is better than implying it
+is there.
+
+### The push gate ran this plugin's own doctor (#30)
+
+The hook fell through to `claude-bp-doctor` whenever the plugin's `bin/` was on PATH — which
+is exactly where a marketplace install puts it. So on any machine that uses this plugin,
+`git push` ran **26 checks of the plugin** instead of anything belonging to the pushed code:
+~40s of self-test, and the doctor's verdict became the push gate's verdict, so an
+environment hiccup rejected a push of healthy code.
+
+In this repository it closed a loop: `pre-push` found `check:`, `make check` was red inside
+a session for that reason, and **claude-bestpractice refused to let claude-bestpractice be
+pushed from a Claude Code session.**
+
+The tier is gone. Proving this plugin's gates fire is not evidence about the code being
+pushed, and the honest outcome in a repository with no runner is the "nothing to run" line
+the tier below already printed. The Ruby test that had been asserting an environment in
+which this plugin is *not installed* — and which therefore could only pass for someone who
+does not use it — now runs with `bin/` on PATH deliberately.
+
+### The continuation ceiling recorded nothing useful (#31)
+
+The ceiling is how an unverified finish actually happens, and its branch wrote the literal
+string `continuation ceiling reached` over the real reason, with an empty path list. The
+empty list did two more things: `attempts.record` was skipped entirely (it is under `if
+changed:`), and the open item got no subjects, so provenance could never retire it — the
+warning outlived the code it was about. The other ceiling exit, at the end of `main`, always
+passed both.
+
+The block reason and paths are now remembered when a block is counted, and handed forward:
+
+```
+UNVERIFIED finish on master: continuation ceiling reached after: The suite FAILS on the
+code as it stands — 1 failing of 1 run by the gate itself
+subject_paths: [{"blob": "d6f0728…", "path": "a.py"}]
+```
+
+727 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.
+
 ## v1.0.8
 
 Two things: branches follow your convention instead of this plugin's, and **updating the

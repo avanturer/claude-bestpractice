@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
 import re  # noqa: E402
 
-from claude_bestpractice import config, evidence, gitpolicy, hookio, redact, sessions, stage  # noqa: E402
+from claude_bestpractice import ci, config, evidence, gitpolicy, hookio, redact, sessions, stage, store  # noqa: E402
 from claude_bestpractice.gitctx import resolve  # noqa: E402
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
@@ -43,6 +43,28 @@ PROTECTED_STATE = (
     ".claude/claude-bestpractice/failing-suite.json",
     ".claude/claude-bestpractice/last-green.json",
 )
+
+# The OTHER half of the enforcement state. `config.json` was refused as "the plugin's own
+# enforcement state" while everything under the git common directory — session records,
+# baselines, the block counter — stayed writable, and `evidence-gate` trusts all of it.
+# Reported as issue #32, with two working bypasses of a gate that was blocking a red suite:
+#
+#   1. commit the broken change, then set `baseline_commit` to the new HEAD. `changed_files`
+#      comes back empty, the suite is never run, and NOTHING is recorded — no unverified
+#      entry, no open item. The next session sees a clean history. This is the serious one.
+#   2. set `tool_signatures._consecutive_blocks` to the ceiling. One integer, and the turn
+#      ends as "finishing UNVERIFIED after 4 blocked attempts" — indistinguishable from a
+#      session that genuinely hit it.
+#
+# The threat model is not a malicious founder. It is an agent that has been blocked four
+# times looking for the shortest way to end the turn, in a directory whose path this
+# plugin PRINTS on the board, holding plain JSON whose field names say what they do.
+#
+# Resolved rather than repo-relative: in a worktree the common directory lives in the main
+# checkout, so this path is not under our tree at all and no relative rule would see it.
+def _protected_absolute(ctx) -> list:
+    """Paths outside the working tree that are still the plugin's own state."""
+    return [store.tier_b(ctx), ci.hook_path(ctx)]
 
 
 def _protected_state(relpath: str) -> bool:
@@ -474,6 +496,22 @@ def main() -> None:
         # Refused rather than ignored: the founder still edits this by hand or with
         # `claude-bp ci`, and a rule the agent can see and route around beats one that
         # silently discards its work.
+        # Absolute first, because the git common directory is usually not under our tree
+        # at all and `writing_now` only ever holds paths that are.
+        for guarded in _protected_absolute(ctx):
+            for path in absolute:
+                if path == guarded or guarded in path.parents or path in guarded.parents:
+                    hookio.deny_tool(
+                        f"claude-bestpractice: {path} is the plugin's own enforcement state — "
+                        "session records, the baseline the diff is measured from, and the "
+                        "block counter the Stop gate reads.\n"
+                        "  Editing it is how a blocked turn gets ended without doing the "
+                        "work: move `baseline_commit` to HEAD and the suite is never run, "
+                        "and nothing at all is recorded.\n"
+                        "  If a gate is wrong, say so to the founder — do not rewrite what "
+                        "it reads."
+                    )
+
         protected = [rel for rel in writing_now if _protected_state(rel)]
         if protected:
             hookio.deny_tool(

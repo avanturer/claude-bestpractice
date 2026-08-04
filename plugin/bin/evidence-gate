@@ -34,10 +34,36 @@ def _blocks(rec: sessions.SessionRecord) -> int:
     return value if isinstance(value, int) else 0
 
 
-def _bump_blocks(ctx, rec: sessions.SessionRecord, value: int) -> None:
+BLOCK_REASON = "_last_block_reason"
+BLOCK_PATHS = "_last_block_paths"
+
+
+def _bump_blocks(ctx, rec: sessions.SessionRecord, value: int,
+                 reason: str = "", changed: list | None = None) -> None:
+    """Count the block, and remember WHAT it was about.
+
+    The ceiling branch had nothing to hand forward, so it wrote the literal string
+    "continuation ceiling reached" over the real reason and an empty path list — and the
+    empty list also skipped the attempts record entirely and left the open item with no
+    subjects, so provenance could never retire it. The warning outlived the code it was
+    about. Reported as issue #31.
+    """
     payload = dict(rec.tool_signatures)
     payload[BLOCK_COUNTER] = value
+    if reason:
+        payload[BLOCK_REASON] = reason[:2000]
+        payload[BLOCK_PATHS] = list(changed or [])[:64]
     sessions.touch(ctx, rec.session_id, tool_signatures=payload)
+
+
+def _remembered_block(rec: sessions.SessionRecord) -> tuple:
+    """(reason, paths) from the blocks that led here, or the bare fallback."""
+    stored = rec.tool_signatures
+    reason = stored.get(BLOCK_REASON) if isinstance(stored.get(BLOCK_REASON), str) else ""
+    paths = stored.get(BLOCK_PATHS) if isinstance(stored.get(BLOCK_PATHS), list) else []
+    if not reason:
+        return "continuation ceiling reached", []
+    return f"continuation ceiling reached after: {reason}", list(paths)
 
 
 def _allow(ctx, rec: sessions.SessionRecord) -> None:
@@ -137,7 +163,10 @@ def main() -> None:
     # verification still runs, and only the escalation ceiling can end the turn.
     blocked = _blocks(rec)
     if event.stop_hook_active and blocked >= evidence.MAX_CONSECUTIVE_BLOCKS:
-        _give_up(ctx, rec, "continuation ceiling reached", [])
+        # Both ceiling exits describe the same outcome, and this is the one that fires in
+        # the live loop — so it carries the same detail the other one always did.
+        ceiling_reason, ceiling_paths = _remembered_block(rec)
+        _give_up(ctx, rec, ceiling_reason, ceiling_paths)
         _bump_blocks(ctx, rec, 0)
         sys.stderr.write("claude-bestpractice: finishing UNVERIFIED — continuation ceiling reached.\n")
         _allow(ctx, rec)
@@ -254,7 +283,7 @@ def main() -> None:
         )
         hookio.emit_silent()
 
-    _bump_blocks(ctx, rec, blocked + 1)
+    _bump_blocks(ctx, rec, blocked + 1, reason=reason, changed=changed)
     hookio.block(
         f"claude-bestpractice [{blocked + 1}/{evidence.MAX_CONSECUTIVE_BLOCKS}] — not done yet.\n\n"
         f"{reason}\n\n"
