@@ -238,10 +238,29 @@ def ready(ctx: GitContext, base: str) -> list[str]:
     if _unverified_here(ctx):
         problems.append("this branch carries an UNVERIFIED finish")
 
-    dirty = subprocess.run(
-        ["git", "status", "--porcelain"],
-        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=30,
-    ).stdout.strip()
-    if dirty:
+    if _dirty(ctx):
         problems.append("there are uncommitted changes")
     return problems
+
+
+# The plugin's own bookkeeping is not the founder's unfinished work. `.claude/` holds the
+# stage marker, the green ledger and the config, all written by the gates themselves and
+# all untracked in a repository that has never committed them — so every session made the
+# tree read as dirty within seconds of starting, and this check reported it as a reason
+# not to ship. The evidence gate exempts the same prefix for the same reason.
+_NOT_THE_FOUNDERS = (".claude/",)
+
+
+def _dirty(ctx: GitContext) -> bool:
+    """Uncommitted work that would not reach the remote, ignoring the gates' own state."""
+    listed = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=30,
+    ).stdout
+    for line in listed.splitlines():
+        # `XY <path>`, and for a rename `XY <old> -> <new>`. The destination is what a
+        # later commit would carry, so that is the one judged.
+        path = line[3:].split(" -> ")[-1].strip().strip('"')
+        if path and not path.startswith(_NOT_THE_FOUNDERS):
+            return True
+    return False

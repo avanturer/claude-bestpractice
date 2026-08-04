@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
 import re  # noqa: E402
 
-from claude_bestpractice import ci, config, evidence, gitpolicy, hookio, redact, sessions, stage, store  # noqa: E402
+from claude_bestpractice import ci, config, evidence, gitpolicy, hookio, pullrequest, redact, sessions, stage, store  # noqa: E402
 from claude_bestpractice.gitctx import resolve  # noqa: E402
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
@@ -430,6 +430,33 @@ def main() -> None:
             hookio.deny_tool(
                 f"claude-bestpractice: detected a repeating cycle: {loop}. Break out of it — try a "
                 "different approach or report the blocker."
+            )
+
+    # A pull request is an obligation from the moment it is opened, and the merge is the
+    # one point where every check this plugin has can still be applied. Both halves of
+    # that live here: the obligation is written down, and the merge is judged.
+    if cfg.manage_pull_requests:
+        command = str(ti.get("command", "")) if event.tool_name == "Bash" else ""
+        number = pullrequest.merge_target(event.tool_name, command, ti)
+        if number is not None:
+            gated = pullrequest.gated_by(
+                ctx, number, pullrequest.about_current_branch(event.tool_name, command)
+            )
+            if gated is not None:
+                base = str(gated.get("base") or "") or gitpolicy.default_branch(ctx) or "main"
+                problems = pullrequest.blockers(ctx, base)
+                if problems:
+                    hookio.deny_tool(pullrequest.merge_refusal(gated, problems))
+                # Recorded on the way through: a PreToolUse hook never sees the result,
+                # and an obligation the founder has already watched be merged is worse
+                # than useless on the board.
+                pullrequest.settle(ctx, ctx.branch, pullrequest.MERGED)
+        elif pullrequest.opens_a_pull_request(event.tool_name, command):
+            # No number: a PreToolUse hook sees the request, never the response, and the
+            # number only exists in the response. The branch identifies the obligation,
+            # which is the identity every check here is keyed by anyway.
+            pullrequest.opened(
+                ctx, ctx.branch, gitpolicy.default_branch(ctx) or "main", event.session_id
             )
 
     resolved_stage, _ = stage.current(ctx, cfg.stage_override)

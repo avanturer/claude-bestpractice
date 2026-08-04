@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-1.0.13-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-1.0.14-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-738%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-26%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -195,6 +195,34 @@ environment variable.
 It also escalates rather than wedging: after four blocked attempts it records an
 unverified finish and lets the turn end, because a gate that blocks a founder's workflow
 forever is a gate that gets uninstalled.
+
+### A pull request is an obligation, not a notification
+
+The failure this closes is a session that agrees the change, opens the pull request, and
+then stops — waiting for an approval nobody asked it to wait for. The PR sits, the session
+ends, and nothing in the repository remembers it.
+
+There are exactly two ways it can end, and no third:
+
+**Merged, by the session that opened it.** No approval step, because there is no reviewer.
+A turn that tries to end on an open pull request is interrupted and told to merge it.
+
+**Handed to you, with the blockers named.** When the final check finds something the merge
+is *refused* — not negotiated, not repaired. That half is what makes the first half safe:
+a model asked to make a branch mergeable will make it mergeable, and the moves available
+at merge time are weakening an assertion, widening a tolerance, or reverting the change
+that surfaced the problem. All three satisfy the letter. Which is acceptable is your call,
+so the gate stops there and says so.
+
+The check is the same one that runs before a PR is opened — unfinished merge, no commits,
+red suite, never-verified branch, unverified finish, uncommitted work — plus the review
+findings already on the board. All local: no network call, because this runs on every tool
+call. `gh pr merge` is watched alongside the structured tool, since a gate that only sees
+one of them is one an agent walks past on its first `Bash` call.
+
+It interrupts **once** per pull request and then carries it on the board, so ignoring it,
+crashing, or hitting the escalation ceiling cannot turn a reminder into a wedge. Off with
+`{"manage_pull_requests": false}`.
 
 ### Slop caught mechanically — in your repository
 

@@ -71,6 +71,7 @@ class Config:
     commit_conventions: bool = True
     autonomy: str = "vibecode"
     protect_trunk: bool = True
+    manage_pull_requests: bool = True
     stage_override: str | None = None
     # Test directories are exempt because THIS PLUGIN demands the test. Without them the
     # scope-drift check and the evidence gate deadlock on the most ordinary task there is:
@@ -106,6 +107,7 @@ class Config:
             "commit_conventions": self.commit_conventions,
             "autonomy": self.autonomy,
             "protect_trunk": self.protect_trunk,
+            "manage_pull_requests": self.manage_pull_requests,
             "stage_override": self.stage_override,
             "exempt_paths": self.exempt_paths,
         }
@@ -188,6 +190,7 @@ _EXPECTED: dict[str, type] = {
     "commit_conventions": bool,
     "autonomy": str,
     "protect_trunk": bool,
+    "manage_pull_requests": bool,
     "stage_override": str,
     "exempt_paths": list,
 }
