@@ -132,38 +132,62 @@ BASH_REMOVES = re.compile(
 _ARG = re.compile(r"[\w./@+-]+")
 
 
-def bash_write_targets(command: str, root: Path) -> list[str]:
-    """Repo-relative paths a shell command appears to write.
+# `cd x && …` moves what a relative redirect means, and nothing here was reading it. A
+# command that wrote `/tmp/t9/a.py` was resolved against the repository root instead and
+# refused as a write to `<repo>/a.py` — a file it never touched. Reported from a real
+# machine, alongside the opposite error: an absolute path outside the repository raised
+# ValueError and was dropped entirely, so the same write went through unexamined.
+_CD = re.compile(r"^\s*cd\s+(?P<path>[\"']?[\w./@+~-]+[\"']?)\s*$")
+_SEGMENTS = re.compile(r"&&|\|\||;|\n")
+
+
+def bash_write_targets(command: str, cwd: Path) -> list[Path]:
+    """Absolute paths a shell command appears to write, resolved as the shell would.
 
     Deliberately generous. A path this misses is a missed lease and a missed scan; a
     path it invents is one spurious claim on a file nobody else wanted.
+
+    Absolute rather than repo-relative because the caller now has to decide WHICH tree a
+    write lands in, and a path that has already been forced relative to one root cannot
+    answer that.
     """
     # Blank out quoted spans first. `echo "a > b"` and `grep -q "x>y" f` contain no
     # redirect, but a naive scan read one and claimed a lease on a path that does not
     # exist — which denies a sibling session for a file nobody is editing.
     scannable = _QUOTED.sub(lambda m: " " * len(m.group(0)), command)
-    out: list[str] = []
-    matches = list(BASH_WRITE_TARGETS.finditer(scannable))
-    if "sed" in scannable and " -i" in scannable:
-        matches += list(SED_IN_PLACE.finditer(scannable))
-    raws = [m.group("path") for m in matches]
 
-    # ...and every path a destructive verb names. `rm` is not a redirect, so none of
-    # these commands produced a target at all, and every rule keyed on "what does this
-    # write" was one `rm` away from irrelevant.
-    for match in BASH_REMOVES.finditer(scannable):
-        raws += [a for a in _ARG.findall(match.group("args")) if not a.startswith("-")]
+    out: list[Path] = []
+    here = cwd
+    for segment in _SEGMENTS.split(scannable):
+        moved = _CD.match(segment)
+        if moved:
+            # Tracked, never executed. `cd` into a path that does not exist still changes
+            # what the rest of the line means to this scanner, and guessing wrong here
+            # only costs a target that lands outside every tree, which is ignored anyway.
+            here = (here / moved.group("path").strip("\"'")).expanduser()
+            continue
 
-    for raw in raws:
-        raw = raw.strip("\"'")
-        if not raw or raw.startswith("/dev/"):
-            continue
-        try:
-            rel = str((root / raw).resolve().relative_to(root))
-        except (ValueError, OSError):
-            continue
-        if rel not in out:
-            out.append(rel)
+        matches = list(BASH_WRITE_TARGETS.finditer(segment))
+        if "sed" in segment and " -i" in segment:
+            matches += list(SED_IN_PLACE.finditer(segment))
+        raws = [m.group("path") for m in matches]
+
+        # ...and every path a destructive verb names. `rm` is not a redirect, so none of
+        # these commands produced a target at all, and every rule keyed on "what does this
+        # write" was one `rm` away from irrelevant.
+        for match in BASH_REMOVES.finditer(segment):
+            raws += [a for a in _ARG.findall(match.group("args")) if not a.startswith("-")]
+
+        for raw in raws:
+            raw = raw.strip("\"'")
+            if not raw or raw.startswith("/dev/"):
+                continue
+            try:
+                resolved = (here / raw).expanduser().resolve()
+            except (OSError, RuntimeError):
+                continue
+            if resolved not in out:
+                out.append(resolved)
     return out
 
 
@@ -192,14 +216,38 @@ def main() -> None:
     ti = event.tool_input
     target = ""
     shell_targets: list[str] = []
+
+    # Where the write LANDS, absolute, before anything is forced relative to a root it may
+    # not belong to. The rules below split on this: our tree, somebody else's tree, or
+    # neither — and the third is none of this gate's business.
+    session_cwd = Path(event.cwd) if event.cwd else ctx.worktree_root
+    absolute: list[Path] = []
+
     if event.tool_name in WRITE_TOOLS and ti.get("file_path"):
-        target = str(ti["file_path"])
+        raw = str(ti["file_path"])
         try:
-            target = str(Path(target).resolve().relative_to(ctx.worktree_root))
-        except ValueError:
-            pass
+            absolute = [(session_cwd / raw).expanduser().resolve()]
+        except (OSError, RuntimeError):
+            absolute = []
+        # Repo-relative, or nothing. `target` feeds the lease and the board, and both are
+        # about coordinating sessions over THIS repository's files — so a scratch file in
+        # /tmp took a lease that then denied a second session the same scratch file, for a
+        # path neither of them shares.
+        target = ""
+        if absolute:
+            try:
+                target = str(absolute[0].relative_to(ctx.worktree_root.resolve()))
+            except ValueError:
+                target = ""
     elif event.tool_name == "Bash":
-        shell_targets = bash_write_targets(str(ti.get("command", "")), ctx.worktree_root)
+        absolute = bash_write_targets(str(ti.get("command", "")), session_cwd)
+        # Repo-relative is what the leases, the board and the protected-state refusal all
+        # speak, so the ones inside our tree are converted and the rest stay out of it.
+        for path in absolute:
+            try:
+                shell_targets.append(str(path.relative_to(ctx.worktree_root.resolve())))
+            except ValueError:
+                continue
         target = shell_targets[0] if shell_targets else ""
 
     # What THIS call writes, as opposed to `touched` below, which carries recent history
@@ -301,8 +349,27 @@ def main() -> None:
     # Before any write is examined: may this session write HERE at all? Writes only, so
     # reads, searches and `git worktree add` itself stay free — a rule that blocks the
     # command which satisfies it is a trap the agent learns to route around.
-    writing = event.tool_name in WRITE_TOOLS or (event.tool_name == "Bash" and touched)
-    if writing and (cfg.require_worktree or cfg.protect_trunk):
+    #
+    # Judged by the TARGET, not by where the session happens to sit. Asking the latter got
+    # it wrong in both directions on a real machine: a Write to `/tmp` was refused because
+    # the session was in the main checkout, while a session in a worktree could write into
+    # the main checkout and into a sibling session's tree and nothing objected — which is
+    # precisely the silent overwrite the refusal text warns about.
+    # `absolute`, not `touched`: `touched` holds only paths inside OUR tree, so a shell
+    # command writing into another working tree emptied it and this whole block was
+    # skipped — the one case that most needed to reach it.
+    writing = event.tool_name in WRITE_TOOLS or (event.tool_name == "Bash" and absolute)
+    if writing and cfg.require_worktree:
+        for path in absolute:
+            owner = gitpolicy.foreign_tree(ctx, path)
+            if owner is not None:
+                hookio.deny_tool(gitpolicy.foreign_refusal(path, owner, ctx))
+
+    # Outside every working tree of this repository there is no rule to apply: a scratch
+    # file in /tmp is not somebody else's work, and refusing it only taught the agent that
+    # this gate fires on things that do not matter.
+    ours = [p for p in absolute if gitpolicy.owned_by_session(ctx, p)]
+    if writing and ours and (cfg.require_worktree or cfg.protect_trunk):
         breaches = gitpolicy.violations(ctx, rec.task_statement)
         if not cfg.require_worktree:
             breaches = [b for b in breaches if "main checkout" not in b]
