@@ -51,6 +51,74 @@ class TestVersionAgreement(unittest.TestCase):
             self.assertEqual(badge.group(1), version, f"{rel} badge is stale")
 
 
+class TestTheReleaseCutsItself(unittest.TestCase):
+    """A tag is a ref outside `refs/heads/*`, and an agent session cannot push one.
+
+        ERR push contains a ref outside refs/heads/*; only branch updates are permitted.
+
+    So the release moved to a workflow fired by a merge, which is the one event an agent
+    can cause. That makes the changelog load-bearing: it is now the release body, read by
+    a program with nobody watching.
+    """
+
+    def declared(self) -> str:
+        source = read("plugin/lib/claude_bestpractice/__init__.py")
+        return re.search(r'__version__\s*=\s*"([^"]+)"', source).group(1)
+
+    def test_the_current_version_has_notes_to_release(self):
+        """Bumping the version without writing the entry would publish an empty release.
+
+        The workflow refuses instead, so this catches it one merge earlier — while the
+        person who bumped it is still here.
+        """
+        proc = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "tools" / "release_notes.py"), self.declared()],
+            capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertGreater(len(proc.stdout.strip()), 200, "the entry is a stub")
+
+    def test_a_missing_entry_is_a_refusal_not_an_empty_body(self):
+        proc = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "tools" / "release_notes.py"), "9.9.9"],
+            capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(proc.stdout.strip(), "")
+
+    def test_a_heading_is_matched_whole(self):
+        """`1.0.1` must not be answered by `## v1.0.10`, and must not be found inside
+        the prose of some other entry. Both would release the wrong notes silently."""
+        sys.path.insert(0, str(REPO_ROOT / "tools"))
+        try:
+            import release_notes
+        finally:
+            sys.path.pop(0)
+
+        text = "## v1.0.10\nten\n\n## v1.0.1\none\n\n## v1.0.0\nmentions v1.0.1 here\n"
+        self.assertEqual(release_notes.section(text, "1.0.1"), "one")
+        self.assertEqual(release_notes.section(text, "1.0.10"), "ten")
+        self.assertIsNone(release_notes.section(text, "2.0.0"))
+
+    def test_the_workflow_publishes_only_what_it_proved(self):
+        """A release nobody executed is this project's own thesis, broken by its own
+        release mechanism. A merge is made through the API, so the pre-push hook that
+        guarded the branch never saw the commit being released."""
+        workflow = read(".github/workflows/release.yml")
+        self.assertIn("make check", workflow)
+        self.assertLess(
+            workflow.index("make check"), workflow.index("gh release create"),
+            "the suite must run before the release is published",
+        )
+
+    def test_the_release_workflow_is_not_gated_off(self):
+        """`check.yml` is gated on a variable so it costs nothing until switched on.
+        The same gate on a release means the release silently never happens."""
+        workflow = read(".github/workflows/release.yml")
+        self.assertNotIn("vars.CLAUDE_BESTPRACTICE_CI", workflow)
+        self.assertIn("contents: write", workflow, "it cannot create a tag without this")
+
+
 class TestInstallPath(unittest.TestCase):
     """The one line every new user runs before anything else works."""
 
