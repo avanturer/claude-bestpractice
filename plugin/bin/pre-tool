@@ -135,7 +135,7 @@ def proposed_content(event: hookio.HookEvent) -> str:
 # nobody else wanted.
 _QUOTED = re.compile(r"""'[^']*'|"[^"]*\"""", re.S)
 
-BASH_WRITE_TARGETS = re.compile(r"(?:>>?\s*|\btee\s+(?:-a\s+)?)(?P<path>[\"']?[\w./@+-]+[\"']?)")
+BASH_WRITE_TARGETS = re.compile(r"(?:>>?\s*|\btee\s+(?:-a\s+)?)(?P<path>[\"']?[\w./@+~-]+[\"']?)")
 
 # `sed -i` writes its LAST argument; everything before it is the script, which looks
 # path-shaped enough (`s/x/y/`) to fool a single pattern.
@@ -149,9 +149,9 @@ SED_IN_PLACE = re.compile(r"\bsed\s+(?:-\S+\s+|'[^']*'\s+|\"[^\"]*\"\s+)*(?P<pat
 #
 # Every path-shaped argument of these verbs counts, because `rm -rf a b c` names three.
 BASH_REMOVES = re.compile(
-    r"\b(?:rm|unlink|shred|truncate|mv|cp|install|ln)\b(?P<args>(?:\s+(?:-\S+|[\w./@+-]+))+)"
+    r"\b(?:rm|unlink|shred|truncate|mv|cp|install|ln)\b(?P<args>(?:\s+(?:-\S+|[\w./@+~-]+))+)"
 )
-_ARG = re.compile(r"[\w./@+-]+")
+_ARG = re.compile(r"[\w./@+~-]+")
 
 
 # `cd x && …` moves what a relative redirect means, and nothing here was reading it. A
@@ -205,8 +205,19 @@ def _segments_with_cwd(scannable: str, cwd: Path):
 
 
 def _resolve(base: Path, raw: str) -> Path | None:
+    """Where a path argument actually points, expanding `~` BEFORE joining.
+
+    `base / "~/x"` is `<base>/~/x`, and `.expanduser()` only expands a path that STARTS
+    with `~` — so a home-relative path was rewritten into one inside the repository and
+    then refused by the main-checkout rule, for a file the command never went near.
+    Reported as issue #37: deleting stray files under `~/.claude/projects/` came back as
+    "this is the main checkout, not a worktree".
+    """
     try:
-        return (base / raw.strip("\"'")).expanduser().resolve()
+        candidate = Path(raw.strip("\"'")).expanduser()
+        if not candidate.is_absolute():
+            candidate = base / candidate
+        return candidate.resolve()
     except (OSError, RuntimeError):
         return None
 
@@ -322,10 +333,8 @@ def main() -> None:
 
     if event.tool_name in WRITE_TOOLS and ti.get("file_path"):
         raw = str(ti["file_path"])
-        try:
-            absolute = [(session_cwd / raw).expanduser().resolve()]
-        except (OSError, RuntimeError):
-            absolute = []
+        resolved_target = _resolve(session_cwd, raw)
+        absolute = [resolved_target] if resolved_target else []
         # Repo-relative, or nothing. `target` feeds the lease and the board, and both are
         # about coordinating sessions over THIS repository's files — so a scratch file in
         # /tmp took a lease that then denied a second session the same scratch file, for a
@@ -470,7 +479,11 @@ def main() -> None:
     if cfg.require_worktree and event.tool_name == "Bash":
         for path in git_tree_targets(str(ti.get("command", "")), session_cwd):
             owner = gitpolicy.foreign_tree(ctx, path)
-            if owner is not None:
+            # Ours to clean up if our own hook made it for us. Otherwise the refusal that
+            # hands a session a worktree also makes that worktree permanent: the main
+            # checkout is told it belongs to another session, and a worktree cannot remove
+            # itself from the inside.
+            if owner is not None and not gitpolicy.provisioned_for(ctx, rec.session_id, path):
                 hookio.deny_tool(gitpolicy.foreign_git_refusal(owner, ctx))
 
     # Outside every working tree of this repository there is no rule to apply: a scratch

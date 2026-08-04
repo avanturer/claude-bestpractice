@@ -1,5 +1,37 @@
 # Changelog
 
+## v1.0.11
+
+Issue #37, two defects hit in one session, and together they compound: the first refuses
+something harmless, the second makes the litter that refusal leaves permanent.
+
+### A home-relative path was treated as being inside the repository
+
+Deleting stray files under `~/.claude/projects/` came back as *"this is the main checkout,
+not a worktree"* — for a path that is not in the repository at all.
+
+`base / "~/x"` is `<base>/~/x`, and `.expanduser()` only expands a path that **starts** with
+`~`. Joining first therefore rewrote a home-relative path into one inside the working tree,
+and the main-checkout rule then fired on it correctly, about a file the command never went
+near. `~` was not even in the scanner's path character class, so `rm ~/.claude/x` was read as
+`/.claude/x`.
+
+This is a recurrence of the v1.0.3 fix — judge by the target, not the session — in a shape
+that fix did not cover. The lesson is not the tilde: it is that "resolve the path" had two
+call sites and one of them resolved it wrong.
+
+### The worktree the hook creates could not be removed by anyone
+
+Every refusal provisions a tree. Removing one from the main checkout was refused with *"this
+git command operates on another session's worktree"* — although this session's own hook had
+created it seconds earlier — and a worktree cannot remove itself from the inside. So each
+false positive left litter that only a terminal could clear.
+
+A session may now remove a tree **this plugin provisioned for that session**, and nothing
+else: a sibling's tree stays refused whoever made it.
+
+731 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.
+
 ## v1.0.10
 
 Two issues against v1.0.8 — #34 and #35 — both of them defects I introduced in that

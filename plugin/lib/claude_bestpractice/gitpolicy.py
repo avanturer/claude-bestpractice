@@ -207,6 +207,38 @@ def foreign_refusal(target: Path, owner: Path, ctx: GitContext) -> str:
     )
 
 
+def provisioned_for(ctx: GitContext, session_id: str, target: Path) -> bool:
+    """Did this plugin create `target` for THIS session?
+
+    The refusal that hands over a worktree also made it un-removable: `git worktree remove`
+    from the main checkout came back as "operates on another session's worktree", although
+    the hook had created it for this very session seconds earlier — and a worktree cannot
+    remove itself from the inside either. Every false-positive refusal therefore left
+    permanent litter that only a terminal could clear. Reported as issue #37.
+
+    Narrow on purpose: a tree this plugin made, for the session asking, and nothing else. A
+    sibling session's tree stays refused whoever provisioned it.
+    """
+    if not session_id:
+        return False
+    from . import store
+
+    try:
+        records = sorted(store.tier_b(ctx, "worktrees").glob("*.json"))
+    except OSError:
+        return False
+    for path in records:
+        body = store.read_json(path, default={}) or {}
+        if not body.get("provisioned_by_plugin") or body.get("session_id") != session_id:
+            continue
+        try:
+            if Path(str(body.get("path") or "")).resolve() == target.resolve():
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def foreign_git_refusal(owner: Path, ctx: GitContext) -> str:
     """A git command aimed at somebody else's working tree.
 

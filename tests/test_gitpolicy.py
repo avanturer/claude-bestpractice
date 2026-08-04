@@ -12,7 +12,7 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from helpers import RepoCase, git
+from helpers import RepoCase, git, sid
 
 
 def _verdict(proc) -> tuple[str, str]:
@@ -193,6 +193,53 @@ class TestTheRuleIsAboutTheTargetNotTheSession(PolicyCase):
             self.assertEqual(self.write_from(self.repo, outside)[0], "allow")
             mine = self.worktree("feat/mine")
             self.assertEqual(self.write_from(mine, outside)[0], "allow")
+
+    def test_a_home_relative_path_is_not_inside_the_repository(self):
+        """`base / "~/x"` is `<base>/~/x`, and `.expanduser()` only expands a path that
+        STARTS with `~` — so a home-relative path was rewritten into one inside the repo
+        and refused by the main-checkout rule, for a file the command never went near.
+
+        Reported as issue #37: deleting stray files under `~/.claude/projects/` came back
+        as "this is the main checkout, not a worktree". A recurrence of the v1.0.3 fix in
+        a shape that fix did not cover.
+        """
+        for tool, tool_input in (
+            ("Bash", {"command": "rm -f ~/.claude/projects/probe/x.jsonl"}),
+            ("Write", {"file_path": "~/.claude/projects/probe/y.txt", "content": "x"}),
+        ):
+            proc = self.run_hook(
+                "pre-tool",
+                {"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": tool,
+                 "tool_input": tool_input, "cwd": str(self.repo)},
+                cwd=self.repo,
+            )
+            self.assertEqual(_verdict(proc)[0], "allow", f"{tool} {tool_input}")
+
+    def test_a_session_can_remove_the_worktree_its_own_hook_made(self):
+        """The refusal that hands over a worktree also made it un-removable: the main
+        checkout was told it belonged to another session, and a worktree cannot remove
+        itself from the inside. Every false-positive refusal left permanent litter."""
+        from claude_bestpractice import worktree
+
+        made = worktree.provision(self.ctx(), "abandoned", sid(self.repo, "s1"))
+        proc = self.run_hook(
+            "pre-tool",
+            {"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+             "tool_input": {"command": f"git worktree remove {made}"}, "cwd": str(self.repo)},
+            cwd=self.repo,
+        )
+        self.assertEqual(_verdict(proc)[0], "allow")
+
+    def test_but_not_a_tree_somebody_else_is_in(self):
+        """Narrow on purpose — ours, for this session, and nothing else."""
+        theirs = self.worktree("feat/theirs")
+        proc = self.run_hook(
+            "pre-tool",
+            {"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+             "tool_input": {"command": f"git worktree remove {theirs}"}, "cwd": str(self.repo)},
+            cwd=self.repo,
+        )
+        self.assertEqual(_verdict(proc)[0], "deny")
 
     def test_a_relative_redirect_is_resolved_where_the_shell_would(self):
         """`cd /tmp/x && printf > a.py` writes /tmp/x/a.py, not <repo>/a.py.
