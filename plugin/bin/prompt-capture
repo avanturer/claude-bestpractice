@@ -25,25 +25,73 @@ from claude_bestpractice import hookio, redact, sessions  # noqa: E402
 from claude_bestpractice.gitctx import resolve  # noqa: E402
 
 MAX_TASK_CHARS = 600
+MAX_TASK_PATHS = 64
 
 # Path-shaped tokens: an explicit separator, or a bare filename with an extension.
 _PATH = re.compile(r"[A-Za-z0-9_./\-]*[/][A-Za-z0-9_./\-]+|\b[A-Za-z0-9_\-]+\.[A-Za-z0-9]{1,6}\b")
 _NOISE = {"e.g.", "i.e.", "etc.", "vs."}
 
+# The harness wraps things into the prompt that the founder did not type. `ide_opened_file`
+# says so itself — "This may or may not be related to the current task" — and it carries a
+# path, which is the one thing this file mines a prompt for.
+#
+# Reported from a real session: the block named `/tmp/readonly/Bash tool output (aeqikl)`,
+# that became the entire task scope, and every genuine project file was therefore drift.
+# Eight consecutive blocks on correct work. Two separate leaks were reproduced here: the
+# absolute path when its parent happened to exist, and — with no help from the filesystem
+# at all — the closing tag itself, `/ide_opened_file`, whose parent is `/`.
+#
+# Named rather than pattern-matched on angle brackets: a founder pasting XML is asking for
+# it to be read, not stripped.
+_ENVELOPES = ("ide_opened_file", "ide_selection", "system-reminder")
+_ENVELOPE_BLOCK = re.compile(
+    r"<(" + "|".join(_ENVELOPES) + r")\b[^>]*>.*?</\1\s*>", re.S | re.I
+)
+_ENVELOPE_OPEN = re.compile(
+    r"<(?:" + "|".join(_ENVELOPES) + r")\b[^>]*>.*?(?:\n|$)", re.S | re.I
+)
+
+
+def strip_envelopes(text: str) -> str:
+    """Remove what the harness injected, leaving what the founder actually typed.
+
+    An unclosed opener takes the rest of its block with it rather than being left behind
+    as a bare tag — the tag alone is enough, because `</ide_opened_file>` is path-shaped.
+    """
+    text = _ENVELOPE_BLOCK.sub(" ", text)
+    return _ENVELOPE_OPEN.sub(" ", text).strip()
+
 
 def extract_paths(text: str, root: Path) -> list[str]:
-    """Paths the task actually refers to.
+    """Paths the task actually refers to, and only ones inside this worktree.
 
     Only tokens that resolve to something on disk, or name a directory, are kept. A
     prompt mentioning `README.md` in passing should not widen the allowed blast radius
     to the whole repository, and a token that matches nothing is almost always prose.
+
+    Containment is not tidiness. `root / "/tmp/x"` is `/tmp/x` — an absolute token
+    discards the root entirely — and the directory fallback then accepted anything whose
+    parent existed anywhere on the machine, up to and including `/`. Every path here is
+    compared against repository-relative filenames, so one that is not in the repository
+    can never match anything and turns the whole check into "all of it is drift".
     """
+    try:
+        base = root.resolve()
+    except OSError:
+        return []
+
     found: list[str] = []
     for raw in _PATH.findall(text):
         token = raw.strip(".,;:()[]\"'`")
         if not token or token in _NOISE or len(token) < 3:
             continue
         candidate = root / token
+        try:
+            inside = candidate.resolve().relative_to(base)
+        except (ValueError, OSError):
+            continue
+        if not str(inside) or str(inside).startswith(".."):
+            continue
         if candidate.exists():
             found.append(token.rstrip("/"))
             continue
@@ -61,8 +109,8 @@ def main() -> None:
     if rec is None:
         rec = sessions.adopt(ctx, event.session_id)
 
-    prompt = (event.prompt or "").strip()
-    if prompt and not rec.task_statement:
+    prompt = strip_envelopes(event.prompt or "")
+    if prompt:
         # Scrubbed AT CAPTURE, because this string does not stay here. It fans out to the
         # session record, the sibling sessions' board, `claude-bp status`, every scope-
         # drift message, and the attempt filed on an unverified finish — which is Tier A,
@@ -73,13 +121,23 @@ def main() -> None:
         # Control characters go too: this text is rendered into an injected block, and an
         # ANSI escape or an RTL override in it is a way to make the board lie.
         safe = redact.scrub(redact.strip_control(prompt))
+        # The statement follows the founder rather than freezing at the first thing they
+        # said. It used to be written once and never again, so a session that had long
+        # since moved on was still being measured against "посмотри заново бд" — and every
+        # drift message quoted it back. Reported from a real session.
+        #
+        # Paths ACCUMULATE where the statement replaces. A later instruction naming more
+        # files genuinely widens what is in scope, and dropping the earlier ones would make
+        # the files the founder first asked for into drift. Bounded, because unbounded
+        # growth in a session record is how a fail-closed gate gets slow.
+        merged = sorted(set(rec.task_paths) | set(extract_paths(prompt, ctx.worktree_root)))
         sessions.touch(
             ctx,
             event.session_id,
             task_statement=safe[:MAX_TASK_CHARS],
             # Paths from the ORIGINAL: redaction rewrites credential-shaped tokens, and a
             # filename is not a credential. Scrubbing first would lose real paths.
-            task_paths=extract_paths(prompt, ctx.worktree_root),
+            task_paths=merged[:MAX_TASK_PATHS],
         )
     else:
         sessions.touch(ctx, event.session_id)

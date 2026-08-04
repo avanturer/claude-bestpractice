@@ -183,10 +183,19 @@ def main() -> None:
         drift = evidence.scope_drift(changed, rec.task_paths, exempt)
         if drift:
             shown = ", ".join(drift[:8]) + (f" (+{len(drift) - 8} more)" if len(drift) > 8 else "")
+            # "or state why it was necessary" was a false promise, and it was this gate
+            # making it two lines above "your description was not read". Nothing reads
+            # prose here, by decision 0002 — so an agent whose work is correct and whose
+            # scope reading is wrong had exactly one available move: revert correct work.
+            # Reported from a real session that hit it eight times running. The remedies
+            # named now are the ones that exist.
             problems.append(
                 f"Scope drift: {shown} were modified but the task did not mention them.\n"
                 f"Task was: {rec.task_statement[:200]}\n"
-                "Revert what is out of scope, or state why it was necessary."
+                "Revert what is out of scope. If it IS in scope, this gate cannot be told "
+                "so in prose — ask the founder to name those paths in their next message, "
+                'or to set {"scope_drift_block": false} in '
+                f"{store.tier_a(ctx, config.CONFIG_NAME)}."
             )
 
     if cfg.compare_dependencies:
