@@ -30,6 +30,17 @@ from .gitctx import GitContext
 
 HOOK_NAME = "pre-push"
 MARKER = "# claude-bestpractice pre-push gate"
+
+# The hook body is written once and then never again: `ensure` skips the moment it finds
+# one installed. So every fix to the hook — and v1.0.0 shipped a serious one, an `exit 0`
+# where a project WITH a suite pushed with nothing run — reached new repositories only.
+# Anyone who had already used the plugin kept the buggy hook forever, and had no way to
+# know. Updating the plugin has to update what the plugin installed.
+#
+# Stamped rather than compared byte-for-byte: the body embeds this project's detected test
+# command, so two correct hooks legitimately differ, and a content check would rewrite the
+# founder's hook on every session start.
+STAMP = "# claude-bestpractice hook version:"
 BACKUP_SUFFIX = ".claude-bestpractice.bak"
 
 # A hook we displaced is moved here and CHAINED, never merely copied aside. Copying it
@@ -50,6 +61,7 @@ WORKFLOW = ".github/workflows/check.yml"
 # all — a repository with no checks of its own still gets its gates proven.
 HOOK_TEMPLATE = f"""#!/bin/sh
 {MARKER}
+{STAMP} __VERSION__
 # Runs this project's own checks before anything leaves the machine. Bypass with
 # --no-verify when you genuinely need to push red work; that is a deliberate act and
 # leaves a record, which a silently-skipped hosted run does not.
@@ -125,13 +137,50 @@ def hook_body(ctx: GitContext | None = None) -> str:
 
         command = detect_test_command(ctx.worktree_root)
 
+    from . import __version__
+
     rendered = NO_RUNNER_TIER
     if command:
         rendered = DETECTED_TIER.format(
             runner=quote(command[0]),
             command=" ".join(quote(part) for part in command),
         )
-    return HOOK_TEMPLATE.replace("__TEST_COMMAND__", rendered)
+    body = HOOK_TEMPLATE.replace("__TEST_COMMAND__", rendered)
+    return body.replace("__VERSION__", __version__)
+
+
+def stamped_version(ctx: GitContext) -> str:
+    """The plugin version that wrote the installed hook, or "" when there is none."""
+    try:
+        text = hook_path(ctx).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    for line in text.splitlines():
+        if line.startswith(STAMP):
+            return line[len(STAMP):].strip()
+    # Ours, but from before stamping existed. Any stamped version is newer than that.
+    return "0" if MARKER in text else ""
+
+
+def refresh(ctx: GitContext) -> bool:
+    """Rewrite our own hook in place when it was written by an older plugin.
+
+    In place, and only over our own file: `install()` displaces whatever was at this path
+    into `pre-push.claude-bestpractice-original` and chains it. Reusing that path here
+    would move OUR hook onto theirs and destroy the founder's husky or lefthook script —
+    the one thing this module has always refused to do.
+    """
+    from . import __version__
+
+    current = stamped_version(ctx)
+    if not current or current == __version__:
+        return False
+    try:
+        hook_path(ctx).write_text(hook_body(ctx), encoding="utf-8")
+        _make_executable(hook_path(ctx))
+    except OSError:
+        return False
+    return True
 
 
 def hooks_dir(ctx: GitContext) -> Path:
@@ -217,7 +266,12 @@ def ensure(ctx: GitContext) -> tuple[bool, str]:
     first, and the create is O_EXCL, so eight sessions starting at once produce one hook
     and seven no-ops rather than a torn file.
     """
-    if installed(ctx) or declined(ctx):
+    if installed(ctx):
+        # Installed, but possibly by an older plugin. An upgrade that fixes the hook has to
+        # reach the repositories that already have one, or the fix ships to nobody who was
+        # already using it.
+        return (True, "refreshed") if refresh(ctx) else (False, "")
+    if declined(ctx):
         return False, ""
     return install(ctx)
 
