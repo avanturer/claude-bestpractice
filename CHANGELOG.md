@@ -1,5 +1,63 @@
 # Changelog
 
+## v1.0.12
+
+Issues #40, #41 and #42. Two are wrong diagnoses — the gate blocking correctly and then
+explaining itself with a claim that is not true — which is the failure mode this project
+is most prone to, because a refusal with a false reason costs a detour and then costs
+trust.
+
+### "The suite FAILS on the code as it stands" — when it never ran (#40)
+
+That headline is a claim about the **code**. It was printed verbatim when the runner was
+missing: a bare `pytest` in a Makefile that only resolves inside an activated virtualenv,
+so interactive shells had it and the gate's did not. Zero tests executed, zero failures,
+and a founder sent looking for a defect that was not there.
+
+The two situations need opposite responses — *fix your environment* and *fix your code* —
+so they are now distinguished by exit 127, by `command not found`, and by
+`<tool>: No such file or directory`, and the message names the tool:
+
+> Could not run the suite — `pytest` not found on PATH (exit 2). This is an environment
+> problem, not a code failure. Fix the runner, then the gate can judge the code.
+
+Blocking the turn is still right; only the diagnosis was wrong. It is also **no longer
+filed as a red suite** — that ledger entry could never be cleared by fixing the code,
+because the code was never the problem.
+
+The third pattern above was found by the test for this fix, not by the report. The report
+carried one sample, and a pattern built from one sample fits one sample.
+
+### The worktree guard judged every path, not the writes (#42)
+
+Two shapes, both refusing correct work:
+
+**A read source in another tree.** `cp <main>/.env .env` from a worktree was refused for
+touching the main checkout — which is where the bytes came *from*, with the destination
+inside our own tree. Same for an `ssh -i <main>/key` identity file. Reading a sibling
+checkout is routine. `cp`, `mv`, `install` and `ln` now contribute only their **last**
+argument; `rm` and friends still contribute all of theirs, because they destroy all of them.
+
+**A path invented from a heredoc.** `select … where n_live_tup > 0` inside a heredoc body
+looks exactly like a redirect to a file named `0`, so the guard refused a write to
+`<cwd>/0` — a path that does not exist and was never named, leaving no way to find the real
+problem. Heredoc bodies are data and are now blanked before scanning, like quoted spans.
+Purely numeric redirect targets are dropped too: `2>&1` and `> 0` are descriptors and
+comparisons, never filenames.
+
+### Scope drift judged against an IDE notice (#41)
+
+Already fixed in v1.0.2 and confirmed against the exact payload from the report: the
+`<ide_opened_file>` block is stripped, no paths survive, and the check **abstains** rather
+than comparing against what is left — which is the last of the four things the issue asked
+for. What was still missing is now done: the envelope list covers `ide_diagnostics`,
+`background-task` and the command wrappers as well, and a task statement cut at the
+character limit is **marked as truncated**, because the drift refusal quotes it back as
+"Task was:" and a fragment presented as the whole instruction is a claim the founder cannot
+check.
+
+738 tests, 26 doctor checks, ~332/400 always-on tokens, zero dependencies.
+
 ## v1.0.11
 
 Issue #37, two defects hit in one session, and together they compound: the first refuses

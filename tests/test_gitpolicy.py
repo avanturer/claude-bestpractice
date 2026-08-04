@@ -12,7 +12,7 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from helpers import RepoCase, git, sid
+from helpers import BIN, RepoCase, git, sid
 
 
 def _verdict(proc) -> tuple[str, str]:
@@ -240,6 +240,56 @@ class TestTheRuleIsAboutTheTargetNotTheSession(PolicyCase):
             cwd=self.repo,
         )
         self.assertEqual(_verdict(proc)[0], "deny")
+
+    def test_a_read_source_in_another_tree_is_not_a_write(self):
+        """`cp <main>/.env .env` from a worktree was refused for touching the main
+        checkout — where the bytes came FROM, with the destination inside our own tree.
+        Reading a sibling checkout is routine: an `.env`, a shared key, a diff. Reported
+        as issue #42, alongside an `ssh -i <main>/key` identity file."""
+        mine = self.worktree("feat/mine")
+        for command in (
+            f"cp {self.repo / '.env'} .env",
+            f"ssh -i {self.repo / '.secrets' / 'key'} root@host 'uptime'",
+        ):
+            proc = self.run_hook(
+                "pre-tool",
+                {"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+                 "tool_input": {"command": command}, "cwd": str(mine)},
+                cwd=mine,
+            )
+            self.assertEqual(_verdict(proc)[0], "allow", command)
+
+    def test_a_copy_into_another_tree_is_still_a_write(self):
+        """Destination-only must not become nobody-at-all."""
+        mine = self.worktree("feat/mine")
+        proc = self.run_hook(
+            "pre-tool",
+            {"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+             "tool_input": {"command": f"cp .env {self.repo / '.env'}"}, "cwd": str(mine)},
+            cwd=mine,
+        )
+        self.assertEqual(_verdict(proc)[0], "deny")
+
+    def test_a_heredoc_body_is_data_not_shell(self):
+        """`where n_live_tup > 0` inside a heredoc looked like a redirect to a file named
+        `0`, and the guard refused a write to `<cwd>/0` — a path that does not exist and
+        was never named, so the message gave no way to find the real problem."""
+        import importlib.machinery
+        import importlib.util
+
+        loader = importlib.machinery.SourceFileLoader("pt", str(BIN / "pre-tool"))
+        module = importlib.util.module_from_spec(
+            importlib.util.spec_from_loader("pt", loader))
+        loader.exec_module(module)
+
+        command = (
+            "cat > /tmp/scratch/t.sql <<'SQL'\n"
+            "select relname from pg_class where n_live_tup > 0 order by 1;\n"
+            "SQL\n"
+            "ssh root@H 'psql' < /tmp/scratch/t.sql 2>&1 | tail -28"
+        )
+        targets = [str(p) for p in module.bash_write_targets(command, self.repo)]
+        self.assertEqual(targets, ["/tmp/scratch/t.sql"])
 
     def test_a_relative_redirect_is_resolved_where_the_shell_would(self):
         """`cd /tmp/x && printf > a.py` writes /tmp/x/a.py, not <repo>/a.py.
