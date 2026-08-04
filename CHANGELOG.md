@@ -1,5 +1,60 @@
 # Changelog
 
+## v1.0.15
+
+Issues #50 and #51. Both are the same failure of imagination: code that was correct for
+the machine and the language it was written on.
+
+### `make check` could not run under a virtualenv (#50)
+
+Self-inflicted, in v1.0.13, by the test written to prove the liveness fix. It copied
+`sys.executable` to a file named `claude` so the process tree would contain a process the
+walk could find. Under a virtualenv that interpreter cannot start: it locates its stdlib
+through the `pyvenv.cfg` beside its own executable, and a copy has no way back.
+
+```
+AssertionError: 0 != 1 : Could not find platform independent libraries
+```
+
+Green for the author, red for anyone running the project the ordinary way — and the
+pre-push hook runs `make check` on every push, so it blocked pushing too. Second failure
+of this shape in this suite.
+
+The fix is not a better way to relocate an interpreter. The shim is now a shebang script
+that runs `sys.executable` **from its own path**, so there is nothing to relocate and the
+whole class is gone; verified under both a symlinked and a `--copies` virtualenv, with the
+child reporting the venv's own prefix. The assertion that the shim started is also
+separated from the assertions about liveness — a broken fixture now says so instead of
+sending the reader to the wrong file, which is what `0 != 1` did here.
+
+### The decision inbox was English-only (#51)
+
+v1.0.14 stopped the inbox filling with the plugin's own output. What that exposed is that
+the classifier deciding what *is* a decision only ever spoke English, so for a founder
+working in Russian the inbox went from reliably wrong to reliably **empty** — five markers
+out of five silent on instructions whose English translations all classified correctly:
+
+| | Russian | English |
+|---|---|---|
+| decision | «мы решили использовать Decimal вместо float» → none | `decision` |
+| rejection | «никогда не используй float для денег» → none | `rejection` |
+| correction | «нет, не так — бери timestamp из source_products» → none | `correction` |
+| constraint | «КБЖУ должно быть всегда на 100 г» → none | `constraint` |
+| rationale | «так нельзя, потому что сломается прод» → none | `constraint` |
+
+Empty is the worse failure, because it reads exactly like a session that made no
+decisions. There is nothing to notice.
+
+Every marker now carries its vocabulary in both languages, side by side in one table, and
+a test asserts each one fires on both — so the asymmetry cannot quietly return the next
+time a marker is edited. Russian pleasantries («нет, спасибо», «не сейчас», «ладно,
+забудь») join the noise filter, and both `е` and `ё` spellings are accepted.
+
+Also fixed, from the same report: `rejection` required `never` to be followed by a verb
+from a fixed list, so `"use Decimal here, never float"` — the most natural way to say it —
+scored nothing in English either. The comma before `never` is what carries the rejection,
+and it does not fire on "I have never seen this before".
+
 ## v1.0.14
 
 A pull request is now an obligation rather than a notification.
