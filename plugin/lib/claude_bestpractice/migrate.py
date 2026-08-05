@@ -231,6 +231,23 @@ def coverage(ctx: GitContext, path: Path) -> tuple[int, int]:
     return len(open_items(text)), migrated
 
 
+# What this can and cannot see, stated once so every surface can say the same thing.
+#
+# Twice now a shape was invented and quietly expected of the founder: first the filename
+# `TODO-<name>.md`, then a checkbox list. Both were wrong in the same way — a convention
+# nobody agreed to, presented as detection. A registry keyed by id and status is exactly
+# what this feature is for, and it matches neither.
+#
+# So detection is best-effort and SAYS SO. The failure that matters is not missing a
+# document; it is announcing that nothing was missed.
+RECOGNISED = "checkbox lists (`- [ ] …`)"
+
+
+def unenumerable(text: str) -> bool:
+    """True when a document tracks something this cannot count."""
+    return not open_items(text) and not _DONE_ITEM.search(text)
+
+
 def brief(ctx: GitContext, path: Path) -> str:
     """The instruction handed to the session, and the check that closes it.
 
@@ -242,7 +259,27 @@ def brief(ctx: GitContext, path: Path) -> str:
     """
     relative = path.relative_to(ctx.worktree_root).as_posix()
     total, migrated = coverage(ctx, path)
-    items = open_items(path.read_text(encoding="utf-8", errors="replace"))
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if unenumerable(text):
+        # Handing over a document with an empty item list and the words "for each item"
+        # is instructions for nothing. Say what is actually true instead.
+        return "\n".join([
+            f"{relative} is not in a shape this can enumerate — it recognises only "
+            f"{RECOGNISED}, and this is not one.",
+            f"{migrated} task(s) in the ledger name it as their source.",
+            "",
+            "Read it yourself. For anything it tracks that is not already in the ledger:",
+            "",
+            f'  claude-bp-plan park "<title>" --paths <files> --note "<what is known, what',
+            f'    was ruled out, where it stands>" --source {relative}',
+            "",
+            "`--check` can tell you how many tasks came from here, but NOT how many are",
+            "left, because it cannot read this format. Do not take a count from it.",
+            "",
+            f"If it is curated and should stay the source of truth: "
+            f"claude-bp-plan adopt --ignore {relative}",
+        ])
+    items = open_items(text)
     listed = "\n".join(f"  - {item}" for item in items[:12])
     more = f"\n  … and {len(items) - 12} more" if len(items) > 12 else ""
     return "\n".join([

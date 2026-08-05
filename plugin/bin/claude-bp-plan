@@ -114,7 +114,14 @@ def cmd_adopt(ctx, brief: str, check: str, ignore: str) -> int:
         if brief:
             print(migrate.brief(ctx, target))
             return 0
+        text = target.read_text(encoding="utf-8", errors="replace")
         total, migrated = migrate.coverage(ctx, target)
+        if migrate.unenumerable(text):
+            # Reporting "0 left" here would be a green light nobody earned.
+            print(f"{check}: {migrated} task(s) in the ledger from this document.")
+            print(f"How many remain is unknown — this recognises only {migrate.RECOGNISED},")
+            print("and this document is not one. Read it rather than trusting a count.")
+            return 0
         left = total - migrated
         print(f"{check}: {total} open item(s), {migrated} in the ledger, {left} left")
         return 0 if left <= 0 else 1
@@ -131,7 +138,15 @@ def cmd_adopt(ctx, brief: str, check: str, ignore: str) -> int:
         if total > migrated:
             outstanding.append((path.relative_to(ctx.worktree_root).as_posix(), total - migrated))
     if not outstanding:
-        print("nothing tracked outside the ledger")
+        # NOT "nothing tracked outside the ledger". That is a claim about the repository,
+        # and this only ever looked for one shape — a registry keyed by id and status is
+        # invisible to it and is exactly what this feature is for. A false all-clear is
+        # worse than no answer: it is the quiet failure this whole project is written
+        # against, committed by the thing that warns about it.
+        print(f"no documents found tracking work in {migrate.RECOGNISED}.")
+        print("That is the only shape this recognises — a registry in any other form is")
+        print("invisible to it. Point it at one directly:")
+        print("  claude-bp-plan adopt --brief <file>")
         return 0
 
     print("work tracked outside the ledger:\n")

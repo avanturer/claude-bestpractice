@@ -1,5 +1,55 @@
 # Changelog
 
+## v1.3.1
+
+v1.3.0 replaced one invented convention with another, and the field report that confirmed
+it working contains the proof — offered generously, as if it were correct behaviour:
+
+> «А наш `docs/TODO.md` не поднят, и это правильно: в нём ноль чекбоксов — он устроен как
+> реестр с ID и статусами, а не как список галочек.»
+
+It is not correct. That document is the repository's **primary** registry, created
+deliberately so decided-but-unbuilt work stops evaporating. It tracks real work and the
+plugin cannot see it — because v1.2.0 quietly expected a filename, and v1.3.0 quietly
+expected a checkbox. Same mistake, one layer down.
+
+### The part that actually had to be fixed
+
+Missing a document is forgivable. **Announcing that nothing was missed is not**:
+
+```
+$ claude-bp-plan adopt
+nothing tracked outside the ledger        ← with two planned items in docs/TODO.md
+```
+
+That is a claim about the repository, and it was false. It is the quiet failure this whole
+project is written against — a dead system looking exactly like a quiet one — committed by
+the thing that warns about it. It now names what it looked for and admits the rest is
+invisible:
+
+```
+no documents found tracking work in checkbox lists (`- [ ] …`).
+That is the only shape this recognises — a registry in any other form is
+invisible to it. Point it at one directly:
+  claude-bp-plan adopt --brief <file>
+```
+
+The escape hatch did not work either. `--brief` on such a document printed "tracks 0 open
+item(s)", no items, and then "For each item NOT yet in the ledger…" — instructions for an
+empty list. It now says it cannot enumerate the format, reports the one thing it does know
+(how many tasks name the document as their source), and hands the reading to the session.
+
+`--check` no longer reports "0 left" for a format it cannot read. A count nobody can stand
+behind is a green light nobody earned.
+
+### What was deliberately not done
+
+A third detection shape was not added. Guessing at markdown tables, or at status
+vocabulary like `planned` / `todo`, would be the same mistake a third time — and #51 is
+already the record of what vocabulary guessing costs. Detection stays best-effort and says
+so; the founder points at anything it missed.
+
+
 ## v1.3.0
 
 v1.2.0 looked for work outside the ledger by matching filenames, and a field report showed
