@@ -10,7 +10,7 @@ import unittest
 
 from helpers import BIN, RepoCase, git
 
-from claude_bestpractice import plan, sessions
+from claude_bestpractice import plan, sessions, store
 
 
 class PlanCase(RepoCase):
@@ -220,3 +220,69 @@ class TestCli(PlanCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheLedgerIsVisibleToGit(PlanCase):
+    """A parked task that git cannot see is not parked, whatever `park` printed.
+
+    Issue #66: an ignore rule covering Tier A hid thirty migrated tasks. Every command
+    reported success, because every command asks the filesystem and the filesystem was
+    fine — only git disagreed, and nothing was looking.
+    """
+
+    def hide_tier_a(self, rule: str = f"{store.TIER_A_DIRNAME}/") -> None:
+        exclude = self.ctx().common_dir / "info" / "exclude"
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        with exclude.open("a", encoding="utf-8") as handle:
+            handle.write(f"\n{rule}\n")
+
+    def test_a_healthy_repository_says_nothing(self):
+        self.assertEqual(store.hidden_from_git(self.ctx()), "")
+
+    def test_an_ignore_rule_over_tier_a_is_found_and_located(self):
+        self.hide_tier_a()
+        where = store.hidden_from_git(self.ctx())
+        self.assertIn("info/exclude", where)
+        self.assertIn(store.TIER_A_DIRNAME, where)
+
+    def test_a_committed_file_inside_does_not_buy_an_all_clear(self):
+        """The probe must be a path git can never have in its index.
+
+        Probing the directory, or a real task file, answers "visible" as soon as one file
+        inside has been committed — because a tracked path is not subject to exclude rules.
+        That is a false all-clear in the case that matters most: a repository that was
+        healthy once and has been hidden since. Checked against git, not reasoned about.
+        """
+        ctx = self.ctx()
+        task = plan.add(ctx, "already committed")
+        git(["add", "-f", str(task.path.relative_to(ctx.worktree_root))], ctx.worktree_root)
+        git(["commit", "-qm", "commit one task before the rule appears"], ctx.worktree_root)
+
+        self.hide_tier_a()
+        self.assertNotEqual(
+            store.hidden_from_git(ctx), "", "a tracked sibling masked the rule"
+        )
+
+    def park(self) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(BIN / "claude-bp-plan"), "park", "Finish the importer",
+             "--paths", "a.py",
+             "--note", "The CSV reader lands rows but the date column stays a string; "
+                       "tried strptime in the reader and it belongs in the mapper instead."],
+            cwd=str(self.repo), capture_output=True, text=True, timeout=60,
+        )
+
+    def test_park_refuses_to_promise_the_task_will_be_picked_up(self):
+        """`pick it up in another session` is the sentence that was false."""
+        self.hide_tier_a()
+        proc = self.park()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("parked", proc.stdout)
+        self.assertNotIn("pick it up in another session", proc.stdout)
+        self.assertIn("git cannot see", proc.stderr.lower())
+
+    def test_park_keeps_its_promise_when_git_can_see_the_ledger(self):
+        proc = self.park()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("pick it up in another session", proc.stdout)
+        self.assertEqual(proc.stderr, "")

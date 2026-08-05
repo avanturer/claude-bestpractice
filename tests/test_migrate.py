@@ -343,6 +343,25 @@ class TestMigrationIsDelegatedAndThenCounted(RepoCase):
         self.write("docs/pre-release-todo.md", "".join(f"- [ ] item {i}\n" for i in range(26)))
         self.assertIn("28 open item(s) in 2 checkbox document(s)", migrate.line(self.ctx()))
 
+    def test_the_board_names_the_next_command_not_the_genre(self):
+        """A count with nothing that starts anything is a count that gets scrolled past.
+
+        Issue #65: `adopt` on its own was reported every session forever while the
+        repository carried the same 66 items. The worktree refusal names the destination
+        rather than describing the kind of move to make; this is the same obligation.
+        """
+        self.seed()
+        self.write("docs/pre-release-todo.md", "".join(f"- [ ] item {i}\n" for i in range(26)))
+        line = migrate.line(self.ctx())
+        # The biggest of the two, because that is the one worth a turn.
+        self.assertIn("adopt --brief docs/pre-release-todo.md", line)
+
+    def test_the_board_names_the_way_out_as_well_as_the_way_through(self):
+        """One exit is not a choice. A repository that curates its documents on purpose
+        has to be able to discharge this line, or it learns to ignore the channel."""
+        self.seed()
+        self.assertIn("--ignore", migrate.line(self.ctx()))
+
 
 class TestItNeverClaimsToHaveLookedEverywhere(RepoCase):
     """Twice a shape was invented and quietly expected: a filename, then a checkbox.

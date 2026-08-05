@@ -1,5 +1,61 @@
 # Changelog
 
+## v1.4.0
+
+Issue #66, and the worst kind of failure this project can have: **every signal said the
+work was safe while it was one command from gone.**
+
+Thirty tasks were migrated into the ledger. `park` printed thirty ids, `list` showed all
+thirty, `adopt --check` reported `0 left`. An ignore rule covering
+`.claude/claude-bestpractice/` meant git could see none of them — so the ledger lived
+inside one working tree, and `git worktree remove` would have taken it.
+
+Nothing was looking, because every command asks the filesystem and the filesystem was
+fine. Only git disagreed.
+
+### What the plugin now does
+
+`git check-ignore` against Tier A, and say so in the three places it matters: on the board
+every session, on stderr at the moment `park` writes, and as a doctor check that plants the
+rule and proves the report fires.
+
+`park` no longer prints "pick it up in another session" when that is false. The file is
+still written and the exit code is still zero — a caller that read failure would park the
+same task twice — but the promise is withdrawn and replaced with what actually happened.
+
+### What it does not do
+
+It does not edit the ignore rule. The plugin has never written one, in any released
+version — searched across the whole history — so the rule belongs to the founder or to
+another tool, and rewriting somebody's ignore file on the strength of a guess about why it
+is there is not a repair.
+
+### The probe is a path that cannot exist
+
+`git check-ignore` reports nothing for a path already in the index, because a tracked file
+is not subject to exclude rules. Probing the directory, or any real task file, therefore
+answers "visible" as soon as one file inside has been committed — a false all-clear in
+precisely the case that matters most, a repository that was healthy once and has been
+hidden since. Checked against git rather than reasoned about, and the test that pins it
+would have failed on the obvious implementation.
+
+### The migration line names a command (#65)
+
+`adopt` on its own was a count repeated every session with nothing that starts anything —
+one repository carried the same 66 items indefinitely with every gate green. The line now
+names the next action the way the worktree refusal names the destination, and names the
+way out as well:
+
+```
+31 open item(s) in 2 checkbox document(s) tracked outside the work ledger —
+`claude-bp-plan adopt --brief docs/pre-release-todo.md` to migrate,
+`adopt --ignore <paths>` if a document is curated and stays put
+```
+
+Both exits, deliberately. A signal a repository can never discharge is one it learns to
+scroll past, which costs the signals that matter.
+
+
 ## v1.3.3
 
 Issue #63. `adopt` raised `.github/pull_request_template.md` as "3 open item(s) not in the

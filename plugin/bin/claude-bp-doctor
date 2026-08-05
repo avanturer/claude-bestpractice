@@ -133,6 +133,46 @@ def check_session_start(repo: Path) -> Result:
     return Result("session-start injects a board", True, f"{len(body)} chars, fenced, health footer present")
 
 
+NAME_HIDDEN = "a hidden ledger is reported"
+
+
+def check_a_hidden_ledger_is_reported(repo: Path) -> Result:
+    """A ledger git cannot see must be announced, never written in silence.
+
+    Not hypothetical: an ignore rule covering Tier A made thirty parked tasks invisible to
+    git while `park` printed ids, `list` showed all of them and `adopt --check` reported
+    zero left — every signal green, the work one `git worktree remove` from gone (#66).
+
+    The plugin never wrote that rule, in any released version, and does not remove it. What
+    it owes is that nobody hears "parked" and believes the task is safe when it is not.
+    """
+    sys.path.insert(0, str(BIN.parent / "lib"))
+    from claude_bestpractice import store
+    from claude_bestpractice.gitctx import resolve
+
+    ctx = resolve(repo)
+    if store.hidden_from_git(ctx):
+        return Result(NAME_HIDDEN, False, "reported a hidden ledger before any rule existed")
+
+    exclude = ctx.common_dir / "info" / "exclude"
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    with exclude.open("a", encoding="utf-8") as handle:
+        handle.write(f"\n{store.TIER_A_DIRNAME}/\n")
+
+    where = store.hidden_from_git(ctx)
+    if not where:
+        return Result(NAME_HIDDEN, False, "an exclude rule over Tier A went unnoticed")
+
+    proc = start_session(repo, "doctor-hidden")
+    try:
+        body = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return Result(NAME_HIDDEN, False, f"unparseable board: {proc.stdout[:200]}")
+    if "GIT CANNOT SEE" not in body:
+        return Result(NAME_HIDDEN, False, "the board said nothing about a ledger git cannot see")
+    return Result(NAME_HIDDEN, True, f"detected and announced: {where}")
+
+
 def check_hooks_wiring() -> Result:
     """Every command named in hooks.json must exist and be executable.
 
@@ -1100,6 +1140,7 @@ def main() -> int:
             check_reap,
             check_sessions_see_each_other,
             check_a_pull_request_is_merged_or_reported,
+            check_a_hidden_ledger_is_reported,
         ):
             repo = make_repo(Path(tempfile.mkdtemp(prefix="claude-bestpractice-case-", dir=tmp)))
             try:

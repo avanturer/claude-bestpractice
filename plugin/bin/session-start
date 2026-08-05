@@ -197,6 +197,29 @@ def _knowledge_line(ctx: GitContext) -> str:
     )
 
 
+def _hidden_line(ctx: GitContext) -> str:
+    """Say it when git cannot see the layer this plugin calls committed.
+
+    The failure it reports is otherwise undetectable from inside the plugin: every command
+    reports success, because every command is asking the filesystem, and the filesystem is
+    fine. Only git disagrees, and nothing was looking. Reported as issue #66 after thirty
+    parked tasks turned out to be one `git worktree remove` from gone.
+
+    Costs nothing against the always-on budget in any repository where nothing hides it,
+    which is nearly all of them.
+    """
+    where = store.hidden_from_git(ctx)
+    if not where:
+        return ""
+    source = where.split(":", 1)[0]
+    return (
+        f"\nGIT CANNOT SEE `{store.TIER_A_DIRNAME}/` — hidden by {where}. Parked tasks, "
+        "attempts and decisions are being written where nothing will ever commit them, so "
+        f"they die with this worktree. Fix the rule in {source} before parking anything; "
+        "the plugin does not edit it, because it did not write it."
+    )
+
+
 def main() -> None:
     event = hookio.read_event()
     ctx = hookio.repo(event.cwd or os.getcwd())
@@ -232,6 +255,7 @@ def main() -> None:
     body += _armed_line(ctx)
     body += _swept_line(swept)
     body += _knowledge_line(ctx)
+    body += _hidden_line(ctx)
     # Empty in every repository whose tasks already live in the ledger, which is the
     # steady state — this only speaks while a workaround is still lying around.
     loose = migrate.line(ctx)
