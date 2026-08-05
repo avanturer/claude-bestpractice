@@ -260,6 +260,50 @@ def frontmatter(text: str) -> dict[str, str]:
     return out
 
 
+def retires(meta: dict[str, str]) -> set[str]:
+    """The decision numbers this record retires.
+
+    A comma list, because one policy commonly replaces several: "versions match across
+    all three stores" is the end of whatever three separate records said before it. Read
+    as a single value, the second and third stayed live and kept being injected alongside
+    the record that had replaced them.
+    """
+    raw = (meta.get("supersedes") or "").strip("[] ")
+    return {part.strip().zfill(4) for part in raw.split(",") if part.strip().isdigit()}
+
+
+def paths_of(meta: dict[str, str]) -> list[str]:
+    return [g.strip().strip("'\"") for g in meta.get("paths", "").strip("[]").split(",") if g.strip()]
+
+
+def live_decisions(ctx: GitContext) -> list[tuple[str, str, list[str]]]:
+    """(number, title, paths) for records nothing has retired — what a session is handed."""
+    retired: set[str] = set()
+    rows: list[tuple[str, str, list[str]]] = []
+    for path in decision_files(ctx):
+        meta = frontmatter(_read(path))
+        retired.update(retires(meta))
+        rows.append((
+            path.name.split("-", 1)[0],
+            meta.get("title") or path.stem.split("-", 1)[-1].replace("-", " "),
+            paths_of(meta),
+        ))
+    return [row for row in rows if row[0] not in retired]
+
+
+def covering(ctx: GitContext, paths: list[str]) -> list[tuple[str, str, list[str]]]:
+    """Live decisions that already claim any of these paths.
+
+    The one honest, model-free signal that a new record may be replacing an old one:
+    two decisions about the same files are about the same thing. It is not proof of
+    contradiction — that reading needs a model, and a second model watching the first is
+    exactly what this project refuses — so this only ever surfaces the collision to the
+    founder at the moment they are already deciding.
+    """
+    wanted = {p for p in paths if p}
+    return [row for row in live_decisions(ctx) if wanted & set(row[2])]
+
+
 def validate_decisions(ctx: GitContext) -> list[Problem]:
     problems: list[Problem] = []
     for path in decision_files(ctx):
@@ -282,6 +326,15 @@ def validate_decisions(ctx: GitContext) -> list[Problem]:
                         Problem(rel, f"`paths:` glob {glob!r} matches nothing — the code moved")
                     )
 
+        known = {q.name.split("-", 1)[0] for q in decision_files(ctx)}
+        for number in retires(meta):
+            if number not in known:
+                problems.append(
+                    Problem(rel, f"`supersedes: {number}` names no decision — nothing was retired")
+                )
+            elif number == path.name.split("-", 1)[0]:
+                problems.append(Problem(rel, "`supersedes:` names itself"))
+
         if "## Rejected" not in text:
             problems.append(
                 Problem(
@@ -302,8 +355,7 @@ def build_index(ctx: GitContext) -> str:
         meta = frontmatter(_read(path))
         number = path.name.split("-", 1)[0]
         title = meta.get("title") or path.stem.split("-", 1)[-1].replace("-", " ")
-        if meta.get("supersedes"):
-            superseded.add(meta["supersedes"].strip())
+        superseded.update(retires(meta))
         entries.append((number, title, path.name))
 
     live = [e for e in entries if e[0] not in superseded]
