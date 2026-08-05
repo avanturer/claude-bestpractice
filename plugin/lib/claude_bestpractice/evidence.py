@@ -1045,6 +1045,25 @@ def record_red(ctx: GitContext, command: list[str], tail: str) -> None:
 GREEN_FILE = "last-green.json"
 
 
+def _green_path(ctx: GitContext, branch: str = ""):
+    """One file per branch, in the git common dir.
+
+    TIER B, and both halves of that matter. The common dir is shared by every worktree of
+    one clone, so a run observed in the branch's own worktree is visible to a merge decided
+    from anywhere in the same clone — it used to sit in the worktree's own Tier A, which is
+    why a suite that had demonstrably run came back as "no test run has ever been observed"
+    (#69). And it dies with the clone, which is what keeps it evidence: a green record
+    committed and pulled onto another machine would satisfy the gate there without anything
+    having run, which is an assertion wearing evidence's clothes (decision 0002).
+
+    Per branch, because the message is a claim about a branch. One file for the clone meant
+    a green run on `feat/a` answered for `feat/b` — the same defect `_unverified_here` was
+    fixed for, still open here in the permissive direction.
+    """
+    name = re.sub(r"[^A-Za-z0-9._-]", "-", branch or ctx.branch or "detached") or "detached"
+    return store.tier_b(ctx, "green", f"{name}.json")
+
+
 def record_green(ctx: GitContext, command: list[str]) -> None:
     """Remember that a run was OBSERVED to pass, positively.
 
@@ -1053,15 +1072,26 @@ def record_green(ctx: GitContext, command: list[str]) -> None:
     record either.
     """
     store.write_json(
-        store.tier_a(ctx, GREEN_FILE),
+        _green_path(ctx),
         {"command": command, "at": time.time(), "branch": ctx.branch},
         mode=0o644,
     )
 
 
 def last_green(ctx: GitContext) -> dict | None:
-    got = store.read_json(store.tier_a(ctx, GREEN_FILE), default=None)
-    return got if isinstance(got, dict) and got.get("command") else None
+    """The observed green run for THIS branch, or None.
+
+    Reads the pre-1.5 location too, and checks its branch — that record was written per
+    worktree with no branch test at all, so trusting it as-is would carry the old bug
+    forward for one release rather than ending it.
+    """
+    got = store.read_json(_green_path(ctx), default=None)
+    if isinstance(got, dict) and got.get("command"):
+        return got
+    legacy = store.read_json(store.tier_a(ctx, GREEN_FILE), default=None)
+    if isinstance(legacy, dict) and legacy.get("command") and legacy.get("branch") == ctx.branch:
+        return legacy
+    return None
 
 
 def _covers_the_red_run(ctx: GitContext, entry: dict, executed: int | None) -> bool:

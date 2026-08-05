@@ -54,12 +54,28 @@ class PolicyCase(RepoCase):
                  if p.is_dir() and p.name.startswith(f"{self.repo.name}-")]
         return found[0] if len(found) == 1 else None
 
-    def worktree(self, branch: str):
+    def worktree(self, branch: str, occupant: str = "other-session"):
+        """A sibling worktree, with a live session standing in it by default.
+
+        The occupant is not decoration. What the guard defends is another session losing
+        work, and until #67 it was asked as "is this tree mine", which is a different
+        question — a tree nobody is in was refused just as hard, so a hand-made worktree
+        was a permanent stranger and the deadlock in that issue had no exit. These tests
+        all said "another session's tree" and none of them had a session in it, so they
+        passed while asserting something they did not set up. Pass `occupant=""` for the
+        empty tree, which is now a case in its own right.
+        """
         target = self.repo.parent / f"wt-{branch.replace('/', '-')}"
         subprocess.run(
             ["git", "worktree", "add", "-q", "-b", branch, str(target)],
             cwd=str(self.repo), capture_output=True, timeout=120, check=True,
         )
+        if occupant:
+            from claude_bestpractice import sessions
+
+            from helpers import session_record_for
+
+            sessions.register(self.ctx(), session_record_for(self.ctx(target), occupant))
         return target
 
 
@@ -870,3 +886,84 @@ class TestEnteringAWorktreeIsNeverAQuestion(PolicyCase):
             for m in _json.loads(stripped)["hooks"]["PreToolUse"]
         ]
         self.assertTrue(any("EnterWorktree" in m for m in matchers), matchers)
+
+
+class TestATreeNobodyIsInIsNotSomebodyElses(PolicyCase):
+    """Issue #67. The guard asked "is this tree mine", and refused every answer but yes.
+
+    A worktree made by hand — which is what this project's own convention tells people to
+    do — is never in the provisioned registry, so it was a stranger forever. The session
+    that owned the branch could not run a git command in the branch's tree, ran the suite
+    in a throwaway clone instead, and was then refused the merge for having no observed
+    run: each gate's exit blocked by the other, with no legitimate move left.
+    """
+
+    def bash(self, from_tree, command: str) -> tuple[str, str]:
+        proc = self.run_hook(
+            "pre-tool",
+            {"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+             "tool_input": {"command": command}, "cwd": str(from_tree)},
+            cwd=from_tree,
+        )
+        return _verdict(proc)
+
+    def test_a_git_command_in_an_empty_worktree_is_allowed(self):
+        empty = self.worktree("feat/nobody-home", occupant="")
+        decision, reason = self.bash(self.repo, f"git -C {empty} merge origin/main")
+        self.assertEqual("allow", decision, reason)
+
+    def test_the_same_tree_is_refused_once_a_session_stands_in_it(self):
+        """The exemption is occupancy, not tree identity — so it has to reverse."""
+        theirs = self.worktree("feat/somebody-home")
+        decision, reason = self.bash(self.repo, f"git -C {theirs} merge origin/main")
+        self.assertEqual("deny", decision, reason)
+
+    def test_the_main_checkout_stays_guarded_with_nobody_in_it(self):
+        """Under this gate nobody is supposed to be in it, so occupancy would exempt it
+        permanently — and its tracked files belong to every branch, not to an occupant."""
+        mine = self.worktree("feat/mine")
+        decision, reason = self.bash(mine, f"git -C {self.repo} reset --hard")
+        self.assertEqual("deny", decision, reason)
+
+
+class TestAPathGitCannotCarryHasNoOtherTree(PolicyCase):
+    """Issue #68. "Make the change in your own tree and merge it" is not a remedy for a
+    file git ignores: it does not exist in the other tree and no commit will carry it.
+
+    Both exits led back to each other — the worktree refused the write, the main checkout
+    refused the session — and a rotated production SSH key stayed on disk because of it.
+    """
+
+    def write_from(self, session_root, target_file) -> tuple[str, str]:
+        proc = self.run_hook(
+            "pre-tool",
+            {"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+             "tool_input": {"command": f"rm -f {target_file}"}, "cwd": str(session_root)},
+            cwd=session_root,
+        )
+        return _verdict(proc)
+
+    def test_an_ignored_file_in_the_main_checkout_can_be_removed(self):
+        (self.repo / ".gitignore").write_text(".secrets/\n", encoding="utf-8")
+        secrets = self.repo / ".secrets"
+        secrets.mkdir()
+        key = secrets / "prod_key"
+        key.write_text("retired\n", encoding="utf-8")
+
+        mine = self.worktree("feat/rotate-key")
+        decision, reason = self.write_from(mine, key)
+        self.assertEqual("allow", decision, reason)
+
+    def test_a_tracked_file_in_the_main_checkout_is_still_refused(self):
+        """The distinction is IGNORED, not merely untracked — getting it wrong in the
+        loose direction would have opened every write into another tree."""
+        mine = self.worktree("feat/mine")
+        decision, reason = self.write_from(mine, self.repo / "README.md")
+        self.assertEqual("deny", decision, reason)
+
+    def test_a_new_file_is_not_uncarryable_merely_by_being_absent(self):
+        """A file git would happily track is carryable the ordinary way: write it in your
+        own tree, commit, merge. Only a path git is told to ignore has no other tree."""
+        mine = self.worktree("feat/mine")
+        decision, reason = self.write_from(mine, self.repo / "brand-new.py")
+        self.assertEqual("deny", decision, reason)
