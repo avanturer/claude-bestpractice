@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import board, ci, config, hookio, onboard, sessions, stage, store, upgrade, worktree  # noqa: E402
+from claude_bestpractice import board, ci, config, hookio, migrate, onboard, sessions, stage, store, upgrade, worktree  # noqa: E402
 from claude_bestpractice.gitctx import GitContext, resolve, stash_baseline  # noqa: E402
 
 
@@ -217,6 +217,11 @@ def main() -> None:
     swept = worktree.reap_unused(ctx, {rec.session_id for rec in others} | {me.session_id})
     leases = {rec.session_id: sessions.leases_held_by(ctx, rec.session_id) for rec in others}
 
+    # Repairs are the plugin's own state and run themselves. Adoption rewrites files in
+    # the founder's repository and does not — it is surfaced by `_knowledge_line` and
+    # applied by one command.
+    migrate.repair(ctx)
+
     cfg = config.load(ctx)
     resolved_stage, _signals = stage.current(ctx, cfg.stage_override)
     send_captured_defects(ctx, cfg)
@@ -227,6 +232,10 @@ def main() -> None:
     body += _armed_line(ctx)
     body += _swept_line(swept)
     body += _knowledge_line(ctx)
+    # Empty in every repository whose tasks already live in the ledger, which is the
+    # steady state — this only speaks while a workaround is still lying around.
+    loose = migrate.line(ctx)
+    body += f"\n{loose}" if loose else ""
     # Empty on every session that is running what is installed, which is all of them
     # except the ones that just updated and did not restart.
     body += upgrade.stale_line()
