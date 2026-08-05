@@ -102,8 +102,12 @@ def cmd_adopt(ctx, brief: str, check: str, ignore: str) -> int:
     from claude_bestpractice import migrate
 
     if ignore:
-        migrate.ignore(ctx, ignore)
-        print(f"{ignore} left alone; it will not be raised again")
+        # Several at once: a repository that has kept its registries by hand has more
+        # than one of them, and five invocations to say one thing is a tax on the
+        # decision rather than a record of it.
+        for relative in [p.strip() for p in ignore.split(",") if p.strip()]:
+            migrate.ignore(ctx, relative)
+            print(f"{relative} left alone; it will not be raised again")
         return 0
 
     if brief or check:
@@ -191,7 +195,8 @@ def main() -> int:
     adopt = sub.add_parser("adopt", help="bring work tracked outside the ledger into it")
     adopt.add_argument("--brief", default="", help="what to migrate out of this document")
     adopt.add_argument("--check", default="", help="count what is still not migrated")
-    adopt.add_argument("--ignore", default="", help="this document is curated; leave it alone")
+    adopt.add_argument("--ignore", default="",
+                       help="these documents are curated; leave them alone (comma separated)")
 
     args = parser.parse_args()
     ctx = resolve_for_cli()

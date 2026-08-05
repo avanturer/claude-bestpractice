@@ -1,5 +1,30 @@
 # Changelog
 
+## v1.3.3
+
+Issue #63. `adopt` raised `.github/pull_request_template.md` as "3 open item(s) not in the
+ledger". Its checkboxes are a **form**, ticked in the pull request body on GitHub and never
+in the file — so the count can never fall, no migration can change it, and it surfaces on
+every run forever.
+
+GitHub's template paths are now skipped the way `.claude/` already is: every location it
+reads a template from, in the spellings it accepts.
+
+Worth saying plainly, because this feature has retracted two conventions already: these
+paths are **GitHub's own and documented**, not a guess about how somebody might name a
+file. Everything else under `.github/` stays in scope — a release checklist there is real
+work.
+
+### `--ignore` takes several at once
+
+A repository that has kept its registries by hand has more than one of them, and five
+invocations to say one thing is a tax on the decision rather than a record of it:
+
+```
+claude-bp-plan adopt --ignore docs/pre-release-todo.md,docs/store-listing.md
+```
+
+
 ## v1.3.2
 
 Issue #61, and the sharpest catch of the series: v1.3.1 added the "checkbox lists are the

@@ -158,6 +158,22 @@ _REPAIRS = {
 _OPEN_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\[ \]\s+(?P<text>\S.*?)\s*$", re.M)
 _DONE_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\[[xX]\]\s", re.M)
 
+# A template's checkboxes are a FORM, ticked in the pull request body on GitHub and never
+# in the file. So it can never leave the list: `.github/pull_request_template.md` sat at
+# "3 open item(s)" permanently and surfaced on every run, with no migration able to change
+# the count. Reported as issue #63.
+#
+# Unlike the two conventions this feature invented and had to retract, these paths are
+# GitHub's own and documented — every location it will read a template from, in the
+# spellings it accepts. Not a guess about how somebody might name a file.
+_TEMPLATE = re.compile(
+    r"(?:^|/)(?:\.github/)?(?:"
+    r"pull_request_template\.md|issue_template\.md|"
+    r"PULL_REQUEST_TEMPLATE(?:/.+\.md|\.md)|ISSUE_TEMPLATE(?:/.+\.md|\.md)"
+    r")$",
+    re.I,
+)
+
 IGNORED = "adoption-ignored.json"
 
 # Below this a document is prose that happens to contain a checkbox, not a registry.
@@ -200,6 +216,8 @@ def registries(ctx: GitContext) -> list[Path]:
     for path in sorted(root.rglob("*.md")):
         relative = path.relative_to(root).as_posix()
         if any(part in _SKIP for part in path.relative_to(root).parts) or relative in skip:
+            continue
+        if _TEMPLATE.search(relative):
             continue
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
