@@ -242,6 +242,16 @@ def coverage(ctx: GitContext, path: Path) -> tuple[int, int]:
 # document; it is announcing that nothing was missed.
 RECOGNISED = "checkbox lists (`- [ ] …`)"
 
+# Said wherever a list of findings is shown, and NOT only where the list is empty — which
+# is where v1.3.1 said it, and is the path that matters least. A repository with no
+# checkbox document at all is one where nobody is mid-task; the mixed repository is where
+# the message is believed, because a one-item list reads as a result rather than as an
+# absence. That reading is what produced the field report this feature had to correct.
+INCOMPLETE = (
+    f"Only {RECOGNISED} are recognised; a registry in any other form is invisible here — "
+    "point at one with `claude-bp-plan adopt --brief <file>`."
+)
+
 
 def unenumerable(text: str) -> bool:
     """True when a document tracks something this cannot count."""
@@ -402,11 +412,14 @@ def line(ctx: GitContext) -> str:
             left += total - migrated
             documents += 1
     if left:
-        parts.append(f"{left} open item(s) in {documents} document(s)")
+        parts.append(f"{left} open item(s) in {documents} checkbox document(s)")
 
     if not parts:
         return ""
+    # "checkbox document(s)" is doing the work a whole sentence would otherwise do. This
+    # line is injected into every session, so the honest scope has to be carried by the
+    # words already there rather than by an extra one.
     return (
         " and ".join(parts) + " tracked outside the work ledger — "
-        "`claude-bp-plan adopt` for what to do about it"
+        "`claude-bp-plan adopt` for what to do about it, including what it cannot see"
     )
