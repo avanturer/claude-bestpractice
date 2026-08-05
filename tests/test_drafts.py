@@ -319,9 +319,20 @@ class TestBothLanguagesOrNeither(unittest.TestCase):
         this before" is not one and must stay unclassified.
         """
         self.assertEqual(
-            "rejection", drafts.classify("always use Decimal here, never float, because money")
+            "rejection", drafts.classify("store money as Decimal, never float, in every table")
         )
         self.assertIsNone(drafts.classify("I have never seen this behaviour before now"))
+
+    def test_a_standing_instruction_outranks_the_rejection_inside_it(self):
+        """"always use X, never Y" is both, and the stronger reading is the true one.
+
+        Markers are ordered by strength and only the strongest is kept. A sentence that
+        opens by saying what to do forever is policy that happens to name its alternative,
+        not a rejection that happens to be permanent.
+        """
+        self.assertEqual(
+            "standing", drafts.classify("always use Decimal here, never float, because money")
+        )
 
     def test_russian_pleasantries_are_still_noise(self):
         for turn in ("нет, спасибо, это не нужно сейчас делать",
@@ -350,3 +361,114 @@ class TestARussianTurnReachesTheInbox(RepoCase):
         self.assertEqual(1, len(made))
         self.assertEqual("correction", made[0].marker)
         self.assertIn("source_products", made[0].quote)
+
+
+class TestAStandingInstructionIsADecision(unittest.TestCase):
+    """Every other marker is correction-shaped, and that missed the commonest class.
+
+    A founder stating a policy calmly — «запомни навсегда», «на будущее», «правило для
+    всех чатов», "from now on" — is correcting nothing, so nothing fired. The subsystem
+    whose whole job is to stop durable instructions being forgotten was deaf to the exact
+    sentence that says "do not forget this". A 500-character message laying out release
+    policy for three app stores scored None.
+    """
+
+    POLICY = [
+        "запомни навсегда: версии во всех трёх сторах держим одинаковые",
+        "на будущее: патч ноут пишем по-человечески, а не ллм слопом",
+        "всегда пиши патч ноут кратко, как все нормальные приложения",
+        "правило для всех чатов: OTA только для JS-изменений, нативка через стор",
+        "впредь мажорную версию поднимаем только вместе с нативным изменением",
+        "from now on tag every store release with the same version number",
+        "as a rule the patch note should be two sentences, not a changelog dump",
+        "remember this: OTA is for JS only, native changes go through review",
+    ]
+
+    # Description, not policy. Each of these contains a word the marker keys on, which is
+    # why they are here: the phrase carries the instruction, the keyword alone does not.
+    DESCRIPTION = [
+        "это всегда падает на проде, когда база под нагрузкой отвечает медленно",
+        "по умолчанию оно берёт последнюю версию, что для нас сейчас неудобно",
+        "как правило это занимает минут двадцать, но сейчас почему-то дольше",
+        "I do not remember whether we shipped that build to the store last week",
+        "I can't remember if the android build was tagged with the same number",
+    ]
+
+    def test_a_policy_stated_calmly_is_captured(self):
+        for turn in self.POLICY:
+            with self.subTest(turn=turn[:40]):
+                self.assertEqual("standing", drafts.classify(turn))
+
+    def test_describing_the_world_is_not_stating_a_policy(self):
+        for turn in self.DESCRIPTION:
+            with self.subTest(turn=turn[:40]):
+                self.assertIsNone(drafts.classify(turn))
+
+    def test_the_reported_message_that_scored_nothing(self):
+        """Verbatim, because a paraphrase would not prove the thing that failed."""
+        turn = (
+            "сейчас заранее спрошу и уточню тебе, и так же для всех чатов , у меня в "
+            "апстор сейчас релизная v1.0.0, в ру стор тоже самое а в гугл уже на финальной "
+            "модерации, и как выйдет я хочу грамотно для всех сразу вести релизы, "
+            "обновления и ведения версий по лучшим практикам для этого приложения"
+        )
+        self.assertEqual("standing", drafts.classify(turn))
+
+    def test_a_question_ending_in_or_not_is_not_a_correction(self):
+        """«или нет,» is the tail of a question, and it filed a draft every time."""
+        self.assertIsNone(
+            drafts.classify("ставили мы там версию или нет, посмотри пожалуйста в конфиге")
+        )
+        self.assertEqual("correction", drafts.classify("нет, не так — бери из source_products"))
+
+
+class TestAStandingInstructionSurvivesTheTurn(RepoCase):
+    """End to end through the real Stop gate, because the inbox is what the founder opens."""
+
+    def test_it_reaches_the_inbox_and_renders_as_a_record(self):
+        from claude_bestpractice import drafts as d
+
+        transcript = self.repo / "transcript.jsonl"
+        turn = "запомни навсегда: во всех трёх сторах держим один и тот же номер версии"
+        transcript.write_text(
+            json.dumps({"type": "user", "message": {"content": turn}}), encoding="utf-8"
+        )
+        made = d.extract(d.user_turns(str(transcript)), "main", "s1", [])
+        self.assertEqual(1, len(made))
+        self.assertEqual("standing", made[0].marker)
+
+        d.record(self.ctx(), made)
+        pending = d.pending(self.ctx())
+        self.assertEqual(1, len(pending))
+        self.assertIn("один и тот же номер версии", d.render(pending[0]))
+
+
+class TestTheQuoteIsNotSilentlyCut(unittest.TestCase):
+    """A fragment presented as the whole instruction is a claim nobody can check.
+
+    Issue #41 established that for the prompt gate; the inbox had the same defect in a
+    second file. A founder's 522-character release policy was stored as 400 characters
+    ending mid-word, and the record put that fragment under "## Why" as their own words.
+    """
+
+    def test_a_policy_length_instruction_survives_whole(self):
+        turn = (
+            "запомни навсегда: у нас три стора, и версия во всех трёх одна и та же — "
+            "мажор и минор поднимаем только вместе с нативным изменением, патч ноут "
+            "пишем на два предложения по-человечески, а не выгрузкой чейнджлога, "
+            "OTA только для JS-изменений, и никакая платформа не уезжает вперёд "
+            "остальных без явной причины, которую я называю сам. Исключение только "
+            "одно: баг, который воспроизводится на одной платформе и больше нигде — "
+            "тогда чиним точечно и догоняем остальные следующим общим релизом, а не "
+            "разводим три разные ветки версий по трём сторам"
+        )
+        self.assertGreater(len(turn), 400, "the fixture proves nothing below the old cap")
+        quote = drafts.extract([turn], "main", "s1", [])[0].quote
+        self.assertEqual(" ".join(turn.split()), quote)
+        self.assertNotIn(drafts.TRUNCATED, quote)
+
+    def test_past_the_cap_the_cut_is_marked(self):
+        turn = "запомни: " + ("правило про релизы " * 90)
+        quote = drafts.extract([turn], "main", "s1", [])[0].quote
+        self.assertIn(drafts.TRUNCATED, quote)
+        self.assertTrue(quote.startswith("запомни: правило"))
