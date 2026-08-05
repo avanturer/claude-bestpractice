@@ -26,7 +26,7 @@ from __future__ import annotations
 import re
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import store
@@ -51,6 +51,10 @@ class Task:
     created_at: str = ""
     updated_at: str = ""
     body: str = ""
+    # The files the next session has to open. A task parked without them is a title and a
+    # good intention: whoever picks it up spends their first ten minutes rediscovering
+    # what the session that parked it already knew.
+    paths: list[str] = field(default_factory=list)
     # Empty when the task file is in THIS checkout. The sibling's directory name
     # otherwise, so the board can say where the work actually is.
     worktree: str = ""
@@ -94,6 +98,9 @@ def _load(path: Path, state: str) -> Task | None:
         created_at=meta.get("created_at", ""),
         updated_at=meta.get("updated_at", ""),
         body=body,
+        # Absent in every task written before this field existed, which is what `migrate`
+        # backfills. Missing must read as "none named", never as a load failure.
+        paths=[p.strip() for p in meta.get("paths", "").split(",") if p.strip()],
     )
 
 
@@ -195,7 +202,8 @@ def slug(text: str) -> str:
     return "-".join(words) or "task"
 
 
-def _render(task_id: str, title: str, state: str, owner: str, branch: str, body: str) -> str:
+def _render(task_id: str, title: str, state: str, owner: str, branch: str, body: str,
+            paths: list[str] | None = None) -> str:
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     lines = [
         "---",
@@ -204,6 +212,7 @@ def _render(task_id: str, title: str, state: str, owner: str, branch: str, body:
         f"state: {state}",
         f"owner: {owner}",
         f"branch: {branch}",
+        f"paths: {', '.join(paths or [])}",
         f"created_at: {now}",
         f"updated_at: {now}",
         "---",
@@ -212,6 +221,29 @@ def _render(task_id: str, title: str, state: str, owner: str, branch: str, body:
         "",
     ]
     return "\n".join(lines)
+
+
+MIN_HANDOFF_CHARS = 80
+
+
+def handoff_problems(paths: list[str], note: str) -> list[str]:
+    """Why this is not yet a handoff somebody else could pick up.
+
+    A parked task is read by a session that was not in the room. It has the title and
+    nothing else — not the reasoning, not the files, not what was already ruled out — so
+    a thin one costs its reader the whole rediscovery the parking session was trying to
+    save. Refusing here is the same trade the evidence gate makes: a moment now against
+    an hour later.
+    """
+    problems = []
+    if not paths:
+        problems.append("no files named — the next session has nowhere to start")
+    if len(" ".join(note.split())) < MIN_HANDOFF_CHARS:
+        problems.append(
+            f"the note is under {MIN_HANDOFF_CHARS} characters — say what is already known, "
+            "what was ruled out, and where it stands"
+        )
+    return problems
 
 
 ALLOC_LOCK = "plan-alloc.lock"
@@ -227,11 +259,44 @@ def add(ctx: GitContext, title: str, body: str = "", branch: str = "") -> Task:
     that `claim 0007` and `done 0007` silently act on whichever one `find` reaches
     first. The lock is held across both steps or it buys nothing.
     """
+    return park(ctx, title, body=body, branch=branch, paths=[])
+
+
+def park(ctx: GitContext, title: str, body: str = "", branch: str = "",
+         paths: list[str] | None = None) -> Task:
+    """Hand a task to a session that has not happened yet.
+
+    The scene this exists for: a chat with more work in it than belongs in one chat, and
+    the founder saying "leave that for another session". Before this the answer was a
+    markdown file somebody invented on the spot — which is a second task system, in a
+    repository that already has one, with nothing keeping the two honest.
+    """
     with store.file_lock(store.tier_b(ctx, ALLOC_LOCK)):
         task_id = next_id(ctx)
         path = plan_dir(ctx, NEXT) / f"{task_id}-{slug(title)}.md"
-        store.atomic_write(path, _render(task_id, title, NEXT, "", branch, body), mode=0o644)
+        store.atomic_write(
+            path, _render(task_id, title, NEXT, "", branch, body, paths), mode=0o644
+        )
     return _load(path, NEXT)
+
+
+def show(task: Task) -> str:
+    """Everything the next session needs, in one read.
+
+    Deliberately NOT on the board. The board is injected into every session and pays for
+    itself every time; a full handoff is wanted by exactly one session, the one picking
+    this up, and putting it in front of the other seven is how a context budget dies.
+    """
+    lines = [f"{task.id}  {task.title}", ""]
+    if task.paths:
+        lines.append("FILES:")
+        lines += [f"  - {p}" for p in task.paths]
+        lines.append("")
+    lines.append("HANDOFF:")
+    lines += [f"  {line}" for line in (task.body or "(no detail)").splitlines()]
+    if task.branch:
+        lines += ["", f"parked from branch {task.branch}"]
+    return "\n".join(lines)
 
 
 def find(ctx: GitContext, task_id: str) -> Task | None:

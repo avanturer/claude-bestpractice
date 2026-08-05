@@ -1,5 +1,81 @@
 # Changelog
 
+## v1.2.0
+
+Parking a task for a session that has not happened yet, and taking over the workaround
+that existed because the ledger could not.
+
+### A TODO is a handoff, and a handoff has a bar
+
+The scene: a chat with more work in it than belongs in one chat, and the founder saying
+"leave that for another session". Until now the honest answer was a markdown file somebody
+invented on the spot — `docs/scoring/TODO-dictionary-realign.md` — which is a **second task
+system** in a repository that already had one, with nothing keeping the two honest.
+
+The work ledger already had the right bones: one file per task, lifecycle in the directory,
+claims released when a session dies. It was missing the three things a handoff needs.
+
+`claude-bp-plan park` refuses anything that is not one:
+
+```
+$ claude-bp-plan park "Пересобрать словарь" --note "потом доделать"
+not a handoff somebody else could pick up:
+  - no files named — the next session has nowhere to start
+  - the note is under 80 characters — say what is already known, what was ruled out,
+    and where it stands
+```
+
+A parked task is read by a session that was not in the room. It has the title and nothing
+else, so a thin one costs its reader the entire rediscovery the parking session was trying
+to save. Refusing is the same trade the evidence gate makes: a moment now against an hour
+later.
+
+`claude-bp-plan show 0007` hands the next session everything in one read — the files, the
+reasoning, what was already ruled out, the branch it was parked from.
+
+**Deliberately not on the board.** The board is injected into every session and pays for
+itself each time; a full handoff is wanted by exactly one session, the one picking it up.
+Putting it in front of the other seven is how a context budget dies. The board carries the
+title; the detail is one command away.
+
+### An upgrade repairs what it finds, and takes over what it caused
+
+New in `migrate.py`, and the third of these is the one nobody does:
+
+- **Old state keeps loading.** A field added today is absent in everything written before
+  it, and absent has to read as a default rather than a parse failure.
+- **Broken state is repaired rather than stepped around.** A half-written JSON file under
+  `.claude/` survives every upgrade — each reader catches its own decode error and carries
+  on with a default, so nothing breaks loudly and nothing is ever fixed. It is now set
+  aside as `.broken`, with the original kept, because deleting a founder's file to fix a
+  parse error is not a trade this plugin gets to make.
+- **A workaround the plugin caused is taken over once the plugin grows the feature.**
+  Hand-written `TODO-*.md` files are found, surfaced on the board, and adopted by
+  `claude-bp-plan adopt`: the text becomes a task, the files the note *actually* mentions
+  become its `paths` (only the ones that resolve — prose is full of things that look like
+  filenames), and the original is rewritten to a pointer at the task. Not deleted: every
+  link to it still resolves and git keeps the text.
+
+A bare `TODO.md` is left alone. That is usually a document a project maintains on purpose,
+and adopting it would be taking over something that was never a workaround — the hyphen is
+the whole distinction.
+
+Repairs run themselves on session start. **Adoption does not.** It rewrites files in the
+founder's repository, and a plugin that edits `docs/` on its own initiative during an
+upgrade is one nobody installs twice.
+
+### Two defects found by running it
+
+`adopt` was not idempotent: a second run adopted its own pointer, filed a task whose body
+was the pointer text, and left a fresh pointer for the third — one task per invocation,
+forever. Exactly the pollution class the last four releases have been about.
+
+The migration ledger was written to the working tree, dirtying `git status` on every
+session start. An existing test caught it, because a previous version of this plugin did
+the same thing with the stage marker. It lives in the git common dir now, which is what
+decision 0001 says about bookkeeping that describes a clone rather than the repository.
+
+
 ## v1.1.0
 
 First minor bump, and the reason is the point: nineteen releases went out as `1.0.x`

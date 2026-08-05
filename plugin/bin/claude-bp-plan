@@ -65,6 +65,53 @@ def cmd_done(ctx, task_id: str) -> int:
     return 0
 
 
+def cmd_park(ctx, title: str, paths: str, note: str) -> int:
+    wanted = [p.strip() for p in paths.split(",") if p.strip()]
+    problems = plan.handoff_problems(wanted, note)
+    if problems:
+        print("not a handoff somebody else could pick up:", file=sys.stderr)
+        for problem in problems:
+            print(f"  - {problem}", file=sys.stderr)
+        print("\n  claude-bp-plan park \"<title>\" --paths a.py,b.py --note \"<what is known, "
+              "what was ruled out, where it stands>\"", file=sys.stderr)
+        return 1
+
+    missing = [p for p in wanted if not (ctx.worktree_root / p).exists()]
+    if missing:
+        # Named but absent is worth saying rather than refusing: a task can legitimately
+        # be about a file that does not exist yet, and a gate that cannot tell the
+        # difference should not be the one deciding.
+        print(f"note: {', '.join(missing)} not in the tree yet")
+
+    task = plan.park(ctx, title, body=note, branch=ctx.branch, paths=wanted)
+    print(f"parked {task.id}  {task.title}")
+    print(f"pick it up in another session with: claude-bp-plan show {task.id}")
+    return 0
+
+
+def cmd_show(ctx, task_id: str) -> int:
+    task = plan.find(ctx, task_id)
+    if task is None:
+        print(f"no task {task_id}", file=sys.stderr)
+        return 1
+    print(plan.show(task))
+    return 0
+
+
+def cmd_adopt(ctx) -> int:
+    from claude_bestpractice import migrate
+
+    loose = migrate.parked_by_hand(ctx)
+    if not loose:
+        print("no TODO files outside the ledger")
+        return 0
+    for path in loose:
+        task_id = migrate.adopt(ctx, path)
+        print(f"{path.relative_to(ctx.worktree_root)} -> task {task_id}")
+    print(f"\n{len(loose)} adopted. The originals now point at the ledger; git has the text.")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="claude-bestpractice work ledger")
     sub = parser.add_subparsers(dest="command")
@@ -83,6 +130,16 @@ def main() -> int:
     done = sub.add_parser("done", help="move a task to done")
     done.add_argument("task_id")
 
+    park = sub.add_parser("park", help="hand a task to a session that has not happened yet")
+    park.add_argument("title")
+    park.add_argument("--paths", default="", help="comma-separated files the next session opens")
+    park.add_argument("--note", default="", help="what is known, what was ruled out, where it stands")
+
+    show = sub.add_parser("show", help="everything a parked task carries")
+    show.add_argument("task_id")
+
+    sub.add_parser("adopt", help="bring hand-written TODO files into the ledger")
+
     args = parser.parse_args()
     ctx = resolve_for_cli()
 
@@ -92,6 +149,12 @@ def main() -> int:
         return cmd_claim(ctx, args.task_id, args.session)
     if args.command == "done":
         return cmd_done(ctx, args.task_id)
+    if args.command == "park":
+        return cmd_park(ctx, args.title, args.paths, args.note)
+    if args.command == "show":
+        return cmd_show(ctx, args.task_id)
+    if args.command == "adopt":
+        return cmd_adopt(ctx)
     return cmd_list(ctx, getattr(args, "state", ""))
 
 
