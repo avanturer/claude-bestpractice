@@ -147,13 +147,45 @@ def blockers(ctx: GitContext, base: str) -> list[str]:
     request its own reason for not being merged: refused forever, by itself, for existing.
     Unverified finishes are left to `delivery.ready`, which already reads their ledger.
     """
-    from . import board, delivery, provenance
+    from . import board, delivery, drafts, provenance
 
     problems = list(delivery.ready(ctx, base))
+    in_diff = _files_against(ctx, base)
     for item in board.open_items(ctx, branch=ctx.branch):
-        if item.get("provenance") == provenance.FRESH and str(item.get("id", "")).startswith("review-"):
-            problems.append(str(item.get("text", ""))[:200])
+        if item.get("provenance") != provenance.FRESH or not str(item.get("id", "")).startswith("review-"):
+            continue
+        # Only findings in files this pull request actually changes. The workflow REQUIRES
+        # `git merge origin/main` before merging, and that import brought every open
+        # finding in main onto the branch — a pull request of eight markdown files was
+        # refused over SQL interpolation in a Python module it never touched, and the
+        # longer main got the more it inherited, so syncing with main could never go green
+        # (#69). Subjects are compared against the diff from the merge base, which is the
+        # pull request's own diff and not "every file the branch's commits touched".
+        # `drafts.subject_paths`, not a plain read: `provenance.stamp` stores these as
+        # dicts carrying a blob hash, and reading them as strings gives an empty list for
+        # every real item. That is the defect that helper was written for, and doing it by
+        # hand here would have silently dropped every finding instead of the stale ones.
+        subjects = drafts.subject_paths(item)
+        if subjects and in_diff is not None and not (set(subjects) & in_diff):
+            continue
+        problems.append(str(item.get("text", ""))[:200])
     return problems
+
+
+def _files_against(ctx: GitContext, base: str) -> set[str] | None:
+    """Paths this branch changes relative to its merge base with `base`.
+
+    None when git cannot answer — an unknown base, an unborn branch — and the caller then
+    keeps every finding. Losing a real finding is worse than repeating a stale one, so the
+    filter only ever narrows on an answer it actually got.
+    """
+    from .gitctx import _run
+
+    for ref in (base, f"origin/{base}"):
+        listed = _run(["diff", "--name-only", f"{ref}...HEAD"], ctx.worktree_root, check=False)
+        if listed.strip():
+            return {line.strip() for line in listed.splitlines() if line.strip()}
+    return None
 
 
 def merge_refusal(record: dict[str, Any], problems: list[str]) -> str:

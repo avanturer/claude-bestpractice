@@ -174,13 +174,89 @@ def foreign_tree(ctx: GitContext, target: Path) -> Path | None:
 
     Cheap first: a target inside our own tree is a path comparison and asks git nothing,
     which is the overwhelmingly common case on a hook that runs on every tool call.
+
+    Two things it deliberately does NOT refuse, both reported from real machines:
+
+    A tree nobody is standing in. The condition worth defending is "another session would
+    lose work", and that is a claim about LIVE SESSIONS, not about tree identity — the
+    plugin has the session list loaded for the board, each record carrying its `worktree`.
+    The sweep already reasons this way when it removes unused trees; a tree safe to delete
+    is a tree safe to write in. Before this, a hand-made worktree was a permanent stranger,
+    because the registry only records trees the plugin provisioned, and the project's own
+    convention tells people to make them by hand (#67).
+
+    A path git cannot carry. The remedy this refusal names — make it in your own tree and
+    merge it — does not exist for a file git never tracks: it is absent from the other tree
+    and no merge can move a change to it. Both exits led back to each other, and a session
+    that had just rotated a production SSH key could not delete the retired one (#68).
     """
     if _within(target, ctx.worktree_root):
         return None
     for tree in working_trees(ctx):
-        if tree != ctx.worktree_root.resolve() and _within(target, tree):
-            return tree
+        if tree == ctx.worktree_root.resolve() or not _within(target, tree):
+            continue
+        if not _occupied(ctx, tree):
+            return None
+        if _uncarryable(tree, target):
+            return None
+        return tree
     return None
+
+
+def _occupied(ctx: GitContext, tree: Path) -> bool:
+    """Is `tree` one somebody would lose work in?
+
+    The main checkout always is, whoever is or is not standing in it. Under this gate no
+    session is SUPPOSED to be in it, so occupancy would exempt it permanently — and its
+    tracked files belong to every branch rather than to whoever happens to be there. The
+    liveness question is about sibling worktrees, which exist because a session is working
+    in them; #68's case in the main checkout is the uncarryable path, handled separately.
+
+    Fails CLOSED. If the registry cannot be read the tree is treated as occupied, because
+    the cost of being wrong runs one way: a refusal is an inconvenience, and a silent
+    cross-tree overwrite is the thing this gate exists to prevent.
+    """
+    from . import sessions
+
+    try:
+        if tree == ctx.common_dir.parent.resolve():
+            return True
+    except OSError:
+        return True
+
+    try:
+        live = sessions.live_sessions(ctx)
+    except Exception:  # noqa: BLE001 - an unreadable registry is not permission to write
+        return True
+    for record in live:
+        try:
+            if Path(record.worktree).resolve() == tree:
+                return True
+        except OSError:
+            return True
+    return False
+
+
+def _uncarryable(tree: Path, target: Path) -> bool:
+    """Is `target` a path no other working tree could ever hold?
+
+    IGNORED, not merely untracked. A new file that git would happily track is carryable in
+    the ordinary way — write it in your own tree, commit, merge — and refusing it is the
+    whole point of the guard. A file git is told to ignore is the opposite: it exists in
+    exactly one checkout, no commit will ever carry it, and there is no tree to make the
+    change in. That is the distinction #68 turns on, and getting it wrong in the loose
+    direction would have opened every write into another session's tree.
+
+    Asked of the OWNING tree, since that is the checkout the file lives in and whose
+    ignore rules decide.
+    """
+    try:
+        relative = target.resolve().relative_to(tree)
+    except (ValueError, OSError):
+        return False
+    from .gitctx import _run
+
+    return bool(_run(["check-ignore", "--", relative.as_posix()], tree, check=False).strip())
 
 
 def owned_by_session(ctx: GitContext, target: Path) -> bool:

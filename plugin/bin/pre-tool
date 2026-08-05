@@ -468,8 +468,13 @@ def main() -> None:
     # this plugin knows nothing about is not the gate's to do.
     if event.tool_name == "EnterWorktree" and cfg.require_worktree:
         target = _resolve(session_cwd, str(ti.get("path") or "")) if ti.get("path") else None
-        if target is None or gitpolicy.foreign_tree(ctx, target) is not None or \
-                gitpolicy.owned_by_session(ctx, target):
+        # Any working tree of this repository, asked directly. This used to lean on
+        # `foreign_tree` returning non-None to mean "a tree of ours", which stopped being
+        # true once that function learned to stay silent about trees nobody is standing in
+        # (#67) — and the tree it had just handed over is exactly such a tree, so the
+        # pre-approval fell through and the founder was asked again.
+        if target is None or gitpolicy.owned_by_session(ctx, target) or \
+                target.resolve() in set(gitpolicy.working_trees(ctx)):
             hookio.allow_tool(
                 "claude-bestpractice: this gate requires a worktree, so entering one needs no "
                 "further permission. Asking the founder to authorise the move it just "

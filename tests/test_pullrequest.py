@@ -322,3 +322,75 @@ class TestAPullRequestThisPluginNeverSaw(PRCase):
         self.start()
         evidence.record_red(self.ctx(), ["pytest"], "1 failed")
         self.assertNotEqual("deny", self.decision(self.tool("Bash", {"command": "gh pr merge 91"})))
+
+
+class TestAFindingFromMainIsNotThisPullRequests(PRCase):
+    """Issue #69. The workflow REQUIRES `git merge origin/main` before merging, and that
+    import carried every open finding in main onto the branch.
+
+    A pull request of eight markdown files was refused over SQL interpolation in a Python
+    module it never touched. The longer main got, the more a branch inherited — so syncing
+    with main, which the gate itself demands, made going green impossible.
+    """
+
+    def branch_work(self) -> None:
+        self.write("docs/notes.md", "# notes\n")
+        self.commit("document the thing")
+        evidence.record_green(self.ctx(), ["pytest"])
+
+    def finding(self, path: str) -> None:
+        board.add_open_item(
+            self.ctx(), item_id=f"review-abcd-{path}",
+            text=f"1 review finding(s): secret in {path}",
+            branch=self.ctx().branch, session_id="s1", subject_paths=[path],
+        )
+
+    def test_a_finding_in_a_file_the_branch_never_touched_is_not_a_blocker(self):
+        git(["checkout", "-q", "main"], self.repo)
+        self.write("backend/config.py", "DSN = 'postgres://localhost/dev'\n")
+        self.commit("main moves ahead")
+        git(["checkout", "-q", "feat/x"], self.repo)
+        git(["merge", "-q", "--no-edit", "main"], self.repo)
+
+        self.branch_work()
+        self.finding("backend/config.py")
+        self.assertEqual([], pullrequest.blockers(self.ctx(), "main"))
+
+    def test_a_finding_in_a_file_the_branch_does_touch_still_blocks(self):
+        """The narrowing is the PR's own diff, not an amnesty for review findings."""
+        self.branch_work()
+        self.finding("docs/notes.md")
+        self.assertIn(
+            "1 review finding(s): secret in docs/notes.md",
+            pullrequest.blockers(self.ctx(), "main"),
+        )
+
+
+class TestAGreenRunIsObservedAcrossTheClone(PRCase):
+    """Issue #69, second half: the suite had run, in the branch's own worktree, and the
+    gate still said "no test run has ever been observed on this branch".
+
+    The record sat in the worktree's own Tier A, so it was invisible from anywhere else in
+    the same clone — and it carried no branch test at all, so a run on one branch answered
+    for every other.
+    """
+
+    def test_a_run_on_another_branch_does_not_answer_for_this_one(self):
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.assertIsNotNone(evidence.last_green(self.ctx()))
+
+        git(["checkout", "-q", "-b", "feat/other"], self.repo)
+        self.assertIsNone(evidence.last_green(self.ctx()), "a run on feat/x answered for feat/other")
+
+    def test_the_record_is_shared_by_every_worktree_of_the_clone(self):
+        """A merge decided from one tree has to see a run observed in another."""
+        evidence.record_green(self.ctx(), ["pytest"])
+        sibling = self.tmp / "sibling"
+        # `--force`: git refuses one branch in two trees, and one branch in two trees is
+        # precisely the arrangement being tested — a run observed in the tree the work
+        # happened in, read from the tree the merge is decided in.
+        git(["worktree", "add", "-q", "--force", str(sibling), "feat/x"], self.repo)
+
+        from claude_bestpractice.gitctx import resolve
+
+        self.assertIsNotNone(evidence.last_green(resolve(sibling)))

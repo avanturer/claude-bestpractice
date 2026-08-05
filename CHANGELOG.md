@@ -1,5 +1,56 @@
 # Changelog
 
+## v1.5.0
+
+Three reports, one shape: **a gate refusing on a question next to the one worth asking.**
+
+### The guard asked "is this tree mine" (#67, #68)
+
+It should ask "would anyone lose work". A worktree made by hand — which is what this
+project's own convention tells people to do — is never in the provisioned registry, so it
+was a stranger forever. The session owning a branch could not run a git command in that
+branch's tree, ran the suite in a throwaway clone instead, and was then refused the merge
+for having no observed run: each gate's exit blocked by the other, no legitimate move left.
+
+Sibling worktrees are now refused only while a live session is standing in them. The data
+was already loaded for the board, and the sweep already reasons this way when it removes
+unused trees — a tree safe to delete is a tree safe to write in.
+
+The main checkout stays guarded whoever is or is not in it. Under this gate nobody is
+*supposed* to be there, so occupancy would exempt it permanently, and its tracked files
+belong to every branch rather than to whoever happens to be standing there.
+
+**A path git cannot carry has no other tree.** "Make the change in your own tree and merge
+it" is not a remedy for a file git ignores: it does not exist in the other tree and no
+commit will move it. Both exits led back to each other, and a session that had just
+rotated a production SSH key could not delete the retired one. Ignored paths are now let
+through — *ignored*, not merely untracked, because a new file git would happily track is
+carryable the ordinary way and getting that distinction wrong in the loose direction would
+have opened every write into another session's tree.
+
+### The merge gate counted findings from files the pull request never touched (#69)
+
+The workflow *requires* `git merge origin/main` before merging, and that import carried
+every open finding in main onto the branch. A pull request of eight markdown files was
+refused over SQL interpolation in a Python module it never touched — and the longer main
+got, the more a branch inherited, so syncing with main could never go green.
+
+Findings are now matched against the pull request's own diff from the merge base. When git
+cannot answer, every finding is kept: losing a real one is worse than repeating a stale one.
+
+### "No test run has ever been observed on this branch" — while it had (#69)
+
+The green record sat in the worktree's own Tier A, so a run observed in the branch's tree
+was invisible from anywhere else in the same clone. It also carried no branch test at all,
+so a run on one branch answered for every other — the same defect `_unverified_here` was
+fixed for, still open here in the permissive direction.
+
+It moves to the git common dir, one file per branch: shared by every worktree of the clone,
+and still dying with the clone, which is what keeps it evidence rather than an assertion
+that could be committed and pulled onto a machine where nothing ran. The old location is
+still read for one release, with its branch checked.
+
+
 ## v1.4.0
 
 Issue #66, and the worst kind of failure this project can have: **every signal said the
