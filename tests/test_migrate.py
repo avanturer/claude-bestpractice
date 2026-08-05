@@ -297,3 +297,62 @@ class TestMigrationIsDelegatedAndThenCounted(RepoCase):
         self.seed()
         self.write("docs/pre-release-todo.md", "".join(f"- [ ] item {i}\n" for i in range(26)))
         self.assertIn("28 open item(s) in 2 document(s)", migrate.line(self.ctx()))
+
+
+class TestItNeverClaimsToHaveLookedEverywhere(RepoCase):
+    """Twice a shape was invented and quietly expected: a filename, then a checkbox.
+
+    Both were the same mistake — a convention nobody agreed to, presented as detection.
+    A registry keyed by id and status matches neither, and is exactly what this feature
+    exists for. So detection is best-effort and says so, because the failure that matters
+    is not missing a document; it is announcing that nothing was missed.
+    """
+
+    REGISTRY = (
+        "# Registry\n\n"
+        "| ID | Status | Title |\n"
+        "|----|--------|-------|\n"
+        "| T-001 | planned | перемерить лимит MegaMarket |\n"
+        "| T-002 | planned | переписать скоринг словаря |\n"
+    )
+
+    def plan(self, *args) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(BIN / "claude-bp-plan"), *args],
+            capture_output=True, text=True, cwd=str(self.repo), timeout=60,
+        )
+
+    def test_a_registry_without_checkboxes_is_unenumerable(self):
+        self.assertTrue(migrate.unenumerable(self.REGISTRY))
+        self.assertFalse(migrate.unenumerable("- [ ] one\n- [ ] two\n"))
+        self.assertFalse(migrate.unenumerable("- [x] all done\n"), "finished is still countable")
+
+    def test_the_all_clear_names_what_was_looked_for(self):
+        """"nothing tracked outside the ledger" is a claim about the repository, and it
+        was false in a repository whose primary registry had two planned items."""
+        self.write("docs/TODO.md", self.REGISTRY)
+        out = self.plan("adopt").stdout
+        self.assertNotIn("nothing tracked outside", out)
+        self.assertIn("checkbox", out)
+        self.assertIn("invisible to it", out)
+
+    def test_the_brief_does_not_instruct_over_an_empty_list(self):
+        """It printed "tracks 0 open item(s)", no items, then "for each item…"."""
+        self.write("docs/TODO.md", self.REGISTRY)
+        out = self.plan("adopt", "--brief", "docs/TODO.md").stdout
+        self.assertIn("not in a shape this can enumerate", out)
+        self.assertNotIn("0 open item(s)", out)
+        self.assertIn("Read it yourself", out)
+
+    def test_the_check_refuses_to_report_a_count_it_cannot_know(self):
+        """"0 left" on an unreadable format is a green light nobody earned."""
+        self.write("docs/TODO.md", self.REGISTRY)
+        proc = self.plan("adopt", "--check", "docs/TODO.md")
+        self.assertNotIn("left", proc.stdout)
+        self.assertIn("unknown", proc.stdout)
+
+    def test_a_countable_document_still_gets_its_arithmetic(self):
+        self.write("docs/pre-release-todo.md", "- [ ] one\n- [ ] two\n")
+        proc = self.plan("adopt", "--check", "docs/pre-release-todo.md")
+        self.assertIn("2 open item(s), 0 in the ledger, 2 left", proc.stdout)
+        self.assertEqual(1, proc.returncode)
