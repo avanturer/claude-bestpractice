@@ -1,5 +1,45 @@
 # Changelog
 
+## v1.3.2
+
+Issue #61, and the sharpest catch of the series: v1.3.1 added the "checkbox lists are the
+only shape I recognise" disclaimer **only on the path where nothing was found** — which is
+the path where it matters least.
+
+A repository with no checkbox document at all is one where nobody is mid-task; the reader
+is unlikely to act on the message. The **mixed** repository is where it is believed,
+because a one-item list reads as a result rather than as an absence:
+
+```
+work tracked outside the ledger:
+
+  docs/pre-release-todo.md  —  25 open item(s) not in the ledger
+```
+
+Not a word that a second registry sits beside it, unreadable. That is the exact reading
+that produced the field report v1.3.1 had to correct — the reporter saw a one-item list,
+saw their primary registry absent, and concluded the omission was deliberate. The fix
+printed the honest sentence in the one place that reading could not happen.
+
+The caveat is now one shared constant printed on **both** paths, so they cannot drift.
+
+### The report said this was the last such place. It was not.
+
+`migrate.line` — the line injected into **every** session, and therefore read far more
+often than the command — had the same defect: `28 open item(s) in 2 document(s) tracked
+outside the work ledger` presents as complete. It now names its own scope in the words it
+was already spending, rather than paying for a second sentence against a 400-token budget:
+
+```
+28 open item(s) in 2 checkbox document(s) tracked outside the work ledger —
+`claude-bp-plan adopt` for what to do about it, including what it cannot see
+```
+
+Two tests of my own were pinned to the exact wording and broke on this edit. They now
+assert against the constant, because a test that breaks on a rephrasing teaches nothing
+when it does.
+
+
 ## v1.3.1
 
 v1.3.0 replaced one invented convention with another, and the field report that confirmed

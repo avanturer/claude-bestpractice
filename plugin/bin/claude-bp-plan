@@ -144,9 +144,7 @@ def cmd_adopt(ctx, brief: str, check: str, ignore: str) -> int:
         # worse than no answer: it is the quiet failure this whole project is written
         # against, committed by the thing that warns about it.
         print(f"no documents found tracking work in {migrate.RECOGNISED}.")
-        print("That is the only shape this recognises — a registry in any other form is")
-        print("invisible to it. Point it at one directly:")
-        print("  claude-bp-plan adopt --brief <file>")
+        print(migrate.INCOMPLETE)
         return 0
 
     print("work tracked outside the ledger:\n")
@@ -156,6 +154,10 @@ def cmd_adopt(ctx, brief: str, check: str, ignore: str) -> int:
     print("  claude-bp-plan adopt --brief <file>    what to migrate, and how")
     print("  claude-bp-plan adopt --check <file>    how much is left, counted")
     print("  claude-bp-plan adopt --ignore <file>   it is curated; stop raising it")
+    # The list above is not the answer to "what is outstanding", it is the answer to
+    # "what could be seen". Saying so only when the list is EMPTY got the distinction
+    # exactly backwards: a one-item list is what a reader believes.
+    print(f"\n{migrate.INCOMPLETE}")
     return 0
 
 

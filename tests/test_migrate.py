@@ -296,7 +296,7 @@ class TestMigrationIsDelegatedAndThenCounted(RepoCase):
         """"2 documents" says nothing about what is at stake; "31 items" decides it."""
         self.seed()
         self.write("docs/pre-release-todo.md", "".join(f"- [ ] item {i}\n" for i in range(26)))
-        self.assertIn("28 open item(s) in 2 document(s)", migrate.line(self.ctx()))
+        self.assertIn("28 open item(s) in 2 checkbox document(s)", migrate.line(self.ctx()))
 
 
 class TestItNeverClaimsToHaveLookedEverywhere(RepoCase):
@@ -333,8 +333,9 @@ class TestItNeverClaimsToHaveLookedEverywhere(RepoCase):
         self.write("docs/TODO.md", self.REGISTRY)
         out = self.plan("adopt").stdout
         self.assertNotIn("nothing tracked outside", out)
-        self.assertIn("checkbox", out)
-        self.assertIn("invisible to it", out)
+        # Against the constant, not a phrase: a test pinned to wording breaks on every
+        # edit and teaches nothing when it does.
+        self.assertIn(migrate.INCOMPLETE, out)
 
     def test_the_brief_does_not_instruct_over_an_empty_list(self):
         """It printed "tracks 0 open item(s)", no items, then "for each item…"."""
@@ -350,6 +351,37 @@ class TestItNeverClaimsToHaveLookedEverywhere(RepoCase):
         proc = self.plan("adopt", "--check", "docs/TODO.md")
         self.assertNotIn("left", proc.stdout)
         self.assertIn("unknown", proc.stdout)
+
+    def test_the_caveat_is_on_the_path_where_it_is_believed(self):
+        """v1.3.1 printed it only when nothing was found, which is backwards.
+
+        A repository with no checkbox document is one where nobody is mid-task and the
+        message is unlikely to be acted on. The MIXED repository is where it is believed,
+        because a one-item list reads as a result rather than as an absence — and that
+        reading is what produced the field report this feature had to correct.
+        """
+        self.write("docs/TODO.md", self.REGISTRY)
+        self.write("docs/pre-release-todo.md", "- [ ] one\n- [ ] two\n")
+        out = self.plan("adopt").stdout
+        self.assertIn("docs/pre-release-todo.md", out, "the fixture proves nothing")
+        self.assertIn("invisible here", out)
+
+    def test_the_caveat_is_worded_once_so_the_two_paths_cannot_drift(self):
+        self.write("docs/TODO.md", self.REGISTRY)
+        empty = self.plan("adopt").stdout
+        self.write("docs/pre-release-todo.md", "- [ ] one\n- [ ] two\n")
+        mixed = self.plan("adopt").stdout
+        self.assertIn(migrate.INCOMPLETE, empty)
+        self.assertIn(migrate.INCOMPLETE, mixed)
+
+    def test_the_board_names_its_own_scope(self):
+        """The line injected into every session had the same completeness problem, and
+        is read far more often than the command. It carries the scope in the words it
+        already spends rather than in an extra sentence."""
+        self.write("docs/pre-release-todo.md", "- [ ] one\n- [ ] two\n")
+        line = migrate.line(self.ctx())
+        self.assertIn("checkbox document", line)
+        self.assertIn("what it cannot see", line)
 
     def test_a_countable_document_still_gets_its_arithmetic(self):
         self.write("docs/pre-release-todo.md", "- [ ] one\n- [ ] two\n")
