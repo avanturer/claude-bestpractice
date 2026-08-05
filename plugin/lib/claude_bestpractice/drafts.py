@@ -28,8 +28,17 @@ from . import store
 from .gitctx import GitContext
 
 INBOX_FILE = "decision-inbox.jsonl"
-MAX_DRAFT_CHARS = 400
+
+# A policy is prose, and 400 characters cut the middle out of one. A founder laying out
+# release rules for three app stores wrote 522, and the record kept 400 of them — ending
+# mid-word, with the fragment presented under "## Why" as their own words. Tier B costs
+# nothing here; the inbox listing already shows only the first 150.
+MAX_DRAFT_CHARS = 1_000
 MAX_DRAFTS_PER_TURN = 2
+
+# Same wording the prompt gate uses, for the same reason: a fragment presented as the
+# whole instruction is a claim the founder cannot check. Issue #41, in a second file.
+TRUNCATED = " […truncated; this is not the whole instruction]"
 
 # Ordered by strength. A turn matching a strong marker is far more likely to carry a
 # durable decision than one matching a weak one, and only the strongest match is kept.
@@ -44,6 +53,38 @@ MAX_DRAFTS_PER_TURN = 2
 # `\b` is Unicode-aware on `str` patterns, so it works on Cyrillic unchanged. `[её]`
 # spellings are both accepted; Russian keyboards produce either.
 _VOCABULARY: list[tuple[str, str]] = [
+    (
+        # Leads the table, because this is the least ambiguous decision record there is:
+        # a founder saying "remember this" has already done the hard half of writing one.
+        #
+        # Every other marker here is CORRECTION-shaped — it fires on the moment a human
+        # overruled the agent. That missed a whole class, and the commonest one: a
+        # standing instruction, stated calmly, correcting nothing. «запомни навсегда»,
+        # «на будущее», «правило для всех чатов», "from now on" all scored None, and so
+        # did a 500-character message laying out release policy for three app stores.
+        # The subsystem that exists to stop durable instructions being forgotten was
+        # deaf to the exact sentence that says "do not forget this".
+        #
+        # `всегда`/`always` carry a verb list rather than standing alone, and that is a
+        # deliberate precision choice with a known cost — #51 is about a verb list
+        # missing natural phrasing. Bare `всегда` is far too common in description
+        # ("это всегда падает") to file as policy, and the phrase branches above it
+        # catch the general case without it.
+        "standing",
+        # Negation excluded explicitly: "I do not remember whether we shipped that" is a
+        # question, not a policy, and the space before the verb is already consumed by the
+        # boundary class, so the lookbehind lands exactly on the negation.
+        r"(?:^|[\s(«\"])(?:(?<!not )(?<!n't )remember\b(?:\s+(?:this|that|forever))?|please remember\b|"
+        r"from now on\b|going forward\b|as a rule\b|make it a rule\b|"
+        r"standing (?:rule|instruction)\b|for (?:all|every) (?:chat|session|project|repo)s?\b)"
+        r"|\balways\s+(?:use|write|do|keep|put|check|name|prefer|run|add|ship|tag)\b"
+        r"|(?:^|[\s(«\"])(?:запомни|на будущее\b|впредь\b|с этого момента\b|"
+        r"для всех (?:чатов|сессий|проектов)\b|во всех чатах\b|"
+        r"(?:такое |новое |это )?правило(?: для|:)|"
+        r"хочу,? что ?бы (?:всегда|везде))"
+        r"|\b(?:всегда|по умолчанию)\s+(?:пиши|делай|используй|держи|ставь|проверяй|"
+        r"указывай|добавляй|веди|называй|оформляй|ставим|делаем|пишем|держим)\b",
+    ),
     (
         "decision",
         r"\b(?:we (?:decided|agreed|settled on)|let'?s go with|going with)\b"
@@ -66,7 +107,9 @@ _VOCABULARY: list[tuple[str, str]] = [
     (
         "correction",
         r"(?:^|[\s(«\"])(?:no,|actually,|not that\b|instead of\b|rather than\b)"
-        r"|(?:^|[\s(«\"])(?:нет,|не так\b|вместо (?:этого|того)\b|наоборот\b|не то\b)",
+        # «или нет,» is the tail of a question — "ставили мы версию или нет" — and reading
+        # it as a correction filed a draft for every time the founder wondered aloud.
+        r"|(?:^|[\s(«\"])(?:(?<!или )нет,|не так\b|вместо (?:этого|того)\b|наоборот\b|не то\b)",
     ),
     (
         "constraint",
@@ -215,7 +258,8 @@ def extract(turns: list[str], branch: str, session_id: str, subject_paths: list[
         marker = classify(turn)
         if not marker:
             continue
-        quote = " ".join(turn.split())[:MAX_DRAFT_CHARS]
+        flat = " ".join(turn.split())
+        quote = flat[:MAX_DRAFT_CHARS] + (TRUNCATED if len(flat) > MAX_DRAFT_CHARS else "")
         key = quote[:80].lower()
         if key in seen:
             continue

@@ -1,5 +1,46 @@
 # Changelog
 
+## v1.0.17
+
+The decision inbox only ever heard corrections, so the commonest kind of durable
+instruction was invisible to it.
+
+Every marker was correction-shaped — it fired on the moment a human overruled the agent.
+But a founder stating a policy is correcting nothing. «запомни навсегда», «на будущее»,
+«правило для всех чатов», "from now on", "as a rule" all scored **None**, and so did a
+522-character message laying out release policy for three app stores. The subsystem whose
+entire job is to stop durable instructions being forgotten was deaf to the exact sentence
+that says *do not forget this*.
+
+A `standing` marker now leads the table, because an explicit "remember this" is the least
+ambiguous decision record there is — the founder has already done the hard half of writing
+one. Both languages, as of v1.0.15, and a table test asserts each phrasing fires.
+
+Precision is held by requiring the phrase, not the keyword. Description that happens to
+contain the word is still ignored:
+
+| | |
+|---|---|
+| «запомни навсегда: версии во всех трёх сторах одинаковые» | `standing` |
+| «это всегда падает на проде под нагрузкой» | none |
+| "from now on tag every release with the same number" | `standing` |
+| "I do not remember whether we shipped that build" | none |
+| «как правило это занимает минут двадцать» | none |
+
+`always use X, never Y` now reads as `standing` rather than `rejection`. Markers are
+ordered by strength and only the strongest is kept: a sentence that opens by saying what
+to do forever is policy that names its alternative, not a rejection that happens to be
+permanent.
+
+Also fixed, from the same investigation:
+
+- **The quote was cut at 400 characters with no mark.** A policy is prose. That 522-character
+  message was stored as 400, ending mid-word, and the record put the fragment under
+  `## Why` as the founder's own words — issue #41's defect, in a second file. The cap is
+  now 1000 and a cut is marked with the same wording the prompt gate uses.
+- **«или нет,» read as a correction.** It is the tail of a question — "ставили мы версию
+  или нет" — and it filed a draft every time the founder wondered aloud.
+
 ## v1.0.16
 
 The escalation ceiling counted blocks without looking at the clock, so it fired on an
