@@ -226,6 +226,35 @@ def deny_tool(reason: str) -> NoReturn:
     raise SystemExit(OK)
 
 
+def allow_tool(reason: str) -> NoReturn:
+    """Approve a tool call outright, so the founder is never shown a prompt for it.
+
+    The counterpart to `deny_tool`, and the only way a plugin can pre-approve anything: a
+    plugin manifest carries commands, agents, skills, hooks and output styles, and no
+    permission rules at all. Verified against the CLI, which accepts exactly "allow",
+    "deny" and "ask" here.
+
+    Used for the one action this plugin ORDERS and then made the founder authorise. Being
+    asked "may Claude enter a worktree?" seconds after a gate refused a write for not
+    being in one is the plugin interrupting the founder with its own instruction — the
+    thing the whole design is meant to remove.
+
+    Silence is not the same answer. `emit_silent` leaves the normal permission flow to
+    decide; this ends it. So it is only ever returned for a call this plugin can vouch
+    for, and everything else falls through untouched.
+    """
+    payload = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "permissionDecisionReason": reason,
+        }
+    }
+    sys.stdout.write(json.dumps(payload))
+    sys.stdout.flush()
+    raise SystemExit(OK)
+
+
 def repo(cwd: Any) -> Any:
     """Resolve the repository, or declare this event out of scope.
 
