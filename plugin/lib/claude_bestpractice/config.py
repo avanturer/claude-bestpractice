@@ -72,6 +72,10 @@ class Config:
     autonomy: str = "vibecode"
     protect_trunk: bool = True
     manage_pull_requests: bool = True
+    # "local" captures and holds, "auto" also files, "off" does not capture. Not `auto`
+    # by default: filing uses the installer's own credentials and posts publicly under
+    # their name in a repository they do not own.
+    report_defects: str = "local"
     stage_override: str | None = None
     # Test directories are exempt because THIS PLUGIN demands the test. Without them the
     # scope-drift check and the evidence gate deadlock on the most ordinary task there is:
@@ -108,6 +112,7 @@ class Config:
             "autonomy": self.autonomy,
             "protect_trunk": self.protect_trunk,
             "manage_pull_requests": self.manage_pull_requests,
+            "report_defects": self.report_defects,
             "stage_override": self.stage_override,
             "exempt_paths": self.exempt_paths,
         }
@@ -191,6 +196,7 @@ _EXPECTED: dict[str, type] = {
     "autonomy": str,
     "protect_trunk": bool,
     "manage_pull_requests": bool,
+    "report_defects": str,
     "stage_override": str,
     "exempt_paths": list,
 }

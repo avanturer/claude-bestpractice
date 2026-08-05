@@ -1,5 +1,64 @@
 # Changelog
 
+## v1.1.0
+
+First minor bump, and the reason is the point: nineteen releases went out as `1.0.x`
+including ones that added whole behaviours. Anyone reading the version to decide whether
+an upgrade was safe was reading a number that could not tell them. `RELEASING.md` now
+writes the rule down — a new capability is a minor bump, a fixed defect is a patch — and
+this release adds a capability.
+
+### The plugin reports its own defects, without spending a turn on them
+
+Every failure fixed so far was found by someone hitting it and writing it up by hand. That
+works while the person hitting it owns the repository. It stops the moment anyone else
+installs it: they hit the same defect, work around it, and nothing here ever learns.
+
+`hookio.guard` is the single handler every gate failure already passes through, so it is
+the one place worth recording them. A crash is now written to disk with the gate, the
+exception and the plugin frame it came from, deduplicated by all three, and **injected
+nowhere**. The agent is mid-task; a defect in the tooling is not its problem to read
+about. The only trace is one line in `claude-bp status`, on a surface the founder is
+already looking at.
+
+`claude-bp-report` shows exactly what would be sent; `claude-bp-report send` files it.
+
+**It does not send on its own, and that is deliberate.** Filing an issue uses the
+installer's own GitHub credentials and posts publicly under their name, in a repository
+they do not own, carrying whatever the report holds. Nobody installing a plugin expects
+that. So the default is `"report_defects": "local"` — capture and hold. `"auto"` files
+automatically and exists for the case where consent is real: the owner running it on their
+own machines. `"off"` does not capture at all.
+
+Nothing from the repository leaves. Credentials are scrubbed with the same pass the
+pre-write gate uses, and paths outside the plugin are erased **including their basename** —
+an early version kept it and put `billing.py` into a report whose own last line promised
+"nothing from the repository it ran in". The claim was made true rather than softened.
+
+The network still never touches a hook, which is what the five-hour-limit audit rests on.
+Sending lives in a CLI: the only place allowed to be slow and the only place allowed to
+fail.
+
+### A bad release can now say so
+
+A released version cannot be withdrawn. The tag is permanent and `claude plugin` keeps
+serving it, so v1.0.13 — which cannot run `make check` under a virtualenv, and therefore
+cannot push — still looks fine from the outside. That is how somebody stays on it.
+
+`upgrade.KNOWN_BAD` names those versions with one line of why, and every session running
+one is told, on the board and in `claude-bp status`. It reaches the person on the bad
+version, which release notes never do. A version belongs there when it **broke something
+that worked**, not when a later release improved on it.
+
+### Releasing is written down
+
+`RELEASING.md`: what each bump means, how a release is cut, what to do when one turns out
+to be bad, and why this repository kept needing `git merge -s ours` — squash-merging a
+long-lived branch rewrites the commit, so the branch tip stops being an ancestor of `main`
+and every subsequent push is rejected. The fix is a repository setting rather than a
+technique, and it is named there.
+
+
 ## v1.0.19
 
 Asked whether "remember this" is scalable — whether the plugin understands that a new

@@ -12,6 +12,7 @@ destroyer of in-context rules (0% -> 30% after one round, 78% after four).
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -20,6 +21,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
 from claude_bestpractice import board, ci, config, hookio, onboard, sessions, stage, store, upgrade, worktree  # noqa: E402
 from claude_bestpractice.gitctx import GitContext, resolve, stash_baseline  # noqa: E402
+
+
+def send_captured_defects(ctx, cfg) -> None:
+    """Fire the sender and walk away, when this repository asked for `auto`.
+
+    Detached and never waited on. The session must not pay for a network call, and it
+    must not fail because one did — the whole point of capture living on disk is that the
+    report survives whether or not this succeeds.
+    """
+    from claude_bestpractice import defects
+
+    if cfg.report_defects != defects.AUTO or not defects.unsent(ctx):
+        return
+    try:
+        subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve().parent / "claude-bp-report"), "send"],
+            cwd=str(ctx.worktree_root),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+        )
+    except OSError:
+        return
 
 
 def build_record(ctx: GitContext, event: hookio.HookEvent) -> sessions.SessionRecord:
@@ -195,11 +217,13 @@ def main() -> None:
     swept = worktree.reap_unused(ctx, {rec.session_id for rec in others} | {me.session_id})
     leases = {rec.session_id: sessions.leases_held_by(ctx, rec.session_id) for rec in others}
 
-    resolved_stage, _signals = stage.current(ctx, config.load(ctx).stage_override)
+    cfg = config.load(ctx)
+    resolved_stage, _signals = stage.current(ctx, cfg.stage_override)
+    send_captured_defects(ctx, cfg)
 
     body = board.render(ctx, me, others, len(reaped), leases)
     body += f"\nstage: {resolved_stage} (computed from the repository, not configured)"
-    body += "\n" + _autonomy_line(config.load(ctx).autonomy)
+    body += "\n" + _autonomy_line(cfg.autonomy)
     body += _armed_line(ctx)
     body += _swept_line(swept)
     body += _knowledge_line(ctx)

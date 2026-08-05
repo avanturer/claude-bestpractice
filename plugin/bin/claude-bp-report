@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""Defects this plugin hit here, and the one command that sends them.
+
+    claude-bp-report          what was captured, and exactly what would be sent
+    claude-bp-report send     file them as issues against the plugin's repository
+
+Sending lives here rather than in a hook, and that is the whole shape of this feature.
+A hook that talks to the network is a hook that can be slow, can fail, and can be
+stopped by an expired token — on a path that runs before every tool call. Capture is
+free and always on; sending is a command, or an explicit `"report_defects": "auto"` from
+someone who owns both ends.
+"""
+
+from __future__ import annotations
+
+import argparse
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from claude_bestpractice import config, defects, hookio  # noqa: E402
+from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
+
+
+def cmd_list(ctx) -> int:
+    waiting = defects.unsent(ctx)
+    if not waiting:
+        print("no defects captured")
+        return 0
+
+    print(f"{len(waiting)} defect(s) captured, not sent:\n")
+    for i, report in enumerate(waiting, start=1):
+        seen = int(report.get("seen", 1))
+        repeats = f"  ×{seen}" if seen > 1 else ""
+        print(f"  [{i}] {defects.title(report)}{repeats}")
+        print(f"      at {report.get('where') or 'unknown'}")
+    print(f"\nThis is the whole of what would be sent to {defects.REPORT_REPO}:\n")
+    print("\n".join("  " + line for line in defects.body(waiting[0]).splitlines()))
+    print("\nSend with: claude-bp-report send")
+    return 0
+
+
+def cmd_send(ctx) -> int:
+    waiting = defects.unsent(ctx)
+    if not waiting:
+        print("nothing to send")
+        return 0
+    if not shutil.which("gh"):
+        print("gh is not installed, so nothing can be filed. The reports are above.",
+              file=sys.stderr)
+        return 1
+
+    sent = 0
+    for report in waiting:
+        proc = subprocess.run(
+            ["gh", "issue", "create", "--repo", defects.REPORT_REPO,
+             "--title", defects.title(report), "--body", defects.body(report),
+             "--label", "bug"],
+            capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=120,
+        )
+        if proc.returncode != 0:
+            print(f"could not file: {proc.stderr.strip()[:200]}", file=sys.stderr)
+            continue
+        url = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
+        # Marked sent whatever the URL parsing did. A report filed twice is noise in
+        # somebody else's repository, which is worse than a report with no link.
+        defects.mark_sent(ctx, report, url)
+        sent += 1
+        print(url or "filed")
+    return 0 if sent else 1
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Defects this plugin hit in this repository.")
+    sub = parser.add_subparsers(dest="command")
+    sub.add_parser("list", help="show captured defects (default)")
+    sub.add_parser("send", help="file them against the plugin's repository")
+    args = parser.parse_args()
+
+    ctx = resolve_for_cli()
+    if config.load(ctx).report_defects == defects.OFF:
+        print("defect reporting is off for this repository")
+        return 0
+    return cmd_send(ctx) if args.command == "send" else cmd_list(ctx)
+
+
+if __name__ == "__main__":
+    raise SystemExit(hookio.run_cli(main))
