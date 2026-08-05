@@ -14,8 +14,27 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import hookio, plan, sessions  # noqa: E402
+from claude_bestpractice import hookio, plan, sessions, store  # noqa: E402
 from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
+
+
+def _durability_warning(ctx) -> str:
+    """Empty unless the ledger is being written where git cannot see it.
+
+    Printed by the commands that write, because that is where the false claim was made:
+    `parked 0017 …` followed by `pick it up in another session` is a promise the plugin
+    cannot keep when an ignore rule covers the directory. Issue #66.
+    """
+    where = store.hidden_from_git(ctx)
+    if not where:
+        return ""
+    return (
+        f"\nWARNING: git cannot see {store.TIER_A_DIRNAME}/ — hidden by {where}.\n"
+        "This task exists on disk and nowhere else: no commit will pick it up and\n"
+        "`git worktree remove` deletes it. Nothing was lost yet — fix that rule, then\n"
+        "commit the ledger. Tell the founder; the plugin will not edit an ignore file\n"
+        "it did not write."
+    )
 
 
 def cmd_add(ctx, title: str, body: str) -> int:
@@ -85,6 +104,13 @@ def cmd_park(ctx, title: str, paths: str, note: str, source: str = "") -> int:
 
     task = plan.park(ctx, title, body=note, branch=ctx.branch, paths=wanted, source=source)
     print(f"parked {task.id}  {task.title}")
+    warning = _durability_warning(ctx)
+    if warning:
+        # Deliberately not a non-zero exit: the file WAS written, and a caller that reads
+        # failure here would park the same task again. The claim is what gets corrected,
+        # not the outcome — "pick it up in another session" is the sentence that was false.
+        print(warning, file=sys.stderr)
+        return 0
     print(f"pick it up in another session with: claude-bp-plan show {task.id}")
     return 0
 

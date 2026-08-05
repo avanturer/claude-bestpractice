@@ -48,6 +48,41 @@ def tier_a(ctx: GitContext, *parts: str) -> Path:
     return ctx.worktree_root.joinpath(TIER_A_DIRNAME, *parts)
 
 
+# A path that will never exist and can never be tracked. `git check-ignore` answers about a
+# path whether or not it is on disk, but it reports NOTHING for a path already in the index,
+# because a tracked file is not subject to exclude rules. Probing the directory itself, or
+# any real task file, therefore answers "visible" the moment one file inside has been
+# committed — a false all-clear in exactly the case that matters most, a repository that was
+# healthy once and has been hidden since. Checked against git rather than reasoned about.
+_VISIBILITY_PROBE = ("plan", "next", ".visibility-probe")
+
+
+def hidden_from_git(ctx: GitContext) -> str:
+    """Where Tier A is being hidden from git, verbatim, or "" when git can see it.
+
+    Tier A is committed by definition (decision 0001), and the whole promise of parking a
+    task is that it outlives the session that wrote it. An ignore rule over this directory
+    voids that promise in silence: `park` prints an id, `list` shows the task, `adopt
+    --check` reports zero left, and only `git status` disagrees. Reported as issue #66 by a
+    repository where thirty migrated tasks turned out to be invisible to git.
+
+    This only ever REPORTS. The plugin has never written an ignore rule — searched across
+    every released version — so the rule belongs to the founder or to another tool, and
+    rewriting somebody else's ignore file on the strength of a guess about why it is there
+    is not a repair.
+    """
+    from .gitctx import _run
+
+    relative = "/".join((TIER_A_DIRNAME, *_VISIBILITY_PROBE))
+    try:
+        out = _run(["check-ignore", "-v", relative], ctx.worktree_root, check=False)
+    except Exception:  # noqa: BLE001 - a diagnostic must never be what breaks a session
+        return ""
+    # `<source>:<line>:<pattern>\t<path>`. The left half is precisely what somebody needs to
+    # go find the rule, so it is returned whole rather than split into pieces nobody reads.
+    return out.split("\t", 1)[0].strip() if out else ""
+
+
 def tier_b(ctx: GitContext, *parts: str) -> Path:
     return ctx.common_dir.joinpath(TIER_B_DIRNAME, *parts)
 

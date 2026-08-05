@@ -424,20 +424,35 @@ def line(ctx: GitContext) -> str:
 
     left = 0
     documents = 0
+    biggest = ""
+    most = 0
     for path in registries(ctx):
         total, migrated = coverage(ctx, path)
         if total > migrated:
             left += total - migrated
             documents += 1
+            if total - migrated > most:
+                most = total - migrated
+                biggest = path.relative_to(ctx.worktree_root).as_posix()
     if left:
         parts.append(f"{left} open item(s) in {documents} checkbox document(s)")
 
     if not parts:
         return ""
+    # Name the next action, the way the worktree refusal names the destination instead of
+    # describing the genre of thing to do (#27, restated as #65). `adopt` on its own is a
+    # count repeated every session with nothing that starts anything, and a count nobody
+    # can act on becomes a count nobody reads.
+    #
+    # Both exits are named, deliberately. A signal with only one exit is one a repository
+    # that legitimately curates its documents can never discharge, and that is how a
+    # channel gets tuned out — the same failure #63 was about, from the other direction.
+    call = f"`claude-bp-plan adopt --brief {biggest}`" if biggest else "`claude-bp-plan adopt`"
     # "checkbox document(s)" is doing the work a whole sentence would otherwise do. This
     # line is injected into every session, so the honest scope has to be carried by the
     # words already there rather than by an extra one.
     return (
         " and ".join(parts) + " tracked outside the work ledger — "
-        "`claude-bp-plan adopt` for what to do about it, including what it cannot see"
+        f"{call} to migrate, `adopt --ignore <paths>` if a document is curated and stays "
+        "put; `adopt` alone lists them, including what it cannot see"
     )
