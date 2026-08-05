@@ -459,6 +459,23 @@ def main() -> None:
                 ctx, ctx.branch, gitpolicy.default_branch(ctx) or "main", event.session_id
             )
 
+    # Entering a worktree is the move this gate ORDERS. Making the founder authorise it
+    # through a permission prompt is the plugin interrupting them with its own
+    # instruction, which is the thing the whole design exists to remove.
+    #
+    # Approved only for a working tree of THIS repository — anywhere else this stays
+    # silent and the normal permission flow decides, because vouching for a directory
+    # this plugin knows nothing about is not the gate's to do.
+    if event.tool_name == "EnterWorktree" and cfg.require_worktree:
+        target = _resolve(session_cwd, str(ti.get("path") or "")) if ti.get("path") else None
+        if target is None or gitpolicy.foreign_tree(ctx, target) is not None or \
+                gitpolicy.owned_by_session(ctx, target):
+            hookio.allow_tool(
+                "claude-bestpractice: this gate requires a worktree, so entering one needs no "
+                "further permission. Asking the founder to authorise the move it just "
+                "ordered is the interruption this plugin exists to remove."
+            )
+
     resolved_stage, _ = stage.current(ctx, cfg.stage_override)
     gates = stage.gates_for(resolved_stage)
 
@@ -520,7 +537,15 @@ def main() -> None:
     if writing and cfg.require_worktree:
         for path in absolute:
             owner = gitpolicy.foreign_tree(ctx, path)
-            if owner is not None:
+            # Ours if this plugin made it for this session. Without this the gate was a
+            # closed loop: it refused the main checkout, handed over a worktree in the
+            # same breath, and then refused every write into that worktree as "another
+            # session's" — a tree it had created for this very session seconds earlier.
+            # Reported from a real machine, with the session left nowhere it could write.
+            # `provisioned_for` already guarded the git verbs for exactly this reason
+            # (issue #37); the write path, which is what the founder actually hits, was
+            # never given the same exemption.
+            if owner is not None and not gitpolicy.provisioned_for(ctx, event.session_id, owner):
                 hookio.deny_tool(gitpolicy.foreign_refusal(path, owner, ctx))
 
     # Kept out of `absolute` on purpose, so these never reach the worktree and trunk rules

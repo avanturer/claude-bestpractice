@@ -761,3 +761,112 @@ class TestConflictMarkers(PolicyCase):
         from claude_bestpractice import gitpolicy
 
         self.assertEqual(gitpolicy.conflict_complaint("x = 1\nsep = '=' * 40\n"), "")
+
+
+class TestTheGateDoesNotRefuseTheTreeItHandedOver(PolicyCase):
+    """The gate refused the main checkout, provisioned a worktree, then refused that too.
+
+    A closed loop with nowhere left to write. The second refusal even called it "another
+    session's worktree" — a tree this plugin had created for this very session seconds
+    earlier, so the block was both wrong and wrongly explained.
+
+    `provisioned_for` already guarded the git verbs against exactly this (issue #37). The
+    write path, which is what a founder actually hits, never got the same exemption.
+    """
+
+    def write_into(self, tree, name="pay.py"):
+        """A write landing in `tree`, from a session still sitting in the main checkout."""
+        return _verdict(self.run_hook(
+            "pre-tool",
+            {
+                "session_id": "s1",
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Write",
+                "tool_input": {"file_path": str(tree / name), "content": "x = 1\n"},
+                "cwd": str(self.repo),
+            },
+            cwd=self.repo,
+        ))
+
+    def test_writing_into_the_provisioned_worktree_is_allowed(self):
+        self.assertEqual("deny", self.decision()[0], "the fixture proves nothing")
+        handed = self.provisioned()
+        self.assertIsNotNone(handed, "the refusal did not hand a worktree over")
+
+        decision, reason = self.write_into(handed)
+        self.assertNotEqual("deny", decision, reason)
+
+    def test_a_sibling_session_tree_is_still_refused(self):
+        """The exemption is for OUR tree, not for any worktree at all."""
+        self.decision()
+        theirs = self.worktree("feat/somebody-else")
+        decision, reason = self.write_into(theirs)
+        self.assertEqual("deny", decision)
+        self.assertIn("another session", reason)
+
+
+class TestEnteringAWorktreeIsNeverAQuestion(PolicyCase):
+    """The founder was shown a permission prompt for the move this gate had just ordered.
+
+    Refuse a write for not being in a worktree, then ask the human to authorise entering
+    one. That is the plugin interrupting the founder with its own instruction, which is
+    the thing the whole design exists to remove. A plugin manifest cannot ship permission
+    rules, so the only way to pre-approve anything is a PreToolUse hook answering `allow`.
+    """
+
+    def raw_decision(self, tool_input: dict) -> str | None:
+        """The decision as the harness sees it — None when the gate said nothing.
+
+        `_verdict` cannot answer this: it reports silence AS "allow", which is right for
+        the question it was written for ("was this refused?") and wrong for this one.
+        Silence leaves the founder's normal permission flow in charge; an explicit allow
+        ends it. The whole point of this rule is the difference between them.
+        """
+        proc = self.enter(tool_input)
+        try:
+            return json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"]
+        except (json.JSONDecodeError, KeyError, TypeError):
+            return None
+
+    def enter(self, tool_input: dict):
+        return (self.run_hook(
+            "pre-tool",
+            {
+                "session_id": "s1",
+                "hook_event_name": "PreToolUse",
+                "tool_name": "EnterWorktree",
+                "tool_input": tool_input,
+                "cwd": str(self.repo),
+            },
+            cwd=self.repo,
+        ))
+
+    def test_entering_without_naming_a_path_is_approved(self):
+        self.assertEqual("allow", self.raw_decision({}))
+
+    def test_entering_the_tree_the_gate_handed_over_is_approved(self):
+        self.decision()
+        handed = self.provisioned()
+        self.assertIsNotNone(handed)
+        self.assertEqual("allow", self.raw_decision({"path": str(handed)}))
+
+    def test_a_directory_outside_this_repository_is_left_to_the_founder(self):
+        """Silence, not approval. Vouching for a directory this gate knows nothing about
+        is not its to do, and the normal permission flow is the right owner of that call."""
+        outside = self.tmp / "unrelated"
+        outside.mkdir()
+        self.assertIsNone(self.raw_decision({"path": str(outside)}))
+
+    def test_the_hook_is_wired_to_see_the_call_at_all(self):
+        """The rule above is dead code without this: the matcher decides what reaches us,
+        and `EnterWorktree` was not in it, so the gate never had an opinion to give."""
+        import json as _json
+        import re as _re
+
+        raw = (BIN.parent / "hooks" / "hooks.json").read_text(encoding="utf-8")
+        stripped = _re.sub(r'"\$comment[^"]*"\s*:\s*(\[[^\]]*\]|"[^"]*"),?', "", raw, flags=_re.S)
+        matchers = [
+            m.get("matcher", "")
+            for m in _json.loads(stripped)["hooks"]["PreToolUse"]
+        ]
+        self.assertTrue(any("EnterWorktree" in m for m in matchers), matchers)

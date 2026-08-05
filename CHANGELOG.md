@@ -1,5 +1,44 @@
 # Changelog
 
+## v1.0.18
+
+Two halves of one reported failure: the worktree rule refused the tree it had just handed
+over, and then asked the founder for permission to do the thing it had just ordered.
+
+### The gate refused its own worktree (#deadlock)
+
+Reproduced end to end. A session in the main checkout writes a file:
+
+1. **Refused** — "this is the main checkout, not a worktree", and a worktree is
+   provisioned in the same breath.
+2. Writing into **that** worktree — **refused**, as *"belongs to another session's
+   worktree"*. It belonged to this session, created by this plugin, seconds earlier.
+
+A closed loop with nowhere left to write, and the second refusal was not merely wrong but
+wrongly explained, which is the failure mode this project is most prone to.
+
+`provisioned_for` already guarded the git verbs against exactly this (issue #37). The
+write path — which is what a founder actually hits — never got the same exemption. It has
+it now, and a sibling session's tree is still refused, whoever provisioned it.
+
+### Entering a worktree is no longer a question
+
+The founder was shown a permission prompt asking whether Claude might enter a worktree —
+seconds after a gate refused a write for not being in one. That is the plugin
+interrupting the founder with its own instruction.
+
+A plugin manifest carries commands, agents, skills, hooks and output styles, and **no
+permission rules**, so the only way to pre-approve anything is a PreToolUse hook answering
+`allow`. Two things were missing: `EnterWorktree` was not in the hook's matcher, so the
+gate never saw the call at all, and there was no way to answer `allow` if it had.
+
+Approved only for a working tree of this repository. Anywhere else the gate stays
+**silent** rather than approving — silence leaves the founder's normal permission flow in
+charge, and vouching for a directory this plugin knows nothing about is not its to do.
+That distinction is asserted directly on the raw hook response, because the suite's own
+helper reports silence *as* "allow" and could not have told the two apart.
+
+
 ## v1.0.17
 
 The decision inbox only ever heard corrections, so the commonest kind of durable
