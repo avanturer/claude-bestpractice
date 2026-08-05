@@ -150,6 +150,121 @@ _REPAIRS = {
 }
 
 
+# Checkbox items, in every shape markdown writes them: `-`, `*`, `+`, or `1.` before the
+# box. Filename patterns were the first version of this and they missed an entire real
+# setup — `docs/TODO.md`, `docs/pre-release-todo.md`, `.claude/commands/todo.md` — because
+# nobody agreed to the naming convention the plugin was quietly expecting. What a
+# registry looks like INSIDE is not a convention; it is markdown.
+_OPEN_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\[ \]\s+(?P<text>\S.*?)\s*$", re.M)
+_DONE_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\[[xX]\]\s", re.M)
+
+IGNORED = "adoption-ignored.json"
+
+# Below this a document is prose that happens to contain a checkbox, not a registry.
+MIN_ITEMS = 2
+
+
+def open_items(text: str) -> list[str]:
+    """The unfinished items a document is tracking."""
+    return [m.group("text")[:plan_title_limit()] for m in _OPEN_ITEM.finditer(text)]
+
+
+def _ignored(ctx: GitContext) -> dict:
+    record = store.read_json(store.tier_a(ctx, IGNORED), default={})
+    return record if isinstance(record, dict) else {}
+
+
+def ignore(ctx: GitContext, relative: str, why: str = "curated by hand") -> None:
+    """Declare a document none of the plugin's business, permanently.
+
+    Without this the board nags about the same file every session forever, and a warning
+    nothing can clear is one the founder learns to scroll past — which costs the warnings
+    that matter. Tier A, because "this registry is ours, leave it alone" is a fact about
+    the repository and should travel with it rather than be re-decided per clone.
+    """
+    record = _ignored(ctx)
+    record[relative] = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "why": why}
+    store.write_json(store.tier_a(ctx, IGNORED), record, mode=0o644)
+
+
+def registries(ctx: GitContext) -> list[Path]:
+    """Documents that are tracking work, found by what is in them.
+
+    Everything the founder has not already said to leave alone, and not the ledger's own
+    files. `.claude/` is skipped because a slash-command that happens to describe a TODO
+    workflow is not a backlog.
+    """
+    root = ctx.worktree_root
+    skip = _ignored(ctx)
+    found: list[Path] = []
+    for path in sorted(root.rglob("*.md")):
+        relative = path.relative_to(root).as_posix()
+        if any(part in _SKIP for part in path.relative_to(root).parts) or relative in skip:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if POINTER in text or len(open_items(text)) < MIN_ITEMS:
+            continue
+        found.append(path)
+    return found
+
+
+def coverage(ctx: GitContext, path: Path) -> tuple[int, int]:
+    """(items in the document, items already in the ledger from it).
+
+    This is the whole reason migration can be delegated to the agent rather than asked
+    of it. The plugin does not have to read the prose or judge the result — it counts
+    what the document is tracking and counts what the ledger holds from that document,
+    and the gap is a number. An agent that says it migrated a registry and left twenty
+    items behind is contradicted by arithmetic, not by opinion.
+    """
+    from . import plan
+
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return 0, 0
+    relative = path.relative_to(ctx.worktree_root).as_posix()
+    migrated = sum(1 for task in plan.load_all(ctx) if task.source == relative)
+    return len(open_items(text)), migrated
+
+
+def brief(ctx: GitContext, path: Path) -> str:
+    """The instruction handed to the session, and the check that closes it.
+
+    Filename patterns cannot tell a curated registry from a session's scratch note, and
+    prose cannot be parsed into a handoff by regular expressions — but a model reading the
+    document can do both, and the arithmetic above says whether it did. So this is not the
+    plugin asking nicely; it is the plugin delegating a mechanical job it cannot do and
+    keeping the verification for itself.
+    """
+    relative = path.relative_to(ctx.worktree_root).as_posix()
+    total, migrated = coverage(ctx, path)
+    items = open_items(path.read_text(encoding="utf-8", errors="replace"))
+    listed = "\n".join(f"  - {item}" for item in items[:12])
+    more = f"\n  … and {len(items) - 12} more" if len(items) > 12 else ""
+    return "\n".join([
+        f"{relative} tracks {total} open item(s); {migrated} of them are in the ledger.",
+        "",
+        listed + more,
+        "",
+        "For each item NOT yet in the ledger, read enough of the repository to fill in a",
+        "real handoff, then run:",
+        "",
+        f'  claude-bp-plan park "<title>" --paths <files> --note "<what is known, what was',
+        f'    ruled out, where it stands>" --source {relative}',
+        "",
+        "`park` refuses a title with no files and no substance, so a thin one will not land.",
+        f"Run `claude-bp-plan adopt --check {relative}` when you are done: it counts what is",
+        "left rather than taking your word for it.",
+        "",
+        "If this document is curated by hand and should stay the source of truth, say so",
+        f"once and it stops being raised: claude-bp-plan adopt --ignore {relative}",
+    ])
+
+
 def parked_by_hand(ctx: GitContext) -> list[Path]:
     """TODO files a session wrote because the ledger could not park a task yet."""
     found: list[Path] = []
@@ -228,13 +343,33 @@ def _paths_in(text: str, root: Path) -> list[str]:
 
 
 def line(ctx: GitContext) -> str:
-    """One line when a repository still has tasks living outside the ledger."""
-    loose = parked_by_hand(ctx)
-    if not loose:
+    """One line when work is still being tracked outside the ledger.
+
+    Counts ITEMS, not files. "2 documents" says nothing about how much is at stake;
+    "31 open items in 2 documents" is the number that decides whether it is worth a turn.
+    """
+    parts: list[str] = []
+
+    # Scratch notes a session wrote because the ledger could not park a task. These carry
+    # no checkbox list — they are prose — so counting items says nothing about them, and
+    # an earlier version of this line dropped them entirely. Caught by its own test.
+    scratch = parked_by_hand(ctx)
+    if scratch:
+        parts.append(f"{len(scratch)} scratch TODO file(s)")
+
+    left = 0
+    documents = 0
+    for path in registries(ctx):
+        total, migrated = coverage(ctx, path)
+        if total > migrated:
+            left += total - migrated
+            documents += 1
+    if left:
+        parts.append(f"{left} open item(s) in {documents} document(s)")
+
+    if not parts:
         return ""
-    shown = ", ".join(p.relative_to(ctx.worktree_root).as_posix() for p in loose[:3])
-    more = f" (+{len(loose) - 3} more)" if len(loose) > 3 else ""
     return (
-        f"{len(loose)} TODO file(s) outside the work ledger: {shown}{more} — "
-        "`claude-bp-plan adopt` to bring them in"
+        " and ".join(parts) + " tracked outside the work ledger — "
+        "`claude-bp-plan adopt` for what to do about it"
     )

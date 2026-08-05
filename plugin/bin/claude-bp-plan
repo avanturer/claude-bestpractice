@@ -65,7 +65,7 @@ def cmd_done(ctx, task_id: str) -> int:
     return 0
 
 
-def cmd_park(ctx, title: str, paths: str, note: str) -> int:
+def cmd_park(ctx, title: str, paths: str, note: str, source: str = "") -> int:
     wanted = [p.strip() for p in paths.split(",") if p.strip()]
     problems = plan.handoff_problems(wanted, note)
     if problems:
@@ -83,7 +83,7 @@ def cmd_park(ctx, title: str, paths: str, note: str) -> int:
         # difference should not be the one deciding.
         print(f"note: {', '.join(missing)} not in the tree yet")
 
-    task = plan.park(ctx, title, body=note, branch=ctx.branch, paths=wanted)
+    task = plan.park(ctx, title, body=note, branch=ctx.branch, paths=wanted, source=source)
     print(f"parked {task.id}  {task.title}")
     print(f"pick it up in another session with: claude-bp-plan show {task.id}")
     return 0
@@ -98,17 +98,49 @@ def cmd_show(ctx, task_id: str) -> int:
     return 0
 
 
-def cmd_adopt(ctx) -> int:
+def cmd_adopt(ctx, brief: str, check: str, ignore: str) -> int:
     from claude_bestpractice import migrate
 
-    loose = migrate.parked_by_hand(ctx)
-    if not loose:
-        print("no TODO files outside the ledger")
+    if ignore:
+        migrate.ignore(ctx, ignore)
+        print(f"{ignore} left alone; it will not be raised again")
         return 0
-    for path in loose:
+
+    if brief or check:
+        target = ctx.worktree_root / (brief or check)
+        if not target.is_file():
+            print(f"no such document: {brief or check}", file=sys.stderr)
+            return 1
+        if brief:
+            print(migrate.brief(ctx, target))
+            return 0
+        total, migrated = migrate.coverage(ctx, target)
+        left = total - migrated
+        print(f"{check}: {total} open item(s), {migrated} in the ledger, {left} left")
+        return 0 if left <= 0 else 1
+
+    # Scratch notes the plugin's own absence caused: mechanical, unambiguous, imported.
+    for path in migrate.parked_by_hand(ctx):
         task_id = migrate.adopt(ctx, path)
-        print(f"{path.relative_to(ctx.worktree_root)} -> task {task_id}")
-    print(f"\n{len(loose)} adopted. The originals now point at the ledger; git has the text.")
+        print(f"adopted {path.relative_to(ctx.worktree_root)} -> task {task_id}")
+
+    # Everything else is prose, and prose is the agent's job rather than a regex's.
+    outstanding = []
+    for path in migrate.registries(ctx):
+        total, migrated = migrate.coverage(ctx, path)
+        if total > migrated:
+            outstanding.append((path.relative_to(ctx.worktree_root).as_posix(), total - migrated))
+    if not outstanding:
+        print("nothing tracked outside the ledger")
+        return 0
+
+    print("work tracked outside the ledger:\n")
+    for relative, left in outstanding:
+        print(f"  {relative}  —  {left} open item(s) not in the ledger")
+    print("\nThese are documents, not scratch files, so nothing was moved. For each one:")
+    print("  claude-bp-plan adopt --brief <file>    what to migrate, and how")
+    print("  claude-bp-plan adopt --check <file>    how much is left, counted")
+    print("  claude-bp-plan adopt --ignore <file>   it is curated; stop raising it")
     return 0
 
 
@@ -134,11 +166,15 @@ def main() -> int:
     park.add_argument("title")
     park.add_argument("--paths", default="", help="comma-separated files the next session opens")
     park.add_argument("--note", default="", help="what is known, what was ruled out, where it stands")
+    park.add_argument("--source", default="", help="the document this was migrated out of")
 
     show = sub.add_parser("show", help="everything a parked task carries")
     show.add_argument("task_id")
 
-    sub.add_parser("adopt", help="bring hand-written TODO files into the ledger")
+    adopt = sub.add_parser("adopt", help="bring work tracked outside the ledger into it")
+    adopt.add_argument("--brief", default="", help="what to migrate out of this document")
+    adopt.add_argument("--check", default="", help="count what is still not migrated")
+    adopt.add_argument("--ignore", default="", help="this document is curated; leave it alone")
 
     args = parser.parse_args()
     ctx = resolve_for_cli()
@@ -150,11 +186,11 @@ def main() -> int:
     if args.command == "done":
         return cmd_done(ctx, args.task_id)
     if args.command == "park":
-        return cmd_park(ctx, args.title, args.paths, args.note)
+        return cmd_park(ctx, args.title, args.paths, args.note, args.source)
     if args.command == "show":
         return cmd_show(ctx, args.task_id)
     if args.command == "adopt":
-        return cmd_adopt(ctx)
+        return cmd_adopt(ctx, args.brief, args.check, args.ignore)
     return cmd_list(ctx, getattr(args, "state", ""))
 
 
