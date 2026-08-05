@@ -221,7 +221,7 @@ def _alerts(ctx: GitContext) -> list[str]:
     unfinished merge leaves a tree that reads as normal while half of it is conflict
     markers — a session that is not told will commit them.
     """
-    from . import delivery, pullrequest
+    from . import delivery, pullrequest, upgrade
 
     return [
         line for line in (
@@ -231,6 +231,10 @@ def _alerts(ctx: GitContext) -> list[str]:
             # finished from inside the session that made it. It follows the repository,
             # not the session, so every later session is told until it is merged or closed.
             pullrequest.line(ctx),
+            # A released version cannot be withdrawn, so the only place a known-bad one
+            # can be named is inside the copy that is running. Empty for every version
+            # that is not on the list, which is nearly all of them.
+            upgrade.known_bad(),
         ) if line
     ]
 

@@ -28,6 +28,31 @@ _VERSION_DIR = re.compile(r"^\d+(?:\.\d+)*(?:[-+].*)?$")
 ORPHAN_MARKER = ".orphaned_at"
 
 
+# Versions that shipped a defect serious enough that staying on one is not a choice
+# somebody would make knowingly. A released version cannot be withdrawn — a tag is
+# permanent and `claude plugin` will happily keep serving it — so the only place this can
+# be said is inside the plugin, to the person running it.
+#
+# Kept short and kept honest: a version belongs here when it BROKE something that worked,
+# not merely when a later one improved on it. Everything is superseded eventually; that is
+# not a defect.
+KNOWN_BAD = {
+    "1.0.13": "`make check` cannot run under a virtualenv, which blocks pushing (#50)",
+    "1.0.11": "sessions cannot see each other; file leases never hold (#43)",
+    "1.0.12": "sessions cannot see each other; file leases never hold (#43)",
+}
+
+
+def known_bad(version: str | None = None) -> str:
+    """Why the running version should not be stayed on, or empty when it is fine."""
+    reason = KNOWN_BAD.get(version or __version__, "")
+    return (
+        f"claude-bestpractice {version or __version__} has a known defect: {reason}. "
+        "Update with `claude plugin update claude-bestpractice`."
+        if reason else ""
+    )
+
+
 def _key(name: str) -> tuple:
     """Sortable, and total. `1.0.10` must outrank `1.0.9`, and a build suffix must not
     make the comparison throw — an unparseable component sorts below every number, which

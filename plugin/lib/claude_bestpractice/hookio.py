@@ -20,6 +20,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, NoReturn
 
 # The documented ceiling for injected context. The knowledge layer is sized to sit
@@ -269,6 +270,19 @@ def repo(cwd: Any) -> Any:
         raise NotApplicable(str(exc)) from exc
 
 
+def _capture(exc: BaseException) -> None:
+    """Record a crashed gate, if this repository has capture switched on."""
+    try:
+        from . import config, defects
+        from .gitctx import resolve
+
+        ctx = resolve(os.getcwd())
+        if config.load(ctx).report_defects != defects.OFF:
+            defects.record(ctx, Path(sys.argv[0]).name or "gate", exc)
+    except Exception:  # noqa: BLE001 - reporting must never be the reason a gate dies
+        return
+
+
 def guard(main: Any, *, fail_closed: bool) -> NoReturn:
     """Run a gate body with the correct failure posture.
 
@@ -294,6 +308,11 @@ def guard(main: Any, *, fail_closed: bool) -> NoReturn:
             block(f"claude-bestpractice: {exc}. Refusing to proceed without a parseable event.")
         emit_silent()
     except BaseException as exc:  # noqa: BLE001 - deliberate: this IS the boundary
+        # The one place every gate failure passes through, so the one place worth
+        # recording them. Written to disk and nowhere else: the agent is mid-task and a
+        # defect in the tooling is not its problem to read about. Never allowed to raise —
+        # this handler is already dealing with a failure.
+        _capture(exc)
         if fail_closed:
             block(f"claude-bestpractice: gate failed ({type(exc).__name__}: {exc}). Failing closed.")
         emit_silent()

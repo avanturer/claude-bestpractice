@@ -17,7 +17,7 @@ from pathlib import Path
 BIN = Path(__file__).resolve().parent
 sys.path.insert(0, str(BIN.parent / "lib"))
 
-from claude_bestpractice import __version__, board, ci, conflicts, delivery, drafts, hookio, knowledge, onboard, pullrequest  # noqa: E402
+from claude_bestpractice import __version__, board, ci, conflicts, defects, delivery, drafts, hookio, knowledge, onboard, pullrequest  # noqa: E402
 from claude_bestpractice import plan, provenance, sessions, stage, upgrade  # noqa: E402
 from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
 
@@ -50,6 +50,10 @@ def cmd_status(ctx) -> int:
     # Only when the running copy is not the installed one. `claude plugin update` says
     # "Restart to apply changes" once and is never heard from again, so a session can run
     # superseded code indefinitely with nothing anywhere saying so.
+    bad = upgrade.known_bad()
+    if bad:
+        print(f"  {bad}")
+
     newer = upgrade.superseded_by()
     if newer:
         print(f"  {newer} is installed but NOT running — restart Claude Code to pick it up")
@@ -71,6 +75,13 @@ def cmd_status(ctx) -> int:
                 print(f"      holds: {', '.join(held[:4])}")
     else:
         print("  none live")
+
+    # Never injected into a session — a defect in the tooling is not the agent's problem
+    # to read about mid-task. It appears here, where the founder is already looking.
+    captured = defects.line(ctx)
+    if captured:
+        heading("PLUGIN")
+        print(f"  {captured}")
 
     waiting = pullrequest.outstanding(ctx)
     if waiting:
