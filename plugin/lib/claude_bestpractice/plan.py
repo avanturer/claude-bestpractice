@@ -55,6 +55,10 @@ class Task:
     # good intention: whoever picks it up spends their first ten minutes rediscovering
     # what the session that parked it already knew.
     paths: list[str] = field(default_factory=list)
+    # The document this task was migrated out of, when it was. Without it "has this
+    # registry been brought across?" is a question only a human can answer by reading
+    # both — which is the question the whole migration has to answer mechanically.
+    source: str = ""
     # Empty when the task file is in THIS checkout. The sibling's directory name
     # otherwise, so the board can say where the work actually is.
     worktree: str = ""
@@ -101,6 +105,7 @@ def _load(path: Path, state: str) -> Task | None:
         # Absent in every task written before this field existed, which is what `migrate`
         # backfills. Missing must read as "none named", never as a load failure.
         paths=[p.strip() for p in meta.get("paths", "").split(",") if p.strip()],
+        source=meta.get("source", ""),
     )
 
 
@@ -203,7 +208,7 @@ def slug(text: str) -> str:
 
 
 def _render(task_id: str, title: str, state: str, owner: str, branch: str, body: str,
-            paths: list[str] | None = None) -> str:
+            paths: list[str] | None = None, source: str = "") -> str:
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     lines = [
         "---",
@@ -213,6 +218,7 @@ def _render(task_id: str, title: str, state: str, owner: str, branch: str, body:
         f"owner: {owner}",
         f"branch: {branch}",
         f"paths: {', '.join(paths or [])}",
+        f"source: {source}",
         f"created_at: {now}",
         f"updated_at: {now}",
         "---",
@@ -263,7 +269,7 @@ def add(ctx: GitContext, title: str, body: str = "", branch: str = "") -> Task:
 
 
 def park(ctx: GitContext, title: str, body: str = "", branch: str = "",
-         paths: list[str] | None = None) -> Task:
+         paths: list[str] | None = None, source: str = "") -> Task:
     """Hand a task to a session that has not happened yet.
 
     The scene this exists for: a chat with more work in it than belongs in one chat, and
@@ -275,7 +281,7 @@ def park(ctx: GitContext, title: str, body: str = "", branch: str = "",
         task_id = next_id(ctx)
         path = plan_dir(ctx, NEXT) / f"{task_id}-{slug(title)}.md"
         store.atomic_write(
-            path, _render(task_id, title, NEXT, "", branch, body, paths), mode=0o644
+            path, _render(task_id, title, NEXT, "", branch, body, paths, source), mode=0o644
         )
     return _load(path, NEXT)
 

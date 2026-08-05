@@ -206,3 +206,94 @@ class TestRepairsRunThemselvesAndRunOnce(RepoCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestARegistryIsFoundByWhatIsInIt(RepoCase):
+    """Filename patterns missed an entire real setup, so the plugin stopped guessing.
+
+    Measured on a live repository: `docs/TODO.md`, `docs/pre-release-todo.md` and
+    `.claude/commands/todo.md` — three documents tracking real work, none matching the
+    `TODO-<name>.md` shape the plugin was quietly expecting. Nobody had agreed to that
+    convention. What a registry looks like INSIDE is not a convention; it is markdown.
+    """
+
+    REGISTRY = (
+        "# Registry\n\n"
+        "- [ ] перемерить лимит MegaMarket\n"
+        "- [x] уже сделано\n"
+        "- [ ] переписать скоринг словаря\n"
+    )
+
+    def test_a_document_the_old_pattern_missed_is_found(self):
+        self.write("docs/TODO.md", self.REGISTRY)
+        found = [p.name for p in migrate.registries(self.ctx())]
+        self.assertEqual(["TODO.md"], found)
+
+    def test_every_checkbox_style_counts(self):
+        text = "- [ ] dash\n* [ ] star\n+ [ ] plus\n1. [ ] numbered\n2) [ ] paren\n"
+        self.assertEqual(5, len(migrate.open_items(text)))
+
+    def test_finished_items_are_not_outstanding(self):
+        self.assertEqual(["left"], migrate.open_items("- [x] done\n- [ ] left\n"))
+
+    def test_prose_with_one_stray_checkbox_is_not_a_registry(self):
+        self.write("docs/design.md", "Some prose.\n\n- [ ] maybe one day\n")
+        self.assertEqual([], migrate.registries(self.ctx()))
+
+    def test_the_plugins_own_directory_is_not_searched(self):
+        """A slash-command describing a TODO workflow is not a backlog."""
+        self.write(".claude/commands/todo.md", self.REGISTRY)
+        self.assertEqual([], migrate.registries(self.ctx()))
+
+
+class TestMigrationIsDelegatedAndThenCounted(RepoCase):
+    """The plugin cannot read prose, and a model can. So it hands the job over — and
+    keeps the verification, which is what makes this delegation rather than persuasion.
+    """
+
+    def seed(self) -> None:
+        self.write("backend/scoring/dictionary.py", "x = 1\n")
+        self.write("docs/TODO.md", TestARegistryIsFoundByWhatIsInIt.REGISTRY)
+
+    def test_the_brief_names_the_items_and_the_check_that_closes_it(self):
+        self.seed()
+        brief = migrate.brief(self.ctx(), self.repo / "docs/TODO.md")
+        self.assertIn("перемерить лимит MegaMarket", brief)
+        self.assertNotIn("уже сделано", brief, "a finished item is not work to migrate")
+        self.assertIn("claude-bp-plan park", brief)
+        self.assertIn("adopt --check", brief)
+        self.assertIn("--ignore", brief)
+
+    def test_coverage_counts_what_landed_rather_than_trusting_it(self):
+        self.seed()
+        target = self.repo / "docs/TODO.md"
+        self.assertEqual((2, 0), migrate.coverage(self.ctx(), target))
+
+        plan.park(
+            self.ctx(), "перемерить лимит MegaMarket",
+            body="Лимит зашит константой из старого прайса. На проде ловили обрезание.",
+            paths=["backend/scoring/dictionary.py"], source="docs/TODO.md",
+        )
+        self.assertEqual((2, 1), migrate.coverage(self.ctx(), target))
+
+    def test_a_task_parked_from_elsewhere_does_not_count(self):
+        """Otherwise any unrelated work would silently close out a registry."""
+        self.seed()
+        plan.park(self.ctx(), "unrelated", body="x" * 120, paths=["backend/scoring/dictionary.py"])
+        self.assertEqual((2, 0), migrate.coverage(self.ctx(), self.repo / "docs/TODO.md"))
+
+    def test_a_curated_registry_can_be_left_alone_for_good(self):
+        """A warning nothing can clear is one the founder learns to scroll past, which
+        costs the warnings that matter."""
+        self.seed()
+        self.assertIn("open item", migrate.line(self.ctx()))
+
+        migrate.ignore(self.ctx(), "docs/TODO.md")
+        self.assertEqual([], migrate.registries(self.ctx()))
+        self.assertEqual("", migrate.line(self.ctx()))
+
+    def test_the_board_counts_items_not_files(self):
+        """"2 documents" says nothing about what is at stake; "31 items" decides it."""
+        self.seed()
+        self.write("docs/pre-release-todo.md", "".join(f"- [ ] item {i}\n" for i in range(26)))
+        self.assertIn("28 open item(s) in 2 document(s)", migrate.line(self.ctx()))

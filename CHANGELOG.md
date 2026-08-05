@@ -1,5 +1,79 @@
 # Changelog
 
+## v1.3.0
+
+v1.2.0 looked for work outside the ledger by matching filenames, and a field report showed
+that missing an entire real setup:
+
+| the document | why it was missed |
+|---|---|
+| `docs/TODO.md` — a deliberate registry, PR #460 | bare `TODO.md` excluded on purpose |
+| `docs/pre-release-todo.md` — 26 checkboxes | hyphen in the wrong place |
+| `.claude/commands/todo.md` | whole directory skipped |
+
+Three documents tracking real work, none matching the `TODO-<name>.md` shape the plugin
+was quietly expecting. **Nobody had agreed to that convention.**
+
+### Found by what is inside, not by what it is called
+
+A registry does not announce itself in its filename, but it does in its contents: a list
+of checkboxes. Every markdown style counts — `-`, `*`, `+`, `1.`, `2)` — finished items do
+not, and two items is the floor, because prose containing one stray checkbox is prose.
+
+### Delegated to the agent, and then counted
+
+Prose cannot be turned into a handoff by a regular expression, and the plugin does not run
+a model. A session can read the document; the plugin cannot. So it hands the job over:
+
+```
+$ claude-bp-plan adopt --brief docs/TODO.md
+docs/TODO.md tracks 3 open item(s); 0 of them are in the ledger.
+
+  - перемерить лимит MegaMarket
+  - переписать скоринг словаря
+  - выкатить OTA-политику
+
+For each item NOT yet in the ledger, read enough of the repository to fill in a
+real handoff, then run:
+
+  claude-bp-plan park "<title>" --paths <files> --note "<...>" --source docs/TODO.md
+
+`park` refuses a title with no files and no substance, so a thin one will not land.
+Run `claude-bp-plan adopt --check docs/TODO.md` when you are done: it counts what is
+left rather than taking your word for it.
+```
+
+**That last line is what makes this delegation rather than persuasion**, which the product
+constraints forbid. The plugin does not read the prose or judge the result — it counts
+what the document tracks, counts what the ledger holds *from that document*, and the gap
+is a number. `--check` exits non-zero while anything is left:
+
+```
+$ claude-bp-plan adopt --check docs/TODO.md
+docs/TODO.md: 3 open item(s), 1 in the ledger, 2 left        # exit 1
+```
+
+An agent that says it migrated a registry and left twenty items behind is contradicted by
+arithmetic, not by opinion. That is decision 0002 — evidence, never assertion — applied to
+migration.
+
+### A curated registry can be left alone for good
+
+`claude-bp-plan adopt --ignore docs/TODO.md` records the decision in Tier A, and the file
+stops being raised. A warning nothing can clear is one the founder learns to scroll past,
+which costs the warnings that matter.
+
+Nothing is moved on its own. Scratch notes the plugin's own absence caused are still
+imported mechanically; documents are named, counted, and left where they are.
+
+### Fixed on the way
+
+The board line dropped scratch TODO files entirely once it started counting checkbox
+items — they are prose and have none. Caught by its own test. It now reports both, and
+counts **items** rather than files: "2 documents" says nothing about what is at stake,
+"28 open items in 2 documents" decides whether it is worth a turn.
+
+
 ## v1.2.0
 
 Parking a task for a session that has not happened yet, and taking over the workaround
