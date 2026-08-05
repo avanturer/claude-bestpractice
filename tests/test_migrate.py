@@ -240,6 +240,36 @@ class TestARegistryIsFoundByWhatIsInIt(RepoCase):
         self.write("docs/design.md", "Some prose.\n\n- [ ] maybe one day\n")
         self.assertEqual([], migrate.registries(self.ctx()))
 
+    def test_a_github_template_is_a_form_not_a_backlog(self):
+        """Its checkboxes are ticked in the pull request body, never in the file.
+
+        So `.github/pull_request_template.md` sat at "3 open item(s)" permanently and
+        surfaced on every run, with no migration able to change the count — issue #63.
+        Unlike the two conventions this feature invented and retracted, these paths are
+        GitHub's own and documented.
+        """
+        form = "- [ ] `pytest` passes\n- [ ] smoke test\n- [ ] types clean\n"
+        for template in (
+            ".github/pull_request_template.md",
+            ".github/PULL_REQUEST_TEMPLATE.md",
+            ".github/PULL_REQUEST_TEMPLATE/feature.md",
+            ".github/ISSUE_TEMPLATE/bug.md",
+            ".github/issue_template.md",
+            "docs/pull_request_template.md",
+            "PULL_REQUEST_TEMPLATE.md",
+        ):
+            with self.subTest(template=template):
+                self.write(template, form)
+                found = [p.relative_to(self.repo).as_posix()
+                         for p in migrate.registries(self.ctx())]
+                self.assertNotIn(template, found)
+
+    def test_an_ordinary_github_document_is_still_in_scope(self):
+        """Only templates are skipped, not everything under `.github/`."""
+        self.write(".github/release-checklist.md", "- [ ] tag it\n- [ ] announce it\n")
+        found = [p.name for p in migrate.registries(self.ctx())]
+        self.assertEqual(["release-checklist.md"], found)
+
     def test_the_plugins_own_directory_is_not_searched(self):
         """A slash-command describing a TODO workflow is not a backlog."""
         self.write(".claude/commands/todo.md", self.REGISTRY)
@@ -281,6 +311,21 @@ class TestMigrationIsDelegatedAndThenCounted(RepoCase):
         self.seed()
         plan.park(self.ctx(), "unrelated", body="x" * 120, paths=["backend/scoring/dictionary.py"])
         self.assertEqual((2, 0), migrate.coverage(self.ctx(), self.repo / "docs/TODO.md"))
+
+    def test_several_registries_are_declared_curated_in_one_command(self):
+        """A repository that kept its registries by hand has more than one, and five
+        invocations to say one thing is a tax on the decision rather than a record."""
+        self.write("docs/a.md", "- [ ] one\n- [ ] two\n")
+        self.write("docs/b.md", "- [ ] three\n- [ ] four\n")
+        self.assertEqual(2, len(migrate.registries(self.ctx())))
+
+        proc = subprocess.run(
+            [sys.executable, str(BIN / "claude-bp-plan"), "adopt", "--ignore",
+             "docs/a.md,docs/b.md"],
+            capture_output=True, text=True, cwd=str(self.repo), timeout=60,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual([], migrate.registries(self.ctx()))
 
     def test_a_curated_registry_can_be_left_alone_for_good(self):
         """A warning nothing can clear is one the founder learns to scroll past, which
