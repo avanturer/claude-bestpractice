@@ -42,13 +42,39 @@ def cmd_list(ctx) -> int:
     return 0
 
 
-def cmd_accept(ctx, index: int) -> int:
+def _report_collisions(ctx, draft: dict, just_written: str) -> None:
+    """Name the live decisions already covering these files, and how to retire them.
+
+    Shown rather than acted on. Two records about the same files are about the same
+    thing, which is the only signal available without a model — but "about the same
+    thing" is not "contradicts", and retiring a decision the founder still wants is worse
+    than keeping one they have to read past. This is printed at the exact moment they are
+    already deciding, which is the only place the choice costs them nothing.
+    """
+    # Excluding the record written a moment ago, which is on disk by now and covers its
+    # own files by definition. Reporting it would have every acceptance announce a
+    # collision with itself.
+    clashing = [row for row in knowledge.covering(ctx, drafts.subject_paths(draft))
+                if row[0] != just_written]
+    if not clashing:
+        return
+    print(f"\n{len(clashing)} live decision(s) already cover these files:")
+    for number, title, _ in clashing:
+        print(f"  [{number}] {title}")
+    numbers = ",".join(number for number, _, _ in clashing)
+    print(f"If this replaces them: claude-bp-decide accept <n> --supersedes {numbers}")
+    print("They stay live, and stay in every session's context, until something retires them.")
+
+
+def cmd_accept(ctx, index: int, supersedes: str = "") -> int:
     items = drafts.pending(ctx)
     if not 1 <= index <= len(items):
         print(f"no draft {index}; there are {len(items)}", file=sys.stderr)
         return 1
 
-    draft = items[index - 1]
+    draft = dict(items[index - 1])
+    if supersedes:
+        draft["supersedes"] = supersedes
     number = drafts.next_number(ctx)
     name = f"{number:04d}-{slug(draft.get('quote', ''))}.md"
     path = ctx.worktree_root / knowledge.DECISIONS_DIR / name
@@ -62,6 +88,10 @@ def cmd_accept(ctx, index: int) -> int:
 
     print(f"wrote {path.relative_to(ctx.worktree_root)}")
     print("Fill in the title, Decision and Rejected sections — the quote is already in Why.")
+    if supersedes:
+        print(f"Retired: {supersedes}. Those records stay on disk; they stop being injected.")
+    else:
+        _report_collisions(ctx, draft, f"{number:04d}")
     return 0
 
 
@@ -81,6 +111,10 @@ def main() -> int:
     sub.add_parser("list", help="show pending drafts (default)")
     accept = sub.add_parser("accept", help="promote a draft into a decision record")
     accept.add_argument("index", type=int)
+    accept.add_argument(
+        "--supersedes", default="",
+        help="decision number(s) this one retires, comma separated — they stop being injected",
+    )
     discard = sub.add_parser("discard", help="drop a draft")
     discard.add_argument("index", type=int)
 
@@ -88,7 +122,7 @@ def main() -> int:
     ctx = resolve_for_cli()
 
     if args.command == "accept":
-        return cmd_accept(ctx, args.index)
+        return cmd_accept(ctx, args.index, args.supersedes)
     if args.command == "discard":
         return cmd_discard(ctx, args.index)
     return cmd_list(ctx)

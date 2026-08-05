@@ -9,6 +9,6 @@ dependency tree is latency, a failure mode, and a supply-chain surface for a com
 whose entire job is to be trustworthy.
 """
 
-__version__ = "1.0.18"
+__version__ = "1.0.19"
 
 MIN_PYTHON = (3, 9)

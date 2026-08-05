@@ -342,3 +342,112 @@ class TestASubagentIsNotBriefedWithATemplate(RepoCase):
         self.assertEqual(1, knowledge.placeholders("<ANSWER THIS. Who is it for?>"))
         self.assertTrue(knowledge.unanswered_only("- <a second one>\n- <a third one>\n"))
         self.assertFalse(knowledge.unanswered_only("- a real answer\n- <a second one>\n"))
+
+
+class TestADecisionIsRetiredNotRewritten(RepoCase):
+    """The retirement path existed, was documented, and nothing could reach it.
+
+    A decision is a historical fact: it was made, and that stays true. It is retired by a
+    later record naming it in `supersedes:`, never by editing history — and `build_index`
+    has honoured that field all along. But nothing in the plugin ever WROTE it. `render`
+    did not emit it and `accept` had no flag, so the only way to retire a decision was to
+    hand-edit the markdown. In practice records piled up and contradictory policies stayed
+    live side by side in every session's context.
+    """
+
+    def decide(self, number: int, paths: str, supersedes: str = "") -> None:
+        from claude_bestpractice import knowledge
+
+        body = ["---", f"title: policy {number}", f"paths: {paths}"]
+        if supersedes:
+            body.append(f"supersedes: {supersedes}")
+        body += ["---", "", "## Decision", "x", "", "## Rejected", "- y", ""]
+        path = self.repo / knowledge.DECISIONS_DIR / f"{number:04d}-policy.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(body), encoding="utf-8")
+
+    def live(self) -> list[str]:
+        from claude_bestpractice import knowledge
+
+        return [n for n, _, _ in knowledge.live_decisions(self.ctx())]
+
+    def test_a_retired_decision_leaves_the_context_but_not_the_disk(self):
+        from claude_bestpractice import knowledge
+
+        self.decide(1, "release.py")
+        self.decide(2, "release.py", supersedes="0001")
+        self.assertEqual(["0002"], self.live())
+        self.assertNotIn("0001", knowledge.build_index(self.ctx()))
+        self.assertTrue((self.repo / knowledge.DECISIONS_DIR / "0001-policy.md").exists())
+
+    def test_one_record_can_retire_several(self):
+        """A single policy commonly replaces more than one, and read as a single value
+        the second and third stayed live beside the record that had replaced them."""
+        self.decide(1, "release.py")
+        self.decide(2, "ci/publish.yml")
+        self.decide(3, "release.py", supersedes="0001, 0002")
+        self.assertEqual(["0003"], self.live())
+
+    def test_a_supersedes_pointing_nowhere_is_reported(self):
+        from claude_bestpractice import knowledge
+
+        self.decide(1, "release.py", supersedes="0042")
+        problems = " ".join(str(p) for p in knowledge.validate_decisions(self.ctx()))
+        self.assertIn("names no decision", problems)
+
+    def test_a_record_naming_itself_is_reported(self):
+        from claude_bestpractice import knowledge
+
+        self.decide(1, "release.py", supersedes="0001")
+        problems = " ".join(str(p) for p in knowledge.validate_decisions(self.ctx()))
+        self.assertIn("names itself", problems)
+
+    def test_the_collision_a_founder_needs_to_see(self):
+        from claude_bestpractice import knowledge
+
+        self.decide(1, "release.py")
+        self.decide(2, "docs/guide.md")
+        clashing = knowledge.covering(self.ctx(), ["release.py"])
+        self.assertEqual(["0001"], [n for n, _, _ in clashing])
+
+    def test_a_retired_record_no_longer_collides(self):
+        """Otherwise every new policy would be flagged against the ones it replaced."""
+        from claude_bestpractice import knowledge
+
+        self.decide(1, "release.py")
+        self.decide(2, "release.py", supersedes="0001")
+        self.assertEqual(["0002"], [n for n, _, _ in knowledge.covering(self.ctx(), ["release.py"])])
+
+
+class TestADecisionIsScopedToItsSubject(RepoCase):
+    """`paths:` decides which sessions a record loads in, and it was always `src/**`.
+
+    `render` read `subject_paths` as a list of dicts; `extract` stores plain strings. So
+    for every real draft the list came back empty and the record fell through to its
+    whole-source-tree default. The validator refuses a record with no `paths:` precisely
+    because that means "loads in every session" — and `src/**` is the same thing said
+    differently, so it passed while being exactly what it was meant to catch.
+    """
+
+    def test_the_files_the_draft_was_about_reach_the_record(self):
+        from claude_bestpractice import drafts
+
+        draft = drafts.extract(
+            ["запомни навсегда: релизы во все три стора идут только через CI"],
+            "main", "s1", ["release.py", "ci/publish.yml"],
+        )[0]
+        rendered = drafts.render(draft.to_dict())
+        self.assertIn("paths: release.py, ci/publish.yml", rendered)
+        self.assertNotIn("src/**", rendered)
+
+    def test_stamped_paths_are_read_too(self):
+        """`provenance.stamp` stores dicts; both shapes exist and both must be read."""
+        from claude_bestpractice import drafts
+
+        stamped = {"subject_paths": [{"path": "release.py", "blob": "abc"}, "ci/publish.yml"]}
+        self.assertEqual(["release.py", "ci/publish.yml"], drafts.subject_paths(stamped))
+
+    def test_a_draft_about_nothing_still_falls_back(self):
+        from claude_bestpractice import drafts
+
+        self.assertIn("paths: src/**", drafts.render({"quote": "x", "subject_paths": []}))

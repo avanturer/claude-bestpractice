@@ -301,6 +301,28 @@ def resolve(ctx: GitContext, quote: str) -> None:
     )
 
 
+def subject_paths(draft: dict) -> list[str]:
+    """The files a draft is about, whichever shape they were stored in.
+
+    Two shapes exist and only one was ever read. `extract` stores plain strings, taken
+    from what the session touched; `provenance.stamp` stores dicts carrying a blob hash.
+    `render` read dicts only, so for every real draft the list came back EMPTY and the
+    record fell through to its `paths: src/**` default.
+
+    That default is not a cosmetic loss. `paths:` is what stops a decision loading in
+    sessions it has nothing to do with, and the validator refuses a record without one
+    precisely because "no scope" means "every session". Claiming the whole source tree is
+    the same thing said differently — so every accepted decision was global, and the
+    scoping this layer's whole defence against bloat rests on had never once worked.
+    """
+    out: list[str] = []
+    for entry in draft.get("subject_paths") or []:
+        value = entry.get("path") if isinstance(entry, dict) else entry
+        if isinstance(value, str) and value.strip():
+            out.append(value.strip())
+    return out
+
+
 def render(draft: dict) -> str:
     """A record that is already most of the way written.
 
@@ -308,7 +330,7 @@ def render(draft: dict) -> str:
     that cannot be reconstructed later, and paraphrasing them is how a decision record
     turns into a summary nobody trusts.
     """
-    paths = [s.get("path") for s in (draft.get("subject_paths") or []) if isinstance(s, dict)]
+    paths = subject_paths(draft)
     scope = ", ".join(paths[:4]) if paths else "src/**"
     return "\n".join(
         [
@@ -316,6 +338,13 @@ def render(draft: dict) -> str:
             f"title: <name the decision in five words>",
             f"paths: {scope}",
             f"date: {time.strftime('%Y-%m-%d', time.gmtime(draft.get('created_at', time.time())))}",
+            # Emitted empty rather than omitted. A decision is a historical fact and is
+            # retired by a later record naming it here, never by rewriting the old one —
+            # that is the design, and the index has honoured this field all along. What
+            # was missing was any way to fill it: nothing in the plugin wrote it, so the
+            # retirement path existed and was unreachable, and records piled up with
+            # contradictions live alongside each other in every session's context.
+            f"supersedes: {draft.get('supersedes', '')}",
             "---",
             "",
             "## Decision",

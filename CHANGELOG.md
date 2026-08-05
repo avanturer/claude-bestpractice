@@ -1,5 +1,51 @@
 # Changelog
 
+## v1.0.19
+
+Asked whether "remember this" is scalable — whether the plugin understands that a new
+instruction may *replace* an old one rather than pile up next to it. It does not, and the
+reason turned out to be worse than a missing feature.
+
+### The retirement path existed and nothing could reach it
+
+The design is already right, and stated in the module that owns it: a decision is a
+historical fact, so it is never rewritten. It is retired by a **later record naming it in
+`supersedes:`**, and `build_index` has honoured that field all along — a retired record
+drops out of the index, which is what a session is handed.
+
+Nothing in the plugin ever wrote that field. `render` did not emit it and `accept` had no
+flag, so the only way to retire a decision was to hand-edit markdown nobody was going to
+open. In practice records piled up and contradictory policies stayed live side by side in
+every session's context — the exact pollution the design was built to prevent.
+
+Now: `accept --supersedes 0001,0002` retires several at once, and an acceptance **without**
+the flag prints the live decisions already covering the same files, at the moment the
+founder is already deciding. Shown, not acted on: two records about the same files are
+about the same thing, which is the only signal available without a model, but "about the
+same thing" is not "contradicts", and silently retiring a decision the founder still wants
+is worse than leaving one they have to read past. `validate` now reports a `supersedes:`
+naming a decision that does not exist, or naming itself.
+
+### Every decision claimed the whole source tree
+
+Found on the way, and the larger half. `render` read `subject_paths` as a list of dicts;
+`extract` stores plain strings. For every real draft the list came back **empty**, so the
+record fell through to its default:
+
+```
+paths: src/**
+```
+
+`paths:` is what stops a decision loading in sessions it has nothing to do with. The
+validator refuses a record without one *precisely* because "no scope" means "every
+session" — and `src/**` is the same thing said differently, so it passed the check that
+existed to catch it. Every accepted decision has been global since the layer shipped, and
+collision detection could never have worked either, because nothing overlapped anything.
+
+Both shapes are read now: plain strings from `extract`, stamped dicts from
+`provenance.stamp`.
+
+
 ## v1.0.18
 
 Two halves of one reported failure: the worktree rule refused the tree it had just handed
