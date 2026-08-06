@@ -790,3 +790,57 @@ class TestAPrePushRunIsEvidence(RepoCase):
         )
         self.assertNotEqual(0, proc.returncode)
         self.assertIsNone(evidence.last_green(ctx), "a red run was recorded as green")
+
+
+class TestAStaleHookIsBroughtUpToDate(RepoCase):
+    """Issue #85. `ensure()` has upgraded stale hooks since #33; `install()` predates that
+    and short-circuited on existence — so `claude-bp-ci local`, the command whose whole
+    purpose is running the checks locally, was the one that declined to update them.
+
+    It matters because of what a stale hook silently does: across 1.0.x the body changed
+    several times, including a release where a project WITH a suite pushed with nothing
+    run. A founder running this after an upgrade believes they have the shipped gate.
+    """
+
+    def stale(self) -> None:
+        from claude_bestpractice import ci
+
+        ctx = self.ctx()
+        ci.install(ctx)
+        path = ci.hook_path(ctx)
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                f"{ci.STAMP} ", f"{ci.STAMP} 1.0.0 #", 1),
+            encoding="utf-8",
+        )
+
+    def test_it_rewrites_a_hook_an_older_plugin_wrote(self):
+        from claude_bestpractice import __version__, ci
+
+        self.stale()
+        changed, note = ci.install(self.ctx())
+        self.assertTrue(changed, note)
+        self.assertIn("updated", note)
+        self.assertEqual(__version__, ci.stamped_version(self.ctx()))
+
+    def test_it_says_which_versions_rather_than_only_that_a_hook_exists(self):
+        """"already installed" tells the founder nothing they can act on."""
+        from claude_bestpractice import ci
+
+        ci.install(self.ctx())
+        changed, note = ci.install(self.ctx())
+        self.assertFalse(changed)
+        self.assertIn("current", note)
+
+    def test_it_still_refuses_to_touch_a_hook_that_is_not_ours(self):
+        """The one thing this module has always refused to do."""
+        from claude_bestpractice import ci
+
+        ctx = self.ctx()
+        path = ci.hook_path(ctx)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("#!/bin/sh\necho husky\n", encoding="utf-8")
+
+        ci.install(ctx)
+        displaced = path.parent / ci.DISPLACED_NAME
+        self.assertIn("husky", displaced.read_text(encoding="utf-8"))

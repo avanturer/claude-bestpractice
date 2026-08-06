@@ -1,5 +1,31 @@
 # Changelog
 
+## v1.8.1
+
+Issue #85, reported against v1.8.0 within the hour and correct: **the fix that just
+shipped could not reach the repositories that needed it.**
+
+`claude-bp-ci local` calls `install()`, which short-circuited on the hook merely EXISTING.
+`ensure()` has rewritten a stale hook since #33 — "the hook now carries the version that
+wrote it and is rewritten in place when that is older, only ever over our own file" — and
+`install()` predates that. So the one command whose entire purpose is running the checks
+locally was the one that declined to update the checks, and the only upgrade path left was
+a session restart.
+
+That matters for what a stale hook silently does in between. Across `1.0.x` the body
+changed several times, including a release where a project *with* a suite pushed with
+nothing run. A founder who runs this after an upgrade reasonably believes they now have the
+shipped gate; they had whatever their last session start wrote.
+
+`install()` now refreshes a hook an older plugin wrote, and says which versions:
+`pre-push hook updated 1.6.0 -> 1.8.1` rather than `already installed`. It is not routed
+through `ensure()`, which honours the opt-out — asking for the hook back is consent, and
+`install()` clears the decline for exactly that reason.
+
+Unchanged, and tested so it stays that way: a hook this plugin did not write is still
+displaced and chained, never overwritten.
+
+
 ## v1.8.0
 
 Issue #83, and the sharpest shape yet: **the gate asked for evidence the only session able
