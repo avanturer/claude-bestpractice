@@ -587,7 +587,7 @@ def main() -> None:
     writing = event.tool_name in WRITE_TOOLS or (event.tool_name == "Bash" and absolute)
     if writing and cfg.require_worktree:
         for path in absolute:
-            owner = gitpolicy.foreign_tree(ctx, path)
+            owner = gitpolicy.foreign_tree(ctx, path, event.session_id)
             # Ours if this plugin made it for this session. Without this the gate was a
             # closed loop: it refused the main checkout, handed over a worktree in the
             # same breath, and then refused every write into that worktree as "another
@@ -606,7 +606,7 @@ def main() -> None:
     # that is the only thing checked here.
     if cfg.require_worktree and event.tool_name == "Bash":
         for path in git_tree_targets(str(ti.get("command", "")), session_cwd):
-            owner = gitpolicy.foreign_tree(ctx, path)
+            owner = gitpolicy.foreign_tree(ctx, path, rec.session_id)
             # Ours to clean up if our own hook made it for us. Otherwise the refusal that
             # hands a session a worktree also makes that worktree permanent: the main
             # checkout is told it belongs to another session, and a worktree cannot remove

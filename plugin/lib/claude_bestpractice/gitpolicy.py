@@ -158,7 +158,7 @@ def working_trees(ctx: GitContext) -> list[Path]:
     return out
 
 
-def foreign_tree(ctx: GitContext, target: Path) -> Path | None:
+def foreign_tree(ctx: GitContext, target: Path, session_id: str = "") -> Path | None:
     """The working tree that owns `target`, when that tree is not this session's.
 
     The rule this file opens with — one session per working tree — was enforced by asking
@@ -195,7 +195,7 @@ def foreign_tree(ctx: GitContext, target: Path) -> Path | None:
     for tree in working_trees(ctx):
         if tree == ctx.worktree_root.resolve() or not _within(target, tree):
             continue
-        if not _occupied(ctx, tree):
+        if not _occupied(ctx, tree, session_id):
             return None
         if ignored_by_git(tree, target):
             return None
@@ -203,7 +203,7 @@ def foreign_tree(ctx: GitContext, target: Path) -> Path | None:
     return None
 
 
-def _occupied(ctx: GitContext, tree: Path) -> bool:
+def _occupied(ctx: GitContext, tree: Path, session_id: str = "") -> bool:
     """Is `tree` one somebody would lose work in?
 
     The main checkout always is, whoever is or is not standing in it. Under this gate no
@@ -218,6 +218,7 @@ def _occupied(ctx: GitContext, tree: Path) -> bool:
     """
     from . import sessions
 
+    mine = sessions.my_pid(ctx, session_id)
     try:
         if tree == ctx.common_dir.parent.resolve():
             return True
@@ -229,6 +230,12 @@ def _occupied(ctx: GitContext, tree: Path) -> bool:
     except Exception:  # noqa: BLE001 - an unreadable registry is not permission to write
         return True
     for record in live:
+        # Not me under an older identity. A resumed chat gets a NEW session id, so the
+        # record it left in its previous tree is live and is not excluded by id — and the
+        # session was refused its own former worktree, by a refusal telling it to go ask
+        # the owner, who was the reader (#89). The process is what survives a resume.
+        if mine and record.pid == mine:
+            continue
         try:
             if Path(record.worktree).resolve() == tree:
                 return True

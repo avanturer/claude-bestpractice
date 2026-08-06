@@ -444,6 +444,21 @@ def live_sessions(ctx: GitContext, exclude: str | None = None) -> list[SessionRe
     ]
 
 
+def my_pid(ctx: GitContext, session_id: str) -> int:
+    """The process this session is running as, according to its own record.
+
+    Read from the registry rather than re-resolved, because that is the value every other
+    record is compared against and the two must be the same number. Zero when the session
+    is unknown or its pid was never resolved to the CLI itself — an unresolved pid is some
+    ancestor that real siblings genuinely share, and treating that as "me" would hide the
+    sibling this registry exists to surface.
+    """
+    record = get(ctx, session_id) if session_id else None
+    if record is None or record.pid_trust != PID_TRUST_OWNER or record.pid <= 0:
+        return 0
+    return record.pid
+
+
 # --------------------------------------------------------------------------- leases
 
 
