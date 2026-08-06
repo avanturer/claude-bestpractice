@@ -1,5 +1,56 @@
 # Changelog
 
+## v1.10.0
+
+A task now says whether a chat is on it, what would finish it, and what is stopping it.
+
+### Is anyone working on this right now — derived, not stored
+
+The board printed the owner's session id and nothing about it, so a task a chat is editing
+this minute and one abandoned by a crashed session three days ago read identically.
+
+Activity is **derived from the session registry on every read**, never written to the task
+file. A stored "in progress" flag is set by a session that then crashes and stays true
+forever — which is precisely the case the reader needs it for. Three answers now:
+
+```
+IN FLIGHT:
+  - 0007 rework the importer [active in 65a7313b, seen 40s ago]
+  - 0009 the kuper backfill  [held by 1f2c9a04, which is gone — reclaimable]
+```
+
+There is a test asserting the word never reaches the file, because a file that can carry it
+can carry it wrongly.
+
+### Paused is its own state, and must say what would lift it
+
+`next` means pick me up. The same task waiting on a schema decision, a credential or
+somebody else's merge says the opposite, and conflating them sends session after session at
+work that cannot move.
+
+```
+claude-bp-plan pause 0007 --blocker "waiting on the schema decision in #41"
+claude-bp-plan resume 0007
+```
+
+The blocker is required, on the same grounds a handoff is: a pause nobody can lift is a
+task that has quietly left the ledger.
+
+### A task can learn things while it waits
+
+`claude-bp-plan update <id> --note … --paths … --done-when …`. Before this the only ways to
+record what a task had learned were to park a second one, which splits the identity, or to
+edit the file by hand, which the worktree gate refuses from the main checkout.
+
+### Done when
+
+`done_when` is the missing half of decision 0002 at task level: without it a model closes a
+task on its own judgement, which is the assertion this project refuses everywhere else. It
+leads the handoff view, above the prose, and survives every transition — a move that forgot
+the files and the finish condition would hand the next session exactly the thin task the
+ledger exists to prevent.
+
+
 ## v1.9.1
 
 ### Progress is not a repeat (#95)
