@@ -123,6 +123,45 @@ def resolve(cwd: Path | str | None = None) -> GitContext:
     )
 
 
+def _authored_floor(ctx: GitContext, since: str) -> str:
+    """`since`, raised past work that arrived from upstream rather than from this session.
+
+    A fast-forward is not an edit. `git pull --ff-only` moved a local trunk past eighteen
+    commits other sessions had already merged, and every file in them was reported as this
+    session's scope drift — with "revert what is out of scope" as the advice, which
+    followed literally means rewinding other people's merged work. A gate whose remedy is
+    destructive on its own false positive is worse than no gate (#71).
+
+    The floor becomes the merge base with the trunk ONLY when upstream has genuinely moved
+    past the baseline, so a session that branched long before it started still has its own
+    work measured from where it started rather than from the branch point.
+    """
+    trunk = ""
+    try:
+        from .gitpolicy import default_branch
+
+        trunk = default_branch(ctx)
+    except Exception:  # noqa: BLE001 - an unknown trunk is not a reason to lose the diff
+        return since
+    # The REMOTE trunk, never the local one. Work arrives from other sessions by being
+    # pushed and pulled, so `origin/<trunk>` is what "somebody else's, already merged"
+    # means. The local trunk is a branch this session may be committing to itself, and
+    # measuring against it erases the session's own work: merge-base(main, HEAD) is HEAD
+    # for a session working on main, so the diff came back empty and every gate that reads
+    # it stopped firing. Caught by the escalation-ceiling tests, which went to zero blocks.
+    base = _run(["merge-base", f"origin/{trunk}", "HEAD"], ctx.worktree_root, check=False).strip()
+    if not base or base == since:
+        return since
+    # An ancestor test, not a comparison: the floor rises only when upstream has genuinely
+    # moved past where this session started. A session that branched long before it began
+    # still measures from its own baseline rather than from the branch point.
+    ahead = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", since, base],
+        cwd=str(ctx.worktree_root), capture_output=True, timeout=30,
+    )
+    return base if ahead.returncode == 0 else since
+
+
 def changed_files(ctx: GitContext, since: str | None = None) -> list[str]:
     """Repo-relative paths changed since `since`, or uncommitted if `since` is None.
 
@@ -137,7 +176,8 @@ def changed_files(ctx: GitContext, since: str | None = None) -> list[str]:
     quiet = ["-c", "core.quotePath=false"]
     out: set[str] = set()
     if since:
-        diff = _run(quiet + ["diff", "--name-only", f"{since}..HEAD"], ctx.worktree_root, check=False)
+        floor = _authored_floor(ctx, since)
+        diff = _run(quiet + ["diff", "--name-only", f"{floor}..HEAD"], ctx.worktree_root, check=False)
         out.update(p for p in diff.splitlines() if p)
 
     for args in (["diff", "--name-only", "HEAD"], ["diff", "--name-only", "--cached"]):
