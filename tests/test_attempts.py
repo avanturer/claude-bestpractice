@@ -9,6 +9,16 @@ import unittest
 
 from helpers import BIN, RepoCase
 
+from claude_bestpractice import attempts
+
+
+def _decision(proc) -> str:
+    """The gate's verdict, defaulting to allow — silence is how it permits."""
+    try:
+        return json.loads(proc.stdout)["hookSpecificOutput"].get("permissionDecision", "allow")
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return "allow"
+
 
 class AttemptCase(RepoCase):
     def ctx(self):
@@ -233,3 +243,85 @@ class TestADeadEndAboutRewrittenCodeIsMarked(RepoCase):
         (self.repo / "svc" / "gone.py").unlink()
         self.commit()
         self.assertIn("kept as history", attempts.render_for_board(self.ctx(), []))
+
+
+class TestAnAttemptCanBeRetired(RepoCase):
+    """Issue #92. Every other layer here can be retired — decisions, curated documents,
+    review findings, worktrees. Attempts were the one write-only ledger.
+
+    Both entries in the reporting repository described failures that never happened: they
+    were filed by the scope-drift defect closed in #71, then sat in ALREADY TRIED on every
+    session start, warning about things nobody had failed at.
+    """
+
+    def filed(self) -> str:
+        entry = attempts.record(
+            self.ctx(), "a thing that did not work", "because of a defect since fixed",
+            ["src/app.py"], outcome="failed", branch="main",
+        )
+        self.assertIsNotNone(entry)
+        return entry.id
+
+    def test_it_can_be_dropped_by_id(self):
+        attempt_id = self.filed()
+        self.assertTrue(attempts.load_all(self.ctx()))
+
+        removed = attempts.drop(self.ctx(), attempt_id)
+        self.assertTrue(removed)
+        self.assertEqual([], attempts.load_all(self.ctx()))
+
+    def test_dropping_one_that_is_not_there_says_so(self):
+        self.assertEqual("", attempts.drop(self.ctx(), "9999"))
+
+    def test_dropping_leaves_the_others(self):
+        first = self.filed()
+        attempts.record(
+            self.ctx(), "a different thing", "for a different reason entirely",
+            ["src/other.py"], outcome="failed", branch="main",
+        )
+        attempts.drop(self.ctx(), first)
+        self.assertEqual(1, len(attempts.load_all(self.ctx())))
+
+
+class TestTheLedgerIsCleanableWhereItLives(RepoCase):
+    relax_git_policy = False
+
+    """The files are untracked and live in the main checkout, so the worktree gate refused
+    the deletion and offered a tree that could not hold them — #68's dead end, reached from
+    the untracked side rather than the ignored one."""
+
+    def test_deleting_an_untracked_file_in_the_main_checkout_is_allowed(self):
+        import json as _json
+        import subprocess as _sp
+        import sys as _sys
+
+        from helpers import BIN
+
+        (self.repo / "scratch.md").write_text("untracked, lives only here\n", encoding="utf-8")
+        proc = _sp.run(
+            [_sys.executable, str(BIN / "pre-tool")],
+            input=_json.dumps({
+                "cwd": str(self.repo), "session_id": "s1", "hook_event_name": "PreToolUse",
+                "tool_name": "Bash", "tool_input": {"command": f"rm -f {self.repo / 'scratch.md'}"},
+            }),
+            capture_output=True, text=True, cwd=str(self.repo), timeout=120,
+        )
+        # Silence IS allow for this gate, which is how every other test here reads it.
+        self.assertNotEqual("deny", _decision(proc), proc.stdout[:300])
+
+    def test_a_tracked_file_is_still_refused(self):
+        import json as _json
+        import subprocess as _sp
+        import sys as _sys
+
+        from helpers import BIN
+
+        proc = _sp.run(
+            [_sys.executable, str(BIN / "pre-tool")],
+            input=_json.dumps({
+                "cwd": str(self.repo), "session_id": "s1", "hook_event_name": "PreToolUse",
+                "tool_name": "Bash", "tool_input": {"command": f"rm -f {self.repo / 'README.md'}"},
+            }),
+            capture_output=True, text=True, cwd=str(self.repo), timeout=120,
+        )
+        self.assertEqual("deny", _decision(proc))

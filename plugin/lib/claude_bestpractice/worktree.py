@@ -316,3 +316,48 @@ def provision(ctx: GitContext, task: str = "", session_id: str = "") -> Path | N
 
     record(ctx, slug, absolute, branch, trust(absolute), session_id)
     return target
+
+
+# The founder settings file the permission layer reads. Project settings cannot grant this:
+# `EnterWorktree` is judged by the tool's own `checkPermissions`, and only a rule in user
+# settings resolves ahead of it.
+USER_SETTINGS = ".claude/settings.json"
+ENTER = "EnterWorktree"
+
+
+def entry_permitted(home: Path | None = None) -> bool:
+    """Is `EnterWorktree` already allowed in the founder's own settings?
+
+    Read so the advice can STOP. A line that keeps appearing after it has been acted on is
+    one the founder learns to scroll past, which costs the lines that matter.
+    """
+    import json
+
+    path = (home or Path.home()) / USER_SETTINGS
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    allow = ((raw.get("permissions") or {}).get("allow") or []) if isinstance(raw, dict) else []
+    return any(str(rule).split("(")[0].strip() == ENTER for rule in allow)
+
+
+def permission_advice() -> str:
+    """The one line that removes the prompt, or nothing when it is already gone.
+
+    A `PreToolUse` hook CANNOT close this, which is worth stating because it is the obvious
+    idea and it is wrong: `EnterWorktree.checkPermissions` returns `ask` for any path that
+    is not a Claude-managed worktree, with `decisionReason.type == "safetyCheck"` — and a
+    safety-check ask overrides a hook's allow by design. The plugin approves the call and
+    the founder is asked anyway, one layer below the approval (#91).
+
+    So the plugin says the line instead of pretending to have solved it.
+    """
+    if entry_permitted():
+        return ""
+    return (
+        "\nthe founder is asked to authorise every worktree entry, which this gate then "
+        "requires of every session. One line in ~/.claude/settings.json ends it: add "
+        '"EnterWorktree" (and "ExitWorktree") to permissions.allow. A hook cannot do this — '
+        "the prompt is the tool's own safety check, which overrides any hook approval."
+    )
