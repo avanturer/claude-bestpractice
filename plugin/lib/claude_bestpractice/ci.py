@@ -120,7 +120,14 @@ DETECTED_TIER = """# This project's own suite, detected when the hook was instal
 # in which claude-bp is usually not on PATH. Re-run `claude-bp-ci` if the runner changes.
 _runner={runner}
 if command -v "$_runner" >/dev/null 2>&1; then
-    exec {command}
+    # NOT `exec`. It replaced the shell, which was harmless while passing or failing was
+    # this hook's only job — and silently dropped the second job the moment it had one.
+    # #84 added recording to the two literal tiers of the template and never reached this
+    # one, which is generated here and is the tier that fires for any project with a
+    # detected runner and no `check:` target. That is most of them (#87).
+    {command} || exit $?
+    __RECORD_GREEN__ {quoted} >/dev/null 2>&1 || true
+    exit 0
 fi
 
 echo "claude-bestpractice: $_runner is not on PATH, so this project's suite could not" >&2
@@ -175,9 +182,11 @@ def hook_body(ctx: GitContext | None = None) -> str:
 
     rendered = NO_RUNNER_TIER
     if command:
+        joined = " ".join(quote(part) for part in command)
         rendered = DETECTED_TIER.format(
             runner=quote(command[0]),
-            command=" ".join(quote(part) for part in command),
+            command=joined,
+            quoted=quote(joined),
         )
     body = HOOK_TEMPLATE.replace("__TEST_COMMAND__", rendered)
     body = body.replace("__RECORD_GREEN__", _recorder())
