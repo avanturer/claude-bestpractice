@@ -319,7 +319,20 @@ def install(ctx: GitContext) -> tuple[bool, str]:
     with contextlib.suppress(OSError):
         _declined_path(ctx).unlink(missing_ok=True)
     if installed(ctx):
-        return False, "pre-push hook already installed"
+        # Installed is not current. `ensure()` has upgraded a stale hook since #33; this
+        # path predates it and short-circuited on existence, so the one command whose whole
+        # purpose is "run the checks locally" was the one that declined to update the
+        # checks — and a founder who ran it after an upgrade reasonably believed they now
+        # had the shipped gate. They had whatever their last session start wrote (#85).
+        #
+        # Not routed through `ensure()`, which honours the opt-out: asking for the hook
+        # back is consent, and that is cleared just above.
+        from . import __version__
+
+        before = stamped_version(ctx) or "unknown"
+        if refresh(ctx):
+            return True, f"pre-push hook updated {before} -> {__version__}"
+        return False, f"pre-push hook already current ({__version__})"
 
     displaced = ""
     try:
