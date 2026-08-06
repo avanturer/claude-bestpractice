@@ -1,10 +1,11 @@
-.PHONY: check test doctor lint budget docs knowledge slop ratchet shipped clean help
+.PHONY: check test test-fast doctor lint budget docs knowledge slop ratchet shipped clean help
 
 PY := python3
 
 help:
 	@echo "make check   - everything CI runs: lint, tests, doctor, budget"
-	@echo "make test    - unit and end-to-end tests"
+	@echo "make test    - unit and end-to-end tests, one process (this is the gate)"
+	@echo "make test-fast - the same tests across shards, for the edit loop only"
 	@echo "make doctor  - prove each gate fires by attempting a known-bad action"
 	@echo "make lint    - syntax check and the stdlib-only constraint"
 	@echo "make docs    - the LLM-first documentation gate"
@@ -50,6 +51,12 @@ knowledge:
 
 test:
 	@$(PY) -m unittest discover -s tests -t tests
+
+# For iterating, never for deciding. One process is what lets the suite catch state
+# leaking between tests, and sharding is precisely what hides it — so `check` keeps
+# the serial run and this exists to shorten the loop before you get there.
+test-fast:
+	@$(PY) tools/run_tests.py
 
 doctor:
 	@$(PY) plugin/bin/claude-bp-doctor
