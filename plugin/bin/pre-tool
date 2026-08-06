@@ -121,6 +121,30 @@ def signature(event: hookio.HookEvent) -> str:
     return f"{event.tool_name}:{str(target)[:160]}"
 
 
+def _within_dir(target, root) -> bool:
+    """Is `target` at or under `root`, whether or not either exists yet?"""
+    try:
+        return target.resolve() == root.resolve() or root.resolve() in target.resolve().parents
+    except (OSError, ValueError):
+        return False
+
+
+def _sibling_of_repo(ctx, target) -> bool:
+    """A tree this plugin would provision: `<repo>-<slug>`, alongside the repository.
+
+    The NAME as well as the parent. Matching the parent alone vouched for every unrelated
+    directory that happened to sit next to the checkout, which is exactly the "we know
+    nothing about it, leave it to the founder" case the silence here is for — caught by
+    the test that says so.
+    """
+    try:
+        root = ctx.worktree_root.resolve()
+        resolved = target.resolve()
+    except (OSError, ValueError):
+        return False
+    return resolved.parent == root.parent and resolved.name.startswith(f"{root.name}-")
+
+
 def proposed_content(event: hookio.HookEvent) -> str:
     ti = event.tool_input
     parts = [str(ti.get(k, "")) for k in ("content", "new_string", "new_str", "command")]
@@ -456,9 +480,11 @@ def main() -> None:
             # No number: a PreToolUse hook sees the request, never the response, and the
             # number only exists in the response. The branch identifies the obligation,
             # which is the identity every check here is keyed by anyway.
-            pullrequest.opened(
-                ctx, ctx.branch, gitpolicy.default_branch(ctx) or "main", event.session_id
-            )
+            base = gitpolicy.default_branch(ctx) or "main"
+            # The branch the pull request is opened FROM, which is not the session's own
+            # when the session coordinates from the main checkout (#79).
+            head = pullrequest.head_of(event.tool_name, command, ti, session_cwd) or ctx.branch
+            pullrequest.opened(ctx, head, base, event.session_id)
 
     # Entering a worktree is the move this gate ORDERS. Making the founder authorise it
     # through a permission prompt is the plugin interrupting them with its own
@@ -474,8 +500,14 @@ def main() -> None:
         # true once that function learned to stay silent about trees nobody is standing in
         # (#67) — and the tree it had just handed over is exactly such a tree, so the
         # pre-approval fell through and the founder was asked again.
+        # Including a tree that does not exist YET. Claude Code creates its own worktrees
+        # under `.claude/worktrees`, so requiring the path to be an existing working tree
+        # left the creating call unapproved — and the founder was asked to authorise the
+        # move this gate had just ordered, which is the interruption it exists to remove.
+        made_here = ctx.worktree_root / ".claude" / "worktrees"
         if target is None or gitpolicy.owned_by_session(ctx, target) or \
-                target.resolve() in set(gitpolicy.working_trees(ctx)):
+                target.resolve() in set(gitpolicy.working_trees(ctx)) or \
+                _within_dir(target, made_here) or _sibling_of_repo(ctx, target):
             hookio.allow_tool(
                 "claude-bestpractice: this gate requires a worktree, so entering one needs no "
                 "further permission. Asking the founder to authorise the move it just "

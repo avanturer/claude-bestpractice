@@ -1012,3 +1012,53 @@ class TestAnIgnoredPathHasNowhereElseToGo(PolicyCase):
         decision, reason = self.rm(self.repo / "README.md")
         self.assertEqual("deny", decision, reason)
         self.assertIn("main checkout", reason)
+
+
+class TestTheRuleArrivesBeforeTheRefusal(PolicyCase):
+    """Issue #81. `EnterWorktree` refuses to act on its own judgement — its description
+    says to use it ONLY when instructed by the user or by project instructions, and never
+    when "worktree" is absent from them. The plugin's requirement lived only in the
+    pre-tool refusal, which arrives after a write is blocked and does not persist. So the
+    agent asked the founder, or edited the main checkout and was refused again: forty-two
+    refusals across four transcripts of one day.
+    """
+
+    def board(self) -> str:
+        proc = self.run_hook(
+            "session-start", {"session_id": "s1", "hook_event_name": "SessionStart"},
+        )
+        return json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
+
+    def test_the_main_checkout_is_told_the_rule_at_the_start(self):
+        body = self.board()
+        self.assertIn("EnterWorktree", body, "the tool's own gate needs it named")
+        self.assertIn("do not ask the founder", body)
+
+    def test_a_session_already_in_a_worktree_is_told_nothing(self):
+        """Empty in the steady state, or it is a permanent tax on the context budget."""
+        tree = self.worktree("feat/mine", occupant="")
+        proc = self.run_hook(
+            "session-start", {"session_id": "s1", "hook_event_name": "SessionStart"},
+            cwd=tree,
+        )
+        self.assertNotIn("EnterWorktree", json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"])
+
+    def test_one_session_gets_one_tree_however_the_task_changes(self):
+        """The name is derived from the task statement, and that is re-captured on every
+        substantive message — so each new instruction bought another tree and branch."""
+        from claude_bestpractice import worktree
+
+        ctx = self.ctx()
+        first = worktree.provision(ctx, "fix the importer", "s1")
+        second = worktree.provision(ctx, "now write the release notes instead", "s1")
+        self.assertEqual(first, second)
+
+    def test_two_sessions_still_get_two_trees(self):
+        """Sharing one is the failure the whole rule exists to prevent."""
+        from claude_bestpractice import worktree
+
+        ctx = self.ctx()
+        self.assertNotEqual(
+            worktree.provision(ctx, "same instruction", "s1"),
+            worktree.provision(ctx, "same instruction", "s2"),
+        )

@@ -53,7 +53,32 @@ REDACTED = "[REDACTED]"
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "host.docker.internal", "db", "postgres"}
 
 
+# Words that ARE the placeholder. A comment documenting what an environment variable
+# should contain names the parts rather than supplying them, and the rule fired on the
+# documentation of the correct practice while the line under it read `os.getenv(...)` —
+# the practice the rule exists to encourage (#80). Recognisable by the words alone.
+_PLACEHOLDERS = {
+    "user", "users", "username", "login", "pass", "password", "passwd", "pwd", "secret",
+    "token", "key", "apikey", "api_key", "credential", "credentials", "youruser",
+    "yourpassword", "myuser", "mypassword", "usuario", "senha",
+    # Russian and transliterations, because a comment is written in the language of
+    # whoever wrote it, and this one was.
+    "\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c", "\u043b\u043e\u0433\u0438\u043d", "\u043f\u0430\u0440\u043e\u043b\u044c", "polzovatel", "logini", "parol",
+}
+
+
+def _is_placeholder(word: str) -> bool:
+    return word.strip("<>[]{}()\u00ab\u00bb\"'").lower() in _PLACEHOLDERS
+
+
 def _is_local_default(user: str, secret: str, host: str) -> bool:
+    """A value with nothing to leak: a development default, or a documented shape.
+
+    Both halves were reported as false positives that blocked the merge gate AND blocked
+    the bug report describing them — the only way to file the second one was prose.
+    """
+    if _is_placeholder(user) or _is_placeholder(secret):
+        return True
     return host.lower() in _LOCAL_HOSTS and user == secret
 
 # A secret-shaped NAME assigned a reference rather than a literal is the correct

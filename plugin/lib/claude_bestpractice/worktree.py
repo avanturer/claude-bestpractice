@@ -246,6 +246,30 @@ def _release(ctx: GitContext, tree: tuple, record_path: Path) -> bool:
     return True
 
 
+def mine(ctx: GitContext, session_id: str) -> Path | None:
+    """The tree this plugin already made for this session, if it is still on disk.
+
+    The registry is the record of what was provisioned and for whom, so this asks it
+    rather than re-deriving a name that has since changed.
+    """
+    if not session_id:
+        return None
+    from . import store
+
+    try:
+        records = sorted(store.tier_b(ctx, "worktrees").glob("*.json"))
+    except OSError:
+        return None
+    for path in records:
+        body = store.read_json(path, default={}) or {}
+        if not body.get("provisioned_by_plugin") or body.get("session_id") != session_id:
+            continue
+        candidate = Path(str(body.get("path") or ""))
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
 def provision(ctx: GitContext, task: str = "", session_id: str = "") -> Path | None:
     """Create the worktree this session should be working in, or None if git refused.
 
@@ -256,6 +280,15 @@ def provision(ctx: GitContext, task: str = "", session_id: str = "") -> Path | N
     which is where this started. Better to say something true than to crash a fail-closed
     gate over a convenience.
     """
+    # One tree per SESSION, whatever the task statement says now. The name is derived from
+    # the task, and the task statement is re-captured on every substantive message — so a
+    # session that was refused under one instruction and again under the next got a second
+    # tree with a second branch, named after a slug of whatever the founder had just said.
+    # Forty-two of them across four transcripts of one day, each removed by hand (#81).
+    already = mine(ctx, session_id)
+    if already is not None:
+        return already
+
     slug = session_slug(task, session_id)
     branch = f"{branch_type(task)}/{slug}"
     target = target_for(ctx, slug)

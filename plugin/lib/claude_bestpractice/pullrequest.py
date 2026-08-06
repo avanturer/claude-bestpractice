@@ -168,13 +168,32 @@ def blockers(ctx: GitContext, base: str, head: str = "") -> list[str]:
     request its own reason for not being merged: refused forever, by itself, for existing.
     Unverified finishes are left to `delivery.ready`, which already reads their ledger.
     """
-    from . import board, delivery, drafts, provenance
+    from . import delivery
 
     branch = head or ctx.branch
+    # A record whose head IS its base is misfiled, not strict — the branch can never gain
+    # commits over itself, so the gate would refuse forever (#79). Judging it on the
+    # session's tree is the older, wronger answer; saying nothing is the honest one.
+    if branch == base:
+        return []
     problems = (
         list(delivery.ready(ctx, base)) if branch == ctx.branch
         else _about_the_pull_request(ctx, base, branch)
     )
+    problems.extend(_findings(ctx, base, branch))
+    return problems
+
+
+def _findings(ctx: GitContext, base: str, branch: str) -> list[str]:
+    """Review findings that are still this pull request's problem.
+
+    Three ways one stops being that, each earned: it is about a file the pull request does
+    not touch (#69), the founder has ruled it false (#75), or the rule that raised it no
+    longer fires (#80).
+    """
+    from . import board, drafts, provenance
+
+    out: list[str] = []
     in_diff = _files_against(ctx, base, branch)
     for item in board.open_items(ctx, branch=branch):
         if item.get("provenance") != provenance.FRESH or not str(item.get("id", "")).startswith("review-"):
@@ -196,10 +215,18 @@ def blockers(ctx: GitContext, base: str, head: str = "") -> list[str]:
         # A finding the founder has ruled out is not a blocker. Without this the only ways
         # to clear a false positive were to rewrite correct code or to stop using the gate,
         # and a permanent block over code that is right is how a gate gets switched off.
-        if _all_dismissed(ctx, str(item.get("text", "")), subjects):
+        text = str(item.get("text", ""))
+        if _all_dismissed(ctx, text, subjects):
             continue
-        problems.append(str(item.get("text", ""))[:200])
-    return problems
+        # And one whose RULE no longer fires is not a blocker either. A finding is a claim
+        # about code as it stands, so fixing a detector has to clear what the broken
+        # detector filed — the `sql-interpolation` corrected in #78 was still counted ten
+        # sightings later, over code the current rule reads as clean (#80).
+        if _stale(ctx, text, subjects):
+            board.close_open_item(ctx, str(item.get("id", "")))
+            continue
+        out.append(text[:200])
+    return out
 
 
 def _all_dismissed(ctx: GitContext, text: str, subjects: list[str]) -> bool:
@@ -218,6 +245,30 @@ def _all_dismissed(ctx: GitContext, text: str, subjects: list[str]) -> bool:
     if not detectors:
         return False
     return all(f"{d}:{p}" in ruled_out for d in detectors for p in subjects)
+
+
+def _stale(ctx: GitContext, text: str, subjects: list[str]) -> bool:
+    """Has every rule this finding names stopped firing on every file it names?
+
+    Conservative in the same direction as `_all_dismissed`: a detector this cannot parse,
+    a file it cannot read, or one path where the rule still fires all keep the finding.
+    Retiring on the strength of not knowing is how a real finding disappears.
+    """
+    from . import reviewrules
+
+    detectors = _detectors_in(text)
+    if not detectors or not subjects:
+        return False
+    return not any(
+        reviewrules.still_fires(ctx.worktree_root, detector, path)
+        for detector in detectors for path in subjects
+    )
+
+
+def _detectors_in(text: str) -> set[str]:
+    """The rule names an item's summary lists, out of `<name> in <path>, <name> in <path>`."""
+    named = {part.split(" in ")[0].strip() for part in text.split(":", 1)[-1].split(",")}
+    return {name for name in named if name and " " not in name}
 
 
 def _about_the_pull_request(ctx: GitContext, base: str, head: str) -> list[str]:
@@ -358,6 +409,54 @@ def merge_target(tool_name: str, command: str, tool_input: dict[str, Any]) -> in
     if not found:
         return None
     return _number(found)
+
+
+def head_of(tool_name: str, command: str, tool_input: dict[str, Any], cwd: str = "") -> str:
+    """The branch the pull request is actually opened FROM, or "" when it cannot be told.
+
+    The session's own branch was used before, and for the one session that coordinates —
+    reading pull requests, merging, releasing, from the main checkout the worktree rule
+    leaves it in — that is `main`. Every pull request it opened was filed as being ON the
+    base branch, and "no commits on top of main" is then unsatisfiable rather than strict:
+    a branch cannot gain commits over itself (#79).
+
+    Three sources, in order of authority: the structured tool says `head` outright, `gh`
+    accepts `--head`, and `cd <tree> && gh pr create` means the branch of that tree.
+    """
+    if _OPENS_TOOL.search(tool_name):
+        return str(tool_input.get("head") or "")
+
+    from . import shellcmd
+
+    for argv in shellcmd.runs(command, "gh", "pr", "create"):
+        for index, token in enumerate(argv):
+            if token in ("--head", "-H") and index + 1 < len(argv):
+                return argv[index + 1]
+            if token.startswith("--head="):
+                return token.split("=", 1)[1]
+    return _branch_of(_directory_of(command) or cwd)
+
+
+def _directory_of(command: str) -> str:
+    """The directory a `cd` in this line moves to, if there is one."""
+    from . import shellcmd
+
+    for argv in shellcmd.commands(command):
+        if argv and argv[0] == "cd" and len(argv) > 1:
+            return argv[1]
+    return ""
+
+
+def _branch_of(directory: str) -> str:
+    """The branch checked out in `directory`. Empty when it is not a working tree."""
+    if not directory:
+        return ""
+    from .gitctx import _run
+
+    try:
+        return _run(["rev-parse", "--abbrev-ref", "HEAD"], directory, check=False).strip()
+    except (OSError, ValueError):
+        return ""
 
 
 def about_current_branch(tool_name: str, command: str) -> bool:

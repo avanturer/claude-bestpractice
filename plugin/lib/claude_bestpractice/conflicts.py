@@ -122,6 +122,11 @@ def loose_hooks(ctx: GitContext) -> list[Conflict]:
     return out
 
 
+# Roughly two thousand tokens. Below it a project instruction file is doing its job; above
+# it, it is a standing tax on every turn that nobody is measuring.
+PROJECT_INSTRUCTIONS_MAX_BYTES = 8_000
+
+
 def competing_instructions(ctx: GitContext) -> list[Conflict]:
     """Instruction files that will be concatenated with ours and may contradict them."""
     out: list[Conflict] = []
@@ -131,6 +136,31 @@ def competing_instructions(ctx: GitContext) -> list[Conflict]:
         ctx.worktree_root / ".cursorrules",
         ctx.worktree_root / ".windsurfrules",
     ]
+    # The project's OWN CLAUDE.md was missing from this list, which is the one file here
+    # that is always legitimate and most likely to grow: the plugin watched the global one
+    # and every rival tool's, and not the one sitting next to it. Reported indirectly by
+    # #81, whose workaround was six hand-written lines added to exactly that file.
+    #
+    # A different threshold and a different remedy, because it is not a competitor. Below
+    # this it is doing its job; above it, it is spending the context budget of every turn
+    # in every session, and trimming is the answer rather than excluding.
+    project = ctx.worktree_root / "CLAUDE.md"
+    if project.is_file():
+        try:
+            size = project.stat().st_size
+        except OSError:
+            size = 0
+        if size > PROJECT_INSTRUCTIONS_MAX_BYTES:
+            out.append(
+                Conflict(
+                    "instruction-file",
+                    str(project),
+                    f"{size} bytes loaded into every turn of every session; "
+                    "move what a session can derive into lazily-loaded files",
+                    "trim",
+                )
+            )
+
     for path in candidates:
         if not path.is_file():
             continue
