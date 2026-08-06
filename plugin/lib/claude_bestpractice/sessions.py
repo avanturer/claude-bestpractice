@@ -488,7 +488,29 @@ def _lease_table(box_value: object) -> dict[str, dict]:
     }
 
 
-def _holder_stands(holder: dict, now: float) -> bool:
+def _holder_is_standing(ctx: GitContext, holder: dict) -> bool | None:
+    """Is the session named on this lease still one of the live ones? None if unrecorded.
+
+    `is_live` is the single rule for that question — pid, heartbeat, and a worktree git
+    still knows about — and the lease table was its one reader that never asked. `reap`
+    does ask, and releases the leases of every session that fails it, but reap runs at
+    SessionStart and entering a worktree fires no SessionStart. Identity is (harness id,
+    worktree), so one chat moving to a fresh tree becomes a new session with no lifecycle
+    event in between: nothing reaps the record it left behind, and the leases it took in
+    a tree that `git worktree remove` has since deleted go on standing for the rest of the
+    TTL — against the one chat that provably cannot be editing them, since the tree those
+    files lived in is gone (#100).
+
+    None, not False, when no record exists. A lease with no session behind it is reap's to
+    clear, and reading a missing record as permission would hand the path over during the
+    window where a live session's record has been deleted and not yet re-adopted. The pid
+    and the TTL stay the answer there.
+    """
+    record = get(ctx, str(holder.get("session_id") or ""))
+    return None if record is None else is_live(ctx, record)
+
+
+def _holder_stands(ctx: GitContext, holder: dict, now: float) -> bool:
     """Does another session's claim on this path still hold?
 
     The TTL is the load-bearing half. The pid is only a way to hand a path back early
@@ -497,9 +519,15 @@ def _holder_stands(holder: dict, now: float) -> bool:
     is how the contended-file refusal came to be unfireable between two real chats while
     the doctor check for it passed: the check holds the lease inside one live process,
     where the wrapper happens to still be alive.
+
+    The registry outranks both when it has an answer: it is the same evidence plus the
+    worktree, and a pid says nothing about a session whose tree was removed under it.
     """
     if holder.get("expires_at", 0) <= now:
         return False
+    recorded = _holder_is_standing(ctx, holder)
+    if recorded is not None:
+        return recorded
     if holder.get("pid_trust") != PID_TRUST_OWNER:
         return True
     return pid_alive(int(holder.get("pid", -1)))
@@ -517,7 +545,8 @@ def acquire_lease(ctx: GitContext, session_id: str, relpath: str, ttl: float = 1
     with store.guarded_json(_leases_path(ctx), default={}) as box:
         table = _lease_table(box[0])
         holder = table.get(relpath)
-        if holder and holder.get("session_id") != session_id and _holder_stands(holder, now):
+        if (holder and holder.get("session_id") != session_id
+                and _holder_stands(ctx, holder, now)):
             return str(holder.get("session_id"))
         table[relpath] = {
             "session_id": session_id,

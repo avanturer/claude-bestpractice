@@ -18,19 +18,21 @@ from claude_bestpractice import hookio, plan, sessions, store  # noqa: E402
 from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
 
 
-def _durability_warning(ctx) -> str:
+def _durability_warning(ctx, what: str = "task") -> str:
     """Empty unless the ledger is being written where git cannot see it.
 
     Printed by the commands that write, because that is where the false claim was made:
     `parked 0017 …` followed by `pick it up in another session` is a promise the plugin
-    cannot keep when an ignore rule covers the directory. Issue #66.
+    cannot keep when an ignore rule covers the directory. Issue #66. `--ignore` makes the
+    same promise in the same place — "it will not be raised again" — and needs the same
+    correction when nothing will carry the decision out of this checkout.
     """
     where = store.hidden_from_git(ctx)
     if not where:
         return ""
     return (
         f"\nWARNING: git cannot see {store.TIER_A_DIRNAME}/ — hidden by {where}.\n"
-        "This task exists on disk and nowhere else: no commit will pick it up and\n"
+        f"This {what} exists on disk and nowhere else: no commit will pick it up and\n"
         "`git worktree remove` deletes it. Nothing was lost yet — fix that rule, then\n"
         "commit the ledger. Tell the founder; the plugin will not edit an ignore file\n"
         "it did not write."
@@ -129,9 +131,22 @@ def cmd_adopt(ctx, brief: str, check: str, ignore: str) -> int:
         # Several at once: a repository that has kept its registries by hand has more
         # than one of them, and five invocations to say one thing is a tax on the
         # decision rather than a record of it.
-        for relative in [p.strip() for p in ignore.split(",") if p.strip()]:
+        wanted = [p.strip() for p in ignore.split(",") if p.strip()]
+        # A path that is not there records a decision about nothing and answers with the
+        # same sentence as a real one, so a typo reads as done and the document goes on
+        # being raised every session with no way to tell which of the two happened.
+        missing = [r for r in wanted if not (ctx.worktree_root / r).is_file()]
+        if missing:
+            print(f"no such document: {', '.join(missing)}", file=sys.stderr)
+            print("Nothing was recorded. Paths are relative to the repository root.",
+                  file=sys.stderr)
+            return 1
+        for relative in wanted:
             migrate.ignore(ctx, relative)
             print(f"{relative} left alone; it will not be raised again")
+        warning = _durability_warning(ctx, "decision")
+        if warning:
+            print(warning, file=sys.stderr)
         return 0
 
     if brief or check:
@@ -141,6 +156,15 @@ def cmd_adopt(ctx, brief: str, check: str, ignore: str) -> int:
             return 1
         if brief:
             print(migrate.brief(ctx, target))
+            return 0
+        if migrate.is_ignored(ctx, check):
+            # Said once, and then contradicted by the next command with a non-zero exit a
+            # script could act on. Whichever answer is right, the pair cannot both be.
+            print(f"{check}: curated by hand — left alone, and nothing is counted "
+                  "against it.")
+            where = migrate.ignored_by(ctx, check)
+            print(f"Recorded in {where or store.TIER_A_DIRNAME + '/' + migrate.IGNORED} — "
+                  "delete that entry to have it counted again.")
             return 0
         text = target.read_text(encoding="utf-8", errors="replace")
         total, migrated = migrate.coverage(ctx, target)

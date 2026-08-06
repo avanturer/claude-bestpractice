@@ -303,6 +303,28 @@ def foreign_refusal(target: Path, owner: Path, ctx: GitContext) -> str:
     )
 
 
+def _provisioned_trees(ctx: GitContext, session_id: str) -> list[Path]:
+    """Every working tree this plugin made for THIS session."""
+    if not session_id:
+        return []
+    from . import store
+
+    try:
+        records = sorted(store.tier_b(ctx, "worktrees").glob("*.json"))
+    except OSError:
+        return []
+    out: list[Path] = []
+    for path in records:
+        body = store.read_json(path, default={}) or {}
+        if not body.get("provisioned_by_plugin") or body.get("session_id") != session_id:
+            continue
+        try:
+            out.append(Path(str(body.get("path") or "")).resolve())
+        except OSError:
+            continue
+    return out
+
+
 def provisioned_for(ctx: GitContext, session_id: str, target: Path) -> bool:
     """Did this plugin create `target` for THIS session?
 
@@ -315,24 +337,29 @@ def provisioned_for(ctx: GitContext, session_id: str, target: Path) -> bool:
     Narrow on purpose: a tree this plugin made, for the session asking, and nothing else. A
     sibling session's tree stays refused whoever provisioned it.
     """
-    if not session_id:
-        return False
-    from . import store
-
     try:
-        records = sorted(store.tier_b(ctx, "worktrees").glob("*.json"))
+        resolved = target.resolve()
     except OSError:
         return False
-    for path in records:
-        body = store.read_json(path, default={}) or {}
-        if not body.get("provisioned_by_plugin") or body.get("session_id") != session_id:
-            continue
-        try:
-            if Path(str(body.get("path") or "")).resolve() == target.resolve():
-                return True
-        except OSError:
-            continue
-    return False
+    return resolved in _provisioned_trees(ctx, session_id)
+
+
+def provisioned_tree_of(ctx: GitContext, session_id: str, target: Path) -> Path | None:
+    """The tree this plugin made for this session that `target` lives inside, if any.
+
+    Containment rather than equality, because the question this answers is about a FILE
+    and the record names a directory. Kept beside `provisioned_for` so the two cannot come
+    to disagree about which trees are ours — one reader of that fact was corrected without
+    the other twice now (#89, #100), and this is the third place that asks.
+    """
+    try:
+        resolved = target.resolve()
+    except OSError:
+        return None
+    for tree in _provisioned_trees(ctx, session_id):
+        if resolved == tree or tree in resolved.parents:
+            return tree
+    return None
 
 
 def foreign_git_refusal(owner: Path, ctx: GitContext) -> str:
