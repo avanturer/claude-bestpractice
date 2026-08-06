@@ -247,15 +247,22 @@ def _occupied(ctx: GitContext, tree: Path, session_id: str = "") -> bool:
 def ignored_by_git(tree: Path, target: Path) -> bool:
     """Is `target` a path no other working tree could ever hold?
 
-    IGNORED, not merely untracked. A new file that git would happily track is carryable in
-    the ordinary way — write it in your own tree, commit, merge — and refusing it is the
-    whole point of the guard. A file git is told to ignore is the opposite: it exists in
-    exactly one checkout, no commit will ever carry it, and there is no tree to make the
-    change in. That is the distinction #68 turns on, and getting it wrong in the loose
-    direction would have opened every write into another session's tree.
+    Two shapes, and the line between them is whether a commit could ever carry the change.
 
-    Asked of the OWNING tree, since that is the checkout the file lives in and whose
-    ignore rules decide.
+    IGNORED, wherever it is. Git is told never to track it, so it exists in exactly one
+    checkout and there is no tree to make the change in (#68).
+
+    Or PRESENT AND UNTRACKED. The same dead end arrived at from the other side: the file
+    is here, no commit holds it, so nothing can carry its deletion across. The plugin's own
+    attempt ledger is exactly this — untracked files in the main checkout that an agent
+    could not clean up, offered a worktree that could not hold them (#92).
+
+    A path that does not exist yet is NOT this. Creating a file is carryable in the
+    ordinary way — write it in your own tree, commit, merge — and refusing that is the
+    whole point of the guard. Getting this loose would open every cross-tree write.
+
+    Asked of the OWNING tree, since that is the checkout the file lives in and whose index
+    and ignore rules decide.
     """
     try:
         relative = target.resolve().relative_to(tree)
@@ -263,7 +270,13 @@ def ignored_by_git(tree: Path, target: Path) -> bool:
         return False
     from .gitctx import _run
 
-    return bool(_run(["check-ignore", "--", relative.as_posix()], tree, check=False).strip())
+    if _run(["check-ignore", "--", relative.as_posix()], tree, check=False).strip():
+        return True
+    if not target.exists():
+        return False
+    return not _run(
+        ["ls-files", "--error-unmatch", "--", relative.as_posix()], tree, check=False
+    ).strip()
 
 
 def owned_by_session(ctx: GitContext, target: Path) -> bool:

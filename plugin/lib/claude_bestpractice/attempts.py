@@ -121,6 +121,31 @@ def load_all(ctx: GitContext) -> list[Attempt]:
     return [a for a in out if a]
 
 
+def drop(ctx: GitContext, attempt_id: str) -> str:
+    """Retire one attempt. Returns the filename removed, or "" when there was none.
+
+    Every other layer here can be retired — decisions, curated documents, review findings,
+    worktrees. Attempts were the one write-only ledger, and the two entries in the
+    reporting repository both described failures that never happened: they were filed by
+    the scope-drift defect closed in #71, and then sat in ALREADY TRIED on every session
+    start, warning about things nobody had failed at (#92).
+
+    Done in-process, not through a tool call. The files live in the main checkout, where
+    the worktree gate refuses writes and offers a tree that cannot hold them — so an agent
+    trying to clean up met a remedy that could not be followed. The plugin writing its own
+    state is something it already does on every session start.
+    """
+    for attempt in load_all(ctx):
+        if attempt.id != attempt_id or attempt.path is None:
+            continue
+        try:
+            attempt.path.unlink()
+        except OSError:
+            return ""
+        return attempt.path.name
+    return ""
+
+
 def next_id(ctx: GitContext) -> str:
     highest = 0
     for attempt in load_all(ctx):

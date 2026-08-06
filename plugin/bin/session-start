@@ -281,7 +281,11 @@ def main() -> None:
     body += _swept_line(swept)
     body += _knowledge_line(ctx)
     body += _hidden_line(ctx)
-    body += _worktree_line(ctx, cfg)
+    line = _worktree_line(ctx, cfg)
+    body += line
+    # Only alongside the rule itself. Empty once the founder has added the permission, and
+    # empty for a session already in a worktree, which is not about to be prompted.
+    body += worktree.permission_advice() if line else ""
     # Empty in every repository whose tasks already live in the ledger, which is the
     # steady state — this only speaks while a workaround is still lying around.
     loose = migrate.line(ctx)

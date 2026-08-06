@@ -37,11 +37,21 @@ def main() -> int:
         "--outcome", default=attempts.FAILED, choices=list(attempts.OUTCOMES)
     )
 
+    dropped = sub.add_parser("drop", help="retire an attempt filed in error")
+    dropped.add_argument("id", help="the four-digit id shown by `list`")
     listing = sub.add_parser("list", help="show the ledger")
     listing.add_argument("--paths", nargs="*", default=[], help="only what touched these files")
 
     args = parser.parse_args()
     ctx = resolve_for_cli()
+
+    if args.command == "drop":
+        name = attempts.drop(ctx, args.id)
+        if not name:
+            print(f"no attempt {args.id}", file=sys.stderr)
+            return 1
+        print(f"retired {name}")
+        return 0
 
     if args.command == "add":
         attempt = attempts.record(

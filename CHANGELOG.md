@@ -1,5 +1,56 @@
 # Changelog
 
+## v1.9.0
+
+### The worktree prompt is the tool's own, and a hook cannot close it (#91)
+
+The plugin tells the agent that entering a worktree needs no permission. The agent obeys.
+Claude Code then asks the founder anyway, one layer below the instruction.
+
+The obvious fix does not work, and it is worth recording why rather than shipping it and
+finding out. `EnterWorktree.checkPermissions` returns `allow` for no path and for a
+Claude-managed worktree under `.claude/worktrees/`, and for everything else returns:
+
+```
+{behavior: "ask", decisionReason: {type: "safetyCheck", reason: "permission-root relocation…"}}
+```
+
+A safety-check `ask` **overrides a hook's allow** by design — the hook approves, the
+pipeline runs anyway, the founder is asked. The plugin's worktrees are siblings of the
+repository, so they are never "managed" and always take that branch.
+
+So the plugin says the line that actually ends it, and **stops saying it once it has been
+acted on**: it reads `permissions.allow` in the founder's own settings and goes quiet when
+`EnterWorktree` is there. Advice that keeps appearing after it has been followed is advice
+the founder learns to scroll past.
+
+Not done: moving provisioned worktrees under `.claude/worktrees/` to get the managed
+`allow`. It removes the prompt outright, and it also puts a worktree inside the working
+tree, which this plugin has a test forbidding — `?? .claude/` in every `git status`. That
+is a founder-visible trade, not a bug fix, and it is theirs to make.
+
+### Attempts can be retired (#92)
+
+`claude-bp-attempt drop <id>`. Every other layer here could already be retired — decisions,
+curated documents, review findings, worktrees. Attempts were the one write-only ledger, and
+in the reporting repository both entries described failures that never happened: filed by
+the scope-drift defect closed in #71, then carried into ALREADY TRIED on every session
+start, warning about things nobody had failed at.
+
+Done in-process rather than through a tool call, which sidesteps the second half of the
+report: the files are untracked and live in the main checkout, where the worktree gate
+refused the deletion and offered a tree that could not hold them.
+
+### A file that exists and is untracked has nowhere else to go either
+
+#68 established that a path git IGNORES has no second tree and no merge that could carry a
+change to it. The same dead end is reached from the untracked side: the file is here, no
+commit holds it, so nothing can carry its deletion across.
+
+A path that does not exist yet is still refused, and deliberately — creating a file is
+carryable in the ordinary way, and getting this loose would open every cross-tree write.
+
+
 ## v1.8.3
 
 Issue #89. A session was refused access to its own former worktree — by itself, with the
