@@ -18,6 +18,15 @@ them.
 
 The version is the only thing `claude plugin update` compares. It is the whole contract.
 
+## While working
+
+`make test-fast` runs the same tests across shards — 77s against 173s on four cores. Use it
+to iterate. It is not the gate and cannot be: one process is what lets this suite catch
+state leaking between tests, and sharding is what hides it. `make check` stays serial.
+
+Reach for a single module before either — `python3 -m pytest tests/test_gitpolicy.py` is
+twelve seconds, and most of a fix is answered by one file.
+
 ## Cutting one
 
 1. Bump the version in all six places (`tools/check_shipped.py` names them and refuses a
