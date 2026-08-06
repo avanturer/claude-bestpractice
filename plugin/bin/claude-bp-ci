@@ -26,7 +26,11 @@ from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
 def main() -> int:
     parser = argparse.ArgumentParser(description="Choose where the checks run.")
     parser.add_argument(
-        "command", nargs="?", default="status", choices=["status", "local", "github", "off"]
+        "command", nargs="?", default="status",
+        choices=["status", "local", "github", "off", "record-green"],
+    )
+    parser.add_argument(
+        "ran", nargs="?", default="", help="with `record-green`, the command that passed"
     )
     parser.add_argument("--off", action="store_true", help="with `github`, switch it back off")
     parser.add_argument(
@@ -36,6 +40,16 @@ def main() -> int:
     )
     args = parser.parse_args()
     ctx = resolve_for_cli()
+
+    if args.command == "record-green":
+        # Called by the pre-push hook after the project's own checks passed. The plugin
+        # ran them and saw the exit code, which is the same standard the Stop gate uses —
+        # and until #83 that observation was discarded, so the one session able to merge
+        # was asked for evidence only a session in the branch's own tree could create.
+        from claude_bestpractice import evidence
+
+        evidence.record_green(ctx, args.ran.split() or ["pre-push"])
+        return 0
 
     if args.print_test_command:
         # The hook needs the SAME command the Stop gate resolves, or the two disagree

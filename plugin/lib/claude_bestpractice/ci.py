@@ -76,7 +76,9 @@ if [ -x "$_original" ]; then
 fi
 
 if [ -f Makefile ] && grep -q '^check:' Makefile; then
-    exec make check
+    make check || exit $?
+    __RECORD_GREEN__ 'make check' >/dev/null 2>&1 || true
+    exit 0
 fi
 
 __TEST_COMMAND__
@@ -87,6 +89,7 @@ __TEST_COMMAND__
 _cmd="$(claude-bp-ci --print-test-command 2>/dev/null || true)"
 if [ -n "$_cmd" ]; then
     sh -c "$_cmd" || exit $?
+    __RECORD_GREEN__ "$_cmd" >/dev/null 2>&1 || true
 fi
 
 # There used to be a `claude-bp-doctor` tier here, and it was wrong twice over. Proving
@@ -128,6 +131,29 @@ exit 1"""
 NO_RUNNER_TIER = "# (no test runner was detectable in this project at install time)"
 
 
+def _recorder() -> str:
+    """The command that records a green pre-push run, with absolute paths baked in.
+
+    A green run this plugin executed itself is evidence by the same standard the Stop gate
+    uses (decision 0004) — the plugin ran the project's declared command and saw the exit
+    code. It was being thrown away: `record_green` was reachable only from the Stop gate,
+    which writes for the branch of the tree the SESSION occupies, so a suite run in the
+    branch's own worktree, and the one this very hook runs on every push, counted for
+    nothing. The session that merges stands in the main checkout by this plugin's own
+    design, so the last merge blocker asked it for evidence it could not produce (#83).
+
+    Absolute, because a git hook runs with a stripped environment and cannot rely on
+    `claude-bp-ci` being on PATH — the same reason the test command is baked rather than
+    resolved. Failure is swallowed: recording is bookkeeping, and a push that passed its
+    checks must never be refused because the bookkeeping did not land.
+    """
+    import sys
+    from shlex import quote
+
+    recorder = Path(__file__).resolve().parent.parent.parent / "bin" / "claude-bp-ci"
+    return f"{quote(sys.executable)} {quote(str(recorder))} record-green"
+
+
 def hook_body(ctx: GitContext | None = None) -> str:
     """The hook script, with this project's own test command baked into the middle tier.
 
@@ -154,6 +180,7 @@ def hook_body(ctx: GitContext | None = None) -> str:
             command=" ".join(quote(part) for part in command),
         )
     body = HOOK_TEMPLATE.replace("__TEST_COMMAND__", rendered)
+    body = body.replace("__RECORD_GREEN__", _recorder())
     return body.replace("__VERSION__", __version__)
 
 

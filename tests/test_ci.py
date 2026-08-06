@@ -745,3 +745,48 @@ class TestALanguageIsNotADirectoryName(CICase):
             if line.strip() and not line.lstrip().startswith("#")
         ]
         self.assertNotIn("claude-bp-doctor", "\n".join(runnable))
+
+
+class TestAPrePushRunIsEvidence(RepoCase):
+    """Issue #83. The plugin runs the project's checks on every push, sees the exit code,
+    and threw the observation away — `record_green` was reachable only from the Stop gate,
+    which writes for the branch of the tree the SESSION occupies.
+
+    So the session that merges, which stands in the main checkout by this plugin's own
+    design, was asked for evidence only a session inside the branch's worktree could ever
+    create. Two thousand passing tests, run twice in the right tree and once by this very
+    hook, counted for nothing.
+    """
+
+    def test_the_hook_records_the_run_it_just_watched_pass(self):
+        from claude_bestpractice import ci, evidence
+
+        ctx = self.ctx()
+        self.write("Makefile", "check:\n\t@true\n")
+        self.commit("a project with checks of its own")
+        ci.ensure(ctx)
+        self.assertIsNone(evidence.last_green(ctx), "green before anything ran")
+
+        hook = ci.hook_path(ctx)
+        proc = subprocess.run(
+            [str(hook)], cwd=str(self.repo), capture_output=True, text=True, timeout=180,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        observed = evidence.last_green(ctx)
+        self.assertIsNotNone(observed, "the hook ran the suite and recorded nothing")
+        self.assertEqual(self.ctx().branch, observed.get("branch"))
+
+    def test_a_failing_run_records_nothing(self):
+        """The recorder sits after the exit-code check, not beside it."""
+        from claude_bestpractice import ci, evidence
+
+        ctx = self.ctx()
+        self.write("Makefile", "check:\n\t@exit 1\n")
+        self.commit("a project whose checks fail")
+        ci.ensure(ctx)
+
+        proc = subprocess.run(
+            [str(ci.hook_path(ctx))], cwd=str(self.repo), capture_output=True, text=True, timeout=180,
+        )
+        self.assertNotEqual(0, proc.returncode)
+        self.assertIsNone(evidence.last_green(ctx), "a red run was recorded as green")

@@ -1,5 +1,37 @@
 # Changelog
 
+## v1.8.0
+
+Issue #83, and the sharpest shape yet: **the gate asked for evidence the only session able
+to merge was structurally unable to produce.**
+
+v1.7.0 made the merge gate judge the pull request's head instead of the session's tree, and
+four blockers collapsed to one. That one was `no test run has ever been observed on <head>`
+— and it could not be cleared. `record_green` was reachable only from the Stop gate, which
+writes for the branch of the tree the *session* occupies. The session that merges stands in
+the main checkout, by this plugin's own design, because a merge is not a write to a working
+tree.
+
+So a suite run inside the branch's own worktree counted for nothing. And so did the run
+**this plugin performs itself** on every push: the pre-push hook ran `make test` in that
+worktree, saw it pass, let the push through, and recorded nothing. Two thousand two hundred
+and ninety-nine passing tests, observed twice in the right tree and once by the gate's own
+hook, all discarded.
+
+### What changed
+
+The pre-push hook records the run it just watched pass. That is evidence by the same
+standard the Stop gate uses (decision 0004): the plugin ran the project's declared command
+and saw the exit code. It is not a new mechanism, a new trust assumption, or a new cost —
+the run was already happening on every push, and only the bookkeeping was missing.
+
+The recorder is baked with absolute paths, because a git hook runs with a stripped
+environment and cannot rely on `claude-bp-ci` being on PATH — the same reason the test
+command is baked rather than resolved. Its failure is swallowed: a push whose checks passed
+must never be refused because the bookkeeping did not land. And it sits *after* the exit
+code check, so a red run records nothing, which is the half worth a test of its own.
+
+
 ## v1.7.0
 
 Three reports, and the theme is **a rule that only exists at the moment of refusal**.
