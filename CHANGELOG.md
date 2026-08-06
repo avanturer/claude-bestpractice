@@ -1,5 +1,38 @@
 # Changelog
 
+## v1.9.1
+
+### Progress is not a repeat (#95)
+
+Five sequential edits to five different regions of one module are ordinary work, and they
+shared a signature — so the fifth was refused as "run 4 times in a row with nothing in
+between". The detector wanted to tell a retry from progress and was not drawing that line:
+it keyed on tool and path and left out the ANCHOR, which is the part that says *which
+region* an edit names. A retry repeats its `old_string`; a distinct edit does not.
+
+A Bash command is hashed whole now. Truncating at 160 characters made four heredocs writing
+four different files identical, because the boilerplate that opens a heredoc is — so
+probing for the cause of one block was itself blocked.
+
+The replacement text stays out, deliberately, which is what the truncation was for: a retry
+with a one-character change must not read as progress.
+
+### A refusal that cannot be located has no exit (#95)
+
+A write was refused for "what looks like a credential". The founder deleted the two lines
+they suspected, the write was refused again, and nothing told them what had actually
+matched — so the file could not be written by any route, and the only way out was to stop
+using the gate.
+
+Their diagnosis was wrong, which is the point: `SALT_EXTREME = 15.0` and
+`skip_special_tokens=True` do not fire, and never did. Nothing said so.
+
+The refusal now names the line and a **scrubbed** excerpt. Scrubbed because printing the
+matched value to prove a value was matched would put it in the transcript, which is the
+thing being prevented.
+
+
+
 ## v1.9.0
 
 ### The worktree prompt is the tool's own, and a hook cannot close it (#91)

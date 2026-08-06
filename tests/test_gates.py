@@ -923,3 +923,82 @@ class TestTheCeilingCountsALoopNotAnAfternoon(GateCase):
         payload = {k: v for k, v in self.counter().items() if k != "_last_block_at"}
         sessions.touch(self.ctx(), sid(self.repo, "s1"), tool_signatures=payload)
         self.assertIn(f"[2/{ceiling}]", self.stop().stderr)
+
+
+class TestProgressIsNotARepeat(RepoCase):
+    """Issue #95. Five sequential edits to five different parts of one module are ordinary
+    work, and they shared a signature — so the fifth was refused as "run 4 times in a row
+    with nothing in between".
+
+    The detector wanted to tell a retry from progress and was not drawing that line: it
+    keyed on tool and path, and left out the ANCHOR that says which region an edit names.
+    """
+
+    def edit(self, path: str, old: str, new: str) -> str:
+        proc = self.run_hook(
+            "pre-tool",
+            {"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Edit",
+             "tool_input": {"file_path": str(self.repo / path), "old_string": old,
+                            "new_string": new}},
+        )
+        try:
+            return json.loads(proc.stdout)["hookSpecificOutput"].get("permissionDecision", "allow")
+        except (json.JSONDecodeError, KeyError, TypeError):
+            return "allow"
+
+    def test_five_distinct_edits_to_one_file_are_not_a_loop(self):
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
+        for n in range(6):
+            decision = self.edit("module.py", f"def step_{n}():", f"def step_{n}(arg):")
+            self.assertNotEqual("deny", decision, f"edit {n} of six distinct regions was refused")
+
+    def test_repeating_one_edit_unchanged_is_still_a_loop(self):
+        """The line the detector wanted to draw, still drawn."""
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
+        decisions = [self.edit("module.py", "def same():", f"def same():  # try {n}")
+                     for n in range(6)]
+        self.assertIn("deny", decisions, "an unchanged retry was never caught")
+
+    def test_two_heredocs_writing_different_files_are_not_a_loop(self):
+        """Truncating at 160 characters made them identical, because the boilerplate that
+        opens a heredoc is — so probing for the cause of one block was itself blocked."""
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
+        preamble = "python3 - <<'PY'\nimport sys\n" + ("# padding\n" * 30)
+        for n in range(6):
+            proc = self.run_hook(
+                "pre-tool",
+                {"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+                 "tool_input": {"command": f"{preamble}open('/tmp/probe{n}.py','w')\nPY"}},
+            )
+            try:
+                decision = json.loads(proc.stdout)["hookSpecificOutput"].get("permissionDecision", "allow")
+            except (json.JSONDecodeError, KeyError, TypeError):
+                decision = "allow"
+            self.assertNotEqual("deny", decision, f"probe {n} was refused as a repeat")
+
+
+class TestARefusalSaysWhereToLook(RepoCase):
+    """Issue #95, second half. A write was refused for "what looks like a credential", the
+    founder deleted the lines they suspected, the write was refused again, and nothing told
+    them what had matched. The file could not be written by any route.
+
+    Their diagnosis was wrong — the lines they blamed do not fire — which is the point.
+    """
+
+    def test_the_line_and_a_scrubbed_excerpt_are_named(self):
+        proc = self.run_hook(
+            "pre-tool",
+            {"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Write",
+             "tool_input": {"file_path": str(self.repo / "conf.py"),
+                            "content": 'SALT_EXTREME = 15.0\nAPI_TOKEN = "sk_live_51H8xQ2eZvKYlo2C0"\n'}},
+        )
+        reason = json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertIn("line 2", reason, "the refusal did not say where")
+        self.assertNotIn("51H8xQ2eZvKYlo2C0", reason, "the refusal printed the secret it found")
+
+    def test_ordinary_domain_words_do_not_fire_at_all(self):
+        """`salt` in a nutrition threshold, `token` in a tokenizer kwarg."""
+        from claude_bestpractice import redact
+
+        self.assertEqual([], redact.find("SALT_EXTREME = 15.0"))
+        self.assertEqual([], redact.find("out = tok(t, skip_special_tokens=True)"))

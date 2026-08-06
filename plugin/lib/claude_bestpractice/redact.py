@@ -174,3 +174,23 @@ def strip_control(text: str) -> str:
         for ch in (text or "")
         if ch in "\n\t" or (ch.isprintable() and ch not in "\u200b\u200c\u200d\u2060\ufeff")
     )
+
+
+def locate(text: str) -> list[tuple[str, int, str]]:
+    """(detector, line number, redacted excerpt) for each hit, so it can be FOUND.
+
+    `find` returns names, and a name is not a location. A write was refused for "what looks
+    like a credential", the founder deleted the two lines they suspected, the write was
+    refused again, and there was no way to learn what had actually matched — so the file
+    could not be written at all, by any route, and the only exit was to stop using the
+    gate (#95). Their own diagnosis was wrong, which is the point: nothing told them.
+
+    The excerpt is scrubbed before it is shown. Printing the matched value to prove a
+    credential was matched would put it in the transcript, which is the thing being
+    prevented.
+    """
+    out: list[tuple[str, int, str]] = []
+    for number, line in enumerate((text or "").splitlines(), start=1):
+        for name in find(line):
+            out.append((name, number, scrub(line).strip()[:120]))
+    return out

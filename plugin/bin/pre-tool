@@ -112,13 +112,30 @@ OVERRIDE = "CLAUDE_BESTPRACTICE_I_ACCEPT_DATA_LOSS"
 def signature(event: hookio.HookEvent) -> str:
     """Identify a repeated action without keying on volatile detail.
 
-    Includes the target path so editing two different files is not mistaken for a
-    loop, and excludes free-form content so a retry with a one-character change is not
-    mistaken for progress.
+    Two things are deliberately in and one deliberately out. The target path is in, so
+    editing two different files is never mistaken for a loop. The replacement TEXT is out,
+    so a retry with a one-character change is not mistaken for progress.
+
+    What was wrongly out is the ANCHOR — which region of the file an edit names. Five
+    sequential edits to five different parts of one module are ordinary work, and they
+    shared a signature, so the fifth was refused as "run 4 times in a row with nothing in
+    between" (#95). A retry of a failed edit repeats its `old_string`; a distinct edit does
+    not, which is exactly the line the detector wanted and was not drawing.
+
+    And a Bash command is hashed WHOLE. Truncating at 160 characters made four heredocs
+    writing four different files identical, because the boilerplate that opens them is —
+    so probing for the cause of one block was itself blocked.
     """
+    import hashlib
+
     ti = event.tool_input
     target = ti.get("file_path") or ti.get("path") or ti.get("command") or ""
-    return f"{event.tool_name}:{str(target)[:160]}"
+    anchors = [str(ti.get("old_string") or ti.get("old_str") or "")]
+    edits = ti.get("edits")
+    if isinstance(edits, list):
+        anchors.extend(str(e.get("old_string", "")) for e in edits if isinstance(e, dict))
+    seed = "\u0000".join([str(target), *(a for a in anchors if a)])
+    return f"{event.tool_name}:{hashlib.sha256(seed.encode('utf-8', 'surrogateescape')).hexdigest()[:24]}"
 
 
 def _within_dir(target, root) -> bool:
@@ -684,11 +701,21 @@ def main() -> None:
         content = proposed_content(event)
         hits = redact.find(content)
         if hits:
+            # WHERE, not just what. Naming the detector alone left a founder deleting
+            # lines they suspected, being refused again, and having no way to learn what
+            # had matched — a file that could not be written by any route (#95). The
+            # excerpt is scrubbed first: printing the value to prove a value was found
+            # would put it in the transcript, which is the thing being prevented.
+            where = "\n".join(
+                f"  line {number}: {excerpt}  [{name}]"
+                for name, number, excerpt in redact.locate(content)[:5]
+            )
             hookio.deny_tool(
                 f"claude-bestpractice: refusing this write — it contains what looks like a credential "
-                f"({', '.join(hits)}). Put it in an environment variable and reference it. "
-                "Post-hoc cleanup does not work: the value is already on disk and in the "
-                "transcript, which .gitignore does not cover."
+                f"({', '.join(hits)}).\n{where}\n"
+                "Put it in an environment variable and reference it. Post-hoc cleanup does "
+                "not work: the value is already on disk and in the transcript, which "
+                ".gitignore does not cover."
             )
 
         # Claim the path. Two sessions editing one file is not a merge conflict — it is
