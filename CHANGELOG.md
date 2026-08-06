@@ -1,5 +1,41 @@
 # Changelog
 
+## v1.8.3
+
+Issue #89. A session was refused access to its own former worktree — by itself, with the
+refusal telling it to go ask the owner, who was the reader.
+
+### Why two records exist at all
+
+Session identity is `(harness id, worktree)`, and deliberately so: four concurrent
+`claude -p` children were once found sharing one `CLAUDE_CODE_SESSION_ID` and collapsing
+into a single incoherent record. The tree is part of the identity because it has to be.
+
+The consequence nobody had followed through is that **one chat working in two trees leaves
+two live records**, both naming the same running process. Every rule asking "is somebody
+standing in that tree" then answered yes about the session doing the asking, and occupancy
+could never be released by moving: a session that used a scratch worktree once held it
+against itself for the rest of its life.
+
+### The identity that unites them is the process
+
+Not the id, which is per tree by design, and not anything looser, which would hide the real
+sibling the per-tree identity was introduced to surface. The guard now skips records
+carrying the asking session's own pid, read from its own registry entry rather than
+re-resolved — the two must be the same number, and reading it is what makes the rule
+testable at all.
+
+Only a pid resolved to the CLI itself counts. An unresolved one is some ancestor that real
+siblings genuinely share.
+
+### On the report's own suggestion
+
+It proposed passing `exclude=<session id>`, which is where I started. It does not close
+this: the two records hold *different* ids by construction, so excluding one leaves the
+other. Worth recording because the diagnosis was right and the remedy was one level off —
+the same shape as the cascade the last four releases were.
+
+
 ## v1.8.2
 
 Issue #87. v1.8.0 added green-run recording to **two of the pre-push hook's three tiers**,

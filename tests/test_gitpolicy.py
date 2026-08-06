@@ -1062,3 +1062,59 @@ class TestTheRuleArrivesBeforeTheRefusal(PolicyCase):
             worktree.provision(ctx, "same instruction", "s1"),
             worktree.provision(ctx, "same instruction", "s2"),
         )
+
+
+class TestASessionDoesNotBlockItself(PolicyCase):
+    """Issue #89. Session identity is (harness id, worktree) on purpose — four concurrent
+    `claude -p` children were found sharing one `CLAUDE_CODE_SESSION_ID` and collapsing
+    into a single incoherent record.
+
+    The consequence nobody had followed through: one chat that works in two trees leaves
+    TWO live records, because the tree is part of the identity. Every rule asking "is
+    somebody standing in that tree" then answered yes about the session doing the asking,
+    and the refusal told it to go ask the owner, who was itself.
+
+    So the identity that unites them cannot be the id — it has to be the process.
+    """
+
+    def bash(self, command: str) -> tuple[str, str]:
+        proc = self.run_hook(
+            "pre-tool",
+            {"session_id": "one-chat", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+             "tool_input": {"command": command}, "cwd": str(self.repo)},
+            cwd=self.repo,
+        )
+        return _verdict(proc)
+
+    def standing(self, tree, raw_id: str, pid: int) -> None:
+        """One record, as `session-start` writes it: this harness id, in this tree."""
+        from claude_bestpractice import sessions
+
+        from helpers import session_record_for
+
+        record = session_record_for(self.ctx(tree), sid(tree, raw_id), pid)
+        record.pid_trust = sessions.PID_TRUST_OWNER
+        sessions.register(self.ctx(), record)
+
+    def test_its_own_former_worktree_is_not_another_sessions(self):
+        """One chat, one process, two trees — so two records, both live."""
+        import os
+
+        tree = self.worktree("feat/where-it-was-before", occupant="")
+        self.standing(tree, "one-chat", os.getpid())
+        self.standing(self.repo, "one-chat", os.getpid())
+
+        decision, reason = self.bash(f"git -C {tree} merge origin/main")
+        self.assertEqual("allow", decision, reason)
+
+    def test_a_genuine_sibling_is_still_refused(self):
+        """A real sibling is a different PROCESS, and uniting on anything looser would
+        hide it — which is the failure the per-tree identity was introduced to prevent."""
+        import os
+
+        tree = self.worktree("feat/somebody-else", occupant="")
+        self.standing(tree, "a-different-chat", 1)  # init: alive, and not this process
+        self.standing(self.repo, "one-chat", os.getpid())
+
+        decision, reason = self.bash(f"git -C {tree} merge origin/main")
+        self.assertEqual("deny", decision, reason)
