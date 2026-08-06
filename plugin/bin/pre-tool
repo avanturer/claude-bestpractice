@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
 import re  # noqa: E402
 
-from claude_bestpractice import ci, config, evidence, gitpolicy, hookio, pullrequest, redact, sessions, stage, store  # noqa: E402
+from claude_bestpractice import ci, config, evidence, gitpolicy, hookio, pullrequest, redact, sessions, shellcmd, stage, store  # noqa: E402
 from claude_bestpractice.gitctx import resolve  # noqa: E402
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
@@ -444,7 +444,8 @@ def main() -> None:
             )
             if gated is not None:
                 base = str(gated.get("base") or "") or gitpolicy.default_branch(ctx) or "main"
-                problems = pullrequest.blockers(ctx, base)
+                # The pull request's own head, not the tree this session is standing in.
+                problems = pullrequest.blockers(ctx, base, str(gated.get("branch") or ""))
                 if problems:
                     hookio.deny_tool(pullrequest.merge_refusal(gated, problems))
                 # Recorded on the way through: a PreToolUse hook never sees the result,
@@ -504,7 +505,20 @@ def main() -> None:
     if gates["migration_gate"]:
         if event.tool_name == "Bash":
             command = str(ti.get("command", ""))
-            if PRODUCTION_DEPLOY.search(command) and OVERRIDE not in command:
+            # Per COMMAND, not per line. `--prod` inside `echo "deploy with --prod"` is
+            # text about a deploy, and refusing it is the defect #76 reported one gate
+            # over. An unparseable line falls back to the whole string, so a command
+            # crafted to break the tokeniser does not become one that walks past this.
+            # Two different empties, and folding them together made `echo "--prod"` a
+            # deploy again: `acting` returns nothing both for a line that cannot be parsed
+            # and for a line that only reads. The first must fall back to the whole string,
+            # the second must pass. Caught by the test written for this very fix.
+            parsed = shellcmd.commands(command)
+            deploying = (
+                any(PRODUCTION_DEPLOY.search(" ".join(argv)) for argv in shellcmd.acting(command))
+                if parsed else bool(PRODUCTION_DEPLOY.search(command))
+            )
+            if deploying and OVERRIDE not in command:
                 hookio.deny_tool(
                     "claude-bestpractice: promoting to production is the one action that cannot be undone "
                     "by re-running it. Deploy to a preview environment instead, or ask the human "
@@ -571,7 +585,20 @@ def main() -> None:
     # Outside every working tree of this repository there is no rule to apply: a scratch
     # file in /tmp is not somebody else's work, and refusing it only taught the agent that
     # this gate fires on things that do not matter.
-    ours = [p for p in absolute if gitpolicy.owned_by_session(ctx, p)]
+    # A path git ignores is exempt from the worktree and trunk rules as well, not only
+    # from the cross-tree one. Both rules end in "make the change somewhere else and merge
+    # it", and for a file no commit will ever carry there is nowhere else and no merge —
+    # #68 stayed open because the first fix reached only the cross-tree rule, and the
+    # session standing IN the main checkout met this one instead, with the same dead end.
+    #
+    # It also stops the refusal PROVISIONING a worktree nobody can use: three accumulated
+    # over one task, and the retired production key the session was trying to delete was
+    # still on disk at the end of it.
+    ours = [
+        p for p in absolute
+        if gitpolicy.owned_by_session(ctx, p)
+        and not gitpolicy.ignored_by_git(ctx.worktree_root, p)
+    ]
     if writing and ours and (cfg.require_worktree or cfg.protect_trunk):
         breaches = gitpolicy.violations(ctx, rec.task_statement, rec.session_id)
         if not cfg.require_worktree:

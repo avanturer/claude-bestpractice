@@ -51,7 +51,18 @@ CHECKS: list[tuple[str, re.Pattern[str], str]] = [
      "bare except catches KeyboardInterrupt and SystemExit too"),
     ("shell-injection", re.compile(r"subprocess\.[a-z_]+\([^)]*shell\s*=\s*True"),
      "shell=True with a constructed command"),
-    ("sql-interpolation", re.compile(r"(?i)(?:execute|query)\s*\(\s*[f\"'].*(?:\{|%s|\+)"),
+    # `%s` inside a plain string literal is psycopg's PLACEHOLDER, and the parameters ride
+    # in the next argument — it is the form people are told to use INSTEAD of interpolation,
+    # and the old pattern flagged it (#75). A reviewer that flags the safe form teaches its
+    # reader to ignore it, and the next finding, a real one, is ignored too.
+    #
+    # So interpolation is what it says: an f-string with a placeholder, or a literal handed
+    # to `%` or `+`. A literal followed by a comma is a parameter binding and is left alone.
+    ("sql-interpolation", re.compile(
+        r"(?i)(?:execute|query)\s*\(\s*(?:"
+        r"f[\"'][^\"']*\{"
+        r"|[\"'][^\"']*[\"']\s*(?:%|\+)"
+        r")"),
      "SQL built by string interpolation"),
     ("disabled-verification", re.compile(r"(?i)verify\s*=\s*False|rejectUnauthorized\s*:\s*false"),
      "certificate verification disabled"),

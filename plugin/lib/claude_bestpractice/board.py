@@ -296,3 +296,33 @@ def render(
     if len(body) > room:
         body = body[: max(0, room - 24)] + "\n<elided reason=\"budget\" />"
     return f"{body}\n\n{footer}"
+
+
+DISMISSED = "review-dismissed.json"
+
+
+def dismiss(ctx: GitContext, detector: str, path: str) -> None:
+    """Record that the founder judged this finding false, for good.
+
+    TIER A, so the judgement is committed and travels with the repository. It is about the
+    code, not about one clone, and re-deciding it in every worktree is how a decision
+    becomes noise.
+
+    Keyed on detector and path rather than on the item id. A review writes a new id every
+    run, so closing an item retires it until the next review and no further — which is why
+    two false findings blocked a merge permanently with nothing to fix (#75).
+    """
+    from . import store
+
+    current = store.read_json(store.tier_a(ctx, DISMISSED), default={}) or {}
+    entries = set(current.get("findings") or [])
+    entries.add(f"{detector}:{path}")
+    store.write_json(store.tier_a(ctx, DISMISSED), {"findings": sorted(entries)}, mode=0o644)
+
+
+def dismissed(ctx: GitContext) -> set[str]:
+    """`detector:path` pairs the founder has ruled out."""
+    from . import store
+
+    current = store.read_json(store.tier_a(ctx, DISMISSED), default={}) or {}
+    return {str(entry) for entry in (current.get("findings") or [])}

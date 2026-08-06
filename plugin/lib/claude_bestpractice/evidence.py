@@ -1078,18 +1078,22 @@ def record_green(ctx: GitContext, command: list[str]) -> None:
     )
 
 
-def last_green(ctx: GitContext) -> dict | None:
-    """The observed green run for THIS branch, or None.
+def last_green(ctx: GitContext, branch: str = "") -> dict | None:
+    """The observed green run for a branch, this session's unless one is named.
+
+    Named explicitly when a merge is being judged: the pull request's head is the branch
+    whose suite matters, not whichever branch the session's tree happens to be on (#74).
 
     Reads the pre-1.5 location too, and checks its branch — that record was written per
     worktree with no branch test at all, so trusting it as-is would carry the old bug
     forward for one release rather than ending it.
     """
-    got = store.read_json(_green_path(ctx), default=None)
+    wanted = branch or ctx.branch
+    got = store.read_json(_green_path(ctx, wanted), default=None)
     if isinstance(got, dict) and got.get("command"):
         return got
     legacy = store.read_json(store.tier_a(ctx, GREEN_FILE), default=None)
-    if isinstance(legacy, dict) and legacy.get("command") and legacy.get("branch") == ctx.branch:
+    if isinstance(legacy, dict) and legacy.get("command") and legacy.get("branch") == wanted:
         return legacy
     return None
 
