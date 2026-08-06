@@ -758,6 +758,47 @@ class TestAPrePushRunIsEvidence(RepoCase):
     hook, counted for nothing.
     """
 
+    def fires(self, makefile: str) -> tuple:
+        """Install the hook against a given Makefile and run it as git would."""
+        from claude_bestpractice import ci, evidence
+
+        ctx = self.ctx()
+        self.write("Makefile", makefile)
+        self.commit("a project with checks of its own")
+        ci.ensure(ctx)
+        self.assertIsNone(evidence.last_green(ctx), "green before anything ran")
+        proc = subprocess.run(
+            [str(ci.hook_path(ctx))], cwd=str(self.repo),
+            capture_output=True, text=True, timeout=180,
+        )
+        return proc, evidence.last_green(self.ctx())
+
+    def test_every_tier_that_can_run_a_suite_records_it(self):
+        """One test per TIER, not per fix.
+
+        #84 added recording to the two literal tiers of the template and missed the one
+        generated at install time — which is the tier that fires for a project with a
+        detected runner and no `check:` target, i.e. most of them. It still ended in
+        `exec`, so the shell was replaced and the recording line could not exist. The
+        coverage written for #84 exercised the `make check` tier, which already worked
+        (#87). Enumerated here so a new tier cannot be added without one.
+        """
+        for makefile, tier in (
+            ("check:\n\t@true\n", "check target"),
+            ("test:\n\t@true\n", "detected runner, no check target"),
+        ):
+            with self.subTest(tier=tier):
+                proc, observed = self.fires(makefile)
+                self.assertEqual(0, proc.returncode, proc.stderr)
+                self.assertIsNotNone(observed, f"{tier}: the suite ran and nothing was recorded")
+                self.assertEqual(self.ctx().branch, observed.get("branch"))
+                (self.repo / "Makefile").unlink()
+                from claude_bestpractice import ci, store
+
+                store.tier_b(self.ctx(), "green").exists() and __import__("shutil").rmtree(
+                    store.tier_b(self.ctx(), "green"))
+                ci.hook_path(self.ctx()).unlink(missing_ok=True)
+
     def test_the_hook_records_the_run_it_just_watched_pass(self):
         from claude_bestpractice import ci, evidence
 

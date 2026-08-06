@@ -1,5 +1,29 @@
 # Changelog
 
+## v1.8.2
+
+Issue #87. v1.8.0 added green-run recording to **two of the pre-push hook's three tiers**,
+and missed the one that actually fires for most projects.
+
+The template has two literal tiers; the middle one is generated at install time, and that
+is the tier a project reaches when it has a detected runner and no `check:` target. It
+still ended in `exec`, which replaces the shell — harmless while passing or failing was the
+hook's only job, and silently fatal the moment it had a second one. A push ran 2299 tests
+and the merge gate still said no run had been observed.
+
+The tier runs its command and records, like the other two.
+
+### The coverage was the real defect
+
+The test written for v1.8.0 exercised the `check:` tier — the one that already worked. It
+was green and it proved nothing about the path the reporter was on, which their own issue
+had described exactly.
+
+There is now **one test per tier** rather than one per fix, enumerated so a tier cannot be
+added without one, and it was verified by reverting the fix and watching it fail. A test
+that has not been seen to fail is a test that has not been seen.
+
+
 ## v1.8.1
 
 Issue #85, reported against v1.8.0 within the hour and correct: **the fix that just
