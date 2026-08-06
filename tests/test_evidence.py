@@ -6,9 +6,10 @@ import os
 import time
 import unittest
 
-from helpers import RepoCase
+from helpers import RepoCase, git
 
 from claude_bestpractice import evidence
+from claude_bestpractice.gitctx import changed_files
 
 JUNIT_PASS = '<?xml version="1.0"?><testsuite name="s" tests="4" failures="0" errors="0"></testsuite>'
 JUNIT_FAIL = '<?xml version="1.0"?><testsuite name="s" tests="4" failures="1" errors="0"></testsuite>'
@@ -218,3 +219,58 @@ class TestScopeDrift(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAFastForwardIsNotAnEdit(RepoCase):
+    """Issue #71. `git pull --ff-only` moved the local trunk past eighteen commits other
+    sessions had merged, and all 41 of their files were reported as this session's scope
+    drift — with "revert what is out of scope" as the advice, which followed literally
+    means rewinding other people's merged work.
+    """
+
+    def upstream(self):
+        """A real remote, because the fix turns on what came from one."""
+        origin = self.tmp / "origin"
+        git(["clone", "-q", "--bare", str(self.repo), str(origin)], self.tmp)
+        git(["remote", "add", "origin", str(origin)], self.repo)
+        git(["fetch", "-q", "origin"], self.repo)
+        return origin
+
+    def test_commits_pulled_from_upstream_are_not_this_sessions_changes(self):
+        baseline = git(["rev-parse", "HEAD"], self.repo)
+        origin = self.upstream()
+
+        # Another session's work, landing on the trunk and pulled in.
+        other = self.tmp / "other"
+        git(["clone", "-q", str(origin), str(other)], self.tmp)
+        (other / "somebody-elses.py").write_text("x = 1\n", encoding="utf-8")
+        git(["add", "-A"], other)
+        git(["-c", "user.email=o@t", "-c", "user.name=o", "commit", "-qm", "their work"], other)
+        git(["push", "-q", "origin", "HEAD:main"], other)
+
+        git(["pull", "-q", "--ff-only", "origin", "main"], self.repo)
+        git(["fetch", "-q", "origin"], self.repo)
+
+        self.assertNotIn(
+            "somebody-elses.py", changed_files(self.ctx(), baseline),
+            "a fast-forward was counted as this session's edit",
+        )
+
+    def test_this_sessions_own_work_is_still_measured(self):
+        """The floor rises past upstream, not past the session."""
+        baseline = git(["rev-parse", "HEAD"], self.repo)
+        self.upstream()
+        (self.repo / "mine.py").write_text("y = 2\n", encoding="utf-8")
+        git(["add", "-A"], self.repo)
+        git(["commit", "-qm", "my work"], self.repo)
+
+        self.assertIn("mine.py", changed_files(self.ctx(), baseline))
+
+    def test_without_a_remote_nothing_arrives_from_anywhere(self):
+        """No upstream means no other session, so the baseline stands unchanged."""
+        baseline = git(["rev-parse", "HEAD"], self.repo)
+        (self.repo / "mine.py").write_text("y = 2\n", encoding="utf-8")
+        git(["add", "-A"], self.repo)
+        git(["commit", "-qm", "my work"], self.repo)
+
+        self.assertIn("mine.py", changed_files(self.ctx(), baseline))

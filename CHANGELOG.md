@@ -1,5 +1,28 @@
 # Changelog
 
+## v1.5.1
+
+Issue #71, and the same root as the two before it: **measured from the wrong point.**
+
+`git pull --ff-only` moved a local trunk past eighteen commits other sessions had already
+merged, and the stop gate reported all 41 of their files as this session's scope drift.
+The session had touched eight files, none of them on the list.
+
+The advice is what makes it serious. "Revert what is out of scope", followed literally
+here, means rewinding other people's merged work — a gate whose remedy is destructive on
+its own false positive is worse than no gate. And any session that syncs with main before
+finishing trips it, which this project's own workflow requires.
+
+Scope is now measured from the merge base with the **remote** trunk when upstream has
+moved past the session's baseline. Work arrives from other sessions by being pushed and
+pulled, so `origin/<trunk>` is what "somebody else's, already merged" means.
+
+The remote half is load-bearing and was found by the suite, not by reading. Measuring
+against the LOCAL trunk erases the session's own work — `merge-base(main, HEAD)` is HEAD
+for a session working on main, so the diff came back empty and every gate reading it
+stopped firing. The escalation-ceiling tests went from 2 blocks to 0 and said so.
+
+
 ## v1.5.0
 
 Three reports, one shape: **a gate refusing on a question next to the one worth asking.**
