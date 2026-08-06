@@ -207,12 +207,21 @@ class TestCli(PlanCase):
         self.assertEqual(self.run_cli("done", "0001").returncode, 0)
         self.assertIn("DONE", self.run_cli("list").stdout)
 
-    def test_dead_owner_is_flagged_in_the_listing(self):
+    def test_a_live_holder_and_a_dead_one_do_not_look_alike(self):
+        """The board printed the owner's id and nothing about it, so a task a chat is
+        editing this minute and one abandoned three days ago read identically."""
         ctx = self.ctx()
         self.session("ghost", pid=999_999_999)
-        task = plan.add(ctx, "orphaned")
-        plan.claim(ctx, task.id, "ghost", "main")
-        self.assertIn("DEAD, reclaimable", self.run_cli("list").stdout)
+        dead = plan.add(ctx, "orphaned")
+        plan.claim(ctx, dead.id, "ghost", "main")
+
+        self.session("alive")
+        held = plan.add(ctx, "in hand")
+        plan.claim(ctx, held.id, "alive", "main")
+
+        out = self.run_cli("list").stdout
+        self.assertIn("reclaimable", out, "a dead holder was not flagged")
+        self.assertIn("active in", out, "a live holder was not distinguished")
 
     def test_empty_plan_says_so(self):
         self.assertIn("plan is empty", self.run_cli("list").stdout)
@@ -286,3 +295,103 @@ class TestTheLedgerIsVisibleToGit(PlanCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("pick it up in another session", proc.stdout)
         self.assertEqual(proc.stderr, "")
+
+
+class TestWhetherAChatIsOnIt(PlanCase):
+    """Activity is DERIVED, never stored.
+
+    A stored "in progress" flag is written by a session that then crashes, and stays true
+    forever — which is exactly the case the reader needs it for. The registry already knows
+    who is alive, so the ledger asks it rather than keeping a second copy that can disagree.
+    """
+
+    def test_a_live_holder_reads_as_active(self):
+        ctx = self.ctx()
+        self.session("alpha")
+        task = plan.add(ctx, "current work")
+        plan.claim(ctx, task.id, "alpha", "main")
+        self.assertIn("active in", plan.activity(ctx, plan.find(ctx, task.id)))
+
+    def test_a_dead_holder_reads_as_reclaimable(self):
+        ctx = self.ctx()
+        self.session("ghost", pid=999_999_999)
+        task = plan.add(ctx, "abandoned")
+        plan.claim(ctx, task.id, "ghost", "main")
+        self.assertIn("reclaimable", plan.activity(ctx, plan.find(ctx, task.id)))
+
+    def test_an_unclaimed_task_claims_nothing(self):
+        ctx = self.ctx()
+        task = plan.add(ctx, "nobody's")
+        self.assertEqual("", plan.activity(ctx, task))
+
+    def test_nothing_about_activity_is_written_to_the_file(self):
+        """The whole point. A file that carries it can carry it wrongly."""
+        ctx = self.ctx()
+        self.session("alpha")
+        task = plan.add(ctx, "current work")
+        plan.claim(ctx, task.id, "alpha", "main")
+        text = plan.find(ctx, task.id).path.read_text(encoding="utf-8")
+        self.assertNotIn("active", text)
+
+
+class TestPausingSaysWhatWouldLiftIt(PlanCase):
+    def test_a_pause_without_a_blocker_is_refused(self):
+        ctx = self.ctx()
+        task = plan.add(ctx, "blocked work")
+        paused, problem = plan.pause(ctx, task.id, "later")
+        self.assertIsNone(paused)
+        self.assertIn("what would lift it", problem)
+
+    def test_a_paused_task_leaves_the_queue_and_says_why(self):
+        """`next` means pick me up. A task waiting on somebody else's merge says the
+        opposite, and conflating them sends session after session at work that cannot
+        move."""
+        ctx = self.ctx()
+        task = plan.add(ctx, "blocked work")
+        paused, problem = plan.pause(ctx, task.id, "waiting on the schema decision in #41")
+        self.assertEqual("", problem)
+        self.assertEqual(plan.PAUSED, paused.state)
+
+        board = plan.render_for_board(ctx)
+        self.assertIn("PAUSED:", board)
+        self.assertIn("schema decision", board)
+        self.assertNotIn("NEXT:", board, "a paused task was still offered as work to take")
+
+    def test_resuming_clears_the_blocker(self):
+        ctx = self.ctx()
+        task = plan.add(ctx, "blocked work")
+        plan.pause(ctx, task.id, "waiting on the schema decision in #41")
+        resumed, problem = plan.resume(ctx, task.id)
+        self.assertEqual("", problem)
+        self.assertEqual(plan.NEXT, resumed.state)
+        self.assertEqual("", resumed.blocker)
+
+
+class TestATaskCanLearnThingsWhileItWaits(PlanCase):
+    def test_updating_keeps_the_identity(self):
+        ctx = self.ctx()
+        task = plan.park(ctx, "the importer", body="x" * 90, paths=["a.py"])
+        amended, problem = plan.amend(
+            ctx, task.id, note="y" * 90, paths=["b.py"], done_when="the CSV round-trips",
+        )
+        self.assertEqual("", problem)
+        self.assertEqual(task.id, amended.id)
+        self.assertEqual(["b.py"], amended.paths)
+        self.assertEqual("the CSV round-trips", amended.done_when)
+
+    def test_the_finish_condition_survives_a_transition(self):
+        """A move that forgets it hands the next session the thin task the ledger exists
+        to prevent."""
+        ctx = self.ctx()
+        task = plan.park(ctx, "the importer", body="x" * 90, paths=["a.py"])
+        plan.amend(ctx, task.id, done_when="the CSV round-trips")
+        plan.claim(ctx, task.id, "s1", "main")
+        self.assertEqual("the CSV round-trips", plan.find(ctx, task.id).done_when)
+
+    def test_the_handoff_view_leads_with_the_finish_condition(self):
+        ctx = self.ctx()
+        task = plan.park(ctx, "the importer", body="x" * 90, paths=["a.py"])
+        plan.amend(ctx, task.id, done_when="the CSV round-trips")
+        shown = plan.show(plan.find(ctx, task.id))
+        self.assertIn("DONE WHEN:", shown)
+        self.assertLess(shown.index("DONE WHEN:"), shown.index("HANDOFF:"))

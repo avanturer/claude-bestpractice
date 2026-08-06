@@ -34,7 +34,13 @@ from .gitctx import GitContext
 
 PLAN_DIR = "plan"
 NEXT, DOING, DONE = "next", "doing", "done"
-STATES = (NEXT, DOING, DONE)
+# A fourth state, because "stopped and waiting on something" is not "queued". A task in
+# `next` says pick me up; the same task blocked on a decision, an API key or somebody
+# else's merge says the opposite, and conflating them sends session after session at work
+# that cannot move. The blocker is mandatory for the same reason a handoff is: a pause
+# nobody can lift is a task that has quietly left the ledger.
+PAUSED = "paused"
+STATES = (NEXT, DOING, PAUSED, DONE)
 
 MAX_TITLE_CHARS = 120
 MAX_BODY_CHARS = 2_000
@@ -48,6 +54,12 @@ class Task:
     path: Path
     owner: str = ""
     branch: str = ""
+    # What has to become true for this to be finishable, and what is stopping it now.
+    # Neither is decoration: a task with no `done_when` is closed on the model's own
+    # judgement, which is the assertion decision 0002 refuses everywhere else; a pause
+    # with no `blocker` cannot be resumed by anyone who was not in the room.
+    done_when: str = ""
+    blocker: str = ""
     created_at: str = ""
     updated_at: str = ""
     body: str = ""
@@ -106,6 +118,8 @@ def _load(path: Path, state: str) -> Task | None:
         # backfills. Missing must read as "none named", never as a load failure.
         paths=[p.strip() for p in meta.get("paths", "").split(",") if p.strip()],
         source=meta.get("source", ""),
+        done_when=meta.get("done_when", ""),
+        blocker=meta.get("blocker", ""),
     )
 
 
@@ -208,7 +222,8 @@ def slug(text: str) -> str:
 
 
 def _render(task_id: str, title: str, state: str, owner: str, branch: str, body: str,
-            paths: list[str] | None = None, source: str = "") -> str:
+            paths: list[str] | None = None, source: str = "",
+            done_when: str = "", blocker: str = "", created_at: str = "") -> str:
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     lines = [
         "---",
@@ -219,7 +234,12 @@ def _render(task_id: str, title: str, state: str, owner: str, branch: str, body:
         f"branch: {branch}",
         f"paths: {', '.join(paths or [])}",
         f"source: {source}",
-        f"created_at: {now}",
+        f"done_when: {done_when[:MAX_TITLE_CHARS]}",
+        f"blocker: {blocker[:MAX_TITLE_CHARS]}",
+        # Preserved across a move. Rewriting it on every transition made every task look
+        # created at the moment it was last touched, which is the one thing `created_at`
+        # is for.
+        f"created_at: {created_at or now}",
         f"updated_at: {now}",
         "---",
         "",
@@ -230,6 +250,9 @@ def _render(task_id: str, title: str, state: str, owner: str, branch: str, body:
 
 
 MIN_HANDOFF_CHARS = 80
+
+# Shorter than a handoff on purpose: a blocker is one fact, not a briefing.
+MIN_BLOCKER_CHARS = 12
 
 
 def handoff_problems(paths: list[str], note: str) -> list[str]:
@@ -298,6 +321,10 @@ def show(task: Task) -> str:
         lines.append("FILES:")
         lines += [f"  - {p}" for p in task.paths]
         lines.append("")
+    if task.done_when:
+        lines += ["DONE WHEN:", f"  {task.done_when}", ""]
+    if task.blocker:
+        lines += ["WAITING ON:", f"  {task.blocker}", ""]
     lines.append("HANDOFF:")
     lines += [f"  {line}" for line in (task.body or "(no detail)").splitlines()]
     if task.branch:
@@ -312,7 +339,8 @@ def find(ctx: GitContext, task_id: str) -> Task | None:
     return None
 
 
-def _move(task: Task, state: str, owner: str = "", branch: str = "") -> Task:
+def _move(task: Task, state: str, owner: str = "", branch: str = "",
+          blocker: str | None = None) -> Task:
     """A state transition is a rename. Git records it as a rename, which merges cleanly.
 
     The rename happens where the FILE is, not where the caller is. Now that the ledger
@@ -333,6 +361,13 @@ def _move(task: Task, state: str, owner: str = "", branch: str = "") -> Task:
         owner if owner or state == DOING else "",
         branch or meta.get("branch", ""),
         body,
+        # Carried, not dropped. A transition that forgets the files and the finish
+        # condition hands the next session the thin task the ledger exists to prevent.
+        [p.strip() for p in meta.get("paths", "").split(",") if p.strip()],
+        meta.get("source", ""),
+        meta.get("done_when", ""),
+        meta.get("blocker", "") if blocker is None else blocker,
+        meta.get("created_at", ""),
     )
     store.atomic_write(target, updated, mode=0o644)
     if target != task.path:
@@ -341,6 +376,95 @@ def _move(task: Task, state: str, owner: str = "", branch: str = "") -> Task:
     if moved:
         moved.worktree = task.worktree
     return moved
+
+
+def activity(ctx: GitContext, task: Task) -> str:
+    """Whether a chat is working on this RIGHT NOW, derived rather than stored.
+
+    Stored activity is the crutch: a flag saying "in progress" is written by a session that
+    then crashes, and it stays true forever — which is precisely the case the reader needs
+    it for. The session registry already knows who is alive and when they were last seen,
+    so the ledger asks it instead of keeping a second copy that can disagree.
+
+    Three answers, and the third is the one that was missing entirely. The board printed
+    the owner's id and nothing about it, so a task a live chat is editing this minute and
+    one abandoned by a crashed session three days ago looked identical.
+    """
+    if task.state != DOING or not task.owner:
+        return ""
+    from . import sessions
+
+    holder = sessions.get(ctx, task.owner)
+    if holder is None:
+        return f"claimed by {task.owner[:8]}, which has no record — reclaimable"
+    if not sessions.is_live(ctx, holder):
+        return f"held by {task.owner[:8]}, which is gone — reclaimable"
+    idle = max(time.time() - float(holder.heartbeat_at or 0), 0)
+    return f"active in {task.owner[:8]}, seen {_ago(idle)} ago"
+
+
+def _ago(seconds: float) -> str:
+    if seconds < 90:
+        return f"{int(seconds)}s"
+    if seconds < 5400:
+        return f"{int(seconds // 60)}m"
+    return f"{int(seconds // 3600)}h"
+
+
+def pause(ctx: GitContext, task_id: str, blocker: str) -> tuple[Task | None, str]:
+    """Stop work and say what would restart it.
+
+    The blocker is required. "Paused" without one is indistinguishable from abandoned, and
+    the next session has no way to tell whether it is waiting on a decision, a credential,
+    somebody else's merge, or nothing at all.
+    """
+    if len(blocker.strip()) < MIN_BLOCKER_CHARS:
+        return None, (
+            "a pause needs to say what would lift it — name the decision, the credential, "
+            "the merge or the answer this is waiting on"
+        )
+    task = find(ctx, task_id)
+    if task is None:
+        return None, f"no task {task_id}"
+    if task.state == DONE:
+        return None, f"task {task.id} is already done"
+    return _move(task, PAUSED, blocker=blocker.strip()), ""
+
+
+def resume(ctx: GitContext, task_id: str) -> tuple[Task | None, str]:
+    """Return a paused task to the queue, clearing the blocker that held it."""
+    task = find(ctx, task_id)
+    if task is None:
+        return None, f"no task {task_id}"
+    if task.state != PAUSED:
+        return None, f"task {task.id} is not paused"
+    return _move(task, NEXT, blocker=""), ""
+
+
+def amend(ctx: GitContext, task_id: str, note: str = "", paths: list[str] | None = None,
+          done_when: str = "") -> tuple[Task | None, str]:
+    """Update what a task knows without changing which task it is.
+
+    A task learns things while it waits — a file turns out to be the wrong one, a
+    condition gets sharper. Without this the only ways to record that were to park a
+    second task, which splits the identity, or to rewrite the file by hand, which the
+    worktree gate refuses from the main checkout.
+    """
+    task = find(ctx, task_id)
+    if task is None:
+        return None, f"no task {task_id}"
+    meta, body = _frontmatter(task.path.read_text(encoding="utf-8"))
+    updated = _render(
+        task.id, meta.get("title", task.title), task.state, task.owner, task.branch,
+        note.strip() or body,
+        paths if paths is not None else task.paths,
+        meta.get("source", ""),
+        done_when.strip() or task.done_when,
+        task.blocker,
+        meta.get("created_at", ""),
+    )
+    store.atomic_write(task.path, updated, mode=0o644)
+    return _load(task.path, task.state), ""
 
 
 def claim(ctx: GitContext, task_id: str, session_id: str, branch: str) -> tuple[Task | None, str]:
@@ -411,6 +535,13 @@ def summary(ctx: GitContext) -> dict[str, int]:
     return counts
 
 
+def _section(heading: str, tasks: list[Task], note) -> list[str]:
+    """One block of the board, or nothing when its state is empty."""
+    if not tasks:
+        return []
+    return [heading] + [f"  - {t.id} {t.title[:80]}{note(t)}" for t in tasks]
+
+
 def render_for_board(ctx: GitContext, limit: int = 4) -> str:
     """The plan, compressed for injection.
 
@@ -419,20 +550,22 @@ def render_for_board(ctx: GitContext, limit: int = 4) -> str:
     """
     doing = load_all(ctx, DOING)
     upcoming = load_all(ctx, NEXT)[:limit]
+    paused = load_all(ctx, PAUSED)
     done = summary(ctx)[DONE]
-    if not doing and not upcoming and not done:
+    # `paused` belongs in this test. Without it a repository whose only work is blocked
+    # rendered an empty board — the one state where the reader most needs to be told
+    # something, reported as nothing at all.
+    if not doing and not upcoming and not paused and not done:
         return ""
 
     lines: list[str] = []
-    if doing:
-        lines.append("IN FLIGHT:")
-        for task in doing:
-            who = f" [{task.owner[:8]}]" if task.owner else " [unclaimed]"
-            lines.append(f"  - {task.id} {task.title[:80]}{who}")
-    if upcoming:
-        lines.append("NEXT:")
-        for task in upcoming:
-            lines.append(f"  - {task.id} {task.title[:80]}")
+    lines += _section(
+        "IN FLIGHT:", doing, lambda task: f" [{activity(ctx, task) or 'unclaimed'}]")
+    # Separated from NEXT deliberately: these are not work to pick up, they are work
+    # waiting on something, and mixing them sends sessions at tasks that cannot move.
+    lines += _section(
+        "PAUSED:", paused, lambda task: f" [waiting: {task.blocker[:60]}]")
+    lines += _section("NEXT:", upcoming, lambda task: "")
     if done:
         # Shown even when nothing is in flight. A board that goes blank the moment work
         # finishes throws away the answer to "what has already been done here".
