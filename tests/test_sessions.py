@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 import unittest
 
-from helpers import LIB, RepoCase, session_record_for, sid
+from helpers import LIB, RepoCase, git, session_record_for, sid
 
 from claude_bestpractice import sessions, store
 
@@ -198,6 +198,37 @@ class TestLeases(RepoCase):
                 }
             }
         self.assertIsNone(sessions.acquire_lease(ctx, "b", "src/x.py"))
+
+    def test_a_lease_from_a_removed_worktree_does_not_stand(self):
+        """Merge the branch, remove the tree, carry on — and be locked out by yourself.
+
+        Entering a worktree fires no SessionStart, so `reap` — which does release the
+        leases of a session whose tree git no longer lists — never runs between the two
+        trees. The record survives with a live pid (it is the same CLI process), and the
+        paths stay refused for the rest of the TTL by a message saying another session is
+        editing files that no longer exist anywhere on disk (#100).
+        """
+        from claude_bestpractice.gitctx import resolve
+
+        tree = self.add_worktree("topic")
+        gone_ctx = resolve(tree)
+        sessions.register(gone_ctx, record(gone_ctx, "old"))
+        self.assertIsNone(sessions.acquire_lease(gone_ctx, "old", "src/shared.py"))
+
+        git(["worktree", "remove", "--force", str(tree)], self.repo)
+
+        ctx = self.ctx()
+        self.assertIsNone(sessions.acquire_lease(ctx, "new", "src/shared.py"))
+        self.assertEqual(sessions.leases_held_by(ctx, "new"), ["src/shared.py"])
+
+    def test_a_lease_from_a_live_worktree_still_stands(self):
+        """The other half of the same rule, so the fix cannot be "leases never refuse"."""
+        from claude_bestpractice.gitctx import resolve
+
+        wt_ctx = resolve(self.add_worktree("busy"))
+        sessions.register(wt_ctx, record(wt_ctx, "sibling"))
+        self.assertIsNone(sessions.acquire_lease(wt_ctx, "sibling", "src/shared.py"))
+        self.assertEqual(sessions.acquire_lease(self.ctx(), "me", "src/shared.py"), "sibling")
 
     def test_release_all_clears_only_that_session(self):
         ctx = self.ctx()

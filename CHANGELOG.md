@@ -1,5 +1,57 @@
 # Changelog
 
+## v1.11.0
+
+Three refusals that were the plugin arguing with itself, and one prompt it caused.
+
+### A lease survived the worktree it was taken in (#100)
+
+A branch merged, its worktree removed, the same chat continuing from a fresh tree — and
+the files it had just edited were locked against it for the rest of the TTL, by a message
+saying another session was editing them right now. The tree those files lived in no longer
+existed.
+
+`reap` already releases the leases of a session whose worktree git no longer lists. It runs
+at SessionStart, and **entering a worktree fires no SessionStart**: identity is (harness id,
+worktree), so one chat moving to a fresh tree becomes a new session with no lifecycle event
+in between. Nothing reaped the record it left behind.
+
+The lease table now asks the registry the same question every other reader asks — `is_live`,
+which weighs pid, heartbeat AND worktree — instead of reading a pid on its own. A holder
+with no record at all still falls back to the pid and the TTL, because a lease whose session
+was deleted and not yet re-adopted is not a path to hand over.
+
+### `adopt --ignore` was contradicted by the next command (#98)
+
+`--ignore` said a document would not be raised again; `--check` raised it in the next breath
+with a non-zero exit, and every sibling worktree went on counting it. The record was being
+written the whole time — `--check` had simply never read it, and the decision lived in one
+checkout's Tier A in a product whose premise is three to eight of them.
+
+- `--check` honours the decision, and names the checkout that actually holds it.
+- The decision is read across sibling worktrees, the same way `plan.load_all` reads tasks.
+- `--ignore` on a path that is not there is refused instead of answered with the same
+  sentence a real registry gets.
+
+### The plugin stopped interrogating its own instructions (#99)
+
+Measured on a real machine over three days: 35 classifier prompts, three of them worth
+asking about. `EnterWorktree` was already vouched for; the CLI spelling of the same move
+was not, nor was the suite the evidence gate refuses a finish without.
+
+`pre-tool` now returns `allow` — **after every one of its own gates has spoken, never
+before** — for `git worktree add/remove/list`, for the detected test command exactly as
+detected, and for writes inside a tree this plugin provisioned for this session. One
+command it cannot name takes the whole line with it, an unparseable line vouches for
+nothing, and production stays where it was: ssh, force pushes and store submissions reach
+the permission layer untouched.
+
+### `git worktree list` was refused as a command that destroys work
+
+`worktree` was in the tree-verb set whole, for the sake of `remove`. Asking where the other
+sessions are, from anywhere but the tree you were standing in, came back refused for
+discarding uncommitted work — citing reset, clean and stash, none of which it was.
+
 ## v1.10.0
 
 A task now says whether a chat is on it, what would finish it, and what is stopping it.

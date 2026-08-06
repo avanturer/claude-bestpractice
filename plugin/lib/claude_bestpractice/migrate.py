@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import re
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from . import store
 from .gitctx import GitContext
@@ -185,9 +185,62 @@ def open_items(text: str) -> list[str]:
     return [m.group("text")[:plan_title_limit()] for m in _OPEN_ITEM.finditer(text)]
 
 
+def _key(relative: str) -> str:
+    """One spelling of a path, so `--ignore ./docs/x.md` and `--check docs/x.md` agree."""
+    return PurePosixPath(relative.strip()).as_posix()
+
+
 def _ignored(ctx: GitContext) -> dict:
-    record = store.read_json(store.tier_a(ctx, IGNORED), default={})
-    return record if isinstance(record, dict) else {}
+    """Every document declared curated, from every checkout of this clone.
+
+    Tier A lives inside the working tree, so this decision was per-worktree in a product
+    whose premise is three to eight of them at once: `--ignore` in one tree, and every
+    sibling went on counting the same document as untracked work forever (#98). It is the
+    same fact and the same fix as `plan.load_all` — "this registry is ours" is true of the
+    repository, so any checkout carrying the decision carries it for all of them.
+    """
+    merged: dict = {}
+    for _path, record in _ignore_files(ctx):
+        merged.update({_key(k): v for k, v in record.items() if isinstance(k, str)})
+    return merged
+
+
+def _ignore_files(ctx: GitContext) -> list[tuple[Path, dict]]:
+    """Every checkout's ignore record, in the order a merge would apply them."""
+    from .plan import sibling_worktrees
+
+    out: list[tuple[Path, dict]] = []
+    for root in sibling_worktrees(ctx) or [ctx.worktree_root]:
+        path = root / store.TIER_A_DIRNAME / IGNORED
+        record = store.read_json(path, default={})
+        if isinstance(record, dict) and record:
+            out.append((path, record))
+    return out
+
+
+def ignored_by(ctx: GitContext, relative: str) -> Path | None:
+    """The file holding this decision, which is not always one this checkout has.
+
+    "Delete that entry" is not an instruction a founder standing in a worktree can follow
+    when the entry is in a sibling's copy and their own tree has no such file at all.
+    """
+    wanted = _key(relative)
+    found = None
+    for path, record in _ignore_files(ctx):
+        if any(_key(k) == wanted for k in record if isinstance(k, str)):
+            found = path
+    return found
+
+
+def is_ignored(ctx: GitContext, relative: str) -> bool:
+    """Has the founder already said this document is theirs to keep?
+
+    Read by every surface that would otherwise report it, because a decision one command
+    honours and another contradicts is worse than no decision: `--ignore` said it would
+    not be raised again and `--check` raised it in the next breath, with a non-zero exit
+    a script could act on (#98).
+    """
+    return _key(relative) in _ignored(ctx)
 
 
 def ignore(ctx: GitContext, relative: str, why: str = "curated by hand") -> None:
@@ -198,8 +251,14 @@ def ignore(ctx: GitContext, relative: str, why: str = "curated by hand") -> None
     that matter. Tier A, because "this registry is ours, leave it alone" is a fact about
     the repository and should travel with it rather than be re-decided per clone.
     """
-    record = _ignored(ctx)
-    record[relative] = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "why": why}
+    record = store.read_json(store.tier_a(ctx, IGNORED), default={})
+    if not isinstance(record, dict):
+        record = {}
+    # This checkout's own file, not the merged view: writing the union back would copy a
+    # sibling's decisions onto this branch and commit them as if they had been made here.
+    record[_key(relative)] = {
+        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "why": why
+    }
     store.write_json(store.tier_a(ctx, IGNORED), record, mode=0o644)
 
 
@@ -215,7 +274,7 @@ def registries(ctx: GitContext) -> list[Path]:
     found: list[Path] = []
     for path in sorted(root.rglob("*.md")):
         relative = path.relative_to(root).as_posix()
-        if any(part in _SKIP for part in path.relative_to(root).parts) or relative in skip:
+        if any(part in _SKIP for part in path.relative_to(root).parts) or _key(relative) in skip:
             continue
         if _TEMPLATE.search(relative):
             continue

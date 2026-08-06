@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
 import re  # noqa: E402
 
-from claude_bestpractice import ci, config, evidence, gitpolicy, hookio, pullrequest, redact, sessions, shellcmd, stage, store  # noqa: E402
+from claude_bestpractice import ci, config, evidence, gitpolicy, hookio, pullrequest, redact, sessions, shellcmd, stage, store, vouch  # noqa: E402
 from claude_bestpractice.gitctx import resolve  # noqa: E402
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
@@ -236,6 +236,13 @@ _GIT_WORK_TREE = re.compile(r"--work-tree(?:=|\s+)(?P<path>[\"']?[\w./@+~-]+[\"'
 _GIT_VERB = re.compile(r"\bgit\b(?P<rest>.*)", re.S)
 _WORKTREE_REMOVE = re.compile(r"\bworktree\s+(?:remove|prune)\b(?P<args>(?:\s+(?:-\S+|[\w./@+-]+))*)")
 
+# `git worktree list` is `git status` for worktrees: it reads and returns. `worktree` was
+# in the verb set whole, so asking WHERE the other sessions are, from anywhere but your own
+# tree, came back refused as a command that discards uncommitted work — naming reset, clean
+# and stash, none of which it was. The cheapest way to find out what else is running was
+# the one thing you could not do, in the product whose premise is that several things are.
+_WORKTREE_READ = re.compile(r"\bworktree\s+list\b")
+
 # An interpreter is not statically analysable in general and this does not pretend to be.
 # It matches the literal one-liner form only — the shape actually used to reach around a
 # path rule — and misses anything computed, which is stated rather than implied.
@@ -292,8 +299,15 @@ def git_tree_targets(command: str, cwd: Path) -> list[Path]:
         if not found:
             continue
         rest = found.group("rest")
-        if not (GIT_TREE_VERBS & set(_ARG.findall(rest))):
+        verbs = GIT_TREE_VERBS & set(_ARG.findall(rest))
+        if not verbs:
             continue
+        # Only when `worktree` is the whole reason this matched: `git worktree list && git
+        # reset --hard` is two commands in one segment and the second one still counts.
+        if verbs == {"worktree"} and _WORKTREE_READ.search(rest):
+            continue
+        # Only when `worktree` is the whole reason this matched: `git worktree list && git
+        # reset --hard` is two commands in one segment and the second one still counts.
 
         bases = [_resolve(here, m.group("path"))
                  for m in list(_GIT_C.finditer(rest)) + list(_GIT_WORK_TREE.finditer(rest))]
@@ -738,6 +752,20 @@ def main() -> None:
     # written rather than what was attempted.
     if touched:
         sessions.touch(ctx, event.session_id, last_touched=touched)
+
+    # Last, and only here. `allow_tool` ends the permission pipeline, so a vouch placed any
+    # earlier would walk past this gate's own refusals — the credential scan, the leases,
+    # the protected-state rules — on its way to sparing the founder a prompt. At this line
+    # every one of them has already allowed the call, and the only question left is whether
+    # the founder should be asked about something the plugin itself ordered.
+    if event.tool_name == "Bash":
+        vouched = vouch.for_bash(str(ti.get("command", "")), cfg.test_command)
+    elif event.tool_name in WRITE_TOOLS:
+        vouched = vouch.for_write(ctx, event.session_id, absolute)
+    else:
+        vouched = ""
+    if vouched:
+        hookio.allow_tool(vouched)
 
     hookio.emit_silent()
 

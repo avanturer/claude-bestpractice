@@ -337,6 +337,71 @@ class TestMigrationIsDelegatedAndThenCounted(RepoCase):
         self.assertEqual([], migrate.registries(self.ctx()))
         self.assertEqual("", migrate.line(self.ctx()))
 
+    def adopt(self, *args, cwd=None):
+        return subprocess.run(
+            [sys.executable, str(BIN / "claude-bp-plan"), "adopt", *args],
+            capture_output=True, text=True, cwd=str(cwd or self.repo), timeout=60,
+        )
+
+    def test_the_check_honours_the_decision_the_ignore_recorded(self):
+        """Two commands, one repository, opposite answers a minute apart.
+
+        `--ignore` said it would not be raised again and `--check` raised it in the next
+        breath, with a non-zero exit a script could act on. Read as "the flag persists
+        nothing" (#98), which was the reasonable conclusion: the only way to tell that
+        the record HAD been written was to go and read the file yourself.
+        """
+        self.seed()
+        self.assertEqual(1, self.adopt("--check", "docs/TODO.md").returncode)
+
+        self.assertEqual(0, self.adopt("--ignore", "docs/TODO.md").returncode)
+        after = self.adopt("--check", "docs/TODO.md")
+        self.assertEqual(0, after.returncode, after.stdout + after.stderr)
+        self.assertIn("curated by hand", after.stdout)
+
+    def test_a_sibling_worktree_honours_a_decision_it_never_merged(self):
+        """The decision was made in one checkout, so only that checkout stopped nagging.
+
+        Tier A lives in the working tree. Three documents were declared curated and every
+        session since went on opening with "24 open item(s) in 3 checkbox document(s)" —
+        in a product whose stated scene is three to eight worktrees of one repository, the
+        founder could not make the message go away from any tree but the one they were
+        standing in.
+        """
+        self.seed()
+        # Committed, so the sibling carries the DOCUMENT — otherwise it counts nothing
+        # there for a reason that has nothing to do with the decision, and the test holds
+        # whether or not the fix is present.
+        self.commit("registry")
+        sibling = self.add_worktree("side")   # cut BEFORE the decision exists
+        migrate.ignore(self.ctx(), "docs/TODO.md")
+        record = sibling / store.TIER_A_DIRNAME / migrate.IGNORED
+        self.assertFalse(record.exists(), "the fixture proves nothing: the sibling has it too")
+
+        from claude_bestpractice.gitctx import resolve
+
+        self.assertEqual([], migrate.registries(resolve(sibling)))
+        self.assertEqual("", migrate.line(resolve(sibling)))
+
+    def test_the_check_names_the_checkout_that_actually_holds_the_decision(self):
+        """"Delete that entry" is not followable from a tree that has no such file."""
+        self.seed()
+        self.commit("registry")
+        sibling = self.add_worktree("other")
+        migrate.ignore(self.ctx(), "docs/TODO.md")
+
+        proc = self.adopt("--check", "docs/TODO.md", cwd=sibling)
+        self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
+        self.assertIn(str(self.repo / store.TIER_A_DIRNAME / migrate.IGNORED), proc.stdout)
+
+    def test_a_document_that_is_not_there_is_not_declared_curated(self):
+        """Same sentence for a typo as for a real registry, and the nagging continues."""
+        self.seed()
+        proc = self.adopt("--ignore", "docs/nope.md")
+        self.assertEqual(1, proc.returncode)
+        self.assertIn("no such document", proc.stderr)
+        self.assertNotEqual([], migrate.registries(self.ctx()), "recorded a decision anyway")
+
     def test_the_board_counts_items_not_files(self):
         """"2 documents" says nothing about what is at stake; "31 items" decides it."""
         self.seed()

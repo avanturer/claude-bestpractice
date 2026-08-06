@@ -374,6 +374,30 @@ class TestGitItselfReachesIntoOtherTrees(PolicyCase):
             decision, reason = self.bash(mine, command)
             self.assertEqual(decision, "deny", f"{command} -> {reason}")
 
+    def test_asking_where_the_other_sessions_are_is_not_reaching_into_them(self):
+        """`git worktree list` is `git status` for worktrees: it reads and returns.
+
+        `worktree` went into the verb set whole, for `remove`, so the cheapest way to find
+        out what else is running came back refused as a command that discards uncommitted
+        work — citing reset, clean and stash, none of which it was. In the product whose
+        premise is that several sessions ARE running, that was the one question you could
+        not ask from anywhere but the tree you were standing in.
+        """
+        mine = self.worktree("feat/mine")
+        for command in (
+            f"cd {self.repo} && git worktree list",
+            f"git -C {self.repo} worktree list --porcelain",
+        ):
+            decision, reason = self.bash(mine, command)
+            self.assertEqual(decision, "allow", f"{command} -> {reason}")
+
+    def test_a_read_in_front_of_a_write_does_not_carry_it(self):
+        """The exemption is for the segment it matched, never for the line."""
+        mine = self.worktree("feat/mine")
+        decision, _ = self.bash(
+            mine, f"cd {self.repo} && git worktree list && git reset --hard HEAD~1")
+        self.assertEqual(decision, "deny")
+
     def test_the_same_commands_are_free_in_our_own_tree(self):
         """A rule that fires on the founder's own work is one they switch off."""
         mine = self.worktree("feat/mine")

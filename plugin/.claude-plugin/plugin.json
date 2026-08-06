@@ -1,6 +1,6 @@
 {
   "name": "claude-bestpractice",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "description": "Enforcement, memory and parallel-session coordination for solo founders running several Claude Code sessions on one repository.",
   "author": {
     "name": "avanturer"
