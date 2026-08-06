@@ -102,12 +102,18 @@ def _git_dir(ctx: GitContext) -> Path:
     return Path(out) if out else ctx.common_dir
 
 
-def commits_since(ctx: GitContext, base: str) -> list[str]:
-    """Subject lines this branch adds, oldest first."""
+def commits_since(ctx: GitContext, base: str, head: str = "HEAD") -> list[str]:
+    """Subject lines a branch adds over `base`, oldest first.
+
+    `head` is named when a merge is being judged from somewhere else: counting on the
+    session's HEAD reported "no commits on top of main" for a pull request with twenty of
+    them, because the session was standing in the main checkout, which is not supposed to
+    carry any (#74).
+    """
     if not base:
         return []
     out = subprocess.run(
-        ["git", "log", "--reverse", "--format=%s", f"{base}..HEAD"],
+        ["git", "log", "--reverse", "--format=%s", f"{base}..{head or 'HEAD'}"],
         cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=60,
     )
     return [line for line in out.stdout.splitlines() if line.strip()]
@@ -204,6 +210,14 @@ def pr_body(ctx: GitContext, base: str) -> str:
     )
     return "\n".join(lines + ["", "---", diffstat(ctx, base), ""])
 
+
+
+def unverified_on(ctx: GitContext, branch: str) -> bool:
+    """Unverified finishes recorded on a named branch. See `_unverified_here`."""
+    return any(
+        isinstance(r, dict) and r.get("branch") == branch
+        for r in store.read_jsonl(store.tier_b(ctx, "unverified.jsonl"))
+    )
 
 
 def _unverified_here(ctx: GitContext) -> bool:

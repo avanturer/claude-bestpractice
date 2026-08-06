@@ -394,3 +394,80 @@ class TestAGreenRunIsObservedAcrossTheClone(PRCase):
         from claude_bestpractice.gitctx import resolve
 
         self.assertIsNotNone(evidence.last_green(resolve(sibling)))
+
+
+class TestTheMergeIsJudgedOnThePullRequest(PRCase):
+    """Issue #74. A merge is not a write to a working tree, and a session in a main
+    checkout is the normal case for anything that coordinates work — reading pull
+    requests, merging, releasing. Judging the occupied tree refused every one of them,
+    and each reason named the wrong subject.
+    """
+
+    def test_commits_are_counted_on_the_head_not_the_session_tree(self):
+        self.write("src/app.py", "x = 1\n")
+        self.commit("real work on the branch")
+        evidence.record_green(self.ctx(), ["pytest"])
+        head = self.ctx().branch
+
+        git(["checkout", "-q", "main"], self.repo)
+        problems = pullrequest.blockers(self.ctx(), "main", head)
+        self.assertNotIn(f"no commits on {head} over main", problems)
+        self.assertEqual([], problems, "a main-checkout session could not merge a ready branch")
+
+    def test_another_branchs_unverified_finish_is_not_this_pull_requests(self):
+        """It belonged to a different session, on a different task, hours earlier."""
+        self.write("src/app.py", "x = 1\n")
+        self.commit("real work")
+        evidence.record_green(self.ctx(), ["pytest"])
+        head = self.ctx().branch
+
+        store.append_jsonl(
+            store.tier_b(self.ctx(), "unverified.jsonl"),
+            {"branch": "main", "at": time.time(), "why": "somebody else's task"},
+        )
+        git(["checkout", "-q", "main"], self.repo)
+        self.assertEqual([], pullrequest.blockers(self.ctx(), "main", head))
+
+    def test_the_head_branch_still_has_to_be_green(self):
+        """Scoping to the pull request is not an amnesty for the pull request."""
+        self.write("src/app.py", "x = 1\n")
+        self.commit("real work")
+        head = self.ctx().branch
+        git(["checkout", "-q", "main"], self.repo)
+
+        self.assertIn(
+            f"no test run has ever been observed on {head}",
+            pullrequest.blockers(self.ctx(), "main", head),
+        )
+
+
+class TestAFalseFindingCanBeRuledOut(PRCase):
+    """Issue #75. Two false findings blocked the merge permanently: nothing to fix, so the
+    list could never empty, and the only exits were rewriting correct code or switching the
+    gate off."""
+
+    def finding(self) -> None:
+        board.add_open_item(
+            self.ctx(), item_id="review-abcd-1",
+            text="1 review finding(s): sql-interpolation in src/app.py",
+            branch=self.ctx().branch, session_id="s1", subject_paths=["src/app.py"],
+        )
+
+    def test_a_dismissed_finding_stops_blocking(self):
+        self.write("src/app.py", "x = 1\n")
+        self.commit("work")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.finding()
+        self.assertTrue(pullrequest.blockers(self.ctx(), "main"))
+
+        board.dismiss(self.ctx(), "sql-interpolation", "src/app.py")
+        self.assertEqual([], pullrequest.blockers(self.ctx(), "main"))
+
+    def test_dismissing_one_file_does_not_clear_another(self):
+        self.write("src/app.py", "x = 1\n")
+        self.commit("work")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.finding()
+
+        board.dismiss(self.ctx(), "sql-interpolation", "src/other.py")
+        self.assertTrue(pullrequest.blockers(self.ctx(), "main"))

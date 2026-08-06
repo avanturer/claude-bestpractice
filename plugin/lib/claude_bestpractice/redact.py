@@ -35,10 +35,26 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
         ),
     ),
     # Connection strings leak credentials in the authority component.
-    ("url-credentials", re.compile(r"\b([a-z][a-z0-9+.\-]*)://[^\s:/@]+:[^\s:/@]+@")),
+    ("url-credentials", re.compile(
+        r"\b([a-z][a-z0-9+.\-]*)://(?P<user>[^\s:/@]+):(?P<secret>[^\s:/@]+)@(?P<host>[^\s:/@]+)")),
 ]
 
 REDACTED = "[REDACTED]"
+
+# A development default is not a secret. `postgres://app:app@localhost/app` has nothing to
+# leak and nothing to rotate — and the gate refused the bug report ABOUT this false
+# positive, twice, the second time with every component replaced by a placeholder, so the
+# only way to describe it was prose (#75). A closed loop around a value that is safe by
+# construction.
+#
+# Narrow on purpose: the host must be local AND the user must equal the password. A real
+# credential that happens to point at localhost still has a distinct password, and a
+# tunnelled production connection has both.
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "host.docker.internal", "db", "postgres"}
+
+
+def _is_local_default(user: str, secret: str, host: str) -> bool:
+    return host.lower() in _LOCAL_HOSTS and user == secret
 
 # A secret-shaped NAME assigned a reference rather than a literal is the correct
 # pattern. Flagging it would punish the exact fix the gate tells the agent to apply,
@@ -66,7 +82,12 @@ def scrub(text: str) -> str:
                 out,
             )
         elif name == "url-credentials":
-            out = pattern.sub(lambda m: f"{m.group(1)}://{REDACTED}@", out)
+            out = pattern.sub(
+                lambda m: m.group(0) if _is_local_default(
+                    m.group("user"), m.group("secret"), m.group("host")
+                ) else f"{m.group(1)}://{REDACTED}@{m.group('host')}",
+                out,
+            )
         else:
             out = pattern.sub(REDACTED, out)
     return out
@@ -78,6 +99,12 @@ def find(text: str) -> list[str]:
     for name, pattern in _PATTERNS:
         for match in pattern.finditer(text or ""):
             if name == "assigned-secret" and _is_indirection(match.group(2)):
+                continue
+            # Skipped rather than broken out of: one development default early in a file
+            # must not stop the scan before a real credential later in it.
+            if name == "url-credentials" and _is_local_default(
+                match.group("user"), match.group("secret"), match.group("host")
+            ):
                 continue
             hits.add(name)
             break

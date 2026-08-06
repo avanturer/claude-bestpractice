@@ -197,7 +197,7 @@ def foreign_tree(ctx: GitContext, target: Path) -> Path | None:
             continue
         if not _occupied(ctx, tree):
             return None
-        if _uncarryable(tree, target):
+        if ignored_by_git(tree, target):
             return None
         return tree
     return None
@@ -237,7 +237,7 @@ def _occupied(ctx: GitContext, tree: Path) -> bool:
     return False
 
 
-def _uncarryable(tree: Path, target: Path) -> bool:
+def ignored_by_git(tree: Path, target: Path) -> bool:
     """Is `target` a path no other working tree could ever hold?
 
     IGNORED, not merely untracked. A new file that git would happily track is carryable in

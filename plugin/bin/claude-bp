@@ -229,6 +229,17 @@ def cmd_adopt(ctx, dry_run: bool, restore: bool) -> int:
     return 0
 
 
+def cmd_dismiss(ctx, detector: str, path: str) -> int:
+    """Rule one finding false. The only exit a false positive had before this was to
+    rewrite correct code or to stop using the gate (#75)."""
+    from claude_bestpractice import board
+
+    board.dismiss(ctx, detector, path)
+    print(f"{detector} in {path} will not block a merge again")
+    print(f"  recorded in {board.DISMISSED} — commit it, the judgement is about the code")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="claude-bp", description="claude-bestpractice control plane")
     sub = parser.add_subparsers(dest="command")
@@ -239,6 +250,10 @@ def main() -> int:
     adopt = sub.add_parser("adopt", help="take over events another tool is contesting")
     adopt.add_argument("--dry-run", action="store_true", help="report without changing anything")
     adopt.add_argument("--restore", action="store_true", help="undo a previous adopt")
+    dismiss = sub.add_parser(
+        "dismiss", help="rule a review finding false, for good — it stops blocking merges")
+    dismiss.add_argument("detector", help="the name in the finding, e.g. sql-interpolation")
+    dismiss.add_argument("path", help="the file it was raised against")
 
     args = parser.parse_args()
     ctx = resolve_for_cli()
@@ -247,6 +262,8 @@ def main() -> int:
         return cmd_init(ctx, args.force)
     if args.command == "doctor":
         return cmd_doctor(ctx)
+    if args.command == "dismiss":
+        return cmd_dismiss(ctx, args.detector, args.path)
     if args.command == "adopt":
         return cmd_adopt(ctx, args.dry_run, args.restore)
     return cmd_status(ctx)

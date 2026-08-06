@@ -1,5 +1,72 @@
 # Changelog
 
+## v1.6.0
+
+Four reports, **one shape: the gate judged a proxy instead of the thing.** Where the
+session stands instead of who a write could hurt (#68); the tree it occupies instead of
+the pull request being merged (#74); the shape of a string instead of whether it is unsafe
+(#75); a substring of the command line instead of the command (#76).
+
+Each was also a closed loop — the refusal blocked the one action that would have resolved
+it. That is the property worth naming, because it is what turns a false positive from an
+annoyance into a dead end.
+
+### Reading is not doing (#76)
+
+`echo` of the merge invocation was refused as a merge. So was `grep` for it in
+documentation, and a script whose JSON payload contained it — which is how the tool for
+investigating this gate became blocked by this gate.
+
+Gates now decide on the parsed command: the program being run and its subcommand, never a
+substring of the line. Quoted text is an argument, not an action. A line the tokeniser
+cannot read falls back to the old match, so a command crafted to break parsing does not
+become one that walks past.
+
+**The same shape one gate over, unreported:** `PRODUCTION_DEPLOY` matched `--prod` anywhere
+in the line, so `echo "deploy with --production"` was a production deploy. Found by looking
+for the shape rather than by waiting for the report.
+
+### A path git ignores has nowhere else to go (#68, reopened)
+
+The first fix reached only the cross-tree rule. A session standing IN the main checkout met
+the `require_worktree` rule instead — same dead end, same unreachable remedy, and the config
+file that would switch the guard off is itself in the main checkout, so neither exit could
+be taken from a session. Three worktrees were provisioned as side effects of the refusals,
+and the retired production SSH key it was trying to delete stayed on disk.
+
+Ignored paths are now exempt from the worktree and trunk rules too, and the refusal no
+longer provisions a tree nobody can use.
+
+### A merge is not a write to a working tree (#74)
+
+A session in a main checkout could never merge. Every reason named the wrong subject: "no
+commits on top of main" measured on a checkout not supposed to carry any, an UNVERIFIED
+finish belonging to another session's task hours earlier, findings in files the pull
+request never touched.
+
+The merge gate now resolves against the pull request's head — commits over its base, its
+own green run, its own unverified finishes, findings intersected with its own diff. The two
+checks that are genuinely about a working tree rather than a branch are not asked of a tree
+the pull request has nothing to do with.
+
+### A reviewer that flags the safe form teaches you to ignore it (#75)
+
+`sql-interpolation` fired on a psycopg placeholder with its parameter binding — the form
+people are told to use *instead of* interpolation. Interpolation now means what it says: an
+f-string with a placeholder, or a literal handed to `%` or `+`. A literal followed by a
+comma is a parameter binding.
+
+`url-credentials` fired on a development default pointing at localhost, with nothing to
+leak and nothing to rotate — and refused the bug report about itself, twice, the second
+time with every component replaced by a placeholder. A local host plus a user equal to its
+password is now recognised as the development default it is.
+
+**And a finding can be ruled out.** `claude-bp dismiss <detector> <path>` records the
+judgement in Tier A, committed, keyed on detector and path rather than on an item id that a
+new review replaces. Before this the only exits from a false positive were rewriting
+correct code or switching the gate off.
+
+
 ## v1.5.1
 
 Issue #71, and the same root as the two before it: **measured from the wrong point.**

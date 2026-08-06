@@ -56,8 +56,29 @@ _MERGES_TOOL = re.compile(r"(?:^|__)merge_pull_request$")
 # The CLI spellings. `gh pr create` and `gh pr merge` reach exactly the same API, and a
 # gate that watches only the structured tool is one an agent walks past on its first
 # `Bash` call — which is how the credential check was walked past before it read heredocs.
+# Kept as the fallback for a line the tokeniser cannot read. On a parseable line the
+# decision is made on the PROGRAM being run, because these patterns matched text: `echo`
+# of the invocation, `grep` for it in documentation, and a script carrying it as a JSON
+# payload were all refused as merges — so the tool for investigating this gate was blocked
+# by this gate (#76). Reading is not doing and quoting is not doing.
 _OPENS_SHELL = re.compile(r"\bgh\s+pr\s+create\b")
 _MERGES_SHELL = re.compile(r"\bgh\s+pr\s+merge\b(?:\s+(?P<number>\d+))?")
+
+
+def _gh_subcommand(command: str, verb: str, pattern: "re.Pattern[str]"):
+    """The argv of `gh pr <verb>` in this line, or None.
+
+    Returns the regex match instead when the line cannot be tokenised — an unparseable
+    line must not be a line that walks past the gate, so the old behaviour is what a
+    failure falls back to.
+    """
+    from . import shellcmd
+
+    parsed = shellcmd.commands(command)
+    if not parsed:
+        return pattern.search(command)
+    found = shellcmd.runs(command, "gh", "pr", verb)
+    return found[0] if found else None
 
 
 def _records(ctx: GitContext) -> dict[str, dict[str, Any]]:
@@ -134,7 +155,7 @@ def hand_off(ctx: GitContext, record: dict[str, Any], blockers: list[str]) -> No
     _write(ctx, {**record, "handed_off_at": time.time(), "blockers": blockers[:8]})
 
 
-def blockers(ctx: GitContext, base: str) -> list[str]:
+def blockers(ctx: GitContext, base: str, head: str = "") -> list[str]:
     """Everything standing between this branch and a merge, in plain language.
 
     `delivery.ready` is the same check `claude-bp-ship --pr` runs before opening one, so a
@@ -149,9 +170,13 @@ def blockers(ctx: GitContext, base: str) -> list[str]:
     """
     from . import board, delivery, drafts, provenance
 
-    problems = list(delivery.ready(ctx, base))
-    in_diff = _files_against(ctx, base)
-    for item in board.open_items(ctx, branch=ctx.branch):
+    branch = head or ctx.branch
+    problems = (
+        list(delivery.ready(ctx, base)) if branch == ctx.branch
+        else _about_the_pull_request(ctx, base, branch)
+    )
+    in_diff = _files_against(ctx, base, branch)
+    for item in board.open_items(ctx, branch=branch):
         if item.get("provenance") != provenance.FRESH or not str(item.get("id", "")).startswith("review-"):
             continue
         # Only findings in files this pull request actually changes. The workflow REQUIRES
@@ -168,11 +193,65 @@ def blockers(ctx: GitContext, base: str) -> list[str]:
         subjects = drafts.subject_paths(item)
         if subjects and in_diff is not None and not (set(subjects) & in_diff):
             continue
+        # A finding the founder has ruled out is not a blocker. Without this the only ways
+        # to clear a false positive were to rewrite correct code or to stop using the gate,
+        # and a permanent block over code that is right is how a gate gets switched off.
+        if _all_dismissed(ctx, str(item.get("text", "")), subjects):
+            continue
         problems.append(str(item.get("text", ""))[:200])
     return problems
 
 
-def _files_against(ctx: GitContext, base: str) -> set[str] | None:
+def _all_dismissed(ctx: GitContext, text: str, subjects: list[str]) -> bool:
+    """Has every detector named in this item been ruled out for every file it names?
+
+    Conservative on both axes: an item naming a detector this cannot parse, or one path
+    that is still live, stays a blocker. Silence is the wrong way to be wrong here.
+    """
+    from . import board
+
+    ruled_out = board.dismissed(ctx)
+    if not ruled_out or not subjects:
+        return False
+    detectors = {part.split(" in ")[0].strip() for part in text.split(":", 1)[-1].split(",")}
+    detectors = {d for d in detectors if d}
+    if not detectors:
+        return False
+    return all(f"{d}:{p}" in ruled_out for d in detectors for p in subjects)
+
+
+def _about_the_pull_request(ctx: GitContext, base: str, head: str) -> list[str]:
+    """The blockers that are facts about `head`, when the session is standing elsewhere.
+
+    A merge is not a write to a working tree, and a session in a main checkout is the
+    normal case for anything that coordinates work — reading pull requests, merging,
+    releasing. Judging the merge on the occupied tree refused every one of them, and each
+    reason named the wrong subject (#74): "no commits on top of main" measured on a
+    checkout that is not supposed to carry any, an UNVERIFIED finish belonging to a
+    different session's task hours earlier, and findings in files the pull request never
+    touches.
+
+    Deliberately a SUBSET of `delivery.ready`. Two of its checks are about a working tree
+    rather than a branch — uncommitted changes, and the red-suite record written per tree —
+    and a tree the pull request has nothing to do with cannot speak for it. Everything that
+    is genuinely about the branch is still asked, of the branch.
+    """
+    from . import delivery, evidence
+
+    problems: list[str] = []
+    if not delivery.commits_since(ctx, base, head):
+        problems.append(f"no commits on {head} over {base}")
+    entry = evidence.red(ctx)
+    if entry and entry.get("branch") == head:
+        problems.append("the test suite is red")
+    if not evidence.last_green(ctx, head):
+        problems.append(f"no test run has ever been observed on {head}")
+    if delivery.unverified_on(ctx, head):
+        problems.append(f"{head} carries an UNVERIFIED finish")
+    return problems
+
+
+def _files_against(ctx: GitContext, base: str, head: str = "HEAD") -> set[str] | None:
     """Paths this branch changes relative to its merge base with `base`.
 
     None when git cannot answer — an unknown base, an unborn branch — and the caller then
@@ -182,7 +261,7 @@ def _files_against(ctx: GitContext, base: str) -> set[str] | None:
     from .gitctx import _run
 
     for ref in (base, f"origin/{base}"):
-        listed = _run(["diff", "--name-only", f"{ref}...HEAD"], ctx.worktree_root, check=False)
+        listed = _run(["diff", "--name-only", f"{ref}...{head or 'HEAD'}"], ctx.worktree_root, check=False)
         if listed.strip():
             return {line.strip() for line in listed.splitlines() if line.strip()}
     return None
@@ -244,7 +323,24 @@ def line(ctx: GitContext) -> str:
 
 
 def opens_a_pull_request(tool_name: str, command: str) -> bool:
-    return bool(_OPENS_TOOL.search(tool_name) or _OPENS_SHELL.search(command))
+    return bool(
+        _OPENS_TOOL.search(tool_name)
+        or _gh_subcommand(command, "create", _OPENS_SHELL) is not None
+    )
+
+
+def _number(found) -> int:
+    """The pull request number out of either shape `_gh_subcommand` returns.
+
+    A list is argv, where the number is the first bare digit run after the verb; a match
+    object is the fallback regex, which captured it by name.
+    """
+    if isinstance(found, list):
+        for token in found[3:]:
+            if token.isdigit():
+                return int(token)
+        return 0
+    return int(found.group("number") or 0)
 
 
 def merge_target(tool_name: str, command: str, tool_input: dict[str, Any]) -> int | None:
@@ -258,10 +354,10 @@ def merge_target(tool_name: str, command: str, tool_input: dict[str, Any]) -> in
             return int(tool_input.get("pullNumber") or 0)
         except (TypeError, ValueError):
             return 0
-    found = _MERGES_SHELL.search(command)
+    found = _gh_subcommand(command, "merge", _MERGES_SHELL)
     if not found:
         return None
-    return int(found.group("number") or 0)
+    return _number(found)
 
 
 def about_current_branch(tool_name: str, command: str) -> bool:
@@ -274,8 +370,8 @@ def about_current_branch(tool_name: str, command: str) -> bool:
     """
     if _MERGES_TOOL.search(tool_name):
         return False
-    found = _MERGES_SHELL.search(command)
-    return bool(found and not found.group("number"))
+    found = _gh_subcommand(command, "merge", _MERGES_SHELL)
+    return bool(found is not None and not _number(found))
 
 
 def gated_by(ctx: GitContext, number: int, current: bool = False) -> dict[str, Any] | None:

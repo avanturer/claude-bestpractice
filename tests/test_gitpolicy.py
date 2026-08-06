@@ -967,3 +967,48 @@ class TestAPathGitCannotCarryHasNoOtherTree(PolicyCase):
         mine = self.worktree("feat/mine")
         decision, reason = self.write_from(mine, self.repo / "brand-new.py")
         self.assertEqual("deny", decision, reason)
+
+
+class TestAnIgnoredPathHasNowhereElseToGo(PolicyCase):
+    """Issue #68, reopened. The first fix reached only the cross-tree rule, so a session
+    standing IN the main checkout met the require_worktree rule instead and hit the same
+    dead end — with the same remedy it could not follow.
+
+    Both rules end in "make the change somewhere else and merge it". For a file no commit
+    will ever carry there is nowhere else and no merge. The retired production key the
+    session was trying to delete was still on disk when the founder gave up on it.
+    """
+
+    def rm(self, target) -> tuple[str, str]:
+        proc = self.run_hook(
+            "pre-tool",
+            {"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+             "tool_input": {"command": f"rm -f {target}"}, "cwd": str(self.repo)},
+            cwd=self.repo,
+        )
+        return _verdict(proc)
+
+    def secret(self):
+        (self.repo / ".gitignore").write_text(".secrets/\n", encoding="utf-8")
+        git(["add", ".gitignore"], self.repo)
+        git(["commit", "-qm", "ignore secrets"], self.repo)
+        (self.repo / ".secrets").mkdir(exist_ok=True)
+        key = self.repo / ".secrets" / "prod_key"
+        key.write_text("retired\n", encoding="utf-8")
+        return key
+
+    def test_the_main_checkout_may_delete_its_own_ignored_file(self):
+        decision, reason = self.rm(self.secret())
+        self.assertEqual("allow", decision, reason)
+
+    def test_the_refusal_does_not_provision_a_worktree_nobody_can_use(self):
+        """Three accumulated over one task and were removed by hand."""
+        self.secret()
+        before = {p.name for p in self.repo.parent.iterdir()}
+        self.rm(self.repo / ".secrets" / "prod_key")
+        self.assertEqual(before, {p.name for p in self.repo.parent.iterdir()})
+
+    def test_a_tracked_file_in_the_main_checkout_is_still_refused(self):
+        decision, reason = self.rm(self.repo / "README.md")
+        self.assertEqual("deny", decision, reason)
+        self.assertIn("main checkout", reason)
