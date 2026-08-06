@@ -12,6 +12,10 @@ from helpers import BIN, RepoCase, git
 
 from claude_bestpractice import board, evidence, pullrequest, store
 
+# Code that genuinely trips `sql-interpolation`. Findings are re-asked of the file before
+# they are counted, so a fixture asserting on a clean file asserts on nothing.
+TRIGGER = 'def q(cur, x):\n    cur.execute(f"SELECT {x}")\n' 
+
 
 class PRCase(RepoCase):
     def setUp(self) -> None:
@@ -132,13 +136,18 @@ class TestTheMergeIsJudged(PRCase):
         self.green()
         self.start()
         self.open_a_pr()
+        # Real interpolation, because a finding is now re-asked of the file before it is
+        # counted: a fixture with a clean file describes a finding that no longer exists.
+        self.write("src/app.py", TRIGGER)
+        self.commit("interpolate")
         board.add_open_item(
-            self.ctx(), item_id="review-abcd-1", text="1 review finding(s): secret in src/app.py",
+            self.ctx(), item_id="review-abcd-1",
+            text="1 review finding(s): sql-interpolation in src/app.py",
             branch=self.ctx().branch, session_id="s1", subject_paths=["src/app.py"],
         )
         proc = self.merge()
         self.assertEqual("deny", self.decision(proc))
-        self.assertIn("secret in src/app.py", self.reason(proc))
+        self.assertIn("sql-interpolation in src/app.py", self.reason(proc))
 
     def test_the_refusal_forbids_fixing_it_into_green(self):
         """The whole point of refusing rather than fixing.
@@ -335,13 +344,14 @@ class TestAFindingFromMainIsNotThisPullRequests(PRCase):
 
     def branch_work(self) -> None:
         self.write("docs/notes.md", "# notes\n")
+        self.write("src/live.py", TRIGGER)
         self.commit("document the thing")
         evidence.record_green(self.ctx(), ["pytest"])
 
     def finding(self, path: str) -> None:
         board.add_open_item(
             self.ctx(), item_id=f"review-abcd-{path}",
-            text=f"1 review finding(s): secret in {path}",
+            text=f"1 review finding(s): sql-interpolation in {path}",
             branch=self.ctx().branch, session_id="s1", subject_paths=[path],
         )
 
@@ -359,9 +369,9 @@ class TestAFindingFromMainIsNotThisPullRequests(PRCase):
     def test_a_finding_in_a_file_the_branch_does_touch_still_blocks(self):
         """The narrowing is the PR's own diff, not an amnesty for review findings."""
         self.branch_work()
-        self.finding("docs/notes.md")
+        self.finding("src/live.py")
         self.assertIn(
-            "1 review finding(s): secret in docs/notes.md",
+            "1 review finding(s): sql-interpolation in src/live.py",
             pullrequest.blockers(self.ctx(), "main"),
         )
 
@@ -454,7 +464,7 @@ class TestAFalseFindingCanBeRuledOut(PRCase):
         )
 
     def test_a_dismissed_finding_stops_blocking(self):
-        self.write("src/app.py", "x = 1\n")
+        self.write("src/app.py", TRIGGER)
         self.commit("work")
         evidence.record_green(self.ctx(), ["pytest"])
         self.finding()
@@ -464,7 +474,7 @@ class TestAFalseFindingCanBeRuledOut(PRCase):
         self.assertEqual([], pullrequest.blockers(self.ctx(), "main"))
 
     def test_dismissing_one_file_does_not_clear_another(self):
-        self.write("src/app.py", "x = 1\n")
+        self.write("src/app.py", TRIGGER)
         self.commit("work")
         evidence.record_green(self.ctx(), ["pytest"])
         self.finding()

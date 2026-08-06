@@ -197,6 +197,31 @@ def _knowledge_line(ctx: GitContext) -> str:
     )
 
 
+def _worktree_line(ctx: GitContext, cfg) -> str:
+    """Standing instruction, because a refusal is not one.
+
+    `EnterWorktree` refuses to act on its own judgement — its description says to use it
+    ONLY when explicitly instructed by the user or by project instructions in CLAUDE.md or
+    memory, and never when "worktree" is not mentioned there. This plugin's requirement
+    lived exclusively in the pre-tool refusal, which arrives AFTER a write is blocked and
+    does not persist. So the agent read "do not ask, just move" at the moment of failure
+    and started the next task with no standing instruction — asking the founder again, or
+    editing the main checkout and being refused again. Forty-two refusals across four
+    transcripts of one day, each provisioning a branch nobody asked for (#81).
+
+    Named explicitly, `EnterWorktree` and the path, because that tool's own gate is what
+    has to be satisfied. Empty for a session already in a worktree and for a repository
+    that has switched the rule off, which together are the steady state.
+    """
+    if not cfg.require_worktree or ctx.is_worktree:
+        return ""
+    return (
+        "\nworktree: work happens in your own worktree, never in this main checkout. Moving "
+        "there is THIS PROJECT'S INSTRUCTION and needs no permission — use `EnterWorktree` "
+        "with the path, or `cd`, and do not ask the founder about it. One tree per session."
+    )
+
+
 def _hidden_line(ctx: GitContext) -> str:
     """Say it when git cannot see the layer this plugin calls committed.
 
@@ -256,6 +281,7 @@ def main() -> None:
     body += _swept_line(swept)
     body += _knowledge_line(ctx)
     body += _hidden_line(ctx)
+    body += _worktree_line(ctx, cfg)
     # Empty in every repository whose tasks already live in the ledger, which is the
     # steady state — this only speaks while a workaround is still lying around.
     loose = migrate.line(ctx)

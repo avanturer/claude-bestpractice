@@ -1,5 +1,76 @@
 # Changelog
 
+## v1.7.0
+
+Three reports, and the theme is **a rule that only exists at the moment of refusal**.
+
+### The worktree rule is now standing context (#81)
+
+`EnterWorktree` refuses to act on its own judgement — its own description says to use it
+ONLY when instructed by the user or by project instructions in CLAUDE.md or memory, and
+never when "worktree" is absent from them. This plugin's requirement lived exclusively in
+the pre-tool refusal, which arrives *after* a write is blocked and does not persist.
+
+So the agent read "do not ask, just move" at the moment of failure and began the next task
+with no standing instruction: asking the founder again, or editing the main checkout and
+being refused again. **Forty-two refusals across four transcripts of one day**, each
+provisioning a branch nobody asked for.
+
+The rule is now published at SessionStart, naming `EnterWorktree` and the path, because
+that tool's own gate is what has to be satisfied. Empty for a session already in a worktree
+and for a repository that has switched the rule off — which together are the steady state.
+
+**One tree per session, whatever the task says now.** The name was derived from the task
+statement, and the task statement is re-captured on every substantive message, so each new
+instruction bought another tree and another branch named after a slug of it.
+
+**And entering a tree that does not exist yet is approved.** Claude Code creates its own
+worktrees under `.claude/worktrees`; requiring the path to be an existing working tree left
+the creating call unapproved, so the founder was asked to authorise the move this gate had
+just ordered.
+
+### The ledger recorded the session's branch, not the pull request's (#79)
+
+The one session that coordinates — reading pull requests, merging, releasing — sits in the
+main checkout, which is what the worktree rule leaves it doing, because a merge is not a
+write to a working tree. Every pull request it opened was filed as being ON the base
+branch. "No commits on top of main" is then not strict but *unsatisfiable*: a branch cannot
+gain commits over itself.
+
+The head is now taken from where it actually is — the structured tool's `head`, `gh`'s
+`--head`, or the branch of the tree a `cd` moves to. And a record whose head equals its base
+is treated as misfiled rather than as a reason to refuse forever.
+
+This was the root cause under #74, which v1.6.0 fixed one level too high.
+
+### Findings expire when their rule does (#80)
+
+Fixing a detector did not clear what the broken detector filed. The `sql-interpolation`
+corrected in v1.6.0 was still counted ten sightings later, over code the current rule reads
+as clean, and it kept the merge gate refusing.
+
+A finding is a claim about code as it stands, so it is now re-asked before it is counted —
+one regex over one file — and retires itself when its rule no longer fires. Conservative in
+one direction only: an unknown detector, an unreadable file, or one path where the rule
+still fires all keep the finding.
+
+The review rules moved into a module to make that possible, which is also what lets them be
+tested directly rather than through the hook.
+
+**`url-credentials` no longer fires on documentation.** A comment naming the shape of a
+connection string — the words for user and password, not values — was reported as a secret,
+while the line under it read the value from the environment, which is the practice the rule
+exists to encourage. Placeholder words are recognised as placeholders, in English and in
+Russian, because a comment is written in the language of whoever wrote it.
+
+### Found while looking, not reported
+
+The plugin watched `~/.claude/CLAUDE.md` and every rival tool's instruction file, and not
+**the project's own CLAUDE.md** — the one file here that is always legitimate and most
+likely to grow. It is now watched too, with a threshold that means something and a remedy
+of trimming rather than excluding, because it is not a competitor.
+
+
 ## v1.6.0
 
 Four reports, **one shape: the gate judged a proxy instead of the thing.** Where the

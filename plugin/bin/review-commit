@@ -35,42 +35,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import board, hookio, redact, sessions, store  # noqa: E402
+from claude_bestpractice import board, hookio, redact, reviewrules, sessions, store  # noqa: E402
 from claude_bestpractice.gitctx import resolve, stash_baseline  # noqa: E402
 
 MAX_FINDINGS_SHOWN = 6
 REPORT_DIR = "reviews"
 
-# Each pattern is a class that is exact, cheap, and measured to be over-produced by
-# generated code. Anything requiring judgement is deliberately absent: a reviewer that
-# cries wolf gets ignored, and an ignored reviewer is worse than none.
-CHECKS: list[tuple[str, re.Pattern[str], str]] = [
-    ("swallowed-exception", re.compile(r"except[^:\n]*:\s*(?:#[^\n]*)?\n\s*pass\b"),
-     "exception swallowed silently — the highest-prevalence measured regression in generated code"),
-    ("bare-except", re.compile(r"except\s*:\s*\n"),
-     "bare except catches KeyboardInterrupt and SystemExit too"),
-    ("shell-injection", re.compile(r"subprocess\.[a-z_]+\([^)]*shell\s*=\s*True"),
-     "shell=True with a constructed command"),
-    # `%s` inside a plain string literal is psycopg's PLACEHOLDER, and the parameters ride
-    # in the next argument — it is the form people are told to use INSTEAD of interpolation,
-    # and the old pattern flagged it (#75). A reviewer that flags the safe form teaches its
-    # reader to ignore it, and the next finding, a real one, is ignored too.
-    #
-    # So interpolation is what it says: an f-string with a placeholder, or a literal handed
-    # to `%` or `+`. A literal followed by a comma is a parameter binding and is left alone.
-    ("sql-interpolation", re.compile(
-        r"(?i)(?:execute|query)\s*\(\s*(?:"
-        r"f[\"'][^\"']*\{"
-        r"|[\"'][^\"']*[\"']\s*(?:%|\+)"
-        r")"),
-     "SQL built by string interpolation"),
-    ("disabled-verification", re.compile(r"(?i)verify\s*=\s*False|rejectUnauthorized\s*:\s*false"),
-     "certificate verification disabled"),
-    ("skipped-test", re.compile(r"(?i)@pytest\.mark\.skip|\bit\.skip\(|\bxit\(|\bt\.Skip\(|\.only\("),
-     "test skipped or narrowed — freeze the scoring rules, do not edit them"),
-    ("debug-leftover", re.compile(r"(?:^|\s)(?:breakpoint\(\)|debugger;|console\.log\()"),
-     "debugging leftover"),
-]
+CHECKS = reviewrules.CHECKS
 
 
 def git(args: list[str], cwd: Path) -> str:
