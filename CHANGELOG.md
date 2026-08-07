@@ -1,5 +1,44 @@
 # Changelog
 
+## v1.13.0
+
+A card before the code, and an upgrade that fixes the repository it lands in.
+
+### A card is asked for at the first write, not at the finish
+
+v1.12.0 made the board binding, but it asked at the END: a whole turn of edits happened
+first and the board became true only in retrospect. The first write of a session the
+founder has briefed is now refused until a task on the board says who is doing what.
+
+Never a wedge — the way out is a Bash command, and Bash is not what this refuses. The
+ledger's own files are exempt, or filing the card would be refused by the rule demanding
+one. And it stays quiet for a session with no statement from the founder: a card records
+work somebody asked for, and demanding one where nothing was asked is the gate inventing a
+process rather than recording one. The Stop demand still catches that session at the end.
+
+### An upgrade repairs, it does not merely behave better next time
+
+The founder upgrades on top of what was working, so a fix that only improves the next
+repository is half a fix. `migrate._REPAIRS` gained `0003-absorb-scratch-todos`: a
+`TODO-*.md` a previous session wrote as a stand-in — because the ledger could not park a
+task yet — is pulled into the ledger, and its file is rewritten to a pointer so nothing
+that linked to it breaks and git keeps the whole text.
+
+A document the founder curates is still never touched. Deciding what in one is a task
+needs judgement a regex does not have, and rewriting it on a hunch is worse than the
+duplicate; those are reported, with `adopt --brief`, and left to the agent.
+
+This reverses part of an earlier rule, deliberately and with its reasoning recorded:
+"nothing is adopted without being asked" holds for what the founder curates and does not
+hold for a workaround the plugin's own absence caused.
+
+### Decision 0005, so this is not re-decided every release
+
+`The plugin absorbs what it owns, and an upgrade repairs the repository it lands in` is
+now a decision record, indexed and injected into every session: nothing the plugin owns is
+reimplemented beside it, every change that leaves state behind ships its repair, and
+duplicates are absorbed where that is mechanical and refused where it is not.
+
 ## v1.12.1
 
 The scope-drift gate could wedge a session with no way out that did not go through the

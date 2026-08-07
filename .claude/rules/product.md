@@ -21,6 +21,15 @@ sessions in parallel, and reads almost none of the resulting code.
 - **Not cross-harness.** The enforcement surface is Claude Code specific, and the
   portable half would be the advisory half, which is the useless half.
 
+## Non-negotiable, on every change
+- **Never build beside the plugin what the plugin already has.** Task list, status,
+  decisions log, notes — where a mechanism exists, it is the only one. See decision 0005.
+- **Every change ships its repair.** The founder upgrades on top of what was working, so a
+  fix that only improves the next repository is half a fix. State left behind gets a step
+  in `migrate._REPAIRS`.
+- **A card before the code.** No file is written until a task on the board says who is
+  doing what; the board is how the other sessions decide what is safe to touch.
+
 ## Hard constraints
 - Standard library only. These hooks run on every tool call; a dependency is latency,
   a failure mode, and a supply-chain surface.

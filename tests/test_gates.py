@@ -1069,3 +1069,68 @@ class TestARefusalSaysWhereToLook(RepoCase):
 
         self.assertEqual([], redact.find("SALT_EXTREME = 15.0"))
         self.assertEqual([], redact.find("out = tok(t, skip_special_tokens=True)"))
+
+
+class TestACardBeforeTheCode(RepoCase):
+    """A card is asked for at the FIRST WRITE, not at the finish.
+
+    The Stop demand asks at the end, so a whole turn of edits happens first and the board
+    is true only in retrospect. Asked where a task actually begins instead — and never a
+    wedge, because the way out is a Bash command and Bash is not what this refuses.
+    """
+
+    def gate(self, name: str, event: dict) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(BIN / name)],
+            input=json.dumps({"cwd": str(self.repo), **event}),
+            capture_output=True, text=True, cwd=str(self.repo), timeout=120,
+        )
+
+    def decision(self, proc) -> str | None:
+        try:
+            return json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"]
+        except (json.JSONDecodeError, KeyError, TypeError):
+            return None
+
+    def write_event(self, relpath: str) -> dict:
+        return {"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Write",
+                "tool_input": {"file_path": str(self.repo / relpath), "content": "x = 1\n"}}
+
+    def start(self, task: str = "перепиши импортер каталога, он падает на пустых ценах"):
+        """A session the founder has actually given a task — which is when a card is due.
+
+        Without a statement there is no task to card, and the rule deliberately stays
+        quiet; the Stop demand still catches that session at the end.
+        """
+        proc = self.gate("session-start",
+                         {"session_id": "s1", "hook_event_name": "SessionStart",
+                          "source": "startup"})
+        self.gate("prompt-capture",
+                  {"session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": task})
+        return proc
+
+    def test_the_first_write_without_a_card_is_refused(self):
+        self.start()
+        proc = self.gate("pre-tool", self.write_event("backend/new.py"))
+        self.assertEqual("deny", self.decision(proc), proc.stdout)
+        self.assertIn("claude-bp-plan add", proc.stdout, "a refusal must name the way through")
+
+    def test_the_card_the_refusal_names_clears_it(self):
+        self.start()
+        self.claim_a_task("s1", "backend/new.py")
+        proc = self.gate("pre-tool", self.write_event("backend/new.py"))
+        self.assertEqual("allow", self.decision(proc), proc.stdout + proc.stderr)
+
+    def test_a_session_the_founder_has_not_briefed_is_not_asked_for_a_card(self):
+        """A card records work somebody asked for. Demanding one where nothing was asked
+        is the gate inventing a process rather than recording one."""
+        self.gate("session-start", {"session_id": "s1", "hook_event_name": "SessionStart",
+                                    "source": "startup"})
+        proc = self.gate("pre-tool", self.write_event("backend/new.py"))
+        self.assertNotEqual("deny", self.decision(proc), proc.stdout)
+
+    def test_the_ledgers_own_files_never_need_a_card(self):
+        """Otherwise filing the card is refused by the rule demanding one."""
+        self.start()
+        proc = self.gate("pre-tool", self.write_event(".claude/claude-bestpractice/x.json"))
+        self.assertNotEqual("deny", self.decision(proc), proc.stdout)
