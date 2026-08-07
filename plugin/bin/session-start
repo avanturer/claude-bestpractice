@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import board, ci, config, hookio, knowledge, migrate, onboard, plan, sessions, stage, store, upgrade, worktree  # noqa: E402
+from claude_bestpractice import board, ci, config, hookio, knowledge, migrate, onboard, plan, policy, sessions, stage, store, upgrade, worktree  # noqa: E402
 from claude_bestpractice.gitctx import GitContext, resolve, stash_baseline  # noqa: E402
 
 
@@ -209,6 +209,26 @@ def _knowledge_line(ctx: GitContext) -> str:
     )
 
 
+def _stale_rules_line(ctx: GitContext) -> str:
+    """Standing instructions whose subject has left the repository.
+
+    A rule file has no expiry and no test, and the failure is quiet: an instruction naming
+    a path that was moved months ago is followed, or worked around, by every session that
+    reads it. Reported and never edited — deciding what the founder meant by a line is
+    judgement a path check does not have (#113, decision 0007).
+
+    Empty in every repository whose rules still match the tree, which is nearly all of them.
+    """
+    stale = knowledge.stale_rules(ctx)
+    if not stale:
+        return ""
+    return (
+        f"\nSTANDING RULES OUT OF DATE: {'; '.join(stale[:3])}"
+        + (f" (+{len(stale) - 3} more)" if len(stale) > 3 else "")
+        + ". Tell the founder; do not quietly work around them and do not edit their file."
+    )
+
+
 def _worktree_line(ctx: GitContext, cfg) -> str:
     """Standing instruction, because a refusal is not one.
 
@@ -299,6 +319,7 @@ def main() -> None:
     body += _armed_line(ctx)
     body += _swept_line(swept)
     body += _knowledge_line(ctx)
+    body += _stale_rules_line(ctx)
     body += _hidden_line(ctx)
     line = _worktree_line(ctx, cfg)
     body += line
@@ -307,6 +328,9 @@ def main() -> None:
     body += worktree.permission_advice(ctx, event.session_id) if line else ""
     # Empty in every repository whose tasks already live in the ledger, which is the
     # steady state — this only speaks while a workaround is still lying around.
+    # Drift between what this repository is and what auto mode has been told it is. Empty
+    # once `Setup` has run and nothing has moved, which is the steady state.
+    body += policy.line(ctx, cfg.test_command)
     # What this upgrade actually changed here, and only when it changed something.
     body += migrate.repaired_line(repaired)
     loose = migrate.line(ctx)

@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-1.14.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-1.15.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-738%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-26%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -304,6 +304,7 @@ configuration silently.
 | `claude-bp init` | Derive the knowledge layer from your code |
 | `claude-bp adopt` | Take over events another tool is contesting |
 | `claude-bp set` | Change a gate switch you asked for in your own words |
+| `claude-bp policy` | Tell auto mode what this repository is; name rules that no longer fire |
 | `claude-bp doctor` | Prove each gate by attempting a known-bad action |
 | `claude-bp-plan` | The work ledger: `add`, `list`, `claim`, `done` |
 | `claude-bp-decide` | Accept a decision drafted from your own corrections |

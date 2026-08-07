@@ -4,7 +4,7 @@
 
 **Память, координация и принуждение для разработки продукта в нескольких параллельных сессиях Claude Code.**
 
-[![version](https://img.shields.io/badge/version-1.14.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-1.15.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-738%20passing-2ea44f)](#проверено)
 [![doctor](https://img.shields.io/badge/doctor-26%20checks-2ea44f)](#проверено)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#требования)
@@ -271,6 +271,7 @@ claude-bp-ci off        # снять pre-push хук
 | `claude-bp init` | Вывести слой знания из вашего кода |
 | `claude-bp adopt` | Забрать события, которые оспаривает другой инструмент |
 | `claude-bp set` | Изменить переключатель гейта, о котором вы попросили своими словами |
+| `claude-bp policy` | Рассказать auto mode, что это за репозиторий; назвать правила, которые уже не срабатывают |
 | `claude-bp doctor` | Доказать каждый гейт попыткой заведомо плохого действия |
 | `claude-bp-plan` | Журнал работ: `add`, `list`, `claim`, `done` |
 | `claude-bp-decide` | Принять решение, черновик которого собран из ваших же поправок |

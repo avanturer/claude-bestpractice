@@ -185,6 +185,41 @@ def instruction_bytes(ctx: GitContext) -> int:
     return total
 
 
+# A path-shaped token: an explicit separator, or a bare filename with an extension. Only
+# these are checkable — a rule about a concept has no subject to look for.
+_NAMES_A_PATH = re.compile(r"\b(?:[\w.-]+/)+[\w.-]+\b")
+
+# Directories a rule legitimately names that are not in the working tree.
+_NOT_OURS = ("http", "https", "github.com", "node_modules", "~/", "/etc/", "/usr/")
+
+
+def stale_rules(ctx: GitContext, limit: int = 6) -> list[str]:
+    """Standing instructions whose subject is no longer in the repository.
+
+    A rule file has no expiry and no test. One `autoMode.environment` entry on a real
+    machine still stated that the production SSH key lived inside the checkout, a day after
+    it was moved out and revoked on the server — and nothing compared that claim to the
+    world (#113). The same machinery this plugin already points at its own knowledge
+    anchors, pointed one directory up.
+
+    Reported, never edited. Deciding what a founder meant by a line is judgement a path
+    check does not have, and rewriting their instruction file on a hunch is decision 0007's
+    whole subject.
+    """
+    root = ctx.worktree_root
+    out: list[str] = []
+    for path in existing_rules(ctx):
+        for number, line in enumerate(_read(path).splitlines(), 1):
+            if len(out) >= limit or not _PRESCRIPTIVE.search(line):
+                continue
+            for named in _NAMES_A_PATH.findall(line):
+                if named.startswith(_NOT_OURS) or (root / named).exists():
+                    continue
+                out.append(f"{path.name}:{number} names {named}, which is not here")
+                break
+    return out
+
+
 def _lines(text: str) -> int:
     return len([line for line in text.splitlines() if line.strip()])
 
