@@ -133,6 +133,58 @@ def load(ctx: GitContext) -> Layer:
     )
 
 
+# What this plugin writes into `.claude/rules/`. Everything else there is the founder's.
+_OURS = {PRODUCT, GLOSSARY, INDEX}
+
+
+def existing_rules(ctx: GitContext) -> list[Path]:
+    """Instruction files already here that this plugin did not write.
+
+    The plugin put its own layer in `.claude/rules/` and then judged the layer by whether
+    its own four files were there — so a repository with `CLAUDE.md` and eight rule files
+    in that exact directory was told, every session, that it had no knowledge layer and
+    should run `claude-bp init`. From the founder's side that reads as being told to start
+    what they finished months ago (#112).
+
+    The decisions directory is excluded: those are the plugin's shape by construction, and
+    a repository that has them has been through `init`.
+    """
+    root = ctx.worktree_root
+    found: list[Path] = []
+    project = root / "CLAUDE.md"
+    if project.is_file():
+        found.append(project)
+    rules = root / RULES_DIR
+    if not rules.is_dir():
+        return found
+    try:
+        listed = sorted(p for p in rules.glob("*.md") if p.name not in _OURS)
+    except OSError:
+        # An unreadable rules directory is not an empty one, and the caller's next move
+        # differs: `CLAUDE.md` alone is still a layer, and claiming none is here is the
+        # defect being fixed. Report what was readable.
+        return found
+    found.extend(listed)
+    return found
+
+
+def instruction_bytes(ctx: GitContext) -> int:
+    """What the founder's own instruction layer costs on every turn of every session.
+
+    Measured because nothing was measuring it. This plugin itemises its own always-on
+    context to the byte and holds itself under 400 tokens, while the files it sits beside
+    — loaded into the same window, by the same harness, on the same every-turn basis —
+    were counted only for `CLAUDE.md` and only against a size threshold.
+    """
+    total = 0
+    for path in existing_rules(ctx):
+        try:
+            total += path.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
 def _lines(text: str) -> int:
     return len([line for line in text.splitlines() if line.strip()])
 

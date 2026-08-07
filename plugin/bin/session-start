@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import board, ci, config, hookio, migrate, onboard, plan, sessions, stage, store, upgrade, worktree  # noqa: E402
+from claude_bestpractice import board, ci, config, hookio, knowledge, migrate, onboard, plan, sessions, stage, store, upgrade, worktree  # noqa: E402
 from claude_bestpractice.gitctx import GitContext, resolve, stash_baseline  # noqa: E402
 
 
@@ -188,8 +188,20 @@ def _knowledge_line(ctx: GitContext) -> str:
 
     Costs nothing after the layer exists, which is every session but the first few.
     """
-    if onboard.present(ctx):
+    found = onboard.shape(ctx)
+    if found == onboard.OURS:
         return ""
+    if found == onboard.ANOTHER:
+        # There IS a layer; it is in a different shape, in the same folder. Saying it is
+        # absent told a founder to start what they had finished months ago (#112).
+        rules = knowledge.existing_rules(ctx)
+        cost = knowledge.instruction_bytes(ctx)
+        return (
+            f"\nknowledge layer: {len(rules)} instruction file(s) already here, {cost} bytes "
+            "loaded into every turn, not in this plugin's shape. READ them before writing "
+            "any rule of your own, and put a new one where the existing ones are. "
+            "`claude-bp init` would add a second layer beside them; the founder decides that."
+        )
     return (
         "\nno knowledge layer here yet: run `claude-bp init`, then ASK THE FOUNDER for the "
         "placeholders it leaves — what this is, who it is for, its non-goals. Those cannot "
@@ -268,7 +280,7 @@ def main() -> None:
     # Repairs are the plugin's own state and run themselves. Adoption rewrites files in
     # the founder's repository and does not — it is surfaced by `_knowledge_line` and
     # applied by one command.
-    migrate.repair(ctx)
+    repaired = migrate.repair(ctx)
 
     cfg = config.load(ctx)
     # Work that stopped moving. `reap` covers the session that DIED; this covers the
@@ -295,6 +307,8 @@ def main() -> None:
     body += worktree.permission_advice(ctx, event.session_id) if line else ""
     # Empty in every repository whose tasks already live in the ledger, which is the
     # steady state — this only speaks while a workaround is still lying around.
+    # What this upgrade actually changed here, and only when it changed something.
+    body += migrate.repaired_line(repaired)
     loose = migrate.line(ctx)
     body += f"\n{loose}" if loose else ""
     # Empty on every session that is running what is installed, which is all of them

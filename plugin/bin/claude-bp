@@ -112,10 +112,22 @@ def cmd_status(ctx) -> int:
         f"  {len(layer.entities)} entities · {len(knowledge.decision_files(ctx))} decisions · "
         f"{layer.total_bytes}/{knowledge.LAYER_MAX_BYTES} bytes"
     )
+    # The founder's own instruction files, which this plugin sat beside and never counted.
+    # They are loaded into every turn of every session by the same harness, on the same
+    # always-on basis this plugin holds itself to 400 tokens for (#112).
+    theirs = knowledge.existing_rules(ctx)
+    if theirs:
+        names = ", ".join(path.name for path in theirs[:6])
+        more = f" (+{len(theirs) - 6} more)" if len(theirs) > 6 else ""
+        print(f"  {len(theirs)} instruction file(s) already here, "
+              f"{knowledge.instruction_bytes(ctx)} bytes in every turn: {names}{more}")
     if gaps:
         for gap in gaps:
             print(f"  {DIM}unanswered: {gap}{OFF}")
-    for problem in problems[:5]:
+    # Only about a layer that EXISTS. "product.md: missing" printed under a repository
+    # with nine instruction files of its own is the same false emptiness as the board line
+    # this replaced: nothing is broken, and what is here was never looked at (#112).
+    for problem in (problems[:5] if onboard.present(ctx) else []):
         print(f"  problem: {problem}")
     if pending:
         print(f"  {len(pending)} decision draft(s) waiting — `claude-bp-decide list`")
@@ -137,6 +149,12 @@ def cmd_status(ctx) -> int:
         print("  Another tool contests an event we own: `claude-bp adopt`")
     elif gaps:
         print("  Answer the placeholders in .claude/rules/product.md — nothing else derives them.")
+    elif onboard.shape(ctx) == onboard.ANOTHER:
+        # A layer IS here, in a different shape, in the same directory. Naming `init` here
+        # tells the founder to start what they finished months ago, and would stand a
+        # second layer up beside the one they maintain (#112).
+        print("  Read the instruction files already here before adding rules of your own;")
+        print("  `claude-bp init` would build a SECOND layer beside them — the founder's call.")
     elif not onboard.present(ctx):
         # "Repair the knowledge layer" was the first thing a fresh install printed, about
         # a layer that had never been built. Nothing was broken; nothing was there. It
@@ -247,6 +265,54 @@ def cmd_dismiss(ctx, detector: str, path: str) -> int:
     return 0
 
 
+def cmd_set(ctx, key: str, value: str) -> int:
+    """Change a gate switch, with the founder's own word as the key.
+
+    Every gate in this plugin named `config.json` as the way to turn it off, and every one
+    of those files is refused to the session being enforced — so the remedy the founder was
+    read out loud was one the assistant then said it could not perform (#108).
+
+    Both halves have to hold. A door the session cannot open at all leaves them editing
+    JSON by hand in the middle of unrelated work, from a chat that may not even be on
+    their machine. A door it can open alone is a gate that switches itself off the fourth
+    time it blocks something.
+    """
+    if key in config.EVIDENCE_KEYS:
+        print(f"{key} decides whether a finish is verifiable, so it is not set here.",
+              file=sys.stderr)
+        print("  claude-bp ci owns it: it runs the command and records what happened, "
+              "which is the difference between changing the check and proving it.",
+              file=sys.stderr)
+        return 1
+
+    coerced, complaint = config.coerce(key, value)
+    if complaint:
+        print(complaint, file=sys.stderr)
+        if "unknown key" in complaint:
+            print("  settable: " + ", ".join(
+                sorted(k for k in config._EXPECTED if k not in config.EVIDENCE_KEYS)),
+                file=sys.stderr)
+        return 1
+
+    asked = config.asked_for(ctx, key)
+    if asked is None or config.coerce(key, asked)[0] != coerced:
+        spelled = "off" if coerced is False else "on" if coerced is True else str(coerced)
+        print(f"the founder has not asked for {key} {spelled}.", file=sys.stderr)
+        print(f"  Ask them, and one line back is enough: `{key} {spelled}`.", file=sys.stderr)
+        print("  This is a gate switch. A session that has just been blocked is exactly "
+              "who would reach for it, which is why it is not this session's to turn.",
+              file=sys.stderr)
+        return 1
+
+    cfg = config.load(ctx)
+    setattr(cfg, key, coerced)
+    written = config.save(ctx, cfg)
+    config.clear_switch(ctx, key)
+    print(f"{key} = {coerced!r}")
+    print(f"  written to {written}, on the founder's word")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="claude-bp", description="claude-bestpractice control plane")
     sub = parser.add_subparsers(dest="command")
@@ -261,6 +327,10 @@ def main() -> int:
         "dismiss", help="rule a review finding false, for good — it stops blocking merges")
     dismiss.add_argument("detector", help="the name in the finding, e.g. sql-interpolation")
     dismiss.add_argument("path", help="the file it was raised against")
+    switch = sub.add_parser(
+        "set", help="change a gate switch the founder has asked for in their own words")
+    switch.add_argument("key", help="a config key, e.g. scope_drift_block")
+    switch.add_argument("value", help="on/off, a number, or a string")
 
     args = parser.parse_args()
     ctx = resolve_for_cli()
@@ -273,6 +343,8 @@ def main() -> int:
         return cmd_dismiss(ctx, args.detector, args.path)
     if args.command == "adopt":
         return cmd_adopt(ctx, args.dry_run, args.restore)
+    if args.command == "set":
+        return cmd_set(ctx, args.key, args.value)
     return cmd_status(ctx)
 
 

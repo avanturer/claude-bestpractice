@@ -141,6 +141,20 @@ class TestTheReleaseCutsItself(unittest.TestCase):
         self.assertIn("contents: write", workflow, "it cannot create a tag without this")
 
 
+def dispatcher_verbs(dispatcher: Path) -> set:
+    """What `claude-bp` accepts, read off the dispatcher rather than kept beside it.
+
+    A hand-kept copy is the very defect the test below exists to catch, one level up: it
+    went stale the first time a verb was added, and then failed on correct documentation.
+    """
+    import re
+
+    found = set(re.findall(r'sub\.add_parser\(\s*\n?\s*"([a-z-]+)"',
+                           dispatcher.read_text(encoding="utf-8")))
+    assert {"status", "doctor"} <= found, found
+    return found
+
+
 class TestInstallPath(unittest.TestCase):
     """The one line every new user runs before anything else works."""
 
@@ -174,7 +188,7 @@ class TestInstallPath(unittest.TestCase):
 
         bin_dir = REPO_ROOT / "plugin" / "bin"
         real = {p.name for p in bin_dir.iterdir() if p.is_file()}
-        verbs = {"status", "init", "doctor", "adopt"}  # what the dispatcher accepts
+        verbs = dispatcher_verbs(bin_dir / "claude-bp")
 
         # Prose and printed output only. `install.sh` refers to these paths as shell
         # globs and in comments about this very bug, and has its own structural test.

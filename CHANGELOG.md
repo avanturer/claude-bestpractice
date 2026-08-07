@@ -1,5 +1,73 @@
 # Changelog
 
+## v1.14.0
+
+Every step this plugin orders, it now takes without asking — and every remedy it names is
+one the session can actually reach.
+
+### Worktrees are made where entering them is silent (#111)
+
+Since CLI v2.1.206 `EnterWorktree` prompts for approval on any path outside
+`.claude/worktrees/`, unconditionally, before permissions are consulted at all. So the gate
+ordered a move and the founder was asked to authorise it — every time, in a repository with
+eight sibling trees. No hook approval and no `permissions.allow` entry could clear it: the
+prompt is that tool's own safety check.
+
+Trees are provisioned under `.claude/worktrees/` now, anchored to the main checkout so they
+never nest inside one another. The reason they used to sit outside the repository — untracked
+noise in every status, glob and scan — is paid rather than dropped: the location is excluded
+in `.git/info/exclude`, which is per-clone and not the founder's `.gitignore`, and `.claude/`
+is a dot-directory the search tools skip by default. Both are asserted by the doctor.
+
+Ownership moved with them. `owned_by_session` was plain containment, so a main checkout that
+now CONTAINS every session's tree owned all of them — the silent cross-tree overwrite this
+plugin exists to prevent, reintroduced by a change two files away. Caught by a test that had
+been passing for eleven versions.
+
+### `ExitWorktree` is vouched for on the same terms as entering (#110)
+
+Leaving was the one worktree call the gate stayed silent on, while `git worktree remove`
+through Bash — the identical action in the other spelling — was already vouched for. Keeping
+the tree is approved unconditionally, removing it when the tree holds no uncommitted work,
+and `discard_changes` never.
+
+### The pull request stops being a formality
+
+The founder watched the idea, the checks and the commits go past in the chat, and was then
+asked whether to open the pull request. Opening one and merging one this gate has just found
+no blockers for are both vouched for, so there is no prompt left to hide behind; a call that
+names somebody else's repository is not, and the permission layer decides that one. And a
+turn that ends with finished work and no pull request is blocked once, with the instruction
+to open it and then merge it — bringing the founder a conflict that needs their judgement,
+and nothing else.
+
+### A gate switch is the founder's word, not the session's (#108)
+
+`evidence-gate` blocked a turn and offered, as a way out, editing a file `pre-tool` refuses
+in the same breath. Seven messages named that file. There is one door now —
+`claude-bp set <key> <value>` — and its key is the founder's own message: `prompt-capture`
+records a switch they asked for in their words, where no session can write it, and the word
+is consumed on use. `test_command` is not settable this way at all; `claude-bp ci` owns it,
+because it runs the command before writing it. Decision 0006, proved by a new doctor check.
+
+### A knowledge layer in another shape is not an absent one (#112)
+
+The plugin put its own layer in `.claude/rules/` and then judged whether a layer existed by
+looking for its own four filenames — so a repository with `CLAUDE.md` and eight rule files in
+that exact directory was told, on every session start, to run `claude-bp init`. It reads what
+is there now, counts what those files cost in every turn (nothing else was measuring them),
+and tells the session to read them and put new rules where the existing ones are. They are
+never rewritten. Decision 0007.
+
+### An upgrade reconciles what differs, rather than ticking off names
+
+Repairs are keyed by revision, not by name. A repair whose implementation gets better was
+already recorded as done in every repository that ran the old one, and those were exactly the
+repositories that never got the improvement — which matters because the founder upgrades on
+top of what was working, several versions at a time. A record written before revisions existed
+reads as revision 0, so every repair runs again there, and what an upgrade actually changed is
+said on the board once.
+
 ## v1.13.0
 
 A card before the code, and an upgrade that fixes the repository it lands in.

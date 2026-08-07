@@ -66,10 +66,10 @@ def hidden_from_git(ctx: GitContext) -> str:
     --check` reports zero left, and only `git status` disagrees. Reported as issue #66 by a
     repository where thirty migrated tasks turned out to be invisible to git.
 
-    This only ever REPORTS. The plugin has never written an ignore rule — searched across
-    every released version — so the rule belongs to the founder or to another tool, and
-    rewriting somebody else's ignore file on the strength of a guess about why it is there
-    is not a repair.
+    This only ever REPORTS. The one ignore rule this plugin writes is `worktree.hide`,
+    which excludes the trees it provisions and nothing else — so a rule over Tier A belongs
+    to the founder or to another tool, and rewriting somebody else's ignore file on the
+    strength of a guess about why it is there is not a repair.
     """
     from .gitctx import _run
 

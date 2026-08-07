@@ -537,13 +537,8 @@ def _remote_names(ctx: GitContext) -> set[str]:
     return names
 
 
-def _repository_named(tool_name: str, tool_input: dict[str, Any], command: str) -> str:
-    """The repository this call names outright, or "" when it names none."""
-    if _OPENS_TOOL.search(tool_name) or _MERGES_TOOL.search(tool_name):
-        owner = str(tool_input.get("owner") or "").strip()
-        repo = str(tool_input.get("repo") or "").strip()
-        return f"{owner}/{repo}".lower() if owner and repo else ""
-
+def _repo_flag(command: str) -> str:
+    """`--repo owner/name` out of a `gh` line, in either spelling."""
     from . import shellcmd
 
     for argv in shellcmd.commands(command):
@@ -553,6 +548,15 @@ def _repository_named(tool_name: str, tool_input: dict[str, Any], command: str) 
             if token.startswith("--repo="):
                 return token.split("=", 1)[1].lower()
     return ""
+
+
+def _repository_named(tool_name: str, tool_input: dict[str, Any], command: str) -> str:
+    """The repository this call names outright, or "" when it names none."""
+    if not (_OPENS_TOOL.search(tool_name) or _MERGES_TOOL.search(tool_name)):
+        return _repo_flag(command)
+    owner = str(tool_input.get("owner") or "").strip()
+    repo = str(tool_input.get("repo") or "").strip()
+    return f"{owner}/{repo}".lower() if owner and repo else ""
 
 
 def about_this_repository(ctx: GitContext, tool_name: str, tool_input: dict[str, Any],

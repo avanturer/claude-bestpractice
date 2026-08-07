@@ -295,9 +295,8 @@ def main() -> None:
                 f"Scope drift: {shown} were modified but the task did not mention them.\n"
                 f"Task was: {rec.task_statement[:200]}\n"
                 "Revert what is out of scope. If it IS in scope, this gate cannot be told "
-                "so in prose — ask the founder to name those paths in their next message, "
-                'or to set {"scope_drift_block": false} in '
-                f"{store.tier_a(ctx, config.CONFIG_NAME)}."
+                "so in prose — ask the founder to name those paths in their next message.\n"
+                + config.switch_advice("scope_drift_block", False)
             )
 
     if cfg.require_task and gates["ledger"]:

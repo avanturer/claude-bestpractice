@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import hookio, redact, sessions  # noqa: E402
+from claude_bestpractice import config, hookio, redact, sessions  # noqa: E402
 from claude_bestpractice.gitctx import resolve  # noqa: E402
 
 MAX_TASK_CHARS = 600
@@ -203,6 +203,11 @@ def main() -> None:
         # Control characters go too: this text is rendered into an injected block, and an
         # ANSI escape or an RTL override in it is a way to make the board lie.
         safe = redact.scrub(redact.strip_control(prompt))
+        # A gate switch the founder asked for, in their own words, written where no
+        # session can reach it. This is the whole authorisation for `claude-bp set`: the
+        # remedy every gate names has to be one the session can perform and cannot perform
+        # alone, and the founder saying it is the only thing that satisfies both (#108).
+        config.record_switches(ctx, config.switches_in(safe))
         # Paths ACCUMULATE where the statement replaces. A later instruction naming more
         # files genuinely widens what is in scope, and dropping the earlier ones would make
         # the files the founder first asked for into drift. Bounded, because unbounded

@@ -381,6 +381,38 @@ def check_ledger_demand(repo: Path) -> Result:
     )
 
 
+def check_switch_needs_the_founder(repo: Path) -> Result:
+    """A gate switch must not be turnable by the session the gate is enforcing.
+
+    Every refusal in this plugin names a way to switch its gate off. If that way were
+    reachable by the agent, a session blocked four times would take it — which is not a
+    hypothesis, it is the shortest path to ending the turn. Proved by attempting it, then
+    by putting the founder's own word on record and attempting it again (#108).
+    """
+    unauthorised = subprocess.run(
+        [sys.executable, str(BIN / "claude-bp"), "set", "scope_drift_block", "off"],
+        capture_output=True, text=True, cwd=str(repo), timeout=120,
+    )
+    run_gate(
+        "prompt-capture",
+        {"session_id": "doctor-switch", "hook_event_name": "UserPromptSubmit",
+         "cwd": str(repo), "prompt": "single-session repo, scope_drift_block off"},
+        repo,
+    )
+    authorised = subprocess.run(
+        [sys.executable, str(BIN / "claude-bp"), "set", "scope_drift_block", "off"],
+        capture_output=True, text=True, cwd=str(repo), timeout=120,
+    )
+    ok = unauthorised.returncode != 0 and authorised.returncode == 0
+    return Result(
+        "a gate switch needs the founder's word",
+        ok,
+        "refused the session, accepted the founder" if ok
+        else f"unasked={unauthorised.returncode} asked={authorised.returncode}: "
+             f"{(unauthorised.stderr or authorised.stderr)[:120]!r} — A GATE CAN SWITCH ITSELF OFF",
+    )
+
+
 def check_evidence_gate_accepts(repo: Path) -> Result:
     """And a fresh passing artifact must be accepted, or the gate is unusable."""
     start_session(repo, "doctor-accept")
@@ -1174,6 +1206,7 @@ def main() -> int:
             check_evidence_gate_blocks,
             check_evidence_gate_accepts,
             check_ledger_demand,
+            check_switch_needs_the_founder,
             check_stale_artifact_rejected,
             check_checkpoint,
             check_knowledge_anchor,

@@ -28,6 +28,7 @@ import re
 import subprocess
 from pathlib import Path
 
+from . import config
 from .gitctx import GitContext
 
 # Names git itself treats as the trunk. Checked against the actual default when the
@@ -103,9 +104,9 @@ def worktree_refusal(ctx: GitContext, task: str = "", session_id: str = "") -> s
             "sharing one working tree overwrite each other silently — git does not notice, "
             "and neither will you.\n"
             f"  {worktree_advice(ctx, task)}\n"
-            "then work there, and do not ask the founder about it — run it yourself. Set "
-            "`require_worktree: false` in .claude/claude-bestpractice/config.json if this "
-            "repository is genuinely single-session."
+            "then work there, and do not ask the founder about it — run it yourself.\n"
+            "  If this repository is genuinely single-session: "
+            + config.switch_advice("require_worktree", False)
         )
     return (
         "claude-bestpractice: this is the main checkout, not a worktree. Several sessions "
@@ -114,8 +115,9 @@ def worktree_refusal(ctx: GitContext, task: str = "", session_id: str = "") -> s
         f"  A worktree has been created for you at {ready} — `cd {ready}` and redo this "
         "write there.\n"
         "  This is not a question for the founder: do not ask whether to use a worktree, "
-        "just move. Set `require_worktree: false` in "
-        ".claude/claude-bestpractice/config.json if this repository is genuinely single-session."
+        "just move.\n"
+        "  If this repository is genuinely single-session: "
+        + config.switch_advice("require_worktree", False)
     )
 
 
@@ -136,7 +138,7 @@ def violations(ctx: GitContext, task: str = "", session_id: str = "") -> list[st
             f"claude-bestpractice: {ctx.branch} is the trunk. Work on a branch so it can be "
             "reverted and merged as one unit.\n"
             f"  git switch -c feat/{'-'.join(task.lower().split()[:4]) or 'work'}\n"
-            "Set `protect_trunk: false` in .claude/claude-bestpractice/config.json to allow it."
+            + config.switch_advice("protect_trunk", False)
         )
     return out
 

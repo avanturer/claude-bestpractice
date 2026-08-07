@@ -578,7 +578,7 @@ def main() -> None:
                     f"claude-bestpractice: {complaint}\n"
                     "The reader is not a reviewer — there is none. It is the next session, "
                     "running `git log` on this file to work out why it looks the way it does.\n"
-                    "Set `commit_conventions: false` in .claude/claude-bestpractice/config.json to stop checking."
+                    + config.switch_advice("commit_conventions", False)
                 )
 
     if event.tool_name in WRITE_TOOLS or event.tool_name == "Bash":
@@ -724,8 +724,10 @@ def main() -> None:
                 f"claude-bestpractice: {protected[0]} is the plugin's own enforcement state, and the "
                 "session being enforced does not get to edit it — pointing `test_command` at "
                 "`true` would buy a green finish and erase the record of the real failure.\n"
-                "Change it with `claude-bp ci`, or edit it yourself outside a session. "
-                "Everything else under .claude/claude-bestpractice/ is yours to write."
+                "Change a gate switch with `claude-bp set <key> <value>`, which needs the "
+                "founder to have asked for it in their own words, and the test command with "
+                "`claude-bp ci`, which proves it before writing it. Everything else under "
+                ".claude/claude-bestpractice/ is yours to write."
             )
 
         # Bash is a write tool. An agent writes files with heredocs, `>`, `tee` and
