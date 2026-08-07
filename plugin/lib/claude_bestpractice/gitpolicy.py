@@ -190,7 +190,7 @@ def foreign_tree(ctx: GitContext, target: Path, session_id: str = "") -> Path | 
     and no merge can move a change to it. Both exits led back to each other, and a session
     that had just rotated a production SSH key could not delete the retired one (#68).
     """
-    if _within(target, ctx.worktree_root):
+    if _ours(ctx, target):
         return None
     for tree in working_trees(ctx):
         if tree == ctx.worktree_root.resolve() or not _within(target, tree):
@@ -281,7 +281,27 @@ def ignored_by_git(tree: Path, target: Path) -> bool:
 
 def owned_by_session(ctx: GitContext, target: Path) -> bool:
     """Does this write land in the tree this session is working in?"""
-    return _within(target, ctx.worktree_root)
+    return _ours(ctx, target)
+
+
+def _ours(ctx: GitContext, target: Path) -> bool:
+    """Inside this session's tree, and not inside a working tree nested within it.
+
+    Plain containment stopped being the whole answer when provisioned trees moved under
+    `.claude/worktrees/` (#111): the main checkout then CONTAINS every other session's
+    tree, so a path comparison alone hands all of them to whoever is standing in the main
+    checkout — the silent cross-tree overwrite this file exists to prevent, reintroduced
+    by a change made two files away. Caught by a test that had been passing for eleven
+    versions, which is the argument for having written it.
+
+    Path arithmetic and not `git worktree list`, because this runs on every tool call and
+    the boundary is a location this plugin chooses rather than one it has to discover.
+    """
+    if not _within(target, ctx.worktree_root):
+        return False
+    from .worktree import HOME
+
+    return not _within(target, ctx.worktree_root / HOME)
 
 
 def _within(target: Path, root: Path) -> bool:

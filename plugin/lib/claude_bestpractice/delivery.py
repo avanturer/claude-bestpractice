@@ -252,7 +252,7 @@ def ready(ctx: GitContext, base: str) -> list[str]:
     if _unverified_here(ctx):
         problems.append("this branch carries an UNVERIFIED finish")
 
-    if _dirty(ctx):
+    if dirty(ctx):
         problems.append("there are uncommitted changes")
     return problems
 
@@ -265,7 +265,7 @@ def ready(ctx: GitContext, base: str) -> list[str]:
 _NOT_THE_FOUNDERS = (".claude/",)
 
 
-def _dirty(ctx: GitContext) -> bool:
+def dirty(ctx: GitContext) -> bool:
     """Uncommitted work that would not reach the remote, ignoring the gates' own state."""
     listed = subprocess.run(
         ["git", "status", "--porcelain"],

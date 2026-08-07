@@ -652,11 +652,11 @@ def check_worktree_is_required(repo: Path) -> Result:
     except (json.JSONDecodeError, KeyError, TypeError):
         denied, reason = False, ""
 
-    # Found by prefix, not by name: the name carries a per-session suffix so that two
-    # sessions can never be handed the same tree.
-    siblings = [p for p in strict.parent.iterdir()
-                if p.is_dir() and p.name.startswith(f"{strict.name}-")]
-    actionable = len(siblings) == 1 and str(siblings[0]) in reason
+    # Looked for where entering it needs no approval. The name carries a per-session
+    # suffix so that two sessions can never be handed the same tree.
+    home = strict / ".claude" / "worktrees"
+    made = [p for p in home.iterdir() if p.is_dir()] if home.is_dir() else []
+    actionable = len(made) == 1 and str(made[0]) in reason
     return Result(
         "the main checkout is refused",
         denied and actionable,
@@ -1014,14 +1014,26 @@ def check_worktree_provisioning(repo: Path) -> Result:
         except (json.JSONDecodeError, AttributeError):
             trusted = False
 
-    outside = not path.startswith(str(repo.resolve()) + "/")
-    ok = trusted and outside
+    # `EnterWorktree` prompts unconditionally for any path outside `.claude/worktrees/`,
+    # before permissions are consulted at all — so a tree anywhere else is one the founder
+    # is asked to authorise every time this gate orders the move (#111).
+    home = str((repo / ".claude" / "worktrees").resolve()) + "/"
+    placed = path.startswith(home)
+    # And the reason those trees used to sit outside the repository, paid rather than
+    # dropped: provisioning must not leave the founder's status reporting untracked work.
+    listed = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=str(repo),
+        capture_output=True, text=True, timeout=60,
+    ).stdout
+    hidden = ".claude/worktrees" not in listed
+    ok = trusted and placed and hidden
     return Result(
         "worktree provisioning",
         ok,
-        "path outside the tree, trust seeded at birth"
+        "entered without a prompt, invisible to git, trust seeded at birth"
         if ok
-        else f"outside={outside} trusted={trusted} — an untrusted worktree runs no hooks",
+        else f"in .claude/worktrees={placed} hidden={hidden} trusted={trusted} — "
+             "a tree elsewhere is one the founder is asked about, and an untrusted one runs no hooks",
     )
 
 

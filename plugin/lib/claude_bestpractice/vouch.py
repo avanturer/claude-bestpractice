@@ -56,6 +56,21 @@ WRITE = (
     "into every OTHER tree is this plugin's own rule; the same answer, inverted, is a "
     "vouch rather than a prompt."
 )
+EXIT = (
+    "claude-bestpractice: one tree per session is this gate's rule, and leaving is the last "
+    "step of the convention it publishes. Approving the way in and asking about the way out "
+    "is the same interruption, one call later."
+)
+PULL_REQUEST = (
+    "claude-bestpractice: this plugin refuses a finish that leaves committed work with no "
+    "pull request, so opening one is its own instruction being followed. Asking the founder "
+    "whether to open it is the formality the obligation exists to remove."
+)
+MERGE = (
+    "claude-bestpractice: this merge was judged by this gate one step ago and nothing was "
+    "found standing against it. Refusing a merge with blockers and then asking about one "
+    "without any leaves the founder to re-decide what was already decided."
+)
 
 # Moving around is not doing anything, and the founder's real commands are compound:
 # `cd <tree> && ruff check` is the shape the measurements are full of.
@@ -362,6 +377,40 @@ def for_write(ctx: GitContext, session_id: str, paths: list[Path]) -> str:
     return WRITE
 
 
+# `discard_changes` is absent by design: it is the one exit that destroys work, and no
+# convention this plugin publishes asks for it.
+_EXIT_ACTIONS = {"keep", "remove"}
+
+
+def for_tool(ctx: GitContext, tool_name: str, tool_input: dict) -> str:
+    """Why this structured call needs no prompt, or "" to leave the decision where it was.
+
+    `EnterWorktree` was vouched for and `ExitWorktree` was not, so the founder authorised
+    the last step of a workflow whose first step the plugin had approved on their behalf
+    seconds earlier — and `git worktree remove` through Bash, the identical action in the
+    other spelling, was already silent. Reported as #110.
+    """
+    if tool_name != "ExitWorktree":
+        return ""
+    if tool_input.get("discard_changes"):
+        return ""
+    action = str(tool_input.get("action") or "keep").lower()
+    if action not in _EXIT_ACTIONS:
+        return ""
+    if action == "remove":
+        from . import delivery
+
+        # The same condition `git worktree remove` enforces by refusing, asked before the
+        # call instead of after it: a tree holding uncommitted work is not one the founder
+        # agreed to lose by installing this plugin.
+        try:
+            if delivery.dirty(ctx):
+                return ""
+        except OSError:
+            return ""
+    return EXIT
+
+
 def surface(ctx: GitContext, test_command: list[str]) -> list[str]:
     """What this plugin vouches for here, so the founder can read it rather than find it.
 
@@ -372,7 +421,9 @@ def surface(ctx: GitContext, test_command: list[str]) -> list[str]:
     return [
         f"reads inside {ctx.worktree_root.name}/ that write nothing (git log/diff/status, cat, grep)",
         f"this project's checks in any spelling (detected: {detected})",
-        "git worktree add/remove/list, and writes and commits in this session's own tree",
+        "git worktree add/remove/list, entering and leaving one, and writes and commits "
+        "in this session's own tree",
+        "opening a pull request, and merging one this gate has just found no blockers for",
         "each segment of a compound command judged alone; one unvouched segment ends it",
         "not: the network, production, git push, credentials, anything outside this tree",
     ]

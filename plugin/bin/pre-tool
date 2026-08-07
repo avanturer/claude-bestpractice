@@ -503,6 +503,7 @@ def main() -> None:
     # A pull request is an obligation from the moment it is opened, and the merge is the
     # one point where every check this plugin has can still be applied. Both halves of
     # that live here: the obligation is written down, and the merge is judged.
+    pr_vouch = ""
     if cfg.manage_pull_requests:
         command = str(ti.get("command", "")) if event.tool_name == "Bash" else ""
         number = pullrequest.merge_target(event.tool_name, command, ti)
@@ -516,6 +517,11 @@ def main() -> None:
                 problems = pullrequest.blockers(ctx, base, str(gated.get("branch") or ""))
                 if problems:
                     hookio.deny_tool(pullrequest.merge_refusal(gated, problems))
+                # Judged, and nothing found. Carried to the vouch at the end of this file
+                # rather than allowed here, because `allow_tool` ends the permission
+                # pipeline and every gate below this line still has its say.
+                if pullrequest.about_this_repository(ctx, event.tool_name, ti, command):
+                    pr_vouch = vouch.MERGE
                 # Recorded on the way through: a PreToolUse hook never sees the result,
                 # and an obligation the founder has already watched be merged is worse
                 # than useless on the board.
@@ -529,6 +535,8 @@ def main() -> None:
             # when the session coordinates from the main checkout (#79).
             head = pullrequest.head_of(event.tool_name, command, ti, session_cwd) or ctx.branch
             pullrequest.opened(ctx, head, base, event.session_id)
+            if pullrequest.about_this_repository(ctx, event.tool_name, ti, command):
+                pr_vouch = vouch.PULL_REQUEST
 
     # Entering a worktree is the move this gate ORDERS. Making the founder authorise it
     # through a permission prompt is the plugin interrupting them with its own
@@ -814,7 +822,10 @@ def main() -> None:
     elif event.tool_name in WRITE_TOOLS:
         vouched = vouch.for_write(ctx, event.session_id, absolute)
     else:
-        vouched = ""
+        vouched = vouch.for_tool(ctx, event.tool_name, ti)
+    # Second, never first: a pull request call that any gate above refused never reaches
+    # this line, and one that reached it has been judged rather than merely tolerated.
+    vouched = vouched or pr_vouch
     if vouched:
         hookio.allow_tool(vouched)
 
