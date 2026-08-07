@@ -967,6 +967,83 @@ def _missing_runner(code: int, tail: str) -> str:
     return ""
 
 
+SETTLED_DRIFT = "settled-drift.json"
+
+
+def settle_drift(ctx, session_id: str, paths: list[str]) -> None:
+    """Remember drift the gate has already given up on, so it stops asking.
+
+    The ceiling exists to end a turn the gate cannot resolve — but `stop_hook_active` is
+    false on the first Stop of every NEW user message, so the ceiling was never consulted
+    there and each message bought one guaranteed block on the same paths. A founder who
+    asked an unrelated question was refused over an edit from three turns ago, forever,
+    with the escape reachable only by them (#106).
+
+    Giving up and then asking again is the gate contradicting its own decision. What it
+    let go of once is recorded here, and it does not come back — the founder still sees it,
+    as an unverified attempt and an open item on the board, which is where a decision the
+    plugin could not make belongs.
+    """
+    from . import store
+
+    path = store.tier_b(ctx, SETTLED_DRIFT)
+    with store.guarded_json(path, default={}) as box:
+        table = box[0] if isinstance(box[0], dict) else {}
+        known = set(table.get(session_id) or []) | set(paths)
+        table[session_id] = sorted(known)[:256]
+        box[0] = table
+
+
+def settled_drift(ctx, session_id: str) -> list[str]:
+    from . import store
+
+    table = store.read_json(store.tier_b(ctx, SETTLED_DRIFT), default={})
+    if not isinstance(table, dict):
+        return []
+    return [p for p in (table.get(session_id) or []) if isinstance(p, str)]
+
+
+def landed(ctx, changed: list[str]) -> list[str]:
+    """Of these, the ones whose content is already on the trunk.
+
+    Work that has been merged is not this session's unreviewed change — it has been
+    through whatever review the founder runs, and a gate that keeps calling it drift is
+    describing the past. Compared by content rather than by name, because a file that
+    exists on the trunk with different content is exactly the case drift is FOR.
+    """
+    from .gitctx import _run
+
+    settled = []
+    for rel in changed:
+        here = _blob(ctx, "HEAD", rel)
+        if not here:
+            continue
+        for trunk in ("origin/HEAD", "origin/main", "origin/master"):
+            there = _blob(ctx, trunk, rel)
+            if there:
+                if there == here:
+                    settled.append(rel)
+                break
+    return settled
+
+
+_SHA = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _blob(ctx, rev: str, relpath: str) -> str:
+    """The blob id of one path at one revision, or "" when there is not one.
+
+    Checked against the SHA shape rather than against emptiness: `git rev-parse` ECHOES an
+    argument it cannot resolve instead of failing, so an absent `origin/HEAD` came back as
+    the literal string `origin/HEAD:file.py` — which is non-empty, ended the search at the
+    first trunk name, and made every merged file look unmerged.
+    """
+    from .gitctx import _run
+
+    out = _run(["rev-parse", f"{rev}:{relpath}"], ctx.worktree_root, check=False).strip()
+    return out if _SHA.match(out) else ""
+
+
 def scope_drift(changed: list[str], task_paths: list[str], exempt: list[str]) -> list[str]:
     """Files touched that the task never mentioned.
 

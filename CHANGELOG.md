@@ -1,5 +1,43 @@
 # Changelog
 
+## v1.12.1
+
+The scope-drift gate could wedge a session with no way out that did not go through the
+founder (#106).
+
+### A pasted terminal log is not a statement of work
+
+The founder pastes the tail of a deploy run. It becomes the session's task. Every drift
+refusal then quotes `Task was: (.venv) hedge@AVANTURER-PC:~/dev/startups/fuddy$ …` back at
+an agent that cannot possibly satisfy it, and the founder is pulled in to type a filename
+before any further work can be reported.
+
+A paste is now recognised — a shell prompt, a traceback, `npm ERR!`, a timestamped log —
+and is neither the statement nor the blank-board fallback. The first line decides, so
+"this failed, look: <traceback>" stays an instruction with evidence attached. An empty
+statement is the honest state for a paste, and it leaves `task_paths` empty, which
+disables the drift check rather than enforcing it against a shell prompt.
+
+### What the gate gave up on does not come back
+
+`stop_hook_active` is false on the first Stop of every new message, so the escalation
+ceiling was never consulted there: each new message bought one guaranteed block on the
+same paths, forever, including the message asking the founder to clear it. Giving up and
+then asking again is the gate contradicting its own decision. What the ceiling releases is
+recorded and stays released — the founder still sees it, as an unverified attempt and an
+open item on the board.
+
+### Work already merged is not this session's drift
+
+A file whose content is identical on the trunk has been through whatever review the
+founder runs. Compared by blob rather than by name, because a file that exists there with
+different content is exactly the case drift is for.
+
+Found while fixing it: `git rev-parse` ECHOES an unresolvable argument instead of failing,
+so an absent `origin/HEAD` came back as the literal string `origin/HEAD:file.py` — non-empty,
+ending the trunk search at the first name and making every merged file look unmerged. The
+result is checked against the SHA shape now.
+
 ## v1.12.0
 
 The vouch stopped being a list of strings and became a question about the command.

@@ -184,6 +184,10 @@ def main() -> None:
         # the live loop — so it carries the same detail the other one always did.
         ceiling_reason, ceiling_paths = _remembered_block(rec)
         _give_up(ctx, rec, ceiling_reason, ceiling_paths)
+        # What it just let go of does not come back. The founder still sees it — as an
+        # unverified attempt and an open item — which is where a decision this gate could
+        # not make belongs.
+        evidence.settle_drift(ctx, rec.session_id, ceiling_paths)
         _bump_blocks(ctx, rec, 0)
         sys.stderr.write("claude-bestpractice: finishing UNVERIFIED — continuation ceiling reached.\n")
         _allow(ctx, rec)
@@ -251,7 +255,16 @@ def main() -> None:
     problems: list[str] = []
 
     if cfg.scope_drift_block and gates["scope_drift"]:
-        drift = evidence.scope_drift(changed, rec.task_paths, exempt)
+        # Two things are not drift, and both of them wedged a founder for a whole session.
+        # What the gate has already given up on: asking again after deciding to let it go
+        # is the gate contradicting itself, and `stop_hook_active` is false on the first
+        # Stop of every new message, so each message bought one more block on the same
+        # paths — forever. And what is already merged: that is not this session's
+        # unreviewed change, it has been through whatever review the founder runs (#106).
+        forgiven = set(evidence.settled_drift(ctx, rec.session_id))
+        forgiven.update(evidence.landed(ctx, changed))
+        drift = [p for p in evidence.scope_drift(changed, rec.task_paths, exempt)
+                 if p not in forgiven]
         if drift:
             shown = ", ".join(drift[:8]) + (f" (+{len(drift) - 8} more)" if len(drift) > 8 else "")
             # "or state why it was necessary" was a false promise, and it was this gate
