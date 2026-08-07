@@ -130,7 +130,9 @@ class TestFullLifecycle(Scenario):
         self.assertIn("health:", board_text)
         self.assertIn("stage: prototype", board_text)
 
-        self.cli("claude-bp-plan", "claim", "0001", "--session", "s1")
+        # The composed identity, which is what every gate reads. A session claiming with
+        # its raw id owns a task the registry cannot connect to it.
+        self.cli("claude-bp-plan", "claim", "0001", "--session", sid(self.repo, "s1"))
         self.hook(
             "prompt-capture",
             session_id="s1",

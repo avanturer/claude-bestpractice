@@ -414,6 +414,74 @@ def _move(task: Task, state: str, owner: str = "", branch: str = "",
     return moved
 
 
+IDLE_HOURS = 24.0
+
+
+def _stale_for(task: Task, now: float, hours: float) -> float:
+    """Hours since this task last moved, or 0 when that cannot be read."""
+    stamp = task.updated_at or task.created_at
+    try:
+        moved = time.mktime(time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ"))
+    except (ValueError, TypeError):
+        return 0.0
+    idle = (now - (moved - time.timezone)) / 3600.0
+    return idle if idle > hours else 0.0
+
+
+def _still_on_it(ctx: GitContext, task: Task) -> bool:
+    """Is the owner touching this task's own files right now?
+
+    The reason this is not just a clock. A session can hold one task for two days and be
+    working on it the whole time; reclaiming that would take work off somebody mid-change,
+    which is worse than the stale row it was meant to fix. So the clock only decides for a
+    task whose OWNER has moved on to other files.
+    """
+    from . import sessions
+
+    holder = sessions.get(ctx, task.owner) if task.owner else None
+    if holder is None or not sessions.is_live(ctx, holder):
+        return False
+    if not task.paths:
+        return not sessions.is_idle(holder)
+    return any(touched in task.paths for touched in holder.last_touched)
+
+
+def sweep_idle(ctx: GitContext, hours: float = IDLE_HOURS) -> list[Task]:
+    """Return work that stopped moving to the queue, and say so in the task itself.
+
+    `reap` already releases the tasks of a session that DIED. Nothing covered the commoner
+    case: a live chat that claimed 0007, moved on to something else, and left it reading
+    `doing` on every board for the rest of the week. The board's whole claim is that it
+    says what is in flight, and a row nobody is working on is the claim being false.
+
+    Back to `next`, not to `paused`: paused means waiting on something nameable, and this
+    is waiting on nobody. It goes back where anyone can pick it up, carrying a line saying
+    what happened so the next session does not rediscover it.
+    """
+    now = time.time()
+    moved: list[Task] = []
+    for task in load_all(ctx, DOING):
+        idle = _stale_for(task, now, hours)
+        if not idle or _still_on_it(ctx, task):
+            continue
+        note = (f"[{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now))}] returned to the "
+                f"queue: claimed by {task.owner[:8] or 'nobody'} and untouched for "
+                f"{int(idle)}h.")
+        task.body = f"{task.body}\n\n{note}".strip() if task.body else note
+        _rewrite_body(task)
+        released = _move(task, NEXT)
+        if released:
+            moved.append(released)
+    return moved
+
+
+def _rewrite_body(task: Task) -> None:
+    """Persist an amended body in place, leaving the frontmatter as it stands."""
+    meta, _ = _frontmatter(task.path.read_text(encoding="utf-8"))
+    head = "\n".join(f"{k}: {v}" for k, v in meta.items())
+    store.atomic_write(task.path, f"---\n{head}\n---\n\n{task.body}\n", mode=0o644)
+
+
 def blockers(ctx: GitContext, task: Task) -> list[str]:
     """The ids this task named with `--after` that have not landed yet.
 

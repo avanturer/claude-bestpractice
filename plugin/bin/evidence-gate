@@ -269,6 +269,29 @@ def main() -> None:
                 f"{store.tier_a(ctx, config.CONFIG_NAME)}."
             )
 
+    if cfg.require_task and gates["ledger"]:
+        # Work that changed files while the board says nothing is in flight. The ledger was
+        # advisory in a product whose premise is that the board tells the truth about what
+        # the other sessions are doing — so a session could rewrite the importer for three
+        # hours and appear, to every sibling, to be doing nothing at all.
+        #
+        # Satisfied once per session and then never seen again, which is what makes this a
+        # gate rather than nagging: one `claude-bp-plan add` or `claim`, and the rest of
+        # the session passes here silently.
+        from claude_bestpractice import plan
+
+        mine = [t for t in plan.load_all(ctx, plan.DOING) if t.owner == rec.session_id]
+        if not mine:
+            problems.append(
+                f"Nothing on the board says this session is working: {len(changed)} file(s) "
+                "changed and no task in the ledger is claimed by it.\n"
+                "  Every sibling session reads the board to decide what is safe to touch, "
+                "and an unlisted change is invisible to all of them.\n"
+                '  claude-bp-plan add "<what this turn is doing>" --paths '
+                f"{','.join(changed[:3])}\n"
+                "  then: claude-bp-plan claim <id>   (or claim the task you are already on)"
+            )
+
     if cfg.compare_dependencies:
         uncompared = options.demand(ctx, changed, rec.baseline_commit)
         if uncompared:

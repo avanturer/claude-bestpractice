@@ -75,6 +75,28 @@ class NotApplicable(Exception):
     """
 
 
+def compose_session_id(harness_id: str, cwd: str) -> str:
+    """(harness id, worktree) as one string — the identity everything else is keyed by.
+
+    Shared rather than a method because the CLI has to arrive at the SAME answer. It did
+    not: `claude-bp-plan claim` stamped `cli-<branch>` as the owner, so a task claimed from
+    inside a session was owned by nobody the registry knew — the board reported it
+    "claimed by cli-main, which has no record", and the Stop demand that reads ownership
+    could never be satisfied by the very command it names.
+    """
+    root = _worktree_of(cwd)
+    if not root:
+        return harness_id
+    tag = hashlib.sha1(root.encode("utf-8")).hexdigest()[:8]
+    return f"{harness_id}-{tag}" if harness_id else f"anon-{tag}"
+
+
+def current_session_id(cwd: str) -> str:
+    """This process's session identity, for a CLI running inside a session. "" outside."""
+    harness = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    return compose_session_id(harness, cwd) if harness else ""
+
+
 @dataclass(frozen=True)
 class HookEvent:
     raw: dict[str, Any]
@@ -96,12 +118,7 @@ class HookEvent:
         One session per worktree is this product's model already, and a resume or a
         post-compaction restart in the same worktree still resolves to its own record.
         """
-        base = str(self.raw.get("session_id") or "")
-        root = _worktree_of(self.cwd)
-        if not root:
-            return base
-        tag = hashlib.sha1(root.encode("utf-8")).hexdigest()[:8]
-        return f"{base}-{tag}" if base else f"anon-{tag}"
+        return compose_session_id(str(self.raw.get("session_id") or ""), self.cwd)
 
     @property
     def event_name(self) -> str:

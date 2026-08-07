@@ -17,6 +17,8 @@ from pathlib import Path
 
 from helpers import BIN, RepoCase, sid
 
+from claude_bestpractice import plan
+
 JUNIT_PASS = '<?xml version="1.0"?><testsuite name="s" tests="4" failures="0" errors="0"></testsuite>'
 
 
@@ -34,7 +36,7 @@ class GateCase(RepoCase):
 
     def after_prompts(self, *prompts: str):
         """Drive the real hook once per prompt and return the session record."""
-        from claude_bestpractice import sessions
+        from claude_bestpractice import sessions, plan
 
         self.start()
         for prompt in prompts:
@@ -506,6 +508,7 @@ class TestEvidenceGate(GateCase):
 
     def test_accepts_fresh_passing_evidence(self):
         self.start()
+        self.claim_a_task("s1", "feature.py")
         self.write("feature.py", "x = 1\n")
         time.sleep(0.02)
         self.write("junit.xml", JUNIT_PASS)
@@ -575,8 +578,41 @@ class TestEvidenceGate(GateCase):
         body = json.loads(self.start("next").stdout)["hookSpecificOutput"]["additionalContext"]
         self.assertIn("UNVERIFIED", body)
 
+    def test_unlisted_work_is_refused_at_the_finish(self):
+        """The ledger was advisory in a product whose premise is that the board tells the
+        truth about what the other sessions are doing. A session could rewrite the
+        importer for three hours and appear, to every sibling, to be doing nothing.
+        """
+        self.start()
+        self.write("feature.py", "x = 1\n")
+        self.write("junit.xml", JUNIT_PASS)
+
+        proc = self.stop()
+        self.assertEqual(2, proc.returncode)
+        self.assertIn("Nothing on the board", proc.stderr)
+        self.assertIn("claude-bp-plan add", proc.stderr, "a refusal must name the way through")
+
+    def test_the_command_the_refusal_names_actually_satisfies_it(self):
+        """`claim` stamped `cli-<branch>` as the owner, so the task belonged to somebody
+        the registry had never heard of and the demand could not be cleared by its own
+        instruction. Identity is (harness id, worktree) in the CLI too."""
+        self.start()
+        self.write("feature.py", "x = 1\n")
+        task = plan.add(self.ctx(), "what this turn is doing", paths=["feature.py"])
+        claimed = subprocess.run(
+            [sys.executable, str(BIN / "claude-bp-plan"), "claim", task.id],
+            capture_output=True, text=True, cwd=str(self.repo), timeout=60,
+            env={**os.environ, "CLAUDE_CODE_SESSION_ID": "s1"},
+        )
+        self.assertEqual(0, claimed.returncode, claimed.stderr)
+
+        self.write("junit.xml", JUNIT_PASS)
+        proc = self.stop()
+        self.assertEqual(0, proc.returncode, proc.stderr)
+
     def test_counter_resets_after_a_success(self):
         self.start()
+        self.claim_a_task("s1", "feature.py")
         self.write("feature.py", "x = 1\n")
         self.assertEqual(self.stop().returncode, 2)
         time.sleep(0.02)

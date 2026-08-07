@@ -172,6 +172,7 @@ class TestEvidenceIsWitnessed(DisarmCase):
         self.stdlib_runner()
         self.commit()
         self.start()
+        self.claim_a_task("s1", "bill.py")
         self.write("bill.py", "def total(items):\n    return sum(items)  # same\n")
         self.assertEqual(self.stop().returncode, 0, self.stop().stderr)
 
@@ -373,6 +374,7 @@ class TestAStaleArtifactCannotSpeakForThisRun(DisarmCase):
     def test_a_foreign_failing_artifact_does_not_block_a_green_run(self):
         self.green_project()
         self.start()
+        self.claim_a_task("s1", "impl.py")
         self.write("impl.py", "def f():\n    return 2  # touched\n")
         self.write(
             "junit.xml",
@@ -467,6 +469,7 @@ class TestNoCachedVerdictOutlivesItsCause(RepoCase):
         self.project(expected=1)
         self.config(["true"])
         self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
+        self.claim_a_task("s1", "impl.py")
         self.write("impl.py", "def f():\n    return 1  # edited\n")
         self.assertEqual(self.stop(), 0, "a permissive command should pass on its own terms")
 

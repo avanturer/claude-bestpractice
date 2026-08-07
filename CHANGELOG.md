@@ -116,6 +116,33 @@ every field ever added to this model has been dropped by a move at least once �
 reclaim path rewrote a crashed session's task from its title alone, discarding its files,
 its finish condition and its order at the moment the next session has least context.
 
+### The board is now binding, not advisory
+
+Two gaps, both about the board's central claim — that it says what is in flight.
+
+**Work that changed files while nothing on the board says so is refused at the finish.**
+`pre-tool`, `evidence-gate` and `session-start` did not call `plan` even once: a session
+could rewrite the importer for three hours and appear, to every sibling, to be doing
+nothing at all. The Stop gate now demands the work be on the board, alongside scope drift
+and the evidence demand — satisfied once per session with the command the refusal names,
+then never seen again. `require_task` in config turns it off.
+
+**A task nobody is working on goes back to the queue.** `reap` covered the session that
+DIED; nothing covered the commoner case — a live chat that claimed 0007, moved on, and
+left it reading `doing` on every board for the rest of the week. `plan.sweep_idle` runs at
+SessionStart before the board is rendered: back to `next`, carrying a line saying what
+happened, after `task_idle_hours` (default 24) untouched. Not to `paused`, because paused
+means waiting on something nameable and this is waiting on nobody. A session still editing
+the task's own files keeps it however long it takes — reclaiming work mid-change is worse
+than the stale row it was meant to fix.
+
+The demand exposed a defect in the command it names. `claude-bp-plan claim` stamped
+`cli-<branch>` as the owner, so a task claimed from inside a session belonged to somebody
+the registry had never heard of: the board said "claimed by cli-main, which has no record
+— reclaimable" for work a live chat was doing, and the new demand could not have been
+cleared by its own instruction. Identity is `(harness id, worktree)` in the CLI too now,
+composed by one shared function instead of two that disagreed.
+
 ### shellcmd.segments
 
 `commands()` strips `FOO=bar` and `timeout 30` to find the program a gate should judge.

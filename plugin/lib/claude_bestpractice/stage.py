@@ -244,6 +244,10 @@ def gates_for(stage: str) -> dict[str, bool]:
         # tests is exactly as useless as a revenue system that does.
         "evidence_gate": True,
         "scope_drift": True,
+        # The board has to be true from the first day. A prototype with three sessions on
+        # it needs to know what the other two are holding exactly as much as a revenue
+        # system does — more, because nothing else is written down yet.
+        "ledger": True,
         "clean_rerun": ORDER[stage] >= ORDER[TRACTION],
         "migration_gate": ORDER[stage] >= ORDER[TRACTION],
     }

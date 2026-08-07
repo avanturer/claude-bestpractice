@@ -502,3 +502,60 @@ class TestTheOrderIsVisibleWithoutOpeningTheTask(PlanCase):
 
     def test_a_bare_add_points_at_the_command_that_carries_context(self):
         self.assertIn("park", self.plan_cli("add", "a bare title").stdout)
+
+
+class TestWorkThatStoppedMoving(PlanCase):
+    """`reap` covers the session that DIED. Nothing covered the commoner case: a live
+    chat that claimed 0007, moved on to something else, and left it reading `doing` on
+    every board for the rest of the week. The board's whole claim is that it says what is
+    in flight, and a row nobody is working on is that claim being false.
+    """
+
+    def aged(self, task, hours: float):
+        """Move this task's clock back, which is what the sweep actually reads."""
+        import re
+
+        path = task.path.parent.parent / plan.DOING / task.path.name
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - hours * 3600))
+        path.write_text(re.sub(r"updated_at: .*", f"updated_at: {stamp}", path.read_text()))
+
+    def claimed_by(self, session_id: str, touching: list[str], paths: list[str]):
+        rec = self.session_record(session_id)
+        rec.last_touched = touching
+        sessions.register(self.ctx(), rec)
+        task = plan.add(self.ctx(), "the task", paths=paths)
+        plan.claim(self.ctx(), task.id, session_id, "feat/x")
+        return task
+
+    def test_a_task_untouched_past_the_threshold_returns_to_the_queue(self):
+        task = self.claimed_by("wandered", touching=["other.py"], paths=["app.py"])
+        self.aged(task, 30)
+
+        moved = plan.sweep_idle(self.ctx(), 24.0)
+
+        self.assertEqual([task.id], [t.id for t in moved])
+        back = plan.find(self.ctx(), task.id)
+        self.assertEqual(plan.NEXT, back.state)
+        self.assertIn("returned to the queue", back.body,
+                      "the next session must not have to rediscover why it moved")
+
+    def test_a_session_still_working_on_it_keeps_it(self):
+        """Reclaiming work mid-change is worse than the stale row it was meant to fix."""
+        task = self.claimed_by("busy", touching=["app.py"], paths=["app.py"])
+        self.aged(task, 30)
+
+        self.assertEqual([], plan.sweep_idle(self.ctx(), 24.0))
+        self.assertEqual(plan.DOING, plan.find(self.ctx(), task.id).state)
+
+    def test_a_task_that_moved_recently_is_left_alone(self):
+        task = self.claimed_by("recent", touching=["other.py"], paths=["app.py"])
+
+        self.assertEqual([], plan.sweep_idle(self.ctx(), 24.0))
+        self.assertEqual(plan.DOING, plan.find(self.ctx(), task.id).state)
+
+    def test_the_threshold_is_the_founders_to_move(self):
+        task = self.claimed_by("wandered", touching=["other.py"], paths=["app.py"])
+        self.aged(task, 3)
+
+        self.assertEqual([], plan.sweep_idle(self.ctx(), 24.0))
+        self.assertEqual([task.id], [t.id for t in plan.sweep_idle(self.ctx(), 2.0)])
