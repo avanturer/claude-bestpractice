@@ -18,7 +18,7 @@ import time
 import unittest
 from pathlib import Path
 
-from helpers import BIN, RepoCase
+from helpers import BIN, RepoCase, git
 
 SECRET = 'AWS_SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"'
 
@@ -619,3 +619,69 @@ class TestCLIsOutsideARepositorySaySoPlainly(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDriftMustNotWedgeTheSession(RepoCase):
+    """The gate refused a turn over a file "the task did not mention", where the task was
+    the literal text of the founder's last message — a pasted deploy log. It then fired on
+    every subsequent reply, including the reply asking the founder to clear it, because
+    each new message likewise mentioned no path. `stop_hook_active` is false on the first
+    Stop of a new message, so the ceiling was never consulted there and each message bought
+    one more block. The escape was reachable only by the human (#106).
+    """
+
+    def test_pasted_terminal_output_is_not_a_statement_of_work(self):
+        import importlib.machinery
+        import importlib.util
+
+        # The hooks have no `.py` suffix, so the loader has to be named explicitly.
+        loader = importlib.machinery.SourceFileLoader("pc", str(BIN / "prompt-capture"))
+        spec = importlib.util.spec_from_loader("pc", loader)
+        capture = importlib.util.module_from_spec(spec)
+        loader.exec_module(capture)
+
+        paste = (
+            "(.venv) hedge@AVANTURER-PC:~/dev/startups/fuddy$ ./deploy.sh\n"
+            "+ rsync -az ./ prod:/srv/app\n"
+            "sent 12,345 bytes\n"
+            "(.venv) hedge@AVANTURER-PC:~/dev/startups/fuddy$ "
+        )
+        self.assertFalse(capture.is_statement_of_work(paste, []))
+        # Scrubbing strips trailing whitespace, so the closing `user@host:~$ ` of a real
+        # paste arrives without the space that used to anchor the pattern.
+        self.assertFalse(capture.is_statement_of_work(paste.rstrip(), []))
+        self.assertTrue(
+            capture.is_statement_of_work("перепиши импортер каталога, он падает", []),
+            "a real instruction must still be one",
+        )
+        self.assertTrue(
+            capture.is_statement_of_work(
+                "это упало, посмотри:\nTraceback (most recent call last):\n  File x", []),
+            "an instruction with evidence attached is still an instruction",
+        )
+
+    def test_what_the_gate_gave_up_on_does_not_come_back(self):
+        from claude_bestpractice import evidence
+
+        ctx = self.ctx()
+        self.assertEqual([], evidence.settled_drift(ctx, "s1"))
+
+        evidence.settle_drift(ctx, "s1", ["infra/scripts/backup_onbox.sh"])
+        self.assertEqual(["infra/scripts/backup_onbox.sh"], evidence.settled_drift(ctx, "s1"))
+        self.assertEqual([], evidence.settled_drift(ctx, "other-session"),
+                         "one session's settlement is not another's")
+
+    def test_work_already_on_the_trunk_is_not_this_sessions_drift(self):
+        """Merged work has been through whatever review the founder runs; a gate that
+        keeps calling it drift is describing the past."""
+        from claude_bestpractice import evidence
+
+        self.write("shipped.py", "x = 1\n")
+        self.write("local.py", "y = 2\n")
+        self.commit("both")
+        git(["update-ref", "refs/remotes/origin/main", "HEAD"], self.repo)
+        self.write("local.py", "y = 3\n")
+        self.commit("only this one moved on")
+
+        landed = evidence.landed(self.ctx(), ["shipped.py", "local.py"])
+        self.assertEqual(["shipped.py"], landed)

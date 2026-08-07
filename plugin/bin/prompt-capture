@@ -102,11 +102,46 @@ def is_statement_of_work(prompt: str, paths: list[str]) -> bool:
     finish.
     """
     text = " ".join(prompt.split())
+    if is_pasted_output(prompt):
+        return False
     if paths:
         return True
     if _CONTINUATION.match(text.strip(" .!?,…").lower()):
         return False
     return len(text) >= MIN_STATEMENT_CHARS
+
+
+# A shell prompt, a traceback, a log line. Pasting output is showing the session something,
+# never instructing it.
+_PASTED = (
+    # `[$#]` then whitespace OR end of line: scrubbing strips trailing spaces, so the
+    # final `user@host:~$ ` of a pasted session lost the space that anchored this and
+    # stopped counting — leaving one hit where there were two, and the paste read as an
+    # instruction again.
+    re.compile(r"^\s*(?:\(\S+\)\s*)?[\w.-]+@[\w.-]+:[^\n]*[$#](?:\s|$)", re.M),
+    re.compile(r"^\s*Traceback \(most recent call last\):", re.M),
+    re.compile(r"^\s*(?:npm ERR!|error TS\d|FAILED |=+ (?:FAILURES|ERRORS) =+)", re.M),
+    re.compile(r"^\s*\[\d{4}-\d\d-\d\d[T ]\d\d:\d\d", re.M),
+)
+
+
+def is_pasted_output(prompt: str) -> bool:
+    """Terminal output pasted as a message, which is not a statement of work.
+
+    The founder pastes the tail of a deploy run; it becomes the session's task; every
+    scope-drift refusal then quotes `Task was: (.venv) hedge@AVANTURER-PC:~/dev/...` back
+    at an agent that cannot possibly satisfy it, and the founder is pulled in to type a
+    filename before any further work can be reported (#106).
+
+    The FIRST line decides, because that is where an instruction lives. "this failed, look:
+    <traceback>" is an instruction with evidence attached and must stay one; a ratio rule
+    got that wrong on exactly the length the founder actually types.
+    """
+    lines = [line for line in prompt.splitlines() if line.strip()]
+    if not lines or not any(pattern.match(lines[0]) for pattern in _PASTED):
+        return False
+    hits = sum(1 for line in lines if any(pattern.match(line) for pattern in _PASTED))
+    return hits >= 2 or len(lines) == 1
 
 
 def extract_paths(text: str, root: Path) -> list[str]:
@@ -185,7 +220,14 @@ def main() -> None:
         # resumed with nothing remembered. There, «Делай» is still better than a blank
         # board, and it is the only case that can still yield a branch named after a
         # continuation.
-        if is_statement_of_work(safe, fresh) or not rec.task_statement:
+        # The blank-board fallback does NOT extend to a paste. "«Делай» is better than
+        # nothing" is true; "the task is `(.venv) hedge@AVANTURER-PC:~$ ./deploy.sh`" is
+        # not — that string is what every scope-drift refusal then quotes back at an agent
+        # that cannot satisfy it. And an empty statement is the honest state here: it
+        # leaves `task_paths` empty, which disables the drift check rather than enforcing
+        # it against a shell prompt (#106).
+        if is_statement_of_work(safe, fresh) or (not rec.task_statement
+                                                 and not is_pasted_output(safe)):
             # Marked when cut, because the drift refusal quotes this back as "Task was:"
             # and a fragment presented as the whole instruction is a claim the founder
             # cannot check. Reported as issue #41, where "…перезапустил д" was shown.
