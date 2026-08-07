@@ -271,6 +271,26 @@ def present(ctx: GitContext) -> bool:
     return (root / knowledge.RULES_DIR / knowledge.PRODUCT).exists()
 
 
+# What shape the instruction layer is in, which is a different question from whether one
+# exists. Three answers, and the middle one is the whole of #112.
+OURS = "ours"
+ANOTHER = "another"
+NONE = "none"
+
+
+def shape(ctx: GitContext) -> str:
+    """`ours` when this plugin's layer is here, `another` when one is here in a different
+    shape, `none` when there is genuinely nothing.
+
+    Asked separately from `present` because the advice differs and only one of the three
+    is "run `claude-bp init`". Telling a repository with nine instruction files to start
+    from scratch is not a smaller mistake than missing a repository that has none.
+    """
+    if present(ctx):
+        return OURS
+    return ANOTHER if knowledge.existing_rules(ctx) else NONE
+
+
 def unanswered(ctx: GitContext) -> list[str]:
     """Placeholders still waiting on a human. Surfaced, never invented."""
     root = ctx.worktree_root

@@ -359,6 +359,59 @@ def stop_demand(record: dict[str, Any], problems: list[str]) -> str:
     )
 
 
+# Raised once per branch, and the marker is per clone rather than per session: a founder
+# who says "not yet" and starts a new chat is not asking to be told again.
+DEMANDS = "pull-request-demands.json"
+
+
+def known(ctx: GitContext, branch: str) -> bool:
+    """Has a pull request for this branch ever been recorded, in any state?
+
+    Any state, deliberately. A merged record means the work reached the base branch, and
+    a local checkout whose base is behind still counts commits on top of it — so asking
+    "is one open" here would demand a second pull request for work that has already
+    landed.
+    """
+    return branch in _records(ctx)
+
+
+def demanded(ctx: GitContext, branch: str) -> bool:
+    record = store.read_json(store.tier_b(ctx, DEMANDS), default={})
+    return branch in record if isinstance(record, dict) else False
+
+
+def note_demand(ctx: GitContext, branch: str) -> None:
+    path = store.tier_b(ctx, DEMANDS)
+    record = store.read_json(path, default={})
+    if not isinstance(record, dict):
+        record = {}
+    record[branch] = int(time.time())
+    store.write_json(path, record)
+
+
+def open_demand(branch: str, base: str) -> str:
+    """The turn ended with finished work that never became a pull request.
+
+    The measured shape is not an agent that forgets. It is an agent that asks — the idea,
+    the checks and the commits all went past the founder in the chat, and then the last
+    step arrived as a question they had already answered three times over. Opening one is
+    this plugin's own convention, so asking about it is the plugin making the founder
+    confirm its own rule, and the vouch in `pre-tool` means there is not even a permission
+    prompt left to hide behind.
+    """
+    return (
+        f"claude-bestpractice: {branch} carries committed work that passes every check, and this "
+        f"turn was about to end with no pull request against {base}.\n"
+        "Open it now, and do not ask whether to: this repository's convention is "
+        "commit -> pull request -> merge, this gate approves the call without a prompt, and "
+        "a question the founder has already answered by asking for the work is not a "
+        "decision they own.\n"
+        "Then merge it yourself once the checks pass. Bring them a conflict you cannot "
+        "resolve without their judgement — nothing else.\n"
+        "This will not be raised again for this branch."
+    )
+
+
 def line(ctx: GitContext) -> str:
     """The board's reminder that a pull request is still waiting. Empty when none is."""
     live = outstanding(ctx)
@@ -457,6 +510,69 @@ def _branch_of(directory: str) -> str:
         return _run(["rev-parse", "--abbrev-ref", "HEAD"], directory, check=False).strip()
     except (OSError, ValueError):
         return ""
+
+
+# `owner/repo` out of either URL spelling git writes. Anything else — a local path, a
+# host this does not recognise — leaves the set empty, and an empty set vouches for
+# nothing, which is the safe direction.
+_REMOTE = re.compile(r"[:/](?P<owner>[^/:]+)/(?P<repo>[^/]+?)(?:\.git)?/?$")
+
+
+def _remote_names(ctx: GitContext) -> set[str]:
+    from .gitctx import _run
+
+    names: set[str] = set()
+    try:
+        listed = _run(["remote"], ctx.worktree_root, check=False).split()
+    except (OSError, ValueError):
+        return names
+    for remote in listed[:8]:
+        try:
+            url = _run(["remote", "get-url", remote], ctx.worktree_root, check=False).strip()
+        except (OSError, ValueError):
+            continue
+        found = _REMOTE.search(url)
+        if found:
+            names.add(f"{found['owner']}/{found['repo']}".lower())
+    return names
+
+
+def _repo_flag(command: str) -> str:
+    """`--repo owner/name` out of a `gh` line, in either spelling."""
+    from . import shellcmd
+
+    for argv in shellcmd.commands(command):
+        for index, token in enumerate(argv):
+            if token in ("--repo", "-R") and index + 1 < len(argv):
+                return argv[index + 1].lower()
+            if token.startswith("--repo="):
+                return token.split("=", 1)[1].lower()
+    return ""
+
+
+def _repository_named(tool_name: str, tool_input: dict[str, Any], command: str) -> str:
+    """The repository this call names outright, or "" when it names none."""
+    if not (_OPENS_TOOL.search(tool_name) or _MERGES_TOOL.search(tool_name)):
+        return _repo_flag(command)
+    owner = str(tool_input.get("owner") or "").strip()
+    repo = str(tool_input.get("repo") or "").strip()
+    return f"{owner}/{repo}".lower() if owner and repo else ""
+
+
+def about_this_repository(ctx: GitContext, tool_name: str, tool_input: dict[str, Any],
+                          command: str = "") -> bool:
+    """Is this pull request call about the repository the session is standing in?
+
+    The obligation is recorded either way — a session that opened a pull request somewhere
+    else still opened one, and the board should say so. What this decides is narrower and
+    is only ever asked at the vouch: sparing the founder a prompt on a call that names
+    somebody else's repository is outside every boundary this plugin publishes.
+
+    Naming nothing is this repository, because that is what `gh` resolves a bare call to —
+    the remote of the tree it is run in.
+    """
+    named = _repository_named(tool_name, tool_input, command)
+    return not named or named in _remote_names(ctx)
 
 
 def about_current_branch(tool_name: str, command: str) -> bool:

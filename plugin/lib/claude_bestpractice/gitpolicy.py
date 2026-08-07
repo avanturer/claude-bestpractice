@@ -28,6 +28,7 @@ import re
 import subprocess
 from pathlib import Path
 
+from . import config
 from .gitctx import GitContext
 
 # Names git itself treats as the trunk. Checked against the actual default when the
@@ -103,9 +104,9 @@ def worktree_refusal(ctx: GitContext, task: str = "", session_id: str = "") -> s
             "sharing one working tree overwrite each other silently — git does not notice, "
             "and neither will you.\n"
             f"  {worktree_advice(ctx, task)}\n"
-            "then work there, and do not ask the founder about it — run it yourself. Set "
-            "`require_worktree: false` in .claude/claude-bestpractice/config.json if this "
-            "repository is genuinely single-session."
+            "then work there, and do not ask the founder about it — run it yourself.\n"
+            "  If this repository is genuinely single-session: "
+            + config.switch_advice("require_worktree", False)
         )
     return (
         "claude-bestpractice: this is the main checkout, not a worktree. Several sessions "
@@ -114,8 +115,9 @@ def worktree_refusal(ctx: GitContext, task: str = "", session_id: str = "") -> s
         f"  A worktree has been created for you at {ready} — `cd {ready}` and redo this "
         "write there.\n"
         "  This is not a question for the founder: do not ask whether to use a worktree, "
-        "just move. Set `require_worktree: false` in "
-        ".claude/claude-bestpractice/config.json if this repository is genuinely single-session."
+        "just move.\n"
+        "  If this repository is genuinely single-session: "
+        + config.switch_advice("require_worktree", False)
     )
 
 
@@ -136,7 +138,7 @@ def violations(ctx: GitContext, task: str = "", session_id: str = "") -> list[st
             f"claude-bestpractice: {ctx.branch} is the trunk. Work on a branch so it can be "
             "reverted and merged as one unit.\n"
             f"  git switch -c feat/{'-'.join(task.lower().split()[:4]) or 'work'}\n"
-            "Set `protect_trunk: false` in .claude/claude-bestpractice/config.json to allow it."
+            + config.switch_advice("protect_trunk", False)
         )
     return out
 
@@ -190,7 +192,7 @@ def foreign_tree(ctx: GitContext, target: Path, session_id: str = "") -> Path | 
     and no merge can move a change to it. Both exits led back to each other, and a session
     that had just rotated a production SSH key could not delete the retired one (#68).
     """
-    if _within(target, ctx.worktree_root):
+    if _ours(ctx, target):
         return None
     for tree in working_trees(ctx):
         if tree == ctx.worktree_root.resolve() or not _within(target, tree):
@@ -281,7 +283,27 @@ def ignored_by_git(tree: Path, target: Path) -> bool:
 
 def owned_by_session(ctx: GitContext, target: Path) -> bool:
     """Does this write land in the tree this session is working in?"""
-    return _within(target, ctx.worktree_root)
+    return _ours(ctx, target)
+
+
+def _ours(ctx: GitContext, target: Path) -> bool:
+    """Inside this session's tree, and not inside a working tree nested within it.
+
+    Plain containment stopped being the whole answer when provisioned trees moved under
+    `.claude/worktrees/` (#111): the main checkout then CONTAINS every other session's
+    tree, so a path comparison alone hands all of them to whoever is standing in the main
+    checkout — the silent cross-tree overwrite this file exists to prevent, reintroduced
+    by a change made two files away. Caught by a test that had been passing for eleven
+    versions, which is the argument for having written it.
+
+    Path arithmetic and not `git worktree list`, because this runs on every tool call and
+    the boundary is a location this plugin chooses rather than one it has to discover.
+    """
+    if not _within(target, ctx.worktree_root):
+        return False
+    from .worktree import HOME
+
+    return not _within(target, ctx.worktree_root / HOME)
 
 
 def _within(target: Path, root: Path) -> bool:

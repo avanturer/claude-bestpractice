@@ -187,6 +187,137 @@ class TestTheMergeIsJudged(PRCase):
         self.assertNotEqual("deny", self.decision(self.merge()))
 
 
+class TestOpeningOneIsNotAQuestion(PRCase):
+    """The founder watched the idea, the checks and the commits go by in the chat and was
+    then asked, as a formality, whether to open the pull request. The obligation this
+    module records says the answer is always yes — so asking is the plugin making the
+    founder confirm its own rule."""
+
+    def remote(self, name: str = "o/r") -> None:
+        git(["remote", "add", "origin", f"https://github.com/{name}.git"], self.repo)
+
+    def test_opening_one_here_needs_no_permission(self):
+        self.remote()
+        self.start()
+        self.assertEqual("allow", self.decision(self.open_a_pr()))
+
+    def test_the_shell_spelling_too(self):
+        self.remote()
+        self.start()
+        self.assertEqual("allow", self.decision(self.tool("Bash", {"command": "gh pr create --fill"})))
+
+    def test_a_pull_request_on_somebody_elses_repository_is_not_vouched_for(self):
+        """The obligation is still recorded — the board should say what this session did.
+        What is refused is the SILENCE: naming another repository is outside every
+        boundary this plugin publishes, so the permission layer decides."""
+        self.remote()
+        self.start()
+        proc = self.tool("mcp__github__create_pull_request",
+                         {"owner": "someone", "repo": "else", "head": "feat/x", "base": "main"})
+        self.assertIsNone(self.decision(proc))
+        self.assertEqual(1, len(pullrequest.outstanding(self.ctx())))
+
+    def test_the_shell_spelling_aimed_elsewhere_is_not_vouched_for_either(self):
+        self.remote()
+        self.start()
+        proc = self.tool("Bash", {"command": "gh pr create --repo someone/else --fill"})
+        self.assertIsNone(self.decision(proc))
+
+    def test_with_no_remote_at_all_a_named_repository_is_not_vouched_for(self):
+        self.start()
+        proc = self.tool("mcp__github__create_pull_request",
+                         {"owner": "o", "repo": "r", "head": "feat/x", "base": "main"})
+        self.assertIsNone(self.decision(proc))
+
+
+class TestMergingWhatThisGateJustClearedIsNotAQuestion(PRCase):
+    def remote(self) -> None:
+        git(["remote", "add", "origin", "https://github.com/o/r.git"], self.repo)
+
+    def green(self) -> None:
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+
+    def merge(self):
+        return self.tool("mcp__github__merge_pull_request",
+                         {"owner": "o", "repo": "r", "pullNumber": 48})
+
+    def test_a_merge_this_gate_found_nothing_against_needs_no_permission(self):
+        self.remote()
+        self.green()
+        self.start()
+        self.open_a_pr()
+        self.assertEqual("allow", self.decision(self.merge()))
+
+    def test_a_merge_with_a_blocker_is_refused_rather_than_vouched_for(self):
+        """The vouch is read last, so it can never speak for a call this gate refused."""
+        self.remote()
+        self.start()
+        self.open_a_pr()
+        self.assertEqual("deny", self.decision(self.merge()))
+
+
+class TestFinishedWorkWithNoPullRequestIsDemanded(PRCase):
+    """The other end of the same failure. The obligation only starts once a pull request
+    exists, so a session that committed everything and asked "shall I open one?" ended the
+    turn with nothing on record at all — and the founder, who had already asked for the
+    work, was left holding the last step as a formality."""
+
+    def stop(self, session_id: str = "s1"):
+        return self.gate("evidence-gate", {
+            "session_id": session_id, "hook_event_name": "Stop", "stop_hook_active": False,
+        })
+
+    def finished(self) -> None:
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+
+    def test_a_turn_cannot_end_with_finished_work_and_no_pull_request(self):
+        self.finished()
+        self.start()
+        proc = self.stop()
+        self.assertEqual(2, proc.returncode, proc.stdout)
+        self.assertIn("Open it now, and do not ask whether to", proc.stderr)
+
+    def test_it_interrupts_exactly_once(self):
+        """A demand that repeats is a wedge. Marked before it is raised, so a session
+        that ignores it or dies does not meet it again."""
+        self.finished()
+        self.start()
+        self.assertEqual(2, self.stop().returncode)
+        second = self.stop()
+        self.assertNotIn("Open it now", second.stderr)
+
+    def test_a_branch_that_is_not_ready_is_not_demanded_of(self):
+        """Uncommitted work, a red suite, no commits at all: each is a reason there is
+        nothing to open yet, and each was already computed by `delivery.ready`."""
+        self.write("src/app.py", "x = 1\n")
+        self.start()
+        proc = self.stop()
+        self.assertNotIn("Open it now", proc.stderr)
+
+    def test_a_branch_that_already_has_one_is_left_alone(self):
+        """The obligation machinery owns it from here, and two demands about one branch
+        in consecutive turns is the plugin talking to itself."""
+        self.finished()
+        self.start()
+        self.open_a_pr()
+        proc = self.stop()
+        self.assertNotIn("Open it now", proc.stderr)
+
+    def test_a_branch_whose_pull_request_was_merged_is_not_asked_for_a_second_one(self):
+        """A local checkout whose base is behind still counts commits on top of it, so
+        asking "is one OPEN" here would demand a pull request for work that has landed."""
+        self.finished()
+        self.start()
+        self.open_a_pr()
+        pullrequest.settle(self.ctx(), "feat/x", pullrequest.MERGED)
+        proc = self.stop()
+        self.assertNotIn("Open it now", proc.stderr)
+
+
 class TestAPullRequestIsNeverLeftHanging(PRCase):
     """The reported failure: the PR is opened, the turn ends, and nobody comes back."""
 

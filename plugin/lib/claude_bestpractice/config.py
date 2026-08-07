@@ -12,6 +12,7 @@ plugin exists to prevent.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -212,7 +213,88 @@ _EXPECTED: dict[str, type] = {
     "exempt_paths": list,
 }
 
-_BOOL_WORDS = {"true": True, "false": False, "yes": True, "no": False, "1": True, "0": False}
+_BOOL_WORDS = {
+    "true": True, "false": False, "yes": True, "no": False, "1": True, "0": False,
+    # The spelling the gates print for the founder to repeat back, because "off" is the
+    # word a person uses about a switch and `false` is the word a config file uses.
+    "on": True, "off": False,
+}
+
+# Keys that decide whether a finish is verifiable, which is the one thing a blocked
+# session has a motive to change. `claude-bp ci` owns them because it PROVES the command
+# before it writes it; nothing here can, so nothing here may.
+EVIDENCE_KEYS = {"test_command", "artifact_globs", "clean_rerun"}
+
+# The founder's own words, captured by the hook that reads them and stored where no
+# session can write. Tier B by decision 0001: bookkeeping about this clone, not a fact
+# about the repository.
+SWITCH_REQUESTS = "switch-requests.json"
+
+# `scope_drift_block off`, `require_worktree: false`, `task_idle_hours = 4`. Deliberately
+# narrow: the key is a literal this plugin printed for them to repeat, so there is no
+# prose to interpret and no way for an agent to phrase its way into a match.
+_SWITCH = re.compile(
+    r"\b(?P<key>[a-z][a-z_]{3,31})\s*(?::|=|\s)\s*"
+    r"(?P<value>on|off|true|false|yes|no|-?\d+(?:\.\d+)?)\b",
+    re.I,
+)
+
+
+def switches_in(text: str) -> dict[str, str]:
+    """Config switches the founder asked for, in their own message. Usually empty."""
+    out: dict[str, str] = {}
+    for found in _SWITCH.finditer(text or ""):
+        key = found["key"].lower()
+        if key in _EXPECTED and key not in EVIDENCE_KEYS:
+            out[key] = found["value"].lower()
+    return out
+
+
+def record_switches(ctx: GitContext, asked: dict[str, str]) -> None:
+    if not asked:
+        return
+    path = store.tier_b(ctx, SWITCH_REQUESTS)
+    record = store.read_json(path, default={})
+    if not isinstance(record, dict):
+        record = {}
+    record.update(asked)
+    store.write_json(path, record)
+
+
+def asked_for(ctx: GitContext, key: str) -> str | None:
+    """The value the founder asked for on this key, or None if they never did."""
+    record = store.read_json(store.tier_b(ctx, SWITCH_REQUESTS), default={})
+    if not isinstance(record, dict):
+        return None
+    found = record.get(key)
+    return str(found) if found is not None else None
+
+
+def clear_switch(ctx: GitContext, key: str) -> None:
+    """One word authorises one change. Consumed, so it cannot be spent twice."""
+    path = store.tier_b(ctx, SWITCH_REQUESTS)
+    record = store.read_json(path, default={})
+    if isinstance(record, dict) and record.pop(key, None) is not None:
+        store.write_json(path, record)
+
+
+def switch_advice(key: str, value: Any) -> str:
+    """The one line every gate says instead of naming a file the session cannot write.
+
+    A remedy the session cannot perform is worse than no remedy: the founder is told by
+    the assistant that the assistant cannot do it, which reads as the assistant being
+    unhelpful rather than the plugin contradicting itself (#108). And a remedy the session
+    CAN perform on its own is worse still — this is the switch on a gate, and a session
+    that has been blocked four times has every motive to reach for it.
+
+    So the door exists, and the key is the founder's word.
+    """
+    spelled = "off" if value is False else "on" if value is True else str(value)
+    return (
+        f"This gate is switched by the founder, not by the session it is enforcing. If they "
+        f"want it off, one line from them — `{key} {spelled}` — is the whole of it, and then: "
+        f"claude-bp set {key} {spelled}"
+    )
 
 
 def coerce(key: str, value: Any) -> tuple[Any, str]:

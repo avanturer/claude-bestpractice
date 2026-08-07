@@ -65,35 +65,79 @@ def _done(ctx: GitContext) -> dict:
     return record if isinstance(record, dict) else {}
 
 
-def _mark(ctx: GitContext, step: str, detail: str) -> None:
+def _mark(ctx: GitContext, step: str, revision: int, detail: str) -> None:
     record = _done(ctx)
-    record[step] = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "detail": detail}
+    record[step] = {
+        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "revision": revision,
+        "detail": detail,
+    }
     store.write_json(store.tier_b(ctx, LEDGER), record)
 
 
+def _ran_at(ctx: GitContext, step: str) -> int:
+    """Which revision of this repair the clone has had, or -1 for none at all.
+
+    A record written before repairs carried revisions reads as 0, so every repair at
+    revision 1 or above runs again on it. That is the point rather than a side effect:
+    such a clone was last reconciled by code that has since changed.
+    """
+    entry = _done(ctx).get(step)
+    if entry is None:
+        return -1
+    return int(entry.get("revision") or 0) if isinstance(entry, dict) else 0
+
+
 def pending(ctx: GitContext) -> list[str]:
-    return [name for name in _REPAIRS if name not in _done(ctx)]
+    return [name for name, (revision, _) in _REPAIRS.items() if _ran_at(ctx, name) < revision]
 
 
 def repair(ctx: GitContext) -> list[str]:
-    """Run every repair this repository has not had. Returns what was actually changed.
+    """Reconcile this repository with what the installed version now knows. Returns what
+    actually changed.
+
+    Keyed by REVISION and not by name, which is the difference between an upgrade and a
+    checklist. A repair whose implementation gets better — a case it missed, a shape it
+    could not read, a file it should not have touched — has already been recorded as done
+    in every repository that ran the old one, and under a name-keyed ledger those are
+    exactly the repositories that never get the improvement. The founder upgrades on top
+    of what was working, several versions at a time, so "already ran once" is the wrong
+    question; "ran under which code" is the right one.
+
+    Bump the revision beside a repair whenever what it does changes. Every step is still
+    idempotent, so re-running one that has nothing left to fix costs a walk and writes
+    nothing.
 
     Never raises. An upgrade that dies halfway through fixing something has left the
     repository worse than the defect it came to fix, and the founder with no way to tell
     which half ran.
     """
     changed: list[str] = []
-    for name, step in _REPAIRS.items():
-        if name in _done(ctx):
+    for name, (revision, step) in _REPAIRS.items():
+        if _ran_at(ctx, name) >= revision:
             continue
         try:
             detail = step(ctx)
         except Exception:  # noqa: BLE001 - a failed repair must not brick a session
             continue
-        _mark(ctx, name, detail)
+        _mark(ctx, name, revision, detail)
         if detail:
             changed.append(f"{name}: {detail}")
     return changed
+
+
+def repaired_line(changed: list[str]) -> str:
+    """What the upgrade actually changed in this repository, said once.
+
+    Empty on every session that found nothing to fix, which is all of them after the
+    first — a repair that writes to the founder's tree and says nothing is indistinguishable
+    from a session that decided to edit their files on a whim.
+    """
+    if not changed:
+        return ""
+    shown = "; ".join(changed[:3])
+    more = f" (+{len(changed) - 3} more)" if len(changed) > 3 else ""
+    return f"\nupgrade repaired this repository: {shown}{more}"
 
 
 def _backfill_task_paths(ctx: GitContext) -> str:
@@ -168,10 +212,12 @@ def _absorb_scratch_todos(ctx: GitContext) -> str:
     return "; ".join(adopted)
 
 
+# name -> (revision, step). Raise the revision when the step's behaviour changes; every
+# clone that ran an older revision reconciles again on its next session start.
 _REPAIRS = {
-    "0001-task-paths": _backfill_task_paths,
-    "0002-quarantine-unreadable": _quarantine_unreadable_state,
-    "0003-absorb-scratch-todos": _absorb_scratch_todos,
+    "0001-task-paths": (1, _backfill_task_paths),
+    "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
+    "0003-absorb-scratch-todos": (1, _absorb_scratch_todos),
 }
 
 

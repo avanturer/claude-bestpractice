@@ -48,10 +48,14 @@ class PolicyCase(RepoCase):
         return _verdict(proc)
 
     def provisioned(self):
-        """The tree the gate made for us. Found by prefix: the name carries a session
-        suffix, because two sessions sharing one tree is the failure this all prevents."""
-        found = [p for p in self.repo.parent.iterdir()
-                 if p.is_dir() and p.name.startswith(f"{self.repo.name}-")]
+        """The tree the gate made for us, looked for where entering it needs no approval.
+
+        Under `.claude/worktrees/`, and nowhere else: any other location is one the CLI
+        prompts about unconditionally, which is #111. The name still carries a session
+        suffix, because two sessions sharing one tree is the failure this all prevents.
+        """
+        home = self.repo / ".claude" / "worktrees"
+        found = [p for p in home.iterdir() if p.is_dir()] if home.is_dir() else []
         return found[0] if len(found) == 1 else None
 
     def worktree(self, branch: str, occupant: str = "other-session"):
@@ -113,15 +117,30 @@ class TestWorktreeIsMandatory(PolicyCase):
         _, reason = self.decision()
         made = self.provisioned()
         self.assertIn(str(made), reason)
-        siblings = [p for p in self.repo.parent.iterdir() if p.name.startswith(f"{self.repo.name}-")]
-        self.assertEqual(len(siblings), 1, siblings)
+        trees = list((self.repo / ".claude" / "worktrees").iterdir())
+        self.assertEqual(len(trees), 1, trees)
 
-    def test_the_created_worktree_is_outside_the_repository(self):
-        """One inside the working tree shows up in every status, glob and scan."""
+    def test_the_created_worktree_is_where_entering_it_needs_no_approval(self):
+        """`EnterWorktree` prompts unconditionally outside `.claude/worktrees/`, before
+        permissions are consulted at all — so the gate ordered a move the founder was then
+        asked to authorise, every time (#111).
+
+        These were siblings of the repository, and the reason was that a tree inside the
+        working tree shows up in every status, glob and scan. That reason is paid rather
+        than dropped: the second assertion is the whole of it.
+        """
         self.decision()
         made = self.provisioned()
-        self.assertFalse(str(made).startswith(str(self.repo) + "/"))
+        self.assertTrue(str(made).startswith(str(self.repo / ".claude" / "worktrees") + "/"), made)
         self.assertEqual(git(["status", "--porcelain"], self.repo).strip(), "")
+
+    def test_the_created_worktree_stays_invisible_to_a_status_run_anywhere(self):
+        """The exclude is written to the clone, so every worktree of it agrees."""
+        self.decision()
+        made = self.provisioned()
+        self.assertEqual(git(["status", "--porcelain"], self.repo).strip(), "")
+        self.assertEqual(git(["status", "--porcelain"], made).strip(), "")
+        self.assertIn(str(made), git(["worktree", "list"], self.repo))
 
     def test_a_worktree_is_allowed(self):
         target = self.worktree("feat/x")

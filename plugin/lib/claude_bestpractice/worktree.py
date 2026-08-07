@@ -176,10 +176,85 @@ def session_slug(task: str, session_id: str) -> str:
     return f"{base}-{hashlib.sha256(session_id.encode()).hexdigest()[:8]}"
 
 
+# Where Claude Code makes its own worktrees, and the only location its `EnterWorktree`
+# enters without asking. Every other path returns `ask` from that tool's own safety check,
+# which no hook approval and no `permissions.allow` entry can clear (#91, #111).
+HOME = Path(".claude") / "worktrees"
+
+
+def _within(path: Path, directory: Path) -> bool:
+    try:
+        return directory.resolve() in path.resolve().parents
+    except OSError:
+        return False
+
+
+def main_checkout(ctx: GitContext) -> Path:
+    """The tree everything is provisioned under, from whichever tree is asking.
+
+    Anchored so trees do not nest inside trees: a session refused inside
+    `.claude/worktrees/a` would otherwise be sent to `.claude/worktrees/a/.claude/
+    worktrees/b`, and removing `a` would then take somebody else's tree with it.
+    """
+    from . import gitpolicy
+
+    trees = gitpolicy.working_trees(ctx)
+    return trees[0] if trees else ctx.worktree_root
+
+
+def home_of(ctx: GitContext) -> Path:
+    return main_checkout(ctx) / HOME
+
+
 def target_for(ctx: GitContext, slug: str) -> Path:
-    """Outside the repository by construction — a worktree inside the working tree shows
-    up in every status, every glob and every scan the sibling sessions run."""
-    return ctx.worktree_root.parent / f"{ctx.worktree_root.name}-{slug}"
+    """Under `.claude/worktrees/`, because that is the one place entering never prompts.
+
+    These were siblings of the repository, and the argument for it was real: a worktree
+    inside the working tree shows up in every status, every glob and every scan the
+    sibling sessions run. It was answered by the layer above — since CLI v2.1.206
+    `EnterWorktree` prompts for approval on any path outside `.claude/worktrees/`,
+    unconditionally, before permissions are consulted at all. So the gate ordered a move
+    the founder was then asked to authorise, every time, in a repository with eight
+    sibling trees (#111).
+
+    The original argument is paid for rather than dismissed: `hide` excludes this from
+    git, and `.claude/` is a dot-directory, which the search tools skip by default.
+    """
+    return home_of(ctx) / slug
+
+
+# `.git/info/exclude` and not the founder's `.gitignore`: this is a fact about one clone,
+# not about the project, and a plugin that edits a tracked file to make room for its own
+# scratch space is one that shows up in the founder's next diff. Same reasoning as
+# decision 0001 puts Tier B in the common dir.
+_EXCLUDE_LINE = "/.claude/worktrees/"
+
+
+def hide(ctx: GitContext) -> bool:
+    """Keep provisioned trees out of `git status`, once per clone.
+
+    Without this every session start reports the plugin's own scratch trees as untracked
+    work in the founder's repository — which is the exact complaint that put them outside
+    the repository in the first place.
+    """
+    exclude = ctx.common_dir / "info" / "exclude"
+    try:
+        current = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+    except OSError:
+        return False
+    if any(line.strip() == _EXCLUDE_LINE for line in current.splitlines()):
+        return True
+    body = current if not current or current.endswith("\n") else current + "\n"
+    try:
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        store.atomic_write(
+            exclude,
+            f"{body}# claude-bestpractice: worktrees this plugin provisions\n{_EXCLUDE_LINE}\n",
+            mode=0o644,
+        )
+    except OSError:
+        return False
+    return True
 
 
 def reap_unused(ctx: GitContext, live: set) -> list[str]:
@@ -293,6 +368,9 @@ def provision(ctx: GitContext, task: str = "", session_id: str = "") -> Path | N
     branch = f"{branch_type(task)}/{slug}"
     target = target_for(ctx, slug)
     absolute = str(target)
+    # Before the tree exists, so it is never visible as untracked work even for the moment
+    # between `git worktree add` and the next status.
+    hide(ctx)
 
     if target.is_dir():
         record(ctx, slug, absolute, branch, trust(absolute), session_id)
@@ -342,8 +420,8 @@ def entry_permitted(home: Path | None = None) -> bool:
     return any(str(rule).split("(")[0].strip() == ENTER for rule in allow)
 
 
-def permission_advice() -> str:
-    """The one line that removes the prompt, or nothing when it is already gone.
+def permission_advice(ctx: GitContext | None = None, session_id: str = "") -> str:
+    """The one line that removes the prompt, or nothing when there is no prompt left.
 
     A `PreToolUse` hook CANNOT close this, which is worth stating because it is the obvious
     idea and it is wrong: `EnterWorktree.checkPermissions` returns `ask` for any path that
@@ -351,10 +429,17 @@ def permission_advice() -> str:
     safety-check ask overrides a hook's allow by design. The plugin approves the call and
     the founder is asked anyway, one layer below the approval (#91).
 
-    So the plugin says the line instead of pretending to have solved it.
+    Which is why the trees moved rather than the advice improving. Since they are made
+    under `.claude/worktrees/` there is nothing to authorise, and this speaks only for a
+    tree an older version left beside the repository — where the prompt is still real and
+    the founder is entitled to know it is not this plugin asking (#111).
     """
     if entry_permitted():
         return ""
+    if ctx is not None:
+        standing = mine(ctx, session_id)
+        if standing is None or _within(standing, home_of(ctx)):
+            return ""
     return (
         "\nthe founder is asked to authorise every worktree entry, which this gate then "
         "requires of every session. One line in ~/.claude/settings.json ends it: add "

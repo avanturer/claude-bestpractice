@@ -26,7 +26,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import store
+from . import config, store
 from .gitctx import GitContext
 
 OPTIONS_DIR = "options"
@@ -247,5 +247,5 @@ def demand(ctx: GitContext, changed: list[str], baseline: str) -> str:
         "      --metric latency --metric ops-burden --metric lock-in \\\n"
         f"      --option '{uncompared[0]}:8,4,3' --option 'stdlib:6,9,9' \\\n"
         f"      --chosen {uncompared[0]} --why \"...\"\n"
-        "Set `compare_dependencies: false` in .claude/claude-bestpractice/config.json to stop asking."
+        + config.switch_advice("compare_dependencies", False)
     )

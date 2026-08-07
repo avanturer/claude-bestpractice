@@ -809,6 +809,86 @@ class TestAdoptDoesNotWriteADeadProductNameIntoYourSettings(GateCase):
         self.assertEqual(["PostToolUse"], list(self.settings()["hooks"].keys()))
 
 
+class TestTheGateNamesADoorThatOpens(GateCase):
+    """Every gate here named `config.json` as the way to switch it off, and that file is
+    refused to the session being enforced. So the founder was read a remedy out loud and
+    then told by the assistant that the assistant could not perform it, which reads as the
+    assistant being unhelpful rather than the plugin contradicting itself (#108).
+
+    Both halves have to hold. A door the session cannot open at all leaves them hand-editing
+    JSON in the middle of unrelated work, from a chat that may not be on their machine. A
+    door it can open alone is a gate that switches itself off the fourth time it blocks
+    something — which is exactly the threat model this file's other class describes.
+    """
+
+    def cli(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(BIN / "claude-bp"), *args],
+            capture_output=True, text=True, cwd=str(self.repo), timeout=300,
+        )
+
+    def founder_says(self, text: str) -> None:
+        self.gate("prompt-capture", {
+            "session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": text,
+            "cwd": str(self.repo),
+        })
+
+    def test_the_session_cannot_turn_a_gate_off_on_its_own(self):
+        proc = self.cli("set", "scope_drift_block", "off")
+        self.assertEqual(1, proc.returncode)
+        self.assertIn("the founder has not asked", proc.stderr)
+
+    def test_the_founders_own_word_is_the_key(self):
+        self.start()
+        self.founder_says("это однопользовательский репозиторий, scope_drift_block off")
+        proc = self.cli("set", "scope_drift_block", "off")
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        from claude_bestpractice import config
+
+        self.assertFalse(config.load(self.ctx()).scope_drift_block)
+
+    def test_one_word_authorises_one_change(self):
+        """Consumed on use, so a sentence from last month cannot be spent again."""
+        self.start()
+        self.founder_says("scope_drift_block off")
+        self.assertEqual(0, self.cli("set", "scope_drift_block", "off").returncode)
+        self.assertEqual(1, self.cli("set", "scope_drift_block", "on").returncode)
+
+    def test_the_word_has_to_match_what_is_being_set(self):
+        self.start()
+        self.founder_says("require_worktree off")
+        self.assertEqual(1, self.cli("set", "scope_drift_block", "off").returncode)
+
+    def test_the_test_command_is_not_settable_here_at_all(self):
+        """Pointing it at `true` buys a green finish and erases the record of the real
+        failure. `claude-bp ci` owns it because it RUNS the command before writing it."""
+        self.start()
+        self.founder_says("test_command true")
+        proc = self.cli("set", "test_command", "true")
+        self.assertEqual(1, proc.returncode)
+        self.assertIn("claude-bp ci", proc.stderr)
+
+    def test_the_scope_drift_refusal_names_the_door_and_not_the_file(self):
+        from claude_bestpractice import config
+
+        advice = config.switch_advice("scope_drift_block", False)
+        self.assertIn("claude-bp set scope_drift_block off", advice)
+        self.assertNotIn("config.json", advice)
+
+    def test_no_gate_advertises_the_file_the_write_hook_refuses(self):
+        """The defect was a pattern, not one message: seven places named `config.json`."""
+        from claude_bestpractice import evidence, gitpolicy, options  # noqa: F401
+
+        offenders = []
+        for module in ("gitpolicy", "options"):
+            source = (Path(__file__).resolve().parents[1] / "plugin" / "lib"
+                      / "claude_bestpractice" / f"{module}.py").read_text(encoding="utf-8")
+            for number, line in enumerate(source.splitlines(), 1):
+                if "config.json" in line and "switch_advice" not in line:
+                    offenders.append(f"{module}.py:{number}")
+        self.assertEqual([], offenders, offenders)
+
+
 class TestTheEnforcementStateIsNotTheAgentsToEdit(GateCase):
     """`config.json` was refused as "the plugin's own enforcement state" while the OTHER
     half — session records, the baseline the diff is measured from, the block counter —

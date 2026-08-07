@@ -175,6 +175,47 @@ class TestWritesInTheTreeTheSessionOccupies(RepoCase):
             self.ctx(), sid(self.repo, "s1"), [self.repo / ".env"]))
 
 
+class TestLeavingTheTreeIsVouchedForToo(RepoCase):
+    """Entering was approved and leaving was not, so the founder authorised the last step
+    of a workflow whose first step the plugin approved on their behalf seconds earlier —
+    while `git worktree remove`, the identical action in the other spelling, was already
+    silent (#110)."""
+
+    def exits(self, **tool_input) -> str:
+        return vouch.for_tool(self.ctx(), "ExitWorktree", tool_input)
+
+    def test_keeping_the_tree_touches_nothing(self):
+        self.assertEqual(vouch.EXIT, self.exits(action="keep"))
+
+    def test_the_default_action_is_the_one_that_keeps_it(self):
+        self.assertEqual(vouch.EXIT, self.exits())
+
+    def test_removing_a_clean_tree_is_the_last_step_of_the_convention(self):
+        self.assertEqual(vouch.EXIT, self.exits(action="remove"))
+
+    def test_removing_a_tree_holding_work_is_left_to_the_permission_layer(self):
+        """The same condition `git worktree remove` enforces by refusing, asked earlier."""
+        (self.repo / "unfinished.py").write_text("x = 1\n")
+        self.assertEqual("", self.exits(action="remove"))
+
+    def test_the_plugins_own_state_is_not_the_founders_unfinished_work(self):
+        """Every session dirties `.claude/` within seconds, and counting it would make the
+        vouch unreachable in the steady state."""
+        (self.repo / ".claude").mkdir(exist_ok=True)
+        (self.repo / ".claude" / "scratch.json").write_text("{}\n")
+        self.assertEqual(vouch.EXIT, self.exits(action="remove"))
+
+    def test_discarding_changes_is_never_vouched_for(self):
+        self.assertEqual("", self.exits(action="remove", discard_changes=True))
+        self.assertEqual("", self.exits(action="keep", discard_changes=True))
+
+    def test_an_action_this_does_not_recognise_is_left_alone(self):
+        self.assertEqual("", self.exits(action="something-new"))
+
+    def test_no_other_tool_is_vouched_for_by_this_door(self):
+        self.assertEqual("", vouch.for_tool(self.ctx(), "WebFetch", {"url": "https://x"}))
+
+
 class TestTheGateVouchesThroughTheRealHook(RepoCase):
     def gate(self, event: dict) -> subprocess.CompletedProcess:
         return subprocess.run(

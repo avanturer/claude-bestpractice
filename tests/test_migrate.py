@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import contextlib
 import unittest
 
 from helpers import BIN, RepoCase
@@ -215,17 +216,82 @@ class TestRepairsRunThemselvesAndRunOnce(RepoCase):
 
     def test_a_failing_repair_does_not_brick_the_session(self):
         """An upgrade that dies halfway leaves the repository worse than the defect."""
-        original = dict(migrate._REPAIRS)
-        migrate._REPAIRS["9999-explodes"] = lambda ctx: 1 / 0
-        try:
+        with only_repair("9999-explodes", 1, lambda ctx: 1 / 0):
             migrate.repair(self.ctx())
-        finally:
-            migrate._REPAIRS.clear()
-            migrate._REPAIRS.update(original)
 
 
-if __name__ == "__main__":
-    unittest.main()
+@contextlib.contextmanager
+def only_repair(name: str, revision: int, step):
+    """Replace the repair table for the duration of a test, and put it back."""
+    original = dict(migrate._REPAIRS)
+    migrate._REPAIRS.clear()
+    migrate._REPAIRS[name] = (revision, step)
+    try:
+        yield
+    finally:
+        migrate._REPAIRS.clear()
+        migrate._REPAIRS.update(original)
+
+
+class TestAnUpgradeReconcilesRatherThanTicksOff(RepoCase):
+    """The founder upgrades on top of what was working, several versions at a time. A
+    repair recorded as done under code that has since changed is exactly the case a
+    name-keyed ledger never revisits — and those are the repositories that need it."""
+
+    def instead(self, name: str, revision: int, step):
+        return only_repair(name, revision, step)
+
+    def counter(self):
+        runs = []
+
+        def step(ctx):
+            runs.append(ctx.worktree_root)
+            return f"run {len(runs)}"
+
+        return runs, step
+
+    def test_the_same_revision_runs_once(self):
+        runs, step = self.counter()
+        with self.instead("0001-thing", 1, step):
+            migrate.repair(self.ctx())
+            migrate.repair(self.ctx())
+        self.assertEqual(1, len(runs))
+
+    def test_a_repair_that_got_better_runs_again(self):
+        runs, step = self.counter()
+        with self.instead("0001-thing", 1, step):
+            migrate.repair(self.ctx())
+        with self.instead("0001-thing", 2, step):
+            self.assertEqual(["0001-thing"], migrate.pending(self.ctx()))
+            migrate.repair(self.ctx())
+        self.assertEqual(2, len(runs))
+
+    def test_a_record_from_before_revisions_existed_is_reconciled(self):
+        """Every repository installed before this reads as revision 0, so every repair at
+        revision 1 or above runs again there. That is the upgrade the founder asked for,
+        not an accident of the format."""
+        runs, step = self.counter()
+        store.write_json(
+            store.tier_b(self.ctx(), migrate.LEDGER),
+            {"0001-thing": {"at": "2026-01-01T00:00:00Z", "detail": "done"}},
+        )
+        with self.instead("0001-thing", 1, step):
+            self.assertEqual(["0001-thing"], migrate.pending(self.ctx()))
+            migrate.repair(self.ctx())
+        self.assertEqual(1, len(runs))
+
+    def test_unreadable_bookkeeping_is_not_permission_to_skip_the_repairs(self):
+        path = store.tier_b(self.ctx(), migrate.LEDGER)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{ this is not json", encoding="utf-8")
+        runs, step = self.counter()
+        with self.instead("0001-thing", 1, step):
+            migrate.repair(self.ctx())
+        self.assertEqual(1, len(runs))
+
+    def test_what_it_repaired_is_said_once_and_only_when_it_did_something(self):
+        self.assertEqual("", migrate.repaired_line([]))
+        self.assertIn("0001-thing: run 1", migrate.repaired_line(["0001-thing: run 1"]))
 
 
 class TestARegistryIsFoundByWhatIsInIt(RepoCase):
@@ -633,3 +699,7 @@ class TestAnUpgradeRepairsTheRepositoryItLandsIn(RepoCase):
 
         self.assertEqual("- [ ] one\n- [ ] two\n- [ ] three\n",
                          (self.repo / "docs/pre-release-audit.md").read_text())
+
+
+if __name__ == "__main__":
+    unittest.main()

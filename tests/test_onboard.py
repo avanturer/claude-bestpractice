@@ -153,6 +153,66 @@ class TestTheFirstThingAFreshInstallSays(RepoCase):
         self.assertNotIn("entities.yaml", derived)
 
 
+class TestALayerInAnotherShapeIsNotAnAbsentOne(RepoCase):
+    """The plugin put its own layer in `.claude/rules/` and then judged the layer by
+    whether its own four files were there. A repository with `CLAUDE.md` and eight rule
+    files in that exact directory was told, every session, to run `claude-bp init` — which
+    from the founder's side is being told to start what they finished months ago (#112)."""
+
+    def cli(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(BIN / "claude-bp"), *args],
+            capture_output=True, text=True, cwd=str(self.repo), timeout=300,
+        )
+
+    def theirs(self, count: int = 8) -> None:
+        self.write("CLAUDE.md", "# Project\n\nAlways keep the ledger current.\n")
+        for name in ("alerts", "code-style", "memory", "preferences", "releasing",
+                     "scoring", "security", "testing")[:count]:
+            self.write(f".claude/rules/{name}.md", f"# {name}\n\nAlways do the {name} thing.\n")
+
+    def test_an_empty_repository_still_reads_as_empty(self):
+        self.assertEqual(onboard.NONE, onboard.shape(self.ctx()))
+
+    def test_instruction_files_in_another_shape_are_seen(self):
+        self.theirs()
+        self.assertEqual(onboard.ANOTHER, onboard.shape(self.ctx()))
+        self.assertEqual(9, len(knowledge.existing_rules(self.ctx())))
+
+    def test_the_plugins_own_files_are_not_counted_as_the_founders(self):
+        self.cli("init")
+        self.assertEqual(onboard.OURS, onboard.shape(self.ctx()))
+        names = {path.name for path in knowledge.existing_rules(self.ctx())}
+        self.assertNotIn(knowledge.PRODUCT, names)
+        self.assertNotIn(knowledge.GLOSSARY, names)
+        self.assertNotIn(knowledge.INDEX, names)
+
+    def test_the_board_stops_saying_there_is_none(self):
+        self.theirs()
+        proc = self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
+        context = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertNotIn("no knowledge layer here yet", context)
+        self.assertIn("9 instruction file(s) already here", context)
+
+    def test_the_board_still_says_so_when_there_genuinely_is_none(self):
+        proc = self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
+        context = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("no knowledge layer here yet", context)
+
+    def test_what_the_founders_layer_costs_every_turn_is_counted(self):
+        """This plugin itemises its own always-on context to the byte and holds itself
+        under 400 tokens. The files it sits beside were counted for `CLAUDE.md` alone."""
+        self.theirs()
+        self.assertGreater(knowledge.instruction_bytes(self.ctx()), 0)
+        self.assertIn("bytes in every turn", self.cli("status").stdout)
+
+    def test_a_layer_that_was_never_built_here_is_not_reported_as_broken(self):
+        self.theirs()
+        out = self.cli("status").stdout
+        self.assertNotIn("product.md: missing", out)
+        self.assertNotIn("Build the knowledge layer", out)
+
+
 class TestSetupHook(RepoCase):
     def setup_hook(self):
         return self.run_hook("setup", {"session_id": "s1", "hook_event_name": "Setup"})
@@ -182,13 +242,17 @@ class TestWorktreeCreate(RepoCase):
             env={"HOME": str(self.tmp), "PATH": "/usr/bin:/bin:/usr/local/bin"},
         )
 
-    def test_returns_a_path_outside_the_repository(self):
-        """A worktree inside the tree shows up in every status, glob and scan."""
+    def test_returns_a_path_the_cli_enters_without_asking(self):
+        """`EnterWorktree` prompts unconditionally outside `.claude/worktrees/`, before
+        permissions are consulted — so a tree anywhere else is one the founder authorises
+        every time this plugin orders the move (#111). The reason these used to sit outside
+        the repository is paid by the exclude, asserted in test_gitpolicy."""
         proc = self.hook(branch="feature-x")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         path = proc.stdout.strip()
         self.assertTrue(path)
-        self.assertNotIn(str(self.repo.resolve()) + "/", path + "/")
+        self.assertTrue(
+            path.startswith(str((self.repo / ".claude" / "worktrees").resolve()) + "/"), path)
 
     def test_honours_an_explicit_path(self):
         target = self.tmp / "explicit"

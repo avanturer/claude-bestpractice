@@ -45,6 +45,10 @@ def main() -> None:
 
     target = Path(requested) if requested else worktree.target_for(ctx, slug)
     target.parent.mkdir(parents=True, exist_ok=True)
+    # The harness creates the tree here, so the exclude has to be in place before it does
+    # — otherwise the founder's next status reports it as untracked work, which is the
+    # whole reason these used to live outside the repository.
+    worktree.hide(ctx)
     absolute = str(target)
 
     # Same provisioning the gate uses when it refuses a write in the main checkout, so the
