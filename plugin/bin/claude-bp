@@ -18,7 +18,7 @@ BIN = Path(__file__).resolve().parent
 sys.path.insert(0, str(BIN.parent / "lib"))
 
 from claude_bestpractice import __version__, board, ci, conflicts, defects, delivery, drafts, hookio, knowledge, onboard, pullrequest  # noqa: E402
-from claude_bestpractice import plan, provenance, sessions, stage, upgrade  # noqa: E402
+from claude_bestpractice import config, plan, provenance, sessions, stage, upgrade, vouch  # noqa: E402
 from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
 
 BOLD = "\033[1m" if sys.stdout.isatty() else ""
@@ -63,6 +63,13 @@ def cmd_status(ctx) -> int:
     heading("CHECKS")
     for line in ci.status_lines(ctx):
         print(f"  {line}" if line else "")
+
+    # Published, not merely applied (#82). A rule the founder can only discover by watching
+    # which prompts stop appearing is one they will reverse-engineer into a hand-written
+    # paragraph — which is exactly what they did, and what #102 was about.
+    heading("VOUCHED FOR — allowed without a permission prompt")
+    for line in vouch.surface(ctx, config.load(ctx).test_command):
+        print(f"  {line}")
 
     heading("SESSIONS")
     if live:

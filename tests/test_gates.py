@@ -275,6 +275,17 @@ class TestPreTool(GateCase):
         except (json.JSONDecodeError, KeyError, TypeError):
             return None
 
+    def assertNotRefused(self, proc, message: str = "") -> None:
+        """The gate did not refuse this — silently, or by vouching for it.
+
+        Three answers, not two. `assertIsNone` was the right test while the only
+        alternative to a refusal was silence; since the plugin also vouches for work it
+        ordered or already governs (#99, #102), reading silence as the only shape of
+        "not refused" makes an approval indistinguishable from a denial.
+        """
+        self.assertNotEqual("deny", self.decision(proc), message or (proc.stdout + proc.stderr))
+
+
     def test_allows_ordinary_work(self):
         self.start()
         proc = self.gate(
@@ -287,7 +298,7 @@ class TestPreTool(GateCase):
             },
         )
         self.assertEqual(proc.returncode, 0)
-        self.assertIsNone(self.decision(proc))
+        self.assertNotRefused(proc)
 
     def test_denies_a_credential_write(self):
         self.start()
@@ -321,7 +332,7 @@ class TestPreTool(GateCase):
                 },
             },
         )
-        self.assertIsNone(self.decision(proc))
+        self.assertNotRefused(proc)
 
     def bash_event(self, command: str, session_id: str = "s1") -> dict:
         return {
@@ -350,7 +361,7 @@ class TestPreTool(GateCase):
         self.start()
         for round_number in range(1, 6):
             suite = self.decision(self.gate("pre-tool", self.bash_event("npm test")))
-            self.assertIsNone(suite, f"the suite was refused on round {round_number}")
+            self.assertNotEqual("deny", suite, f"the suite was refused on round {round_number}")
             self.gate("pre-tool", self.bash_event(f"grep -n thing_{round_number} src.py"))
 
     def test_doing_anything_else_clears_the_streak(self):
@@ -361,7 +372,8 @@ class TestPreTool(GateCase):
         self.assertIn("deny", decisions, "precondition: the streak must trip first")
 
         self.gate("pre-tool", self.bash_event("git status"))
-        self.assertIsNone(
+        self.assertNotEqual(
+            "deny",
             self.decision(self.gate("pre-tool", event)),
             "still refused after doing something else — the count never comes down",
         )
@@ -399,14 +411,14 @@ class TestPreTool(GateCase):
         self.start("alpha")
         for _ in range(2):
             proc = self.gate("pre-tool", self.edit_event("alpha", "src/mine.py"))
-        self.assertIsNone(self.decision(proc))
+        self.assertNotRefused(proc)
 
     def test_different_files_do_not_contend(self):
         self.start("alpha")
         self.start("beta")
         self.gate("pre-tool", self.edit_event("alpha", "src/a.py"))
         proc = self.gate("pre-tool", self.edit_event("beta", "src/b.py"))
-        self.assertIsNone(self.decision(proc))
+        self.assertNotRefused(proc)
 
     def test_lease_is_released_when_the_turn_ends_cleanly(self):
         self.start("alpha")
@@ -418,7 +430,7 @@ class TestPreTool(GateCase):
         self.assertEqual(sessions.leases_held_by(self.ctx(), sid(self.repo, "alpha")), ["src/shared.py"])
         self.stop("alpha")  # nothing changed, so the gate allows and releases
         self.assertEqual(sessions.leases_held_by(self.ctx(), sid(self.repo, "alpha")), [])
-        self.assertIsNone(self.decision(self.gate("pre-tool", self.edit_event("beta", "src/shared.py"))))
+        self.assertNotRefused(self.gate("pre-tool", self.edit_event("beta", "src/shared.py")))
 
     def test_dead_session_lease_does_not_block_forever(self):
         """One crashed session must not poison a path permanently."""
@@ -442,7 +454,7 @@ class TestPreTool(GateCase):
         sessions.acquire_lease(ctx, "ghost", "src/shared.py")
 
         self.start("live")
-        self.assertIsNone(self.decision(self.gate("pre-tool", self.edit_event("live", "src/shared.py"))))
+        self.assertNotRefused(self.gate("pre-tool", self.edit_event("live", "src/shared.py")))
 
     def test_tracks_touched_files(self):
         self.start()

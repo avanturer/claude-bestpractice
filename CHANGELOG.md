@@ -1,5 +1,70 @@
 # Changelog
 
+## v1.12.0
+
+The vouch stopped being a list of strings and became a question about the command.
+
+### Measured, same session profile, before and after (#102)
+
+35 calls in the shape three days of transcripts had: 3 production actions, 9 reads, 6
+project checks, 8 writes and commits in the session's own tree, 9 scratchpad and config
+reads.
+
+| | v1.11.0 | v1.12.0 |
+|---|---|---|
+| vouched, no prompt | 2 | 29 |
+| sent to the classifier | 33 | 6 |
+| production actions vouched | 0 | **0** |
+
+The six still asked about are the three production actions — correctly — and three reads of
+paths outside the repository, which this deliberately does not cover.
+
+### Why a predicate and not a longer list
+
+`make test` was vouched and `ruff check src/` was not, so the founder went back to writing
+paragraphs into `autoMode.allow` describing which tree the session owns and what this
+project's checks are. Both are things the plugin computes on every hook call. Prefix rules
+cannot see inside `cd backend && ruff check && pytest -q`; the classifier can parse it but
+does not know which tree this session owns. The plugin is the only layer with both.
+
+Now vouched, by parse:
+
+- **Reads that change nothing** — `git log/diff/status/show/rev-parse/ls-files/blame`,
+  `cat/head/tail/grep/wc` over paths inside this tree.
+- **This project's checks in any spelling** — pytest, ruff, mypy, tsc, jest, eslint, go
+  test, cargo test, `npm run lint`, `make <check-target>`, `python -m pytest`, `bash -n`.
+- **Every segment of a compound command**, each judged alone.
+- **Writes and commits in the tree the session occupies** — not only trees this plugin
+  provisioned. A worktree the founder made by hand counts.
+
+### Three rules keep a predicate from becoming a bypass
+
+- **Whitelist, never blacklist.** A program not named is not vouched for, so production is
+  out by construction and every new surface arrives silent rather than approved.
+- **The line, whole.** No env assignment stripped, no wrapper unwrapped, no `$(…)`, no
+  backtick, no redirection. `GIT_PAGER='sh -c …' git log` is not a read; `git -c
+  core.pager=… log` is not a read; `cat x > /etc/cron.d/y` is not a read.
+- **One unqualified segment ends the line**, because `allow_tool` approves the line and
+  there is no half of it to approve.
+
+`bundle exec` and `uv run` are judged by the command they carry, `git commit --no-verify`
+is refused a vouch by the plugin whose central claim is that a finish needs evidence, and
+`go test github.com/…` is somebody else's code over the network rather than this project's.
+
+### The rule is published, not only applied
+
+`claude-bp status` gained a `VOUCHED FOR` section listing what is waved through in this
+repository and what is not. A rule the founder can only discover by noticing which prompts
+stopped appearing is one they will reverse-engineer into a hand-written paragraph — which
+is how this issue started (#82).
+
+### shellcmd.segments
+
+`commands()` strips `FOO=bar` and `timeout 30` to find the program a gate should judge.
+That is right for a refusal and backwards for a vouch: it hands back the approvable half
+and discards the half that runs. `segments()` returns the line as written, and the vouch
+declines whatever it cannot account for.
+
 ## v1.11.0
 
 Three refusals that were the plugin arguing with itself, and one prompt it caused.

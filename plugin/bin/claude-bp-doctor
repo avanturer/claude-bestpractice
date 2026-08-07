@@ -534,7 +534,10 @@ def check_stage_gated_rules(repo: Path) -> Result:
     subprocess.run(["git", "commit", "-qm", "users"], cwd=repo, check=True)
 
     denied = decision(write_migration("DROP TABLE users;")) == "deny"
-    allowed = decision(write_migration("ALTER TABLE users ADD COLUMN nick text;")) is None
+    # NOT `is None`. The gate has three answers — deny, silence, and a vouch — and the
+    # question this check asks is whether the additive migration was REFUSED. Reading
+    # silence as the only shape of "allowed" made a vouch indistinguishable from a denial.
+    allowed = decision(write_migration("ALTER TABLE users ADD COLUMN nick text;")) != "deny"
     ok = denied and allowed
     return Result(
         "stage gates scale with the repo",

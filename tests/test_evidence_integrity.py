@@ -167,11 +167,14 @@ class TestTheGatedPartyCannotAmendTheRules(RepoCase):
             ".claude/claude-bestpractice/attempts/0001-y.md",
         ):
             proc = self.run_hook("pre-tool", self.write_event(relpath))
-            self.assertIsNone(self.decision(proc), f"{relpath} was refused")
+            # Not `is None`. The protected-state refusal above still denies the config;
+            # these files are meant to be written, and the gate now says so out loud
+            # rather than staying silent (#102).
+            self.assertNotEqual("deny", self.decision(proc), f"{relpath} was refused")
 
     def test_ordinary_source_is_untouched(self):
         proc = self.run_hook("pre-tool", self.write_event("src/app.py"))
-        self.assertIsNone(self.decision(proc))
+        self.assertNotEqual("deny", self.decision(proc))
 
 
 

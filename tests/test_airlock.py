@@ -158,19 +158,21 @@ class TestMigrationGate(GateCase):
     def test_additive_migration_is_allowed(self):
         self.reach_traction()
         self.start()
-        self.assertIsNone(self.decision(self.migration("ALTER TABLE users ADD COLUMN nickname text;")))
+        # Not `is None`: the gate has three answers, and a vouch for work inside the
+        # session's own tree (#102) is not a refusal any more than silence is.
+        self.assertNotEqual("deny", self.decision(self.migration("ALTER TABLE users ADD COLUMN nickname text;")))
 
     def test_override_token_permits_it(self):
         """A typed acknowledgement, not a config flag that gets set once and forgotten."""
         self.reach_traction()
         self.start()
         proc = self.migration("-- CLAUDE_BESTPRACTICE_I_ACCEPT_DATA_LOSS\nDROP TABLE users;")
-        self.assertIsNone(self.decision(proc))
+        self.assertNotEqual("deny", self.decision(proc))
 
     def test_prototype_stage_does_not_gate_migrations(self):
         """A three-day prototype does not get the ceremony a revenue system needs."""
         self.start()
-        self.assertIsNone(self.decision(self.migration("DROP TABLE users;")))
+        self.assertNotEqual("deny", self.decision(self.migration("DROP TABLE users;")))
 
     def test_production_deploy_is_denied(self):
         self.reach_traction()

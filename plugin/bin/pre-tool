@@ -759,7 +759,7 @@ def main() -> None:
     # every one of them has already allowed the call, and the only question left is whether
     # the founder should be asked about something the plugin itself ordered.
     if event.tool_name == "Bash":
-        vouched = vouch.for_bash(str(ti.get("command", "")), cfg.test_command)
+        vouched = vouch.for_bash(ctx, str(ti.get("command", "")), cfg.test_command, session_cwd)
     elif event.tool_name in WRITE_TOOLS:
         vouched = vouch.for_write(ctx, event.session_id, absolute)
     else:
