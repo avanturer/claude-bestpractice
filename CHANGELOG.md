@@ -58,6 +58,64 @@ repository and what is not. A rule the founder can only discover by noticing whi
 stopped appearing is one they will reverse-engineer into a hand-written paragraph — which
 is how this issue started (#82).
 
+### A second ledger is refused while it is still one file (#103)
+
+The registry check ran at SessionStart and nowhere else, so it could only ever report
+documents that already existed. A session that **created** one mid-session was told
+nothing: the duplicate was written, wired into three entry points and committed across two
+commits before a merge conflict with another session's migration made it visible. The
+founder had asked for a TODO system "while the plugin does not support it", and neither of
+them noticed that it does.
+
+Writing a task registry beside a populated ledger is now refused at write time, naming
+both ways forward: `claude-bp-plan add` to put the work where the sessions read it, or
+`adopt --ignore <file>` if the document is the founder's to curate.
+
+Narrow on purpose, because a false refusal costs a document somebody meant to write: only
+when the ledger already holds tasks, only for a file that does not exist yet — so
+migrating an existing registry is never refused — never the ledger's own task documents,
+never a pull-request template, and never a document already declared curated.
+
+That last escape did not work when it was written: `adopt --ignore` refused a path that was
+not in the tree, and the file does not exist precisely because the gate just refused it.
+It now records the decision and says the file is not there, which is how `park` settled the
+same question.
+
+### Tasks can say how they relate to each other (#104)
+
+A research session produces work that is not independent — B is wrong until A lands, or
+two changes individually swing the result the wrong way and only mean something shipped
+together. None of it was expressible, so it went into a markdown section and was hoped to
+be read, which is the failure the ledger exists to end, one level up.
+
+```
+claude-bp-plan add "score zero for prohibited only" --after 0035
+claude-bp-plan park "recolour the ingredient"       --with 0033
+```
+
+```
+NEXT
+  0001  fix the prohibited-substance flag
+  0002  score zero only for prohibited substances  [after 0001]
+  0003  recolour the ingredient  [with 0004]
+
+4 next (3 ready to start) · 0 in flight · 0 paused · 0 done
+```
+
+`claim` says when an earlier task has not landed rather than proceeding silently, and says
+it without refusing: starting ahead of the order is sometimes right, and starting ahead of
+it *without knowing* is what cost a measurement that could no longer be taken.
+
+`add` also gained `--paths`, `--done-when`, `--after` and `--with`. Nothing had marked it
+as the impoverished half of the pair, so thirteen tasks were filed with it and their files
+backfilled by hand; a bare `add` now points at `park` once, while the difference is still
+cheap to fix.
+
+Two carry paths were fixed along the way. A state transition dropped the new relations —
+every field ever added to this model has been dropped by a move at least once — and the
+reclaim path rewrote a crashed session's task from its title alone, discarding its files,
+its finish condition and its order at the moment the next session has least context.
+
 ### shellcmd.segments
 
 `commands()` strips `FOO=bar` and `timeout 30` to find the program a gate should judge.

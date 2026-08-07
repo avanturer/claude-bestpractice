@@ -395,3 +395,110 @@ class TestATaskCanLearnThingsWhileItWaits(PlanCase):
         shown = plan.show(plan.find(ctx, task.id))
         self.assertIn("DONE WHEN:", shown)
         self.assertLess(shown.index("DONE WHEN:"), shown.index("HANDOFF:"))
+
+
+class TestTasksThatAreNotIndependent(PlanCase):
+    """A research session produces work with an order in it, and the ledger was flat.
+
+    Two changes that individually swing the result the wrong way and only mean something
+    shipped together; a task that is simply wrong until an earlier one lands. None of it
+    was expressible, so it went into a markdown section and was hoped to be read — which
+    is the failure the ledger exists to end, one level up (#104).
+    """
+
+    def test_an_order_survives_the_transition_that_records_it(self):
+        """Every field added to this model has been dropped by a move at least once."""
+        ctx = self.ctx()
+        first = plan.add(ctx, "fix the prohibited flag")
+        second = plan.add(ctx, "score zero for prohibited only", after=[first.id],
+                          together=["0009"], paths=["backend/app.py"])
+
+        claimed, error = plan.claim(ctx, second.id, "s1", "feat/x")
+        self.assertFalse(error, error)
+        self.assertEqual([first.id], claimed.after, "the order was lost on claim")
+        self.assertEqual(["0009"], claimed.together)
+        self.assertEqual(["backend/app.py"], claimed.paths)
+
+    def test_reclaiming_a_dead_sessions_task_keeps_what_it_knew(self):
+        """The reclaim path rewrote the document from its title alone — handing the next
+        session a thin task at the moment it has least context."""
+        ctx = self.ctx()
+        task = plan.add(ctx, "the crashed session's work", after=["0001"],
+                        paths=["backend/app.py"], done_when="the suite is green")
+        plan.claim(ctx, task.id, "ghost", "feat/x")
+
+        plan.release(ctx, "ghost")
+
+        back = plan.find(ctx, task.id)
+        self.assertEqual(plan.NEXT, back.state)
+        self.assertEqual(["0001"], back.after, "the order was dropped by the reclaim")
+        self.assertEqual(["backend/app.py"], back.paths)
+        self.assertEqual("the suite is green", back.done_when)
+
+    def test_an_id_that_names_nothing_blocks_rather_than_clears(self):
+        """Waiting on a task that does not exist is waiting forever; reading that as
+        clear would be the silent failure rather than the visible one."""
+        ctx = self.ctx()
+        task = plan.add(ctx, "waits on a typo", after=["9999"])
+        self.assertEqual(["9999"], plan.blockers(ctx, task))
+
+    def test_a_blocker_clears_when_the_earlier_task_lands(self):
+        ctx = self.ctx()
+        first = plan.add(ctx, "lands first")
+        second = plan.add(ctx, "comes after", after=[first.id])
+        self.assertEqual([first.id], plan.blockers(ctx, second))
+
+        plan.complete(ctx, first.id)
+        self.assertEqual([], plan.blockers(ctx, plan.find(ctx, second.id)))
+
+    def test_startable_answers_what_can_i_begin_right_now(self):
+        """The question an implementing session opens with, answerable without reading a
+        design document — which is the acceptance criterion the issue names."""
+        ctx = self.ctx()
+        first = plan.add(ctx, "lands first")
+        plan.add(ctx, "comes after", after=[first.id])
+        plan.add(ctx, "independent")
+
+        startable = {t.title for t in plan.startable(ctx)}
+        self.assertEqual({"lands first", "independent"}, startable)
+
+
+class TestTheOrderIsVisibleWithoutOpeningTheTask(PlanCase):
+    def plan_cli(self, *args) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(BIN / "claude-bp-plan"), *args],
+            capture_output=True, text=True, cwd=str(self.repo), timeout=60,
+        )
+
+    def test_list_marks_what_is_waiting_and_counts_what_is_ready(self):
+        ctx = self.ctx()
+        first = plan.add(ctx, "lands first")
+        plan.add(ctx, "comes after", after=[first.id])
+
+        out = self.plan_cli("list").stdout
+        self.assertIn(f"[after {first.id}]", out)
+        self.assertIn("1 ready to start", out)
+
+    def test_claim_says_the_earlier_task_has_not_landed(self):
+        ctx = self.ctx()
+        first = plan.add(ctx, "lands first")
+        second = plan.add(ctx, "comes after", after=[first.id])
+
+        proc = self.plan_cli("claim", second.id)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn(first.id, proc.stderr)
+        self.assertIn("has not landed", proc.stderr)
+
+    def test_add_carries_the_same_fields_park_does(self):
+        """Nothing marked `add` as the impoverished one, so thirteen tasks were filed
+        with it and their files backfilled by hand afterwards."""
+        proc = self.plan_cli("add", "with everything", "--paths", "backend/app.py",
+                             "--done-when", "the suite is green", "--after", "0001")
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        task = plan.load_all(self.ctx())[-1]
+        self.assertEqual(["backend/app.py"], task.paths)
+        self.assertEqual("the suite is green", task.done_when)
+        self.assertEqual(["0001"], task.after)
+
+    def test_a_bare_add_points_at_the_command_that_carries_context(self):
+        self.assertIn("park", self.plan_cli("add", "a bare title").stdout)

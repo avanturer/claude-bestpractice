@@ -378,6 +378,25 @@ class TestPreTool(GateCase):
             "still refused after doing something else — the count never comes down",
         )
 
+    def test_a_registry_written_beside_the_ledger_is_refused_at_write_time(self):
+        """End to end: the check that only ran at SessionStart now fires on the write.
+
+        The duplicate in the report was wired into three entry points and committed twice
+        before anyone saw it, because nothing spoke while it was still one file (#103).
+        """
+        from claude_bestpractice import plan
+
+        self.start()
+        plan.add(self.ctx(), "a task the ledger already holds")
+        proc = self.gate("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Write",
+            "tool_input": {
+                "file_path": str(self.repo / "docs/TODO.md"),
+                "content": "# TODO\n\n- [ ] recheck the limit\n- [ ] backfill the skus\n",
+            },
+        })
+        self.assertEqual("deny", self.decision(proc), proc.stdout + proc.stderr)
+
     def test_fails_closed_on_garbage(self):
         proc = subprocess.run(
             [sys.executable, str(BIN / "pre-tool")],

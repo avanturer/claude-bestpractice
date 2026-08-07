@@ -288,6 +288,65 @@ def registries(ctx: GitContext) -> list[Path]:
     return found
 
 
+def _not_ours_to_judge(ctx: GitContext, relative: str) -> bool:
+    """The ledger's own documents, a form rather than a backlog, and anything curated."""
+    return (
+        relative.startswith(store.TIER_A_DIRNAME)
+        or bool(_TEMPLATE.search(relative))
+        or any(part in _SKIP for part in Path(relative).parts)
+        or is_ignored(ctx, relative)
+    )
+
+
+def second_ledger(ctx: GitContext, target: Path, text: str) -> str:
+    """Is this write standing a task registry up beside the ledger? The refusal, or "".
+
+    The registry check ran at SessionStart and nowhere else, so it could only ever report
+    documents that already existed. A session that CREATED one mid-session was told
+    nothing: the duplicate was written, wired into three entry points and committed across
+    two commits before a merge conflict with another session's migration made it visible
+    (#103). The founder had asked for a TODO system "while the plugin does not support it",
+    and neither of them noticed that it does.
+
+    Deliberately narrow, because a false refusal here costs the founder a document they
+    meant to write:
+
+    - only when the ledger already holds tasks — an empty ledger means this may be how
+      this repository starts tracking work, and SessionStart already says so;
+    - only when the file does not exist yet, so editing or MIGRATING a registry that is
+      already there is never refused;
+    - never the ledger's own files, whose task documents are full of checkboxes;
+    - never a document already declared curated, which is the standing answer to this.
+    """
+    from . import plan
+
+    if target.exists() or not any(plan.summary(ctx).values()):
+        return ""
+    try:
+        relative = target.resolve().relative_to(ctx.worktree_root.resolve()).as_posix()
+    except (OSError, ValueError):
+        return ""
+    if _not_ours_to_judge(ctx, relative):
+        return ""
+    items = open_items(text)
+    if POINTER in text or len(items) < MIN_ITEMS:
+        return ""
+
+    counts = plan.summary(ctx)
+    held = sum(counts.values())
+    return (
+        f"claude-bestpractice: {relative} is a second place to track work — it holds "
+        f"{len(items)} open item(s), and the ledger already holds {held}.\n"
+        "  Two registries in one repository is the state this plugin exists to prevent: "
+        "the sessions that read one never see the other, and it surfaces as a merge "
+        "conflict rather than as a question.\n"
+        f"  Put them in the ledger:  claude-bp-plan add \"<title>\"  (or `park` when "
+        "another session will pick it up).\n"
+        f"  Or, if this document is yours to curate by hand and the ledger is not the "
+        f"place for it:  claude-bp-plan adopt --ignore {relative}"
+    )
+
+
 def coverage(ctx: GitContext, path: Path) -> tuple[int, int]:
     """(items in the document, items already in the ledger from it).
 
