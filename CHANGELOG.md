@@ -1,5 +1,52 @@
 # Changelog
 
+## v1.15.0
+
+The founder was the integration layer between auto mode and this plugin. He is not any more.
+
+### The plugin tells auto mode what this repository is (#113)
+
+Two layers answer the same question — may this call proceed unattended. The classifier
+answers it from prose in `~/.claude/settings.json`; this plugin answers it from state it
+computes on every hook call. The only thing joining them was the founder retyping one half
+into the other: 8,940 bytes of hand-written policy on one machine, most of it authored
+mid-session, at the moment a prompt had already interrupted something else — which is the
+worst possible incentive for writing a permission rule.
+
+`claude-bp policy --apply` writes the derivable half, and `Setup` runs it once per project.
+The line it draws is between a fact and a grant. Facts — where this repository is, its
+remotes, its trunk, its checks, that sessions share one clone through worktrees under
+`.claude/worktrees/` — are re-derived from the repository every run, so nothing an agent
+says can change what gets written. That is what makes it safe for the agent to run rather
+than the founder. Grants are not written at all: `autoMode.allow` widens what may proceed
+unattended, and a session that has just been interrupted has a direct motive to widen it.
+
+Nothing hand-written is touched. Every generated line carries a marker naming this
+repository, and only lines carrying it are read, replaced or removed — so the founder's own
+prose survives verbatim, another governed repository's block survives untouched, and two
+repositories on one machine refresh independently. Decision 0008.
+
+### Rules that no longer do anything are named
+
+Eight worktree entries in one `permissions.allow`: six inert because the vouch answers
+`git worktree` by predicate, and two that cannot fire at all because the CLI's own safety
+check outranks them. Nothing anywhere told the founder which was which — a hand-maintained
+list has no expiry and no test. They are reported now, and never deleted: a rule that is
+redundant here may be why something works in another repository this install cannot see.
+
+### A standing instruction whose subject has left the repository is reported
+
+One environment rule still stated that the production SSH key lived inside the checkout, a
+day after it had been moved out and revoked on the server. Every session read it. The same
+machinery this plugin already points at its own knowledge anchors now points one directory
+up: a prescriptive line in `CLAUDE.md` or `.claude/rules/*.md` naming a path that is not
+there is surfaced on the board, with the instruction to tell the founder and to leave their
+file alone.
+
+There is deliberately no generated block in `CLAUDE.md`. Session start already delivers
+those facts, fresher and cheaper; a second copy would double the always-on cost to say the
+same thing twice.
+
 ## v1.14.0
 
 Every step this plugin orders, it now takes without asking — and every remedy it names is

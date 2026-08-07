@@ -7,3 +7,4 @@
 - [0005] The plugin absorbs what it owns, and an upgrade repairs the repository it lands in — `decisions/0005-the-plugin-absorbs-and-an-upgrade-repairs.md`
 - [0006] A gate is switched by the founder's word, never by the session it enforces — `decisions/0006-a-gate-is-switched-by-the-founders-word.md`
 - [0007] Read what is in the repository before reporting that it is not there — `decisions/0007-read-the-layer-before-declaring-it-absent.md`
+- [0008] The plugin holds the pen on facts about this repository, never on grants — `decisions/0008-the-plugin-writes-facts-never-grants.md`

@@ -18,7 +18,7 @@ BIN = Path(__file__).resolve().parent
 sys.path.insert(0, str(BIN.parent / "lib"))
 
 from claude_bestpractice import __version__, board, ci, conflicts, defects, delivery, drafts, hookio, knowledge, onboard, pullrequest  # noqa: E402
-from claude_bestpractice import config, plan, provenance, sessions, stage, upgrade, vouch  # noqa: E402
+from claude_bestpractice import config, plan, policy, provenance, sessions, stage, upgrade, vouch  # noqa: E402
 from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
 
 BOLD = "\033[1m" if sys.stdout.isatty() else ""
@@ -121,6 +121,8 @@ def cmd_status(ctx) -> int:
         more = f" (+{len(theirs) - 6} more)" if len(theirs) > 6 else ""
         print(f"  {len(theirs)} instruction file(s) already here, "
               f"{knowledge.instruction_bytes(ctx)} bytes in every turn: {names}{more}")
+    for stale in knowledge.stale_rules(ctx):
+        print(f"  out of date: {stale}")
     if gaps:
         for gap in gaps:
             print(f"  {DIM}unanswered: {gap}{OFF}")
@@ -313,6 +315,40 @@ def cmd_set(ctx, key: str, value: str) -> int:
     return 0
 
 
+def cmd_policy(ctx, write: bool) -> int:
+    """Keep the derivable half of the auto-mode policy current, without the founder.
+
+    Two layers answer "may this proceed unattended" — the classifier from prose in the
+    founder's settings, this plugin from state it computes — and the founder was the only
+    thing joining them, retyping one half into the other mid-session (#113).
+
+    Safe for an agent to run because the content is derived from the repository rather than
+    from anything the agent says: running this cannot widen what may proceed. Grants are
+    not written here at all.
+    """
+    cfg = config.load(ctx)
+    found = policy.apply(ctx, cfg.test_command) if write else policy.delta(ctx, cfg.test_command)
+
+    heading("AUTO-MODE POLICY")
+    print(f"  settings: {policy.settings_path()}")
+    if found.in_sync:
+        print("  facts about this repository are current")
+    for entry in found.add:
+        print(f"  {'wrote' if write else 'would write'}: {entry[:150]}")
+    for entry in found.remove:
+        print(f"  {'dropped' if write else 'would drop'} (no longer true): {entry[:150]}")
+    if not write and not found.in_sync:
+        print("  `claude-bp policy --apply` writes them")
+
+    if found.dead:
+        heading("HAND-WRITTEN RULES THAT NO LONGER DO ANYTHING")
+        for entry in found.dead:
+            print(f"  {entry}")
+        print(f"  {DIM}Yours to delete. This never edits a rule it did not write — one that is "
+              f"redundant here may be why something works in another repository.{OFF}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="claude-bp", description="claude-bestpractice control plane")
     sub = parser.add_subparsers(dest="command")
@@ -327,6 +363,9 @@ def main() -> int:
         "dismiss", help="rule a review finding false, for good — it stops blocking merges")
     dismiss.add_argument("detector", help="the name in the finding, e.g. sql-interpolation")
     dismiss.add_argument("path", help="the file it was raised against")
+    rules = sub.add_parser(
+        "policy", help="keep auto mode told what this repository is, and name dead rules")
+    rules.add_argument("--apply", action="store_true", help="write it, rather than showing it")
     switch = sub.add_parser(
         "set", help="change a gate switch the founder has asked for in their own words")
     switch.add_argument("key", help="a config key, e.g. scope_drift_block")
@@ -345,6 +384,8 @@ def main() -> int:
         return cmd_adopt(ctx, args.dry_run, args.restore)
     if args.command == "set":
         return cmd_set(ctx, args.key, args.value)
+    if args.command == "policy":
+        return cmd_policy(ctx, args.apply)
     return cmd_status(ctx)
 
 

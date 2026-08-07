@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import ci, hookio, onboard, plan, stage, store  # noqa: E402
+from claude_bestpractice import ci, config, hookio, onboard, plan, policy, stage, store  # noqa: E402
 from claude_bestpractice.gitctx import resolve  # noqa: E402
 
 
@@ -40,6 +40,12 @@ def main() -> None:
     # budget that three to eight parallel sessions spend like a small team.
     hook_installed, hook_note = ci.install(ctx)
 
+    # Told to auto mode once, here, because this is the derivation moment for everything
+    # else too. Facts about this repository only — never a grant — so this cannot widen
+    # what may proceed unattended, and the founder's own rules are carried through
+    # untouched (#113).
+    written_policy = policy.apply(ctx, config.load(ctx).test_command)
+
     lines = [f"claude-bestpractice is set up. Detected stage: {resolved}."]
     if hook_installed:
         lines.append(
@@ -52,6 +58,16 @@ def main() -> None:
         # one thing they must be told is that a file of theirs moved.
         if "moved to" in hook_note:
             lines.append(hook_note.split("\n", 1)[-1].strip())
+    if written_policy.add:
+        lines.append(
+            f"Auto mode now knows what this repository is ({len(written_policy.add)} fact(s) "
+            "in your settings, marked and regenerated — your own rules were not touched)."
+        )
+    if written_policy.dead:
+        lines.append(
+            f"{len(written_policy.dead)} rule(s) in permissions.allow no longer do anything "
+            "here — `claude-bp policy` names them; deleting them is yours."
+        )
     if written:
         lines.append("Derived from your code: " + ", ".join(written))
     if gaps:
