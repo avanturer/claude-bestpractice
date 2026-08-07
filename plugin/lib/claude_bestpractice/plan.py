@@ -71,6 +71,13 @@ class Task:
     # registry been brought across?" is a question only a human can answer by reading
     # both — which is the question the whole migration has to answer mechanically.
     source: str = ""
+    # How this task relates to the others. A research session routinely produces work
+    # that is not independent: B is wrong until A lands, or two changes individually swing
+    # the result the wrong way and only mean something shipped together. None of it was
+    # expressible, so it went into a markdown section and was hoped to be read — the same
+    # failure the ledger exists to end, one level up (#104).
+    after: list[str] = field(default_factory=list)
+    together: list[str] = field(default_factory=list)
     # Empty when the task file is in THIS checkout. The sibling's directory name
     # otherwise, so the board can say where the work actually is.
     worktree: str = ""
@@ -120,7 +127,14 @@ def _load(path: Path, state: str) -> Task | None:
         source=meta.get("source", ""),
         done_when=meta.get("done_when", ""),
         blocker=meta.get("blocker", ""),
+        after=_ids(meta.get("after", "")),
+        together=_ids(meta.get("with", "")),
     )
+
+
+def _ids(raw: str) -> list[str]:
+    """Task ids out of a comma-separated field, normalised to how they are filed."""
+    return [i.strip().zfill(4) for i in raw.split(",") if i.strip()]
 
 
 def load_all(ctx: GitContext, state: str = "") -> list[Task]:
@@ -223,7 +237,8 @@ def slug(text: str) -> str:
 
 def _render(task_id: str, title: str, state: str, owner: str, branch: str, body: str,
             paths: list[str] | None = None, source: str = "",
-            done_when: str = "", blocker: str = "", created_at: str = "") -> str:
+            done_when: str = "", blocker: str = "", created_at: str = "",
+            after: list[str] | None = None, together: list[str] | None = None) -> str:
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     lines = [
         "---",
@@ -236,6 +251,8 @@ def _render(task_id: str, title: str, state: str, owner: str, branch: str, body:
         f"source: {source}",
         f"done_when: {done_when[:MAX_TITLE_CHARS]}",
         f"blocker: {blocker[:MAX_TITLE_CHARS]}",
+        f"after: {', '.join(after or [])}",
+        f"with: {', '.join(together or [])}",
         # Preserved across a move. Rewriting it on every transition made every task look
         # created at the moment it was last touched, which is the one thing `created_at`
         # is for.
@@ -278,7 +295,9 @@ def handoff_problems(paths: list[str], note: str) -> list[str]:
 ALLOC_LOCK = "plan-alloc.lock"
 
 
-def add(ctx: GitContext, title: str, body: str = "", branch: str = "") -> Task:
+def add(ctx: GitContext, title: str, body: str = "", branch: str = "",
+        paths: list[str] | None = None, done_when: str = "",
+        after: list[str] | None = None, together: list[str] | None = None) -> Task:
     """Allocate an id and create the task under one lock.
 
     Scanning for the highest id and then writing the file is a read-modify-write, and
@@ -288,11 +307,13 @@ def add(ctx: GitContext, title: str, body: str = "", branch: str = "") -> Task:
     that `claim 0007` and `done 0007` silently act on whichever one `find` reaches
     first. The lock is held across both steps or it buys nothing.
     """
-    return park(ctx, title, body=body, branch=branch, paths=[])
+    return park(ctx, title, body=body, branch=branch, paths=paths or [],
+                done_when=done_when, after=after, together=together)
 
 
 def park(ctx: GitContext, title: str, body: str = "", branch: str = "",
-         paths: list[str] | None = None, source: str = "") -> Task:
+         paths: list[str] | None = None, source: str = "", done_when: str = "",
+         after: list[str] | None = None, together: list[str] | None = None) -> Task:
     """Hand a task to a session that has not happened yet.
 
     The scene this exists for: a chat with more work in it than belongs in one chat, and
@@ -304,9 +325,26 @@ def park(ctx: GitContext, title: str, body: str = "", branch: str = "",
         task_id = next_id(ctx)
         path = plan_dir(ctx, NEXT) / f"{task_id}-{slug(title)}.md"
         store.atomic_write(
-            path, _render(task_id, title, NEXT, "", branch, body, paths, source), mode=0o644
+            path,
+            _render(task_id, title, NEXT, "", branch, body, paths, source,
+                    done_when=done_when, after=after, together=together),
+            mode=0o644
         )
     return _load(path, NEXT)
+
+
+def _labelled(heading: str, body: list[str]) -> list[str]:
+    """One optional block of `show`, or nothing when it has nothing to say."""
+    return [heading, *body, ""] if body else []
+
+
+def _order_lines(task: Task) -> list[str]:
+    out = []
+    if task.after:
+        out.append(f"  not until {', '.join(task.after)} has landed")
+    if task.together:
+        out.append(f"  ships in the same change as {', '.join(task.together)}")
+    return out
 
 
 def show(task: Task) -> str:
@@ -317,14 +355,10 @@ def show(task: Task) -> str:
     this up, and putting it in front of the other seven is how a context budget dies.
     """
     lines = [f"{task.id}  {task.title}", ""]
-    if task.paths:
-        lines.append("FILES:")
-        lines += [f"  - {p}" for p in task.paths]
-        lines.append("")
-    if task.done_when:
-        lines += ["DONE WHEN:", f"  {task.done_when}", ""]
-    if task.blocker:
-        lines += ["WAITING ON:", f"  {task.blocker}", ""]
+    lines += _labelled("FILES:", [f"  - {p}" for p in task.paths])
+    lines += _labelled("DONE WHEN:", [f"  {task.done_when}"] if task.done_when else [])
+    lines += _labelled("WAITING ON:", [f"  {task.blocker}"] if task.blocker else [])
+    lines += _labelled("ORDER:", _order_lines(task))
     lines.append("HANDOFF:")
     lines += [f"  {line}" for line in (task.body or "(no detail)").splitlines()]
     if task.branch:
@@ -368,6 +402,8 @@ def _move(task: Task, state: str, owner: str = "", branch: str = "",
         meta.get("done_when", ""),
         meta.get("blocker", "") if blocker is None else blocker,
         meta.get("created_at", ""),
+        _ids(meta.get("after", "")),
+        _ids(meta.get("with", "")),
     )
     store.atomic_write(target, updated, mode=0o644)
     if target != task.path:
@@ -376,6 +412,103 @@ def _move(task: Task, state: str, owner: str = "", branch: str = "",
     if moved:
         moved.worktree = task.worktree
     return moved
+
+
+IDLE_HOURS = 24.0
+
+
+def _stale_for(task: Task, now: float, hours: float) -> float:
+    """Hours since this task last moved, or 0 when that cannot be read."""
+    stamp = task.updated_at or task.created_at
+    try:
+        moved = time.mktime(time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ"))
+    except (ValueError, TypeError):
+        return 0.0
+    idle = (now - (moved - time.timezone)) / 3600.0
+    return idle if idle > hours else 0.0
+
+
+def _still_on_it(ctx: GitContext, task: Task) -> bool:
+    """Is the owner touching this task's own files right now?
+
+    The reason this is not just a clock. A session can hold one task for two days and be
+    working on it the whole time; reclaiming that would take work off somebody mid-change,
+    which is worse than the stale row it was meant to fix. So the clock only decides for a
+    task whose OWNER has moved on to other files.
+    """
+    from . import sessions
+
+    holder = sessions.get(ctx, task.owner) if task.owner else None
+    if holder is None or not sessions.is_live(ctx, holder):
+        return False
+    if not task.paths:
+        return not sessions.is_idle(holder)
+    return any(touched in task.paths for touched in holder.last_touched)
+
+
+def sweep_idle(ctx: GitContext, hours: float = IDLE_HOURS) -> list[Task]:
+    """Return work that stopped moving to the queue, and say so in the task itself.
+
+    `reap` already releases the tasks of a session that DIED. Nothing covered the commoner
+    case: a live chat that claimed 0007, moved on to something else, and left it reading
+    `doing` on every board for the rest of the week. The board's whole claim is that it
+    says what is in flight, and a row nobody is working on is the claim being false.
+
+    Back to `next`, not to `paused`: paused means waiting on something nameable, and this
+    is waiting on nobody. It goes back where anyone can pick it up, carrying a line saying
+    what happened so the next session does not rediscover it.
+    """
+    now = time.time()
+    moved: list[Task] = []
+    for task in load_all(ctx, DOING):
+        idle = _stale_for(task, now, hours)
+        if not idle or _still_on_it(ctx, task):
+            continue
+        note = (f"[{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now))}] returned to the "
+                f"queue: claimed by {task.owner[:8] or 'nobody'} and untouched for "
+                f"{int(idle)}h.")
+        task.body = f"{task.body}\n\n{note}".strip() if task.body else note
+        _rewrite_body(task)
+        released = _move(task, NEXT)
+        if released:
+            moved.append(released)
+    return moved
+
+
+def _rewrite_body(task: Task) -> None:
+    """Persist an amended body in place, leaving the frontmatter as it stands."""
+    meta, _ = _frontmatter(task.path.read_text(encoding="utf-8"))
+    head = "\n".join(f"{k}: {v}" for k, v in meta.items())
+    store.atomic_write(task.path, f"---\n{head}\n---\n\n{task.body}\n", mode=0o644)
+
+
+def blockers(ctx: GitContext, task: Task) -> list[str]:
+    """The ids this task named with `--after` that have not landed yet.
+
+    Not done is blocking, including an id that names nothing: a task waiting on `0035`
+    when no `0035` exists is waiting forever, and reading that as clear would be the
+    silent failure rather than the visible one.
+    """
+    if not task.after:
+        return []
+    landed = {t.id for t in load_all(ctx) if t.state == DONE}
+    return [wanted for wanted in task.after if wanted not in landed]
+
+
+def relations(ctx: GitContext, task: Task) -> str:
+    """What `list` shows beside a task so "can I start this" needs no design document."""
+    notes = []
+    waiting = blockers(ctx, task)
+    if waiting:
+        notes.append(f"after {', '.join(waiting)}")
+    if task.together:
+        notes.append(f"with {', '.join(task.together)}")
+    return "; ".join(notes)
+
+
+def startable(ctx: GitContext) -> list[Task]:
+    """Queued work with nothing in front of it — the answer to "what can I start now"."""
+    return [t for t in load_all(ctx, NEXT) if not blockers(ctx, t)]
 
 
 def activity(ctx: GitContext, task: Task) -> str:
@@ -522,7 +655,16 @@ def _move_to(path: Path, target_dir: Path, task: Task) -> None:
     """Rename a task file within the worktree that owns it, not the caller's."""
     store.ensure_dir(target_dir)
     meta, body = _frontmatter(path.read_text(encoding="utf-8"))
-    updated = _render(task.id, meta.get("title", task.title), NEXT, "", meta.get("branch", ""), body)
+    # Everything, not just the title. Reclaiming a crashed session's task rewrote the
+    # document without its files, its finish condition or its relations — handing the
+    # next session the thin task the ledger exists to prevent, at the exact moment it
+    # has least context.
+    updated = _render(
+        task.id, meta.get("title", task.title), NEXT, "", meta.get("branch", ""), body,
+        [p.strip() for p in meta.get("paths", "").split(",") if p.strip()],
+        meta.get("source", ""), meta.get("done_when", ""), "", meta.get("created_at", ""),
+        _ids(meta.get("after", "")), _ids(meta.get("with", "")),
+    )
     store.atomic_write(target_dir / path.name, updated, mode=0o644)
     if target_dir / path.name != path:
         path.unlink(missing_ok=True)

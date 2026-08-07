@@ -66,6 +66,13 @@ class Config:
     max_tool_calls: int = 2_000
     max_repeat_signature: int = 3
     require_worktree: bool = True
+    # Hours a claimed task may sit untouched before it goes back to the queue. The board's
+    # whole claim is that it says what is in flight; a row nobody is working on is that
+    # claim being false. Zero switches the sweep off.
+    task_idle_hours: float = 24.0
+    # Work that changed files while the ledger says nothing is in flight. Same shape as
+    # every other Stop demand: satisfied once per session, then never seen again.
+    require_task: bool = True
     block_unfinished_work: bool = True
     compare_dependencies: bool = True
     commit_conventions: bool = True
@@ -106,6 +113,8 @@ class Config:
             "max_tool_calls": self.max_tool_calls,
             "max_repeat_signature": self.max_repeat_signature,
             "require_worktree": self.require_worktree,
+            "task_idle_hours": self.task_idle_hours,
+            "require_task": self.require_task,
             "block_unfinished_work": self.block_unfinished_work,
             "compare_dependencies": self.compare_dependencies,
             "commit_conventions": self.commit_conventions,
@@ -190,6 +199,8 @@ _EXPECTED: dict[str, type] = {
     "max_tool_calls": int,
     "max_repeat_signature": int,
     "require_worktree": bool,
+    "task_idle_hours": float,
+    "require_task": bool,
     "block_unfinished_work": bool,
     "compare_dependencies": bool,
     "commit_conventions": bool,

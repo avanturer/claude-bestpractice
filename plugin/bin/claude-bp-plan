@@ -39,11 +39,24 @@ def _durability_warning(ctx, what: str = "task") -> str:
     )
 
 
-def cmd_add(ctx, title: str, body: str) -> int:
-    task = plan.add(ctx, title, body, branch=ctx.branch)
+def cmd_add(ctx, title: str, body: str, paths: str = "", done_when: str = "",
+            after: str = "", together: str = "") -> int:
+    task = plan.add(ctx, title, body, branch=ctx.branch,
+                    paths=_list(paths), done_when=done_when,
+                    after=_list(after), together=_list(together))
     print(f"{task.id}  {task.title}")
     print(f"  {task.path.relative_to(ctx.worktree_root)}")
+    if not body and not paths:
+        # Nothing marked `add` as the impoverished one, so thirteen tasks were filed with
+        # it and their files backfilled by hand afterwards. Said once, at the moment the
+        # difference is still cheap to fix.
+        print("  no detail and no files — if another session picks this up, "
+              "`claude-bp-plan park` carries what they will need")
     return 0
+
+
+def _list(raw: str) -> list[str]:
+    return [item.strip() for item in raw.split(",") if item.strip()]
 
 
 def cmd_list(ctx, state: str) -> int:
@@ -59,19 +72,42 @@ def cmd_list(ctx, state: str) -> int:
         print(f"\n{name.upper()}")
         for task in rows:
             note = plan.activity(ctx, task) or (f"waiting: {task.blocker}" if task.blocker else "")
-            print(f"  {task.id}  {task.title[:90]}{'  [' + note + ']' if note else ''}")
+            order = plan.relations(ctx, task)
+            both = "; ".join(part for part in (note, order) if part)
+            print(f"  {task.id}  {task.title[:90]}{'  [' + both + ']' if both else ''}")
     counts = plan.summary(ctx)
-    print(f"\n{counts['next']} next · {counts['doing']} in flight · "
+    # `ready` and not just `next`, because "what can I safely start right now" is the
+    # question an implementing session opens with, and a flat count cannot answer it.
+    ready = len(plan.startable(ctx))
+    print(f"\n{counts['next']} next ({ready} ready to start) · {counts['doing']} in flight · "
           f"{counts.get('paused', 0)} paused · {counts['done']} done")
     return 0
 
 
 def cmd_claim(ctx, task_id: str, session_id: str) -> int:
-    task, error = plan.claim(ctx, task_id, session_id or f"cli-{ctx.branch}", ctx.branch)
+    # The session this CLI is running inside, when it is running inside one. Stamping
+    # `cli-<branch>` made the owner somebody the registry had never heard of: the board
+    # said "claimed by cli-main, which has no record — reclaimable" for a task a live chat
+    # was working on, and the Stop demand could not be satisfied by its own instruction.
+    session_id = session_id or hookio.current_session_id(str(ctx.worktree_root)) or f"cli-{ctx.branch}"
+    wanted = plan.find(ctx, task_id)
+    waiting = plan.blockers(ctx, wanted) if wanted else []
+    task, error = plan.claim(ctx, task_id, session_id, ctx.branch)
     if error:
         print(error, file=sys.stderr)
         return 1
     print(f"claimed {task.id}  {task.title}")
+    if waiting:
+        # Said, not refused. Starting ahead of the order is sometimes right and the
+        # session knows things this does not; starting ahead of it WITHOUT KNOWING is
+        # what cost a measurement that could no longer be taken (#104).
+        for other in waiting:
+            found = plan.find(ctx, other)
+            where = f"still in {found.state}" if found else "no such task"
+            print(f"  WARNING: {other} has not landed ({where}) — this task said it "
+                  f"comes after it", file=sys.stderr)
+    if task.together:
+        print(f"  ships in the same change as {', '.join(task.together)}", file=sys.stderr)
     return 0
 
 
@@ -84,7 +120,8 @@ def cmd_done(ctx, task_id: str) -> int:
     return 0
 
 
-def cmd_park(ctx, title: str, paths: str, note: str, source: str = "") -> int:
+def cmd_park(ctx, title: str, paths: str, note: str, source: str = "",
+             done_when: str = "", after: str = "", together: str = "") -> int:
     wanted = [p.strip() for p in paths.split(",") if p.strip()]
     problems = plan.handoff_problems(wanted, note)
     if problems:
@@ -102,7 +139,8 @@ def cmd_park(ctx, title: str, paths: str, note: str, source: str = "") -> int:
         # difference should not be the one deciding.
         print(f"note: {', '.join(missing)} not in the tree yet")
 
-    task = plan.park(ctx, title, body=note, branch=ctx.branch, paths=wanted, source=source)
+    task = plan.park(ctx, title, body=note, branch=ctx.branch, paths=wanted, source=source,
+                     done_when=done_when, after=_list(after), together=_list(together))
     print(f"parked {task.id}  {task.title}")
     warning = _durability_warning(ctx)
     if warning:
@@ -132,15 +170,14 @@ def cmd_adopt(ctx, brief: str, check: str, ignore: str) -> int:
         # than one of them, and five invocations to say one thing is a tax on the
         # decision rather than a record of it.
         wanted = [p.strip() for p in ignore.split(",") if p.strip()]
-        # A path that is not there records a decision about nothing and answers with the
-        # same sentence as a real one, so a typo reads as done and the document goes on
-        # being raised every session with no way to tell which of the two happened.
+        # Said, not refused. A typo must not read as done — but refusing an absent path
+        # deadlocks the one flow that needs this most: the write gate refuses to CREATE a
+        # registry and names this command as the way to say "this one is mine", and the
+        # file does not exist yet precisely because the gate just refused it (#103).
+        # `park` settled the same question the same way: name it, record it, move on.
         missing = [r for r in wanted if not (ctx.worktree_root / r).is_file()]
         if missing:
-            print(f"no such document: {', '.join(missing)}", file=sys.stderr)
-            print("Nothing was recorded. Paths are relative to the repository root.",
-                  file=sys.stderr)
-            return 1
+            print(f"note: {', '.join(missing)} not in the tree yet")
         for relative in wanted:
             migrate.ignore(ctx, relative)
             print(f"{relative} left alone; it will not be raised again")
@@ -220,6 +257,13 @@ def main() -> int:
     add = sub.add_parser("add", help="add a task to next")
     add.add_argument("title")
     add.add_argument("--body", default="")
+    add.add_argument("--paths", default="", help="the files this touches, comma separated")
+    add.add_argument("--done-when", dest="done_when", default="",
+                     help="what has to be true for this to be finishable")
+    add.add_argument("--after", default="",
+                     help="task ids that must land before this one is correct")
+    add.add_argument("--with", dest="together", default="",
+                     help="task ids this must ship together with")
 
     listing = sub.add_parser("list", help="show the plan (default)")
     listing.add_argument("--state", choices=plan.STATES, default="")
@@ -248,6 +292,12 @@ def main() -> int:
     park.add_argument("--paths", default="", help="comma-separated files the next session opens")
     park.add_argument("--note", default="", help="what is known, what was ruled out, where it stands")
     park.add_argument("--source", default="", help="the document this was migrated out of")
+    park.add_argument("--done-when", dest="done_when", default="",
+                      help="what has to be true for this to be finishable")
+    park.add_argument("--after", default="",
+                      help="task ids that must land before this one is correct")
+    park.add_argument("--with", dest="together", default="",
+                      help="task ids this must ship together with")
 
     show = sub.add_parser("show", help="everything a parked task carries")
     show.add_argument("task_id")
@@ -262,7 +312,8 @@ def main() -> int:
     ctx = resolve_for_cli()
 
     if args.command == "add":
-        return cmd_add(ctx, args.title, args.body)
+        return cmd_add(ctx, args.title, args.body, args.paths, args.done_when,
+                       args.after, args.together)
     if args.command == "claim":
         return cmd_claim(ctx, args.task_id, args.session)
     if args.command == "done":
@@ -293,7 +344,8 @@ def main() -> int:
         return 0
 
     if args.command == "park":
-        return cmd_park(ctx, args.title, args.paths, args.note, args.source)
+        return cmd_park(ctx, args.title, args.paths, args.note, args.source,
+                        args.done_when, args.after, args.together)
     if args.command == "show":
         return cmd_show(ctx, args.task_id)
     if args.command == "adopt":

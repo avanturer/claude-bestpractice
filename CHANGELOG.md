@@ -1,5 +1,155 @@
 # Changelog
 
+## v1.12.0
+
+The vouch stopped being a list of strings and became a question about the command.
+
+### Measured, same session profile, before and after (#102)
+
+35 calls in the shape three days of transcripts had: 3 production actions, 9 reads, 6
+project checks, 8 writes and commits in the session's own tree, 9 scratchpad and config
+reads.
+
+| | v1.11.0 | v1.12.0 |
+|---|---|---|
+| vouched, no prompt | 2 | 29 |
+| sent to the classifier | 33 | 6 |
+| production actions vouched | 0 | **0** |
+
+The six still asked about are the three production actions — correctly — and three reads of
+paths outside the repository, which this deliberately does not cover.
+
+### Why a predicate and not a longer list
+
+`make test` was vouched and `ruff check src/` was not, so the founder went back to writing
+paragraphs into `autoMode.allow` describing which tree the session owns and what this
+project's checks are. Both are things the plugin computes on every hook call. Prefix rules
+cannot see inside `cd backend && ruff check && pytest -q`; the classifier can parse it but
+does not know which tree this session owns. The plugin is the only layer with both.
+
+Now vouched, by parse:
+
+- **Reads that change nothing** — `git log/diff/status/show/rev-parse/ls-files/blame`,
+  `cat/head/tail/grep/wc` over paths inside this tree.
+- **This project's checks in any spelling** — pytest, ruff, mypy, tsc, jest, eslint, go
+  test, cargo test, `npm run lint`, `make <check-target>`, `python -m pytest`, `bash -n`.
+- **Every segment of a compound command**, each judged alone.
+- **Writes and commits in the tree the session occupies** — not only trees this plugin
+  provisioned. A worktree the founder made by hand counts.
+
+### Three rules keep a predicate from becoming a bypass
+
+- **Whitelist, never blacklist.** A program not named is not vouched for, so production is
+  out by construction and every new surface arrives silent rather than approved.
+- **The line, whole.** No env assignment stripped, no wrapper unwrapped, no `$(…)`, no
+  backtick, no redirection. `GIT_PAGER='sh -c …' git log` is not a read; `git -c
+  core.pager=… log` is not a read; `cat x > /etc/cron.d/y` is not a read.
+- **One unqualified segment ends the line**, because `allow_tool` approves the line and
+  there is no half of it to approve.
+
+`bundle exec` and `uv run` are judged by the command they carry, `git commit --no-verify`
+is refused a vouch by the plugin whose central claim is that a finish needs evidence, and
+`go test github.com/…` is somebody else's code over the network rather than this project's.
+
+### The rule is published, not only applied
+
+`claude-bp status` gained a `VOUCHED FOR` section listing what is waved through in this
+repository and what is not. A rule the founder can only discover by noticing which prompts
+stopped appearing is one they will reverse-engineer into a hand-written paragraph — which
+is how this issue started (#82).
+
+### A second ledger is refused while it is still one file (#103)
+
+The registry check ran at SessionStart and nowhere else, so it could only ever report
+documents that already existed. A session that **created** one mid-session was told
+nothing: the duplicate was written, wired into three entry points and committed across two
+commits before a merge conflict with another session's migration made it visible. The
+founder had asked for a TODO system "while the plugin does not support it", and neither of
+them noticed that it does.
+
+Writing a task registry beside a populated ledger is now refused at write time, naming
+both ways forward: `claude-bp-plan add` to put the work where the sessions read it, or
+`adopt --ignore <file>` if the document is the founder's to curate.
+
+Narrow on purpose, because a false refusal costs a document somebody meant to write: only
+when the ledger already holds tasks, only for a file that does not exist yet — so
+migrating an existing registry is never refused — never the ledger's own task documents,
+never a pull-request template, and never a document already declared curated.
+
+That last escape did not work when it was written: `adopt --ignore` refused a path that was
+not in the tree, and the file does not exist precisely because the gate just refused it.
+It now records the decision and says the file is not there, which is how `park` settled the
+same question.
+
+### Tasks can say how they relate to each other (#104)
+
+A research session produces work that is not independent — B is wrong until A lands, or
+two changes individually swing the result the wrong way and only mean something shipped
+together. None of it was expressible, so it went into a markdown section and was hoped to
+be read, which is the failure the ledger exists to end, one level up.
+
+```
+claude-bp-plan add "score zero for prohibited only" --after 0035
+claude-bp-plan park "recolour the ingredient"       --with 0033
+```
+
+```
+NEXT
+  0001  fix the prohibited-substance flag
+  0002  score zero only for prohibited substances  [after 0001]
+  0003  recolour the ingredient  [with 0004]
+
+4 next (3 ready to start) · 0 in flight · 0 paused · 0 done
+```
+
+`claim` says when an earlier task has not landed rather than proceeding silently, and says
+it without refusing: starting ahead of the order is sometimes right, and starting ahead of
+it *without knowing* is what cost a measurement that could no longer be taken.
+
+`add` also gained `--paths`, `--done-when`, `--after` and `--with`. Nothing had marked it
+as the impoverished half of the pair, so thirteen tasks were filed with it and their files
+backfilled by hand; a bare `add` now points at `park` once, while the difference is still
+cheap to fix.
+
+Two carry paths were fixed along the way. A state transition dropped the new relations —
+every field ever added to this model has been dropped by a move at least once — and the
+reclaim path rewrote a crashed session's task from its title alone, discarding its files,
+its finish condition and its order at the moment the next session has least context.
+
+### The board is now binding, not advisory
+
+Two gaps, both about the board's central claim — that it says what is in flight.
+
+**Work that changed files while nothing on the board says so is refused at the finish.**
+`pre-tool`, `evidence-gate` and `session-start` did not call `plan` even once: a session
+could rewrite the importer for three hours and appear, to every sibling, to be doing
+nothing at all. The Stop gate now demands the work be on the board, alongside scope drift
+and the evidence demand — satisfied once per session with the command the refusal names,
+then never seen again. `require_task` in config turns it off.
+
+**A task nobody is working on goes back to the queue.** `reap` covered the session that
+DIED; nothing covered the commoner case — a live chat that claimed 0007, moved on, and
+left it reading `doing` on every board for the rest of the week. `plan.sweep_idle` runs at
+SessionStart before the board is rendered: back to `next`, carrying a line saying what
+happened, after `task_idle_hours` (default 24) untouched. Not to `paused`, because paused
+means waiting on something nameable and this is waiting on nobody. A session still editing
+the task's own files keeps it however long it takes — reclaiming work mid-change is worse
+than the stale row it was meant to fix.
+
+The demand exposed a defect in the command it names. `claude-bp-plan claim` stamped
+`cli-<branch>` as the owner, so a task claimed from inside a session belonged to somebody
+the registry had never heard of: the board said "claimed by cli-main, which has no record
+— reclaimable" for work a live chat was doing, and the new demand could not have been
+cleared by its own instruction. Identity is `(harness id, worktree)` in the CLI too now,
+composed by one shared function instead of two that disagreed.
+
+### shellcmd.segments
+
+`commands()` strips `FOO=bar` and `timeout 30` to find the program a gate should judge.
+That is right for a refusal and backwards for a vouch: it hands back the approvable half
+and discards the half that runs. `segments()` returns the line as written, and the vouch
+declines whatever it cannot account for.
+
 ## v1.11.0
 
 Three refusals that were the plugin arguing with itself, and one prompt it caused.

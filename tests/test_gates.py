@@ -17,6 +17,8 @@ from pathlib import Path
 
 from helpers import BIN, RepoCase, sid
 
+from claude_bestpractice import plan
+
 JUNIT_PASS = '<?xml version="1.0"?><testsuite name="s" tests="4" failures="0" errors="0"></testsuite>'
 
 
@@ -34,7 +36,7 @@ class GateCase(RepoCase):
 
     def after_prompts(self, *prompts: str):
         """Drive the real hook once per prompt and return the session record."""
-        from claude_bestpractice import sessions
+        from claude_bestpractice import sessions, plan
 
         self.start()
         for prompt in prompts:
@@ -275,6 +277,17 @@ class TestPreTool(GateCase):
         except (json.JSONDecodeError, KeyError, TypeError):
             return None
 
+    def assertNotRefused(self, proc, message: str = "") -> None:
+        """The gate did not refuse this — silently, or by vouching for it.
+
+        Three answers, not two. `assertIsNone` was the right test while the only
+        alternative to a refusal was silence; since the plugin also vouches for work it
+        ordered or already governs (#99, #102), reading silence as the only shape of
+        "not refused" makes an approval indistinguishable from a denial.
+        """
+        self.assertNotEqual("deny", self.decision(proc), message or (proc.stdout + proc.stderr))
+
+
     def test_allows_ordinary_work(self):
         self.start()
         proc = self.gate(
@@ -287,7 +300,7 @@ class TestPreTool(GateCase):
             },
         )
         self.assertEqual(proc.returncode, 0)
-        self.assertIsNone(self.decision(proc))
+        self.assertNotRefused(proc)
 
     def test_denies_a_credential_write(self):
         self.start()
@@ -321,7 +334,7 @@ class TestPreTool(GateCase):
                 },
             },
         )
-        self.assertIsNone(self.decision(proc))
+        self.assertNotRefused(proc)
 
     def bash_event(self, command: str, session_id: str = "s1") -> dict:
         return {
@@ -350,7 +363,7 @@ class TestPreTool(GateCase):
         self.start()
         for round_number in range(1, 6):
             suite = self.decision(self.gate("pre-tool", self.bash_event("npm test")))
-            self.assertIsNone(suite, f"the suite was refused on round {round_number}")
+            self.assertNotEqual("deny", suite, f"the suite was refused on round {round_number}")
             self.gate("pre-tool", self.bash_event(f"grep -n thing_{round_number} src.py"))
 
     def test_doing_anything_else_clears_the_streak(self):
@@ -361,10 +374,30 @@ class TestPreTool(GateCase):
         self.assertIn("deny", decisions, "precondition: the streak must trip first")
 
         self.gate("pre-tool", self.bash_event("git status"))
-        self.assertIsNone(
+        self.assertNotEqual(
+            "deny",
             self.decision(self.gate("pre-tool", event)),
             "still refused after doing something else — the count never comes down",
         )
+
+    def test_a_registry_written_beside_the_ledger_is_refused_at_write_time(self):
+        """End to end: the check that only ran at SessionStart now fires on the write.
+
+        The duplicate in the report was wired into three entry points and committed twice
+        before anyone saw it, because nothing spoke while it was still one file (#103).
+        """
+        from claude_bestpractice import plan
+
+        self.start()
+        plan.add(self.ctx(), "a task the ledger already holds")
+        proc = self.gate("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Write",
+            "tool_input": {
+                "file_path": str(self.repo / "docs/TODO.md"),
+                "content": "# TODO\n\n- [ ] recheck the limit\n- [ ] backfill the skus\n",
+            },
+        })
+        self.assertEqual("deny", self.decision(proc), proc.stdout + proc.stderr)
 
     def test_fails_closed_on_garbage(self):
         proc = subprocess.run(
@@ -399,14 +432,14 @@ class TestPreTool(GateCase):
         self.start("alpha")
         for _ in range(2):
             proc = self.gate("pre-tool", self.edit_event("alpha", "src/mine.py"))
-        self.assertIsNone(self.decision(proc))
+        self.assertNotRefused(proc)
 
     def test_different_files_do_not_contend(self):
         self.start("alpha")
         self.start("beta")
         self.gate("pre-tool", self.edit_event("alpha", "src/a.py"))
         proc = self.gate("pre-tool", self.edit_event("beta", "src/b.py"))
-        self.assertIsNone(self.decision(proc))
+        self.assertNotRefused(proc)
 
     def test_lease_is_released_when_the_turn_ends_cleanly(self):
         self.start("alpha")
@@ -418,7 +451,7 @@ class TestPreTool(GateCase):
         self.assertEqual(sessions.leases_held_by(self.ctx(), sid(self.repo, "alpha")), ["src/shared.py"])
         self.stop("alpha")  # nothing changed, so the gate allows and releases
         self.assertEqual(sessions.leases_held_by(self.ctx(), sid(self.repo, "alpha")), [])
-        self.assertIsNone(self.decision(self.gate("pre-tool", self.edit_event("beta", "src/shared.py"))))
+        self.assertNotRefused(self.gate("pre-tool", self.edit_event("beta", "src/shared.py")))
 
     def test_dead_session_lease_does_not_block_forever(self):
         """One crashed session must not poison a path permanently."""
@@ -442,7 +475,7 @@ class TestPreTool(GateCase):
         sessions.acquire_lease(ctx, "ghost", "src/shared.py")
 
         self.start("live")
-        self.assertIsNone(self.decision(self.gate("pre-tool", self.edit_event("live", "src/shared.py"))))
+        self.assertNotRefused(self.gate("pre-tool", self.edit_event("live", "src/shared.py")))
 
     def test_tracks_touched_files(self):
         self.start()
@@ -475,6 +508,7 @@ class TestEvidenceGate(GateCase):
 
     def test_accepts_fresh_passing_evidence(self):
         self.start()
+        self.claim_a_task("s1", "feature.py")
         self.write("feature.py", "x = 1\n")
         time.sleep(0.02)
         self.write("junit.xml", JUNIT_PASS)
@@ -544,8 +578,41 @@ class TestEvidenceGate(GateCase):
         body = json.loads(self.start("next").stdout)["hookSpecificOutput"]["additionalContext"]
         self.assertIn("UNVERIFIED", body)
 
+    def test_unlisted_work_is_refused_at_the_finish(self):
+        """The ledger was advisory in a product whose premise is that the board tells the
+        truth about what the other sessions are doing. A session could rewrite the
+        importer for three hours and appear, to every sibling, to be doing nothing.
+        """
+        self.start()
+        self.write("feature.py", "x = 1\n")
+        self.write("junit.xml", JUNIT_PASS)
+
+        proc = self.stop()
+        self.assertEqual(2, proc.returncode)
+        self.assertIn("Nothing on the board", proc.stderr)
+        self.assertIn("claude-bp-plan add", proc.stderr, "a refusal must name the way through")
+
+    def test_the_command_the_refusal_names_actually_satisfies_it(self):
+        """`claim` stamped `cli-<branch>` as the owner, so the task belonged to somebody
+        the registry had never heard of and the demand could not be cleared by its own
+        instruction. Identity is (harness id, worktree) in the CLI too."""
+        self.start()
+        self.write("feature.py", "x = 1\n")
+        task = plan.add(self.ctx(), "what this turn is doing", paths=["feature.py"])
+        claimed = subprocess.run(
+            [sys.executable, str(BIN / "claude-bp-plan"), "claim", task.id],
+            capture_output=True, text=True, cwd=str(self.repo), timeout=60,
+            env={**os.environ, "CLAUDE_CODE_SESSION_ID": "s1"},
+        )
+        self.assertEqual(0, claimed.returncode, claimed.stderr)
+
+        self.write("junit.xml", JUNIT_PASS)
+        proc = self.stop()
+        self.assertEqual(0, proc.returncode, proc.stderr)
+
     def test_counter_resets_after_a_success(self):
         self.start()
+        self.claim_a_task("s1", "feature.py")
         self.write("feature.py", "x = 1\n")
         self.assertEqual(self.stop().returncode, 2)
         time.sleep(0.02)

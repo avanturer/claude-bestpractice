@@ -732,6 +732,17 @@ def main() -> None:
                 ".gitignore does not cover."
             )
 
+        # A registry being stood up beside the ledger, caught while it is one file rather
+        # than three entry points and two commits. Structured writes only: a Bash line
+        # that merely QUOTES a checkbox is not a registry, and this refuses rather than
+        # warns, so a false positive costs the founder a document they meant to write.
+        if event.tool_name in WRITE_TOOLS and absolute:
+            from claude_bestpractice import migrate
+
+            duplicate = migrate.second_ledger(ctx, absolute[0], content)
+            if duplicate:
+                hookio.deny_tool(duplicate)
+
         # Claim the path. Two sessions editing one file is not a merge conflict — it is
         # a silent overwrite where neither side knows it happened, which is the defining
         # risk of the several-sessions-at-once operating mode.
@@ -759,7 +770,7 @@ def main() -> None:
     # every one of them has already allowed the call, and the only question left is whether
     # the founder should be asked about something the plugin itself ordered.
     if event.tool_name == "Bash":
-        vouched = vouch.for_bash(str(ti.get("command", "")), cfg.test_command)
+        vouched = vouch.for_bash(ctx, str(ti.get("command", "")), cfg.test_command, session_cwd)
     elif event.tool_name in WRITE_TOOLS:
         vouched = vouch.for_write(ctx, event.session_id, absolute)
     else:

@@ -394,13 +394,20 @@ class TestMigrationIsDelegatedAndThenCounted(RepoCase):
         self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
         self.assertIn(str(self.repo / store.TIER_A_DIRNAME / migrate.IGNORED), proc.stdout)
 
-    def test_a_document_that_is_not_there_is_not_declared_curated(self):
-        """Same sentence for a typo as for a real registry, and the nagging continues."""
+    def test_a_document_that_is_not_there_is_recorded_and_said_so(self):
+        """Refusing an absent path deadlocked the one flow that needs this most.
+
+        The write gate refuses to CREATE a registry beside the ledger and names this
+        command as the way to say "this one is mine" — and the file does not exist yet
+        precisely because the gate just refused it (#103). So the decision is recorded and
+        the absence is announced, which is how `park` settled the same question: a typo
+        must not read as done, and that is what the note is for.
+        """
         self.seed()
-        proc = self.adopt("--ignore", "docs/nope.md")
-        self.assertEqual(1, proc.returncode)
-        self.assertIn("no such document", proc.stderr)
-        self.assertNotEqual([], migrate.registries(self.ctx()), "recorded a decision anyway")
+        proc = self.adopt("--ignore", "docs/not-yet.md")
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn("not in the tree yet", proc.stdout)
+        self.assertTrue(migrate.is_ignored(self.ctx(), "docs/not-yet.md"))
 
     def test_the_board_counts_items_not_files(self):
         """"2 documents" says nothing about what is at stake; "31 items" decides it."""
@@ -426,6 +433,60 @@ class TestMigrationIsDelegatedAndThenCounted(RepoCase):
         has to be able to discharge this line, or it learns to ignore the channel."""
         self.seed()
         self.assertIn("--ignore", migrate.line(self.ctx()))
+
+
+class TestASecondLedgerIsRefusedWhileItIsStillOneFile(RepoCase):
+    """The registry check ran at SessionStart and nowhere else, so it could only report
+    documents that already existed. A session that CREATED one was told nothing: the
+    duplicate was written, wired into three entry points and committed across two commits
+    before a merge conflict with another session's migration made it visible (#103).
+    """
+
+    def ledger(self) -> None:
+        plan.add(self.ctx(), "a task the ledger already holds")
+
+    def refusal(self, relpath: str, text: str) -> str:
+        return migrate.second_ledger(self.ctx(), self.repo / relpath, text)
+
+    REGISTRY = "# TODO\n\n- [ ] recheck the limit\n- [ ] backfill the skus\n"
+
+    def test_a_registry_created_beside_a_populated_ledger_is_refused(self):
+        self.ledger()
+        refusal = self.refusal("docs/TODO.md", self.REGISTRY)
+        self.assertIn("second place to track work", refusal)
+        self.assertIn("claude-bp-plan add", refusal, "a refusal must name the way through")
+        self.assertIn("adopt --ignore", refusal, "and the way out")
+
+    def test_an_empty_ledger_means_this_may_be_how_the_repo_starts(self):
+        """SessionStart already reports registries; refusing the first one is a trap."""
+        self.assertEqual("", self.refusal("docs/TODO.md", self.REGISTRY))
+
+    def test_a_registry_that_already_exists_is_never_refused(self):
+        """Otherwise migrating one — editing it to add the POINTER — is impossible."""
+        self.ledger()
+        self.write("docs/TODO.md", self.REGISTRY)
+        self.assertEqual("", self.refusal("docs/TODO.md", self.REGISTRY + "- [ ] third\n"))
+
+    def test_prose_with_one_stray_checkbox_is_not_a_registry(self):
+        self.ledger()
+        self.assertEqual("", self.refusal("docs/notes.md", "# Notes\n\nprose\n\n- [ ] one\n"))
+
+    def test_the_ledgers_own_task_documents_are_not_a_second_ledger(self):
+        """Task files are full of checkboxes; refusing them would refuse the ledger."""
+        self.ledger()
+        self.assertEqual("", self.refusal(
+            f"{store.TIER_A_DIRNAME}/plan/next/0009-x.md", "- [ ] step one\n- [ ] step two\n"))
+
+    def test_a_pull_request_template_is_a_form_not_a_backlog(self):
+        self.ledger()
+        self.assertEqual("", self.refusal(
+            ".github/pull_request_template.md", "- [ ] tests\n- [ ] docs\n"))
+
+    def test_a_document_declared_curated_is_the_standing_answer(self):
+        """The escape the refusal names has to work for a file that does not exist yet."""
+        self.ledger()
+        migrate.ignore(self.ctx(), "docs/TODO.md")
+        self.assertEqual("", self.refusal("docs/TODO.md", self.REGISTRY))
 
 
 class TestItNeverClaimsToHaveLookedEverywhere(RepoCase):

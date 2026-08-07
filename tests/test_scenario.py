@@ -42,6 +42,16 @@ class Scenario(RepoCase):
         except (json.JSONDecodeError, KeyError, TypeError):
             return None
 
+    def assertNotRefused(self, proc, message: str = "") -> None:
+        """Not refused — whether the gate said nothing or vouched for the call.
+
+        Three answers, not two. Asserting silence was right while a refusal's only
+        alternative WAS silence; the plugin now also vouches for work it ordered or
+        already governs (#99, #102), and reading silence as the one shape of "not
+        refused" makes an approval indistinguishable from a denial.
+        """
+        self.assertNotEqual("deny", self.decision_of(proc), message or proc.stdout)
+
     def cli(self, name: str, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
             [sys.executable, str(BIN / name), *args],
@@ -120,7 +130,9 @@ class TestFullLifecycle(Scenario):
         self.assertIn("health:", board_text)
         self.assertIn("stage: prototype", board_text)
 
-        self.cli("claude-bp-plan", "claim", "0001", "--session", "s1")
+        # The composed identity, which is what every gate reads. A session claiming with
+        # its raw id owns a task the registry cannot connect to it.
+        self.cli("claude-bp-plan", "claim", "0001", "--session", sid(self.repo, "s1"))
         self.hook(
             "prompt-capture",
             session_id="s1",
@@ -241,7 +253,7 @@ class TestTwoSessionsInParallel(Scenario):
             "tool_name": "Edit",
             "tool_input": {"file_path": str(self.repo / "src" / "billing.js"), "new_string": "x"},
         }
-        self.assertIsNone(self.decision_of(self.hook("pre-tool", session_id="alpha", **edit)))
+        self.assertNotRefused(self.hook("pre-tool", session_id="alpha", **edit))
 
         collision = self.hook("pre-tool", session_id="beta", **edit)
         self.assertEqual(self.decision_of(collision), "deny")
@@ -251,7 +263,7 @@ class TestTwoSessionsInParallel(Scenario):
         # A different file is never contested.
         other = dict(edit)
         other["tool_input"] = {"file_path": str(self.repo / "src" / "api.js"), "new_string": "y"}
-        self.assertIsNone(self.decision_of(self.hook("pre-tool", session_id="beta", **other)))
+        self.assertNotRefused(self.hook("pre-tool", session_id="beta", **other))
 
     def test_a_dead_session_does_not_block_the_living(self):
         self.build_app()
@@ -265,18 +277,16 @@ class TestTwoSessionsInParallel(Scenario):
 
         self.assertIsNone(sessions.get(ctx, sid(self.repo, "ghost")))
         self.assertEqual(plan.find(ctx, task.id).state, plan.NEXT)
-        self.assertIsNone(
-            self.decision_of(
-                self.hook(
-                    "pre-tool",
-                    session_id="alive",
-                    hook_event_name="PreToolUse",
-                    tool_name="Edit",
-                    tool_input={
-                        "file_path": str(self.repo / "src" / "billing.js"),
-                        "new_string": "z",
-                    },
-                )
+        self.assertNotRefused(
+            self.hook(
+                "pre-tool",
+                session_id="alive",
+                hook_event_name="PreToolUse",
+                tool_name="Edit",
+                tool_input={
+                    "file_path": str(self.repo / "src" / "billing.js"),
+                    "new_string": "z",
+                },
             )
         )
 
@@ -447,7 +457,7 @@ class TestStageEscalation(Scenario):
             },
         }
         # A prototype is not given ceremony it has not earned.
-        self.assertIsNone(self.decision_of(self.hook("pre-tool", session_id="s1", **migration)))
+        self.assertNotRefused(self.hook("pre-tool", session_id="s1", **migration))
 
         # A users table is the documented signal that people's data now exists.
         self.write("migrations/0001_init.sql", "CREATE TABLE users (id serial primary key);")

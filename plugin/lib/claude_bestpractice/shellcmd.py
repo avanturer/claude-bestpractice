@@ -38,6 +38,18 @@ def commands(line: str) -> list[list[str]]:
 
     Empty when the line cannot be tokenised, which the callers treat as "ask the old way".
     """
+    return [stripped for stripped in (_unwrap(argv) for argv in segments(line)) if stripped]
+
+
+def segments(line: str) -> list[list[str]]:
+    """Every command in `line` exactly as written — nothing stripped, nothing unwrapped.
+
+    `commands` drops `FOO=bar` and `timeout 30` to find the program a gate should judge.
+    That is the right direction for a REFUSAL and the wrong one for a vouch: stripping
+    `GIT_PAGER='sh -c …'` off `git log` yields a read to approve and throws away the half
+    that runs. A caller that vouches has to see the line whole and decline what it cannot
+    account for, so it gets this instead.
+    """
     if not line or not line.strip():
         return []
     try:
@@ -58,7 +70,7 @@ def commands(line: str) -> list[list[str]]:
         current.append(token)
     if current:
         out.append(current)
-    return [stripped for stripped in (_unwrap(argv) for argv in out) if stripped]
+    return out
 
 
 def _unwrap(argv: list[str]) -> list[str]:

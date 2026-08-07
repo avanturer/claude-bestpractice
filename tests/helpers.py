@@ -101,6 +101,20 @@ class RepoCase(unittest.TestCase):
         git(["commit", "-qm", message], self.repo)
         return git(["rev-parse", "HEAD"], self.repo)
 
+    def claim_a_task(self, session_id: str = "s1", *paths: str):
+        """Put a turn's work on the board, which the Stop gate requires it to be on.
+
+        The identity is the COMPOSED one — (harness id, worktree) — because that is what
+        every gate reads. A task owned by the raw id is owned by somebody the registry has
+        never heard of, which is the defect this helper exists not to reproduce.
+        """
+        from claude_bestpractice import plan
+
+        ctx = self.ctx()
+        task = plan.add(ctx, "what this turn is doing", paths=list(paths))
+        plan.claim(ctx, task.id, sid(self.repo, session_id), ctx.branch)
+        return task
+
     def add_worktree(self, name: str) -> Path:
         target = self.tmp / name
         git(["worktree", "add", "-q", "-b", name, str(target)], self.repo)

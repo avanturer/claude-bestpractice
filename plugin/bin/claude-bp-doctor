@@ -345,9 +345,46 @@ def check_evidence_gate_blocks(repo: Path) -> Result:
     )
 
 
+def _claim_a_task(repo: Path, session_id: str, paths: str) -> None:
+    """Put this scenario's work on the board, which the Stop gate now requires."""
+    from claude_bestpractice import hookio, plan
+    from claude_bestpractice.gitctx import resolve
+
+    ctx = resolve(repo)
+    task = plan.add(ctx, "doctor scenario", paths=[p for p in paths.split(",") if p])
+    # Composed, because that is the identity every gate reads — the raw id owns nothing.
+    plan.claim(ctx, task.id, hookio.compose_session_id(session_id, str(repo)), ctx.branch)
+
+
+def check_ledger_demand(repo: Path) -> Result:
+    """Changed files while the board says nothing is in flight must not pass.
+
+    The board's whole claim is that it says what the other sessions are doing, and until
+    this the ledger was advisory: a session could rewrite the importer for three hours and
+    appear, to every sibling, to be doing nothing at all.
+    """
+    start_session(repo, "doctor-ledger")
+    (repo / "unlisted.py").write_text("def h():\n    return 3\n")
+    proc = run_gate(
+        "evidence-gate",
+        {"session_id": "doctor-ledger", "hook_event_name": "Stop", "cwd": str(repo),
+         "stop_hook_active": False},
+        repo,
+    )
+    ok = proc.returncode != 0 and "nothing on the board" in proc.stderr.lower()
+    (repo / "unlisted.py").unlink(missing_ok=True)
+    return Result(
+        "unlisted work is refused at the finish",
+        ok,
+        "refused, and named the command that fixes it" if ok
+        else f"exit {proc.returncode}: {proc.stderr[:160]!r} — THE BOARD CAN LIE",
+    )
+
+
 def check_evidence_gate_accepts(repo: Path) -> Result:
     """And a fresh passing artifact must be accepted, or the gate is unusable."""
     start_session(repo, "doctor-accept")
+    _claim_a_task(repo, "doctor-accept", "feature2.py")
     (repo / "feature2.py").write_text("def g():\n    return 2\n")
     time.sleep(0.02)
     (repo / "junit.xml").write_text(
@@ -534,7 +571,10 @@ def check_stage_gated_rules(repo: Path) -> Result:
     subprocess.run(["git", "commit", "-qm", "users"], cwd=repo, check=True)
 
     denied = decision(write_migration("DROP TABLE users;")) == "deny"
-    allowed = decision(write_migration("ALTER TABLE users ADD COLUMN nick text;")) is None
+    # NOT `is None`. The gate has three answers — deny, silence, and a vouch — and the
+    # question this check asks is whether the additive migration was REFUSED. Reading
+    # silence as the only shape of "allowed" made a vouch indistinguishable from a denial.
+    allowed = decision(write_migration("ALTER TABLE users ADD COLUMN nick text;")) != "deny"
     ok = denied and allowed
     return Result(
         "stage gates scale with the repo",
@@ -1121,6 +1161,7 @@ def main() -> int:
             check_lease_conflict_denied,
             check_evidence_gate_blocks,
             check_evidence_gate_accepts,
+            check_ledger_demand,
             check_stale_artifact_rejected,
             check_checkpoint,
             check_knowledge_anchor,
