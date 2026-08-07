@@ -144,9 +144,34 @@ def _quarantine_unreadable_state(ctx: GitContext) -> str:
     return f"{moved} unreadable state file(s) set aside as .broken" if moved else ""
 
 
+def _absorb_scratch_todos(ctx: GitContext) -> str:
+    """Pull the scratch TODO files the plugin's own absence caused into the ledger.
+
+    An upgrade has to fix the repository it lands in, not only behave better on the next
+    one. A founder updates the plugin on top of what was working, so a workaround written
+    before the ledger could park a task stays a second source of truth forever unless the
+    upgrade absorbs it — and the sessions that read one never see the other.
+
+    Only the mechanical half. `parked_by_hand` finds files a SESSION wrote as a stand-in,
+    and importing one needs no judgement: the original is rewritten to a pointer, so
+    nothing that linked to it breaks and git keeps the whole text. Prose registries the
+    founder curates are still only reported, because deciding what in them is a task is
+    the agent's job and not a regex's.
+    """
+    adopted = []
+    for path in parked_by_hand(ctx):
+        try:
+            task_id = adopt(ctx, path)
+        except OSError:
+            continue
+        adopted.append(f"{path.relative_to(ctx.worktree_root).as_posix()} -> {task_id}")
+    return "; ".join(adopted)
+
+
 _REPAIRS = {
     "0001-task-paths": _backfill_task_paths,
     "0002-quarantine-unreadable": _quarantine_unreadable_state,
+    "0003-absorb-scratch-todos": _absorb_scratch_todos,
 }
 
 

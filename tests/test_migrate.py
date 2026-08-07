@@ -154,12 +154,32 @@ class TestTheWorkaroundIsTakenOver(RepoCase):
         self.seed()
         self.assertIn("outside the work ledger", migrate.line(self.ctx()))
 
-    def test_nothing_is_adopted_without_being_asked(self):
-        """Adoption rewrites files in the founder's repository. A plugin that edits
-        `docs/` on its own initiative during an upgrade is one nobody installs twice."""
+    def test_a_scratch_stand_in_is_absorbed_by_the_upgrade(self):
+        """Reversed deliberately, and the reasoning is decision 0005.
+
+        This used to assert that an upgrade adopts nothing, on the grounds that a plugin
+        editing `docs/` on its own initiative is one nobody installs twice. That holds for
+        a document the founder CURATES — see the test below, which still guards it. It
+        does not hold for a file a previous SESSION wrote as a stand-in because the ledger
+        could not park a task yet: leaving that behind means the repository keeps its
+        workaround forever, since a founder upgrades on top of what was working and the
+        fix only ever changed what happened next.
+
+        The original is rewritten to a pointer rather than deleted, so nothing that linked
+        to it breaks and git keeps the whole text.
+        """
         original = self.seed()
         migrate.repair(self.ctx())
-        self.assertEqual(self.NOTE, original.read_text(encoding="utf-8"))
+        left = original.read_text(encoding="utf-8")
+        self.assertIn(migrate.POINTER, left)
+        self.assertEqual(1, len(plan.load_all(self.ctx(), plan.NEXT)))
+
+    def test_a_document_the_founder_curates_is_still_never_touched(self):
+        """The half of the old rule that stands: judgement a regex does not have."""
+        self.write("docs/pre-release-audit.md", "- [ ] one\n- [ ] two\n")
+        migrate.repair(self.ctx())
+        self.assertEqual("- [ ] one\n- [ ] two\n",
+                         (self.repo / "docs/pre-release-audit.md").read_text())
 
 
 class TestRepairsRunThemselvesAndRunOnce(RepoCase):
@@ -578,3 +598,38 @@ class TestItNeverClaimsToHaveLookedEverywhere(RepoCase):
         proc = self.plan("adopt", "--check", "docs/pre-release-todo.md")
         self.assertIn("2 open item(s), 0 in the ledger, 2 left", proc.stdout)
         self.assertEqual(1, proc.returncode)
+
+
+class TestAnUpgradeRepairsTheRepositoryItLandsIn(RepoCase):
+    """The founder updates the plugin on top of what was working, so behaving better on a
+    fresh repository is not the deliverable — the state in front of the upgrade is the
+    state that matters. Decision 0005.
+    """
+
+    def test_a_scratch_todo_a_session_wrote_is_absorbed_on_upgrade(self):
+        self.write("TODO-importer.md", "# Fix the importer\n\nIt falls over on empty prices.\n")
+        self.assertEqual(1, len(migrate.parked_by_hand(self.ctx())))
+
+        migrate.repair(self.ctx())
+
+        self.assertEqual([], migrate.parked_by_hand(self.ctx()),
+                         "the duplicate survived the upgrade")
+        titles = [t.title for t in plan.load_all(self.ctx())]
+        self.assertIn("Fix the importer", titles)
+        self.assertIn(migrate.POINTER, (self.repo / "TODO-importer.md").read_text(),
+                      "the original must point at the task, not vanish")
+
+    def test_the_repair_runs_once_and_is_silent_afterwards(self):
+        self.write("TODO-importer.md", "# Fix the importer\n\nprose\n")
+        self.assertTrue(any("absorb" in line for line in migrate.repair(self.ctx())))
+        self.assertEqual([], [line for line in migrate.repair(self.ctx()) if "absorb" in line])
+
+    def test_a_curated_document_is_not_absorbed_behind_the_founders_back(self):
+        """Deciding what in a curated document is a task needs judgement a regex lacks,
+        and rewriting the founder's documents on a hunch is worse than the duplicate."""
+        self.write("docs/pre-release-audit.md", "- [ ] one\n- [ ] two\n- [ ] three\n")
+
+        migrate.repair(self.ctx())
+
+        self.assertEqual("- [ ] one\n- [ ] two\n- [ ] three\n",
+                         (self.repo / "docs/pre-release-audit.md").read_text())

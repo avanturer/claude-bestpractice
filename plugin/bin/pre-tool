@@ -162,6 +162,19 @@ def _sibling_of_repo(ctx, target) -> bool:
     return resolved.parent == root.parent and resolved.name.startswith(f"{root.name}-")
 
 
+def _ledger_covers(ctx, session_id: str, touched: list[str]) -> bool:
+    """Is a task on the board claimed by this session? The ledger's own files always are.
+
+    Exempt paths too: a turn that only touches `.claude/` needs no card for the same
+    reason it needs no test run — the gate's own bookkeeping is not the founder's work.
+    """
+    from claude_bestpractice import plan, store
+
+    if all(rel.startswith(store.TIER_A_DIRNAME) or rel.startswith(".claude/") for rel in touched):
+        return True
+    return any(t.owner == session_id for t in plan.load_all(ctx, plan.DOING))
+
+
 def proposed_content(event: hookio.HookEvent) -> str:
     ti = event.tool_input
     parts = [str(ti.get(k, "")) for k in ("content", "new_string", "new_str", "command")]
@@ -731,6 +744,33 @@ def main() -> None:
                 "not work: the value is already on disk and in the transcript, which "
                 ".gitignore does not cover."
             )
+
+        # No card, no code. The Stop gate demands the work be on the board, but it demands
+        # it at the END — a whole turn of edits happens first, and the founder's own
+        # description of the failure is that the ledger gets remembered late or not at all.
+        # Asked at the first write instead, which is where a task actually begins.
+        #
+        # Never a wedge: the way out is a Bash command, and Bash is not what this refuses.
+        # The ledger's own files are exempt, or filing the card would be refused by the
+        # rule demanding one.
+        # Only once the founder has actually said what this session is for. A card is for
+        # work somebody asked for; a session with no statement has no task to card yet, and
+        # demanding one there is the gate inventing a process rather than recording one.
+        # The Stop demand still catches that session at the end, where the board has to be
+        # true regardless of how the work arrived.
+        if (cfg.require_task and rec.task_statement
+                and event.tool_name in WRITE_TOOLS and touched):
+            from claude_bestpractice import plan
+
+            if not _ledger_covers(ctx, event.session_id, touched):
+                hookio.deny_tool(
+                    f"claude-bestpractice: nothing on the board says this session is working "
+                    f"on {touched[0]}.\n"
+                    "  Every sibling session reads the board to decide what is safe to "
+                    "touch, and unlisted work is invisible to all of them.\n"
+                    f'  claude-bp-plan add "<what you are about to do>" --paths {touched[0]}\n'
+                    "  then: claude-bp-plan claim <id>   (or claim the task you are on)"
+                )
 
         # A registry being stood up beside the ledger, caught while it is one file rather
         # than three entry points and two commits. Structured writes only: a Bash line
