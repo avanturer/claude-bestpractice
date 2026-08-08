@@ -270,6 +270,79 @@ class TestPromptCapture(GateCase):
         self.assertEqual(sessions.get(self.ctx(), sid(self.repo, "s1")).task_paths, [])
 
 
+class TestTheCeilingCountsWorkRatherThanAttempts(GateCase):
+    """"this session has made 2015 tool calls, past the ceiling of 2000" arrived eleven
+    hours into a measuring session — ssh to a GPU box, pytest, paired comparisons — and
+    then refused EVERY call, including reading the file holding the result that had just
+    been measured. Two thousand calls over eleven hours of measurement is not a runaway."""
+
+    def decide(self, command: str, session: str = "s1") -> str:
+        proc = self.gate("pre-tool", {
+            "session_id": session, "hook_event_name": "PreToolUse", "tool_name": "Bash",
+            "tool_input": {"command": command}, "cwd": str(self.repo),
+        })
+        try:
+            return json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"]
+        except (json.JSONDecodeError, KeyError, TypeError):
+            return "silent"
+
+    def reason(self, command: str) -> str:
+        proc = self.gate("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+            "tool_input": {"command": command}, "cwd": str(self.repo),
+        })
+        try:
+            return json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+        except (json.JSONDecodeError, KeyError, TypeError):
+            return ""
+
+    def test_a_call_this_gate_refused_does_not_count_towards_the_ceiling(self):
+        """Every refusal pushed the session closer to a wall it would then hit for having
+        been refused."""
+        self.configure(max_tool_calls=3)
+        self.start()
+        for _ in range(2):
+            self.assertEqual("allow", self.decide("git status --short"))
+        for _ in range(4):
+            # Refused by the protected-state rule: an attempt this gate blocked is not
+            # work the session did.
+            self.assertEqual("deny", self.decide("rm -rf .claude/claude-bestpractice"))
+        self.assertEqual("allow", self.decide("git status --short"))
+
+    def test_the_message_names_the_key_that_raises_it(self):
+        self.configure(max_tool_calls=1)
+        self.start()
+        self.decide("git status --short")
+        said = self.reason("git status --short")
+        self.assertIn("max_tool_calls", said)
+        self.assertIn("claude-bp set max_tool_calls", said)
+
+    def test_the_command_that_raises_it_is_not_itself_refused(self):
+        """A ceiling that also refuses the one command that lifts it is not a ceiling, it
+        is the end of the session — and the message above names that command."""
+        self.configure(max_tool_calls=1)
+        self.start()
+        self.decide("git status --short")
+        self.assertEqual("deny", self.decide("git status --short"))
+        self.assertEqual("allow", self.decide(f"{BIN / 'claude-bp'} set max_tool_calls 50"))
+
+    def test_the_founders_word_lifts_it_end_to_end(self):
+        self.configure(max_tool_calls=1)
+        self.start()
+        self.decide("git status --short")
+        self.assertEqual("deny", self.decide("git status --short"))
+        self.gate("prompt-capture", {
+            "session_id": "s1", "hook_event_name": "UserPromptSubmit", "cwd": str(self.repo),
+            "prompt": "это длинная измерительная сессия, max_tool_calls 500",
+        })
+        proc = subprocess.run(
+            [sys.executable, str(BIN / "claude-bp"), "set", "max_tool_calls", "500"],
+            capture_output=True, text=True, cwd=str(self.repo), timeout=120,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual("allow", self.decide("git status --short"))
+
+
 class TestAHarnessBlockIsNeverTheTask(GateCase):
     """A background-task completion notice became the session's task statement, and the
     scope-drift refusal then quoted a tool-use id back at an agent whose 136 changed files
@@ -363,6 +436,40 @@ class TestAHarnessBlockIsNeverTheTask(GateCase):
         from claude_bestpractice import sessions
 
         self.assertEqual("", sessions.get(self.ctx(), sid(self.repo, "s1")).task_statement)
+
+
+class TestTheGateDoesNotQuoteItselfAsTheTask(GateCase):
+    """The drift block's own text came back as the session's task statement, so the gate
+    was measuring the branch against its own previous refusal."""
+
+    def test_our_own_refusal_is_not_a_statement_of_work(self):
+        import importlib.machinery
+        import importlib.util
+
+        loader = importlib.machinery.SourceFileLoader("pc", str(BIN / "prompt-capture"))
+        spec = importlib.util.spec_from_loader("pc", loader)
+        pc = importlib.util.module_from_spec(spec)
+        loader.exec_module(pc)
+
+        feedback = (
+            "claude-bestpractice: Scope drift: a.py, b.py were modified but the task did "
+            "not mention them.\nTask was: перепиши импортер"
+        )
+        self.assertTrue(pc.is_harness_block(feedback))
+        self.assertFalse(pc.is_statement_of_work(feedback, []))
+
+    def test_the_founders_instruction_survives_our_own_feedback(self):
+        self.start()
+        real = "перепиши импортер каталога, он падает на пустом csv"
+        self.gate("prompt-capture", {"session_id": "s1", "cwd": str(self.repo),
+                                     "hook_event_name": "UserPromptSubmit", "prompt": real})
+        self.gate("prompt-capture", {
+            "session_id": "s1", "cwd": str(self.repo), "hook_event_name": "UserPromptSubmit",
+            "prompt": "claude-bestpractice: Scope drift: 140 files were modified…",
+        })
+        from claude_bestpractice import sessions
+
+        self.assertEqual(real, sessions.get(self.ctx(), sid(self.repo, "s1")).task_statement)
 
 
 class TestPreTool(GateCase):

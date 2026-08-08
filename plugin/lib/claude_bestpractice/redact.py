@@ -95,6 +95,26 @@ def _is_indirection(value: str) -> bool:
     return bool(_INDIRECTION.match(value.strip()))
 
 
+# A number is not a credential. `TOKEN` is in the name list above and belongs there, but
+# it is also the most common word in a machine-learning metric: `tokens_per_second`,
+# `val_token_acc`, `loss_per_token`. Assigned a value of eight characters or more —
+# `1043.7712` — every one of them read as an assigned secret, and the gate refused the
+# command that was reading a training log. Reported from an eleven-hour measuring session.
+#
+# Safe by construction rather than by judgement: no credential worth rotating is a bare
+# number, so this cannot suppress a real one.
+_MEASUREMENT = re.compile(r"^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$")
+
+
+def _is_measurement(value: str) -> bool:
+    return bool(_MEASUREMENT.match(value.strip().strip("\"'")))
+
+
+def _is_not_a_secret(value: str) -> bool:
+    """Values the assignment form matches that cannot be credentials."""
+    return _is_indirection(value) or _is_measurement(value)
+
+
 def scrub(text: str) -> str:
     """Return `text` with anything that looks like a credential replaced."""
     if not text:
@@ -103,7 +123,7 @@ def scrub(text: str) -> str:
     for name, pattern in _PATTERNS:
         if name == "assigned-secret":
             out = pattern.sub(
-                lambda m: m.group(0) if _is_indirection(m.group(2)) else f"{m.group(1)}={REDACTED}",
+                lambda m: m.group(0) if _is_not_a_secret(m.group(2)) else f"{m.group(1)}={REDACTED}",
                 out,
             )
         elif name == "url-credentials":
@@ -123,7 +143,7 @@ def find(text: str) -> list[str]:
     hits: set[str] = set()
     for name, pattern in _PATTERNS:
         for match in pattern.finditer(text or ""):
-            if name == "assigned-secret" and _is_indirection(match.group(2)):
+            if name == "assigned-secret" and _is_not_a_secret(match.group(2)):
                 continue
             # Skipped rather than broken out of: one development default early in a file
             # must not stop the scan before a real credential later in it.

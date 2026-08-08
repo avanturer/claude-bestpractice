@@ -1003,6 +1003,42 @@ def settled_drift(ctx, session_id: str) -> list[str]:
     return [p for p in (table.get(session_id) or []) if isinstance(p, str)]
 
 
+def committed(ctx: GitContext, changed: list[str]) -> set[str]:
+    """Files whose changes are already in a commit on this branch.
+
+    Drift is about unreviewed spill, and a committed file is on its way through the flow
+    this plugin enforces: it is in the branch, it will be in the pull request, and the
+    review gate reads that diff. Counting it again at every Stop of an eleven-hour session
+    produced a demand for 140 files to be reverted, four times in one turn, that nobody
+    present could satisfy — the founder was asleep and the gate cannot be answered in prose.
+
+    The cost is stated rather than hidden: drift now catches spill that is still
+    uncommitted. Committing something to escape it is not a bypass — it is the work
+    entering the flow where the next gate reads it.
+    """
+    dirty = _uncommitted(ctx)
+    return {path for path in changed if path not in dirty}
+
+
+def _uncommitted(ctx: GitContext) -> set[str]:
+    import subprocess
+
+    try:
+        listed = subprocess.run(
+            ["git", "status", "--porcelain"], cwd=str(ctx.worktree_root),
+            capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=30,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        # Unreadable status is not permission to forgive everything.
+        return set()
+    out = set()
+    for line in listed.splitlines():
+        path = line[3:].split(" -> ")[-1].strip().strip('"')
+        if path:
+            out.add(path)
+    return out
+
+
 def landed(ctx, changed: list[str]) -> list[str]:
     """Of these, the ones whose content is already on the trunk.
 

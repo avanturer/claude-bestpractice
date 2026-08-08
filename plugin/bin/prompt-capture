@@ -103,6 +103,12 @@ _CONTINUATION = re.compile(
 _ONE_BLOCK = re.compile(r"\A<([a-z][\w-]*)\b[^>]*>.*</\1\s*>\Z", re.S | re.I)
 
 
+# This plugin's own voice. Every message it emits begins with it, and a gate's refusal
+# arriving back as the session's task statement is the gate quoting itself as the thing to
+# be measured against — reported from a session where the drift block did exactly that.
+_OUR_OWN_VOICE = "claude-bestpractice:"
+
+
 def is_harness_block(text: str) -> bool:
     """Was this written by the harness rather than by the founder?
 
@@ -116,7 +122,9 @@ def is_harness_block(text: str) -> bool:
     become the record of what the founder asked for.
     """
     stripped = text.strip()
-    return bool(stripped) and bool(_ONE_BLOCK.match(stripped))
+    if not stripped:
+        return False
+    return stripped.startswith(_OUR_OWN_VOICE) or bool(_ONE_BLOCK.match(stripped))
 
 
 def is_statement_of_work(prompt: str, paths: list[str]) -> bool:

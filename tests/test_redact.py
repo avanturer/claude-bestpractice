@@ -85,5 +85,35 @@ class TestUntrustedContent(unittest.TestCase):
         self.assertEqual(redact.strip_control("a\nb\tc"), "a\nb\tc")
 
 
+class TestAMeasurementIsNotACredential(unittest.TestCase):
+    """`TOKEN` is in the name list and belongs there — it is also the most common word in a
+    machine-learning metric. `tokens_per_second: 1043.7712` read as an assigned secret, and
+    the gate refused the command that was reading a training log, in an eleven-hour
+    measuring session."""
+
+    def test_a_metric_whose_name_contains_token_is_not_a_secret(self):
+        for text in ("'val_token_acc': '0.9134567'",
+                     "tokens_per_second: 1043.7712",
+                     "'loss_per_token': '0.41321987'"):
+            self.assertEqual([], redact.find(text), text)
+
+    def test_a_real_credential_is_still_caught(self):
+        self.assertIn("assigned-secret", redact.find('DB_PASSWORD="hunter2hunter2"'))
+        self.assertIn("assigned-secret", redact.find("API_TOKEN=ghp_abcdefghijklmnop1234"))
+
+    def test_scrubbing_leaves_the_measurement_alone(self):
+        self.assertEqual("tokens_per_second: 1043.7712",
+                         redact.scrub("tokens_per_second: 1043.7712"))
+        self.assertIn(redact.REDACTED, redact.scrub('DB_PASSWORD="hunter2hunter2"'))
+
+    def test_the_trade_this_makes_deliberately(self):
+        """A wholly numeric value is exempt, so `SECRET_KEY = '12345678'` passes. That is
+        accepted rather than overlooked: no credential worth rotating is a bare number,
+        every real credential FORMAT has its own detector above, and the alternative wedged
+        a session for eleven hours. Do not "fix" this without reading the trade."""
+        self.assertEqual([], redact.find("SECRET_KEY = '12345678'"))
+        self.assertIn("stripe-key", redact.find("SECRET_KEY = 'sk_live_abcdefghijklmnop'"))
+
+
 if __name__ == "__main__":
     unittest.main()

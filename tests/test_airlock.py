@@ -209,6 +209,63 @@ class TestReviewCommit(GateCase):
         """
         return proc.stderr if proc.returncode == 2 else ""
 
+    def test_the_same_finding_is_raised_once_and_not_on_every_commit(self):
+        """The same seven findings arrived on every commit for twenty-plus commits — a
+        signal that repeats unchanged stops being read at all. It goes to the board on the
+        first sighting, and the board carries it from there."""
+        self.start()
+        self.write("app/query.py",
+                   'def run(con, name):\n    return con.execute(f"SELECT * FROM {name}")\n')
+        first = self.review()
+        self.assertEqual(2, first.returncode, "the fixture proves nothing")
+        self.assertIn("sql-interpolation", self.context(first))
+
+        self.write("app/other.py", "x = 1\n")
+        self.assertEqual(0, self.review().returncode,
+                         "the same finding woke the model a second time")
+
+    def test_a_genuinely_new_finding_still_wakes_the_model(self):
+        self.start()
+        self.write("app/query.py",
+                   'def run(con, name):\n    return con.execute(f"SELECT * FROM {name}")\n')
+        self.assertEqual(2, self.review().returncode)
+
+        self.write("app/second.py",
+                   'def go(con, who):\n    return con.execute(f"DELETE FROM {who}")\n')
+        second = self.review()
+        self.assertEqual(2, second.returncode, "a new occurrence is not the old one")
+        self.assertIn("app/second.py", self.context(second))
+
+    def test_a_different_offending_line_in_a_file_already_flagged_is_raised(self):
+        """`review` reports one finding per (file, detector), so this is what the line's
+        text in the dedup key actually buys: fix the flagged line, and a DIFFERENT one in
+        the same file is a new finding rather than an old one already answered.
+
+        Written after mutating the key to drop the line text and watching every other test
+        still pass — the first version of this test asserted behaviour that never existed.
+        """
+        self.start()
+        self.write("app/query.py",
+                   'def a(con, name):\n    return con.execute(f"SELECT * FROM {name}")\n')
+        self.assertEqual(2, self.review().returncode, "the fixture proves nothing")
+
+        self.write("app/query.py",
+                   "def a(con, name):\n    return con.execute(\"SELECT * FROM t\", [name])\n\n"
+                   'def b(con, who):\n    return con.execute(f"DELETE FROM {who}")\n')
+        again = self.review()
+        self.assertEqual(2, again.returncode, "a different offending line was swallowed")
+        self.assertIn("sql-interpolation", self.context(again))
+
+    def test_the_same_code_moved_down_a_file_is_not_a_new_finding(self):
+        """Keyed on the line's text, not its number: an insertion above a finding is not a
+        rediscovery of it."""
+        self.start()
+        body = 'def run(con, name):\n    return con.execute(f"SELECT * FROM {name}")\n'
+        self.write("app/query.py", body)
+        self.assertEqual(2, self.review().returncode)
+        self.write("app/query.py", "# a new header comment\n\n" + body)
+        self.assertEqual(0, self.review().returncode)
+
     def test_clean_diff_says_nothing(self):
         self.start()
         self.write("ok.py", "def f() -> int:\n    return 1\n")

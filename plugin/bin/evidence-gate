@@ -281,6 +281,10 @@ def main() -> None:
         # unreviewed change, it has been through whatever review the founder runs (#106).
         forgiven = set(evidence.settled_drift(ctx, rec.session_id))
         forgiven.update(evidence.landed(ctx, changed))
+        # And what is already committed on this branch: it is in the flow this plugin
+        # enforces, and re-raising it at every Stop of a long session is a demand nobody
+        # present can satisfy.
+        forgiven.update(evidence.committed(ctx, changed))
         drift = [p for p in evidence.scope_drift(changed, rec.task_paths, exempt)
                  if p not in forgiven]
         if drift:

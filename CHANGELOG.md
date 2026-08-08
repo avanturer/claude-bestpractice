@@ -1,5 +1,60 @@
 # Changelog
 
+## v1.17.0
+
+Five symptoms from one eleven-hour measuring session. Four were this plugin's.
+
+### The ceiling counted attempts, including the ones it refused
+
+"this session has made 2015 tool calls, past the ceiling of 2000" arrived eleven hours into
+a session of ssh, pytest and paired comparisons, and then refused every call — including
+reading the file holding the measurement that had just finished. Two thousand calls over
+eleven hours of measurement is not a runaway.
+
+Three changes, and each was a separate defect. A call this gate REFUSED no longer counts:
+every refusal used to push the session closer to a wall it would then hit for having been
+refused. The message names `max_tool_calls` and the command that raises it. And that command
+is exempt from the ceiling — one that also refuses the only way past it is not a ceiling, it
+is the end of the session, which is the shape of #108 in a place where the founder may be
+asleep.
+
+### A metric is not a credential
+
+`TOKEN` is in the credential name list and belongs there. It is also the most common word in
+a machine-learning metric, so `tokens_per_second: 1043.7712` read as an assigned secret and
+the gate refused the command that was reading a training log. A wholly numeric value is now
+exempt: no credential worth rotating is a bare number, and every real credential FORMAT has
+its own detector. The trade — `SECRET_KEY = '12345678'` passes — is deliberate and has a test
+saying so.
+
+### The gate stopped quoting itself as the task
+
+v1.16.0 stopped a `<task-notification>` becoming the session's task statement. The other
+source was closer to home: the drift block's own text came back as a prompt, so the gate was
+measuring 140 files against its own previous refusal. Anything beginning `claude-bestpractice:`
+is this plugin's voice and is never the record of what the founder asked for.
+
+### What is committed on this branch is not this turn's drift
+
+Forty-nine commits in, the gate demanded 140 files be reverted, four times in one turn, and
+the founder was asleep. Drift is about unreviewed spill; a committed file is already in the
+flow this plugin enforces — it is in the branch, it will be in the pull request, and the
+review gate reads that diff. The cost is stated rather than hidden: drift now catches what is
+still uncommitted.
+
+### A review finding is raised once, not on every commit
+
+The same seven findings arrived on every commit for twenty-plus commits. A signal that
+repeats unchanged stops being read at all. Each is now raised once, keyed by what it is about
+— detector, file, and the offending line's text, so the same code moved down a file is not a
+rediscovery — and the board carries it from there.
+
+### Not ours: a directory named `eval/` (#117)
+
+Measured again on this version, including the exact `cd .../eval && python hard_cases.py`
+form: this gate allows it. The refusal comes from Claude Code's own worktree-isolation guard,
+below where a hook approval reaches. Detail on the issue.
+
 ## v1.16.0
 
 Three reports from one overnight run, two of them ours.
