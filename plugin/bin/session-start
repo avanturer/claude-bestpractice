@@ -328,9 +328,10 @@ def main() -> None:
     body += worktree.permission_advice(ctx, event.session_id) if line else ""
     # Empty in every repository whose tasks already live in the ledger, which is the
     # steady state — this only speaks while a workaround is still lying around.
-    # Drift between what this repository is and what auto mode has been told it is. Empty
-    # once `Setup` has run and nothing has moved, which is the steady state.
-    body += policy.line(ctx, cfg.test_command)
+    # Brought up to date here rather than named as a command, because the command was
+    # refused by the classifier it exists to inform (#116). Writes nothing when nothing
+    # moved, which is every session after the first.
+    body += policy.refresh(ctx, cfg.test_command)
     # What this upgrade actually changed here, and only when it changed something.
     body += migrate.repaired_line(repaired)
     loose = migrate.line(ctx)

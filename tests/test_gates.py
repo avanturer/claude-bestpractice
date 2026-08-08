@@ -270,6 +270,101 @@ class TestPromptCapture(GateCase):
         self.assertEqual(sessions.get(self.ctx(), sid(self.repo, "s1")).task_paths, [])
 
 
+class TestAHarnessBlockIsNeverTheTask(GateCase):
+    """A background-task completion notice became the session's task statement, and the
+    scope-drift refusal then quoted a tool-use id back at an agent whose 136 changed files
+    were all reported as out of scope — in the middle of unattended overnight work, which
+    is exactly when nobody is there to answer it (#118)."""
+
+    def capture(self):
+        import importlib.machinery
+        import importlib.util
+
+        loader = importlib.machinery.SourceFileLoader("pc", str(BIN / "prompt-capture"))
+        spec = importlib.util.spec_from_loader("pc", loader)
+        module = importlib.util.module_from_spec(spec)
+        loader.exec_module(module)
+        return module
+
+    NOTIFICATION = (
+        "<task-notification>\n<task-id>we8nn68xh</task-id>\n"
+        "<tool-use-id>toolu_01Nf7y7cFCvHs9kndNRs2SfX</tool-use-id>\n"
+        "<status>completed</status>\n</task-notification>"
+    )
+
+    def test_the_block_that_caused_this_is_not_a_statement_of_work(self):
+        pc = self.capture()
+        self.assertFalse(pc.is_statement_of_work(pc.strip_envelopes(self.NOTIFICATION), []))
+
+    def test_a_block_shape_nobody_has_named_yet_is_not_one_either(self):
+        """The name list is what failed: `background-task` was on it and
+        `task-notification` was not. A rule that only knows names is a rule that breaks
+        again the next time the harness adds a block."""
+        pc = self.capture()
+        future = "<future-harness-thing>\nsomething added in a later CLI\n</future-harness-thing>"
+        self.assertTrue(pc.is_harness_block(future))
+        self.assertFalse(pc.is_statement_of_work(future, []))
+
+    def test_a_founder_pasting_xml_is_still_instructing(self):
+        """They paste it INTO a sentence. Asking about the whole message rather than about
+        brackets appearing in it is what keeps this from eating their real instruction."""
+        pc = self.capture()
+        asked = "смотри что отдаёт апи, почему пусто?\n<response><items></items></response>"
+        self.assertFalse(pc.is_harness_block(asked))
+        self.assertTrue(pc.is_statement_of_work(asked, []))
+
+    def test_a_notification_appended_to_a_real_instruction_is_stripped_from_it(self):
+        """The shape rule cannot see this one — the message is not a single element — and
+        that is what the name list is for. Found by removing the names and watching every
+        test still pass, which meant the tests were only covering half the fix."""
+        pc = self.capture()
+        mixed = f"перепиши импортер каталога, он падает на пустом csv\n{self.NOTIFICATION}"
+        self.assertFalse(pc.is_harness_block(mixed), "the fixture proves nothing")
+        left = pc.strip_envelopes(mixed)
+        self.assertNotIn("toolu_01Nf", left)
+        self.assertNotIn("task-id", left)
+        self.assertIn("перепиши импортер", left)
+
+    def test_a_notification_appended_to_nothing_leaves_nothing_to_record(self):
+        pc = self.capture()
+        left = pc.strip_envelopes(f"\n{self.NOTIFICATION}\n")
+        self.assertEqual("", left)
+        self.assertFalse(pc.is_statement_of_work(left, []))
+
+    def test_a_real_instruction_is_untouched(self):
+        pc = self.capture()
+        self.assertTrue(pc.is_statement_of_work("почини импортер, он падает на пустом csv", []))
+
+    def test_the_founders_task_survives_a_notification_arriving_after_it(self):
+        """The whole failure, end to end: the instruction several turns earlier must still
+        be what the gate measures against."""
+        self.start()
+        real = "перепиши импортер каталога в src/importer.py, он падает на пустом csv"
+        self.gate("prompt-capture", {
+            "session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": real,
+        })
+        self.gate("prompt-capture", {
+            "session_id": "s1", "hook_event_name": "UserPromptSubmit",
+            "prompt": self.NOTIFICATION,
+        })
+        from claude_bestpractice import sessions
+
+        record = sessions.get(self.ctx(), sid(self.repo, "s1"))
+        self.assertEqual(real, record.task_statement)
+
+    def test_a_notification_on_a_fresh_session_does_not_become_the_task(self):
+        """The blank-board fallback exists because «Делай» beats nothing. A tool-use id
+        does not beat nothing: it is what the refusal quotes back."""
+        self.start()
+        self.gate("prompt-capture", {
+            "session_id": "s1", "hook_event_name": "UserPromptSubmit",
+            "prompt": self.NOTIFICATION,
+        })
+        from claude_bestpractice import sessions
+
+        self.assertEqual("", sessions.get(self.ctx(), sid(self.repo, "s1")).task_statement)
+
+
 class TestPreTool(GateCase):
     def decision(self, proc: subprocess.CompletedProcess) -> str | None:
         try:

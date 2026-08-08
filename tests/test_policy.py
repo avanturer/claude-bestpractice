@@ -151,15 +151,20 @@ class TestItConverges(PolicyCase):
         self.assertIn("autoMode", self.read())
 
     def test_the_board_says_nothing_once_it_is_current(self):
-        self.assertNotEqual("", policy.line(self.ctx(), self.checks(), self.home))
-        policy.apply(self.ctx(), self.checks(), self.home)
-        self.assertEqual("", policy.line(self.ctx(), self.checks(), self.home))
+        self.assertNotEqual("", policy.refresh(self.ctx(), self.checks(), self.home))
+        self.assertEqual("", policy.refresh(self.ctx(), self.checks(), self.home))
 
-    def test_the_board_names_a_command_the_agent_runs(self):
-        """A line telling the founder to go and edit a file would be the complaint restated."""
-        said = policy.line(self.ctx(), self.checks(), self.home)
-        self.assertIn("claude-bp policy --apply", said)
-        self.assertIn("yourself", said)
+    def test_the_refresh_writes_rather_than_asking_for_a_command_to_be_run(self):
+        """The command was refused by the classifier it exists to inform, so the founder
+        could only reach it by hand-editing the file it exists to stop them editing (#116).
+        A hook runs where no classifier stands."""
+        self.assertFalse(self.settings.exists())
+        said = policy.refresh(self.ctx(), self.checks(), self.home)
+        self.assertIn("refreshed", said)
+        self.assertTrue(self.settings.exists())
+        mine = [e for e in self.read()["autoMode"]["environment"]
+                if e.startswith(policy.marker(self.ctx()))]
+        self.assertTrue(mine)
 
 
 class TestThroughTheCli(PolicyCase):

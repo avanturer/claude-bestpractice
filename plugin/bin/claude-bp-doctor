@@ -381,6 +381,46 @@ def check_ledger_demand(repo: Path) -> Result:
     )
 
 
+def check_policy_reaches_the_settings(repo: Path) -> Result:
+    """Auto mode is actually told what this repository is, through the path that runs.
+
+    This exists because the feature passed 31 of 31 checks while being unusable on the
+    founder's machine: the command was refused by the classifier it exists to inform, and
+    nothing here noticed (#116). So the check drives the SessionStart hook against a
+    throwaway HOME and reads the file afterwards, rather than calling the library.
+    """
+    home = repo.parent / "policy-home"
+    home.mkdir(parents=True, exist_ok=True)
+    hand_written = {"autoMode": {"allow": ["a rule the founder wrote"]}}
+    settings = home / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(json.dumps(hand_written), encoding="utf-8")
+
+    subprocess.run(
+        [sys.executable, str(BIN / "session-start")],
+        input=json.dumps({"session_id": "doctor-policy", "hook_event_name": "SessionStart",
+                          "cwd": str(repo)}),
+        capture_output=True, text=True, cwd=str(repo), timeout=120,
+        env={"HOME": str(home), "PATH": os.environ.get("PATH", "")},
+    )
+
+    try:
+        after = json.loads(settings.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        after = {}
+    generated = [entry for entry in (after.get("autoMode") or {}).get("environment", [])
+                 if str(entry).startswith("[claude-bestpractice")]
+    kept = (after.get("autoMode") or {}).get("allow") == hand_written["autoMode"]["allow"]
+    ok = bool(generated) and kept
+    return Result(
+        "auto mode is told what this repository is",
+        ok,
+        f"{len(generated)} fact(s) written, the founder's own rules untouched" if ok
+        else f"generated={len(generated)} founder's rules intact={kept} — "
+             "THE CLASSIFIER IS READING NOTHING THIS PLUGIN KNOWS",
+    )
+
+
 def check_switch_needs_the_founder(repo: Path) -> Result:
     """A gate switch must not be turnable by the session the gate is enforcing.
 
@@ -1207,6 +1247,7 @@ def main() -> int:
             check_evidence_gate_accepts,
             check_ledger_demand,
             check_switch_needs_the_founder,
+            check_policy_reaches_the_settings,
             check_stale_artifact_rejected,
             check_checkpoint,
             check_knowledge_anchor,

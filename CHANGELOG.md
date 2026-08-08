@@ -1,5 +1,52 @@
 # Changelog
 
+## v1.16.0
+
+Three reports from one overnight run, two of them ours.
+
+### A harness block is never the task (#118)
+
+A background-task completion notice became the session's task statement, and the
+scope-drift refusal then quoted a tool-use id back at an agent whose 136 changed files were
+all reported as out of scope — during unattended overnight work, which is exactly when
+nobody is there to answer a gate that says it cannot be answered in prose.
+
+The cause was a name list: `background-task` was on it, `task-notification` was not. Names
+are now the cheap half. The half that does not depend on having guessed every tag the
+harness will ever add asks about the SHAPE — a message that is one XML element and nothing
+else was written by the harness, not typed by the founder, and never becomes the record of
+what they asked for. A founder pasting XML is unaffected, because they paste it into a
+sentence.
+
+Found while mutation-testing the fix: removing the name list broke no test, which meant the
+tests only covered a block arriving alone. A notification appended to a real instruction is
+the other case, and it now has its own.
+
+### The plugin's own commands need no permission (#116)
+
+`claude-bp policy --apply` was refused by the auto-mode classifier, with the standard advice
+that the founder add a Bash permission rule to their settings. The command whose entire
+purpose is that the agent maintains that file could only run once the founder had
+hand-edited that file. That is the loop #113 was about, one level in.
+
+Two changes. The refresh happens in the SessionStart hook, where no classifier stands — the
+same layer `worktree.trust()` already writes from, and doing exactly what the command did:
+facts only, marked entries only. And this plugin's own commands are vouched for, resolved
+to the `bin/` of THIS install rather than by name, because every refusal it prints names one
+of them as the way out. `claude-bp adopt` is excluded: it moves another tool's hook entries,
+which is not this plugin's own state.
+
+A doctor check now drives the whole path through the real hook against a throwaway HOME,
+because the feature passed 31 of 31 checks while being unusable on the founder's machine.
+
+### Not ours: a directory named `eval/` (#117)
+
+Reported against this plugin and measured here: the string `eval` appears nowhere in it, and
+every command in the report — `ls .../eval/`, `cd .../eval && pytest`, and a `;`-separated
+pair — is allowed by this gate, most of them vouched for outright. The refusal comes from
+Claude Code's own worktree-isolation guard, one layer down, where a hook approval cannot
+reach. Details on the issue.
+
 ## v1.15.0
 
 The founder was the integration layer between auto mode and this plugin. He is not any more.

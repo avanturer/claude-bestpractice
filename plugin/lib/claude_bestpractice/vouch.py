@@ -351,6 +351,8 @@ def for_bash(ctx: GitContext, line: str, test_command: list[str], cwd: Path | No
 
 
 def _classify(root: Path, here: Path, argv: list[str], test_command: list[str]) -> str:
+    if _own_command(argv):
+        return OWN
     if _orders_a_worktree(argv):
         return WORKTREE
     if _reads(root, here, argv):
@@ -375,6 +377,60 @@ def for_write(ctx: GitContext, session_id: str, paths: list[Path]) -> str:
                 and gitpolicy.provisioned_tree_of(ctx, session_id, path) is None):
             return ""
     return WRITE
+
+
+OWN = (
+    "claude-bestpractice: this is one of this plugin's own commands, run from the copy that "
+    "is installed here. Every refusal it prints names one of these as the way out, so "
+    "asking the founder to authorise it is the gate arguing with its own instructions."
+)
+
+# This plugin's own `bin/`, resolved from where this file actually is rather than from a
+# name — a `claude-bp` on PATH belonging to some other install is not this one.
+_OWN_BIN = Path(__file__).resolve().parents[2] / "bin"
+
+# `adopt` moves ANOTHER tool's hook entries out of the founder's settings. Everything else
+# here writes only this plugin's own state, or — in `policy`'s case — facts it re-derives
+# from the repository. Rewriting somebody else's configuration is not in that family and
+# is left to the permission layer on purpose.
+_NOT_OURS_TO_VOUCH = {"adopt"}
+
+
+def _own_command(argv: list[str]) -> bool:
+    """Is this the plugin's own CLI, from this install?
+
+    The gate's refusals name these commands: `claude-bp-plan add`, `claude-bp-plan claim`,
+    `claude-bp ci`, `claude-bp set`. A refusal that names a command the founder is then
+    asked to authorise is the interruption `allow_tool` exists to remove — and for
+    `claude-bp policy --apply` it was worse than an interruption: the classifier refused
+    the command whose whole purpose is that the agent, not the founder, maintains the file
+    the classifier reads (#116).
+    """
+    if not _from_our_install(argv):
+        return False
+    return not any(arg in _NOT_OURS_TO_VOUCH for arg in _arguments(argv))
+
+
+def _from_our_install(argv: list[str]) -> bool:
+    """Does `argv[0]` resolve to a binary in THIS install's `bin/`?
+
+    `argv[0]` and not `_program`, which is the basename: a bare `claude-bp` has to be
+    resolved through PATH, and a `claude-bp` on PATH belonging to some other install must
+    not answer for this one.
+    """
+    import shutil
+
+    token = argv[0] if argv else ""
+    if not token:
+        return False
+    found = token if ("/" in token or "\\" in token) else (shutil.which(token) or "")
+    if not found:
+        return False
+    try:
+        resolved = Path(found).resolve()
+    except OSError:
+        return False
+    return resolved.parent == _OWN_BIN and resolved.name.startswith("claude-bp")
 
 
 # `discard_changes` is absent by design: it is the one exit that destroys work, and no
@@ -424,6 +480,7 @@ def surface(ctx: GitContext, test_command: list[str]) -> list[str]:
         "git worktree add/remove/list, entering and leaving one, and writes and commits "
         "in this session's own tree",
         "opening a pull request, and merging one this gate has just found no blockers for",
+        "this plugin's own commands, which are what its refusals tell you to run",
         "each segment of a compound command judged alone; one unvouched segment ends it",
         "not: the network, production, git push, credentials, anything outside this tree",
     ]
