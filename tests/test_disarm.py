@@ -671,6 +671,42 @@ class TestDriftMustNotWedgeTheSession(RepoCase):
         self.assertEqual([], evidence.settled_drift(ctx, "other-session"),
                          "one session's settlement is not another's")
 
+    def test_work_already_committed_on_this_branch_is_not_this_turns_drift(self):
+        """An eleven-hour branch with 49 commits was told to revert 140 files, four times
+        in one turn, by a gate that cannot be answered in prose — while the founder was
+        asleep. Drift is about unreviewed spill; a committed file is already in the flow
+        this plugin enforces, and the pull request gate reads that diff.
+
+        The cost is deliberate: drift now catches what is still uncommitted. Committing to
+        escape it is not a bypass — it is the work entering the flow.
+        """
+        from claude_bestpractice import evidence
+
+        self.write("carried.py", "x = 1\n")
+        self.commit("carried into the branch")
+        self.write("still_loose.py", "y = 2\n")
+
+        forgiven = evidence.committed(self.ctx(), ["carried.py", "still_loose.py"])
+        self.assertIn("carried.py", forgiven)
+        self.assertNotIn("still_loose.py", forgiven)
+
+    def test_a_renamed_file_still_counts_as_loose(self):
+        """`XY old -> new` is what git prints; reading the wrong half forgives the thing
+        that actually changed."""
+        from claude_bestpractice import evidence
+
+        self.write("before.py", "x = 1\n")
+        self.commit("seed")
+        git(["mv", "before.py", "after.py"], self.repo)
+        self.assertNotIn("after.py", evidence.committed(self.ctx(), ["after.py"]))
+
+    def test_an_unreadable_status_forgives_nothing(self):
+        """Fails closed: a gate that cannot see the tree does not get to wave it through."""
+        from claude_bestpractice import evidence
+
+        self.write("loose.py", "x = 1\n")
+        self.assertEqual(set(), evidence.committed(self.ctx(), []))
+
     def test_work_already_on_the_trunk_is_not_this_sessions_drift(self):
         """Merged work has been through whatever review the founder runs; a gate that
         keeps calling it drift is describing the past."""

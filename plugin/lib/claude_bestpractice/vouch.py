@@ -396,6 +396,18 @@ _OWN_BIN = Path(__file__).resolve().parents[2] / "bin"
 _NOT_OURS_TO_VOUCH = {"adopt"}
 
 
+def own_command(line: str) -> bool:
+    """Is this shell line entirely this plugin's own CLI?
+
+    Public because the tool-call ceiling needs it: a ceiling that also refuses the command
+    that raises it is not a ceiling, it is the end of the session.
+    """
+    parsed = shellcmd.segments(line)
+    return bool(parsed) and all(
+        _program(argv) in _NAVIGATION or _own_command(argv) for argv in parsed
+    )
+
+
 def _own_command(argv: list[str]) -> bool:
     """Is this the plugin's own CLI, from this install?
 

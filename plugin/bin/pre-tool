@@ -455,18 +455,33 @@ def main() -> None:
     # had ever appeared in it, and the message named the wrong file every time.
     writing_now = shell_targets if event.tool_name == "Bash" else ([target] if target else [])
 
-    # Counters and history are recorded now, because a denied attempt is still an
-    # attempt and loop detection depends on seeing it. `last_touched` is NOT: it feeds
-    # the session board and the review baseline, and a write we refused never happened.
+    # HISTORY is recorded now, because a denied attempt is still an attempt and loop
+    # detection depends on seeing it. The CEILING's counter is not: a call this plugin
+    # refused is not work the session did, and counting it meant every refusal pushed the
+    # session closer to a wall it would then hit for having been refused. It is
+    # incremented at the end of this file, where the call has actually been allowed.
+    # `last_touched` is not recorded here either — a write we refused never happened.
     payload = dict(counts)
     payload["_history"] = history
-    sessions.touch(ctx, event.session_id, tool_calls=calls, tool_signatures=payload)
+    sessions.touch(ctx, event.session_id, tool_signatures=payload)
     touched = ([target] + [t for t in rec.last_touched if t != target])[:12] if target else []
 
-    if calls > cfg.max_tool_calls:
+    # The escape is exempt. A ceiling that also refuses the one command that raises it is
+    # not a ceiling, it is the end of the session — and the message below names that
+    # command, so refusing it would be this gate advertising a door it has just locked
+    # (the shape of #108, in a place where the founder may not be awake to open it).
+    over_ceiling = rec.tool_calls >= cfg.max_tool_calls
+    escaping = event.tool_name == "Bash" and vouch.own_command(str(ti.get("command", "")))
+    if over_ceiling and not escaping:
         hookio.deny_tool(
-            f"claude-bestpractice: this session has made {calls} tool calls, past the ceiling of "
-            f"{cfg.max_tool_calls}. Stop and summarise what is done and what remains."
+            f"claude-bestpractice: this session has made {rec.tool_calls} tool calls, past the "
+            f"ceiling of {cfg.max_tool_calls}. Calls this gate refused are not counted, so "
+            "that is work that actually happened.\n"
+            "  A long measuring session legitimately runs into thousands of calls. The "
+            "ceiling is the config key `max_tool_calls`, and raising it takes one line from "
+            f"the founder — `max_tool_calls {cfg.max_tool_calls * 2}` — and then:\n"
+            f"  claude-bp set max_tool_calls {cfg.max_tool_calls * 2}\n"
+            "  Otherwise: stop and summarise what is done and what remains."
         )
 
     # CONSECUTIVE repeats, never a lifetime total. The lifetime count made the fourth
@@ -810,9 +825,12 @@ def main() -> None:
                 )
 
     # Reached only when every gate allowed the call, so this records what was actually
-    # written rather than what was attempted.
+    # written rather than what was attempted — and, for the same reason, what was actually
+    # done rather than what was refused.
     if touched:
-        sessions.touch(ctx, event.session_id, last_touched=touched)
+        sessions.touch(ctx, event.session_id, tool_calls=calls, last_touched=touched)
+    else:
+        sessions.touch(ctx, event.session_id, tool_calls=calls)
 
     # Last, and only here. `allow_tool` ends the permission pipeline, so a vouch placed any
     # earlier would walk past this gate's own refusals — the credential scan, the leases,

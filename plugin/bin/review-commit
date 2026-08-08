@@ -26,6 +26,7 @@ until sessions froze, and reverted with the post-mortem in its source.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import subprocess
@@ -156,13 +157,60 @@ def write_report(ctx, findings: list[tuple[str, str, int, str]], baseline: str) 
     return path
 
 
+RAISED = "review-raised.json"
+
+
+def _key(name: str, path: str, message: str, line: str) -> str:
+    """One finding, identified by what it is about rather than by where it sits.
+
+    The line's TEXT and not its number: a finding two commits later has usually moved
+    down the file without changing, and keying on the number would make every insertion
+    above it a fresh discovery.
+    """
+    digest = hashlib.sha1(f"{name}|{path}|{message}|{line.strip()}".encode()).hexdigest()
+    return digest[:16]
+
+
+def _line_at(root: Path, path: str, number: int) -> str:
+    try:
+        lines = (root / path).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    return lines[number - 1] if 0 < number <= len(lines) else ""
+
+
+def unseen(ctx, root: Path, findings: list) -> list:
+    """The findings not already raised in this clone, and record them as raised.
+
+    The same seven findings arrived on every commit for twenty-plus commits — SQL
+    interpolation in a DuckDB f-string over local parquet, a domain constant matching the
+    secret rule. Each was raised once legitimately and then twenty more times as noise,
+    and a signal that repeats unchanged stops being read at all. It is on the board after
+    the first sighting; the board is what carries it from there.
+    """
+    path = store.tier_b(ctx, RAISED)
+    seen = store.read_json(path, default={})
+    if not isinstance(seen, dict):
+        seen = {}
+    fresh = []
+    for name, file_path, number, message in findings:
+        key = _key(name, file_path, message, _line_at(root, file_path, number))
+        if key in seen:
+            continue
+        seen[key] = f"{name} in {file_path}"
+        fresh.append((name, file_path, number, message))
+    if fresh:
+        store.write_json(path, seen)
+    return fresh
+
+
 def main() -> None:
     event = hookio.read_event()
     ctx = hookio.repo(event.cwd or os.getcwd())
     rec = sessions.get(ctx, event.session_id)
     baseline = rec.baseline_commit if rec else stash_baseline(ctx)
 
-    findings = review(ctx.worktree_root, baseline)
+    findings = unseen(ctx, ctx.worktree_root, review(ctx.worktree_root, baseline))
     if not findings:
         hookio.emit_silent()
 
