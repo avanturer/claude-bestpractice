@@ -1,11 +1,25 @@
-"""Shared fixtures. Every test gets a real git repository, never a mock.
+"""Shared fixtures — and, before anything else, a sandbox HOME.
 
-The substrate is defined in terms of git's own behaviour — the common directory, the
-worktree list, blob hashes. A mocked git would test our idea of git rather than git,
-and the whole point of the design is that the merge and worktree semantics are real.
+Set HERE and not only in `conftest.py` because `make test` runs unittest, which never loads
+a conftest: the sandbox appeared to work under pytest while the gate that actually decides
+whether a release ships was still writing to whoever ran it. Found by the test that asserts
+this, on the first full run after it was written (#121).
+
+Every test module imports this one, so the environment is set before any test executes,
+whichever runner is driving.
 """
 
 from __future__ import annotations
+
+import os as _os
+import tempfile as _tempfile
+
+if not _os.environ.get("CLAUDE_BP_TEST_HOME"):
+    _SANDBOX = _tempfile.mkdtemp(prefix="claude-bestpractice-home-")
+    _os.environ["CLAUDE_BP_TEST_HOME"] = _SANDBOX
+    _os.environ["HOME"] = _SANDBOX
+    _os.environ["USERPROFILE"] = _SANDBOX
+
 
 import json
 import shutil

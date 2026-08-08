@@ -43,6 +43,17 @@ class Result:
     detail: str
 
 
+# Every gate this doctor runs is a REAL gate against a throwaway repository, and one of
+# them now writes to `~/.claude/settings.json` by design. Run with the founder's own HOME
+# that meant one `claude-bp-doctor` left 68 entries in their settings naming repositories
+# that were deleted seconds later (#121). A per-run sandbox, set once, for every gate.
+_HOME = Path(tempfile.mkdtemp(prefix="claude-bestpractice-doctor-home-"))
+
+
+def gate_env(home: Path | None = None) -> dict:
+    return {"HOME": str(home or _HOME), "PATH": os.environ.get("PATH", "")}
+
+
 def run_gate(gate: str, event: dict, cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(BIN / gate)],
@@ -51,6 +62,7 @@ def run_gate(gate: str, event: dict, cwd: Path) -> subprocess.CompletedProcess:
         text=True,
         cwd=str(cwd),
         timeout=120,
+        env=gate_env(),
     )
 
 
@@ -226,6 +238,7 @@ def check_fail_closed_on_garbage() -> Result:
         capture_output=True,
         text=True,
         timeout=60,
+        env=gate_env(),
     )
     ok = proc.returncode == 2
     return Result(
@@ -432,6 +445,7 @@ def check_switch_needs_the_founder(repo: Path) -> Result:
     unauthorised = subprocess.run(
         [sys.executable, str(BIN / "claude-bp"), "set", "scope_drift_block", "off"],
         capture_output=True, text=True, cwd=str(repo), timeout=120,
+        env=gate_env(),
     )
     run_gate(
         "prompt-capture",
@@ -442,6 +456,7 @@ def check_switch_needs_the_founder(repo: Path) -> Result:
     authorised = subprocess.run(
         [sys.executable, str(BIN / "claude-bp"), "set", "scope_drift_block", "off"],
         capture_output=True, text=True, cwd=str(repo), timeout=120,
+        env=gate_env(),
     )
     ok = unauthorised.returncode != 0 and authorised.returncode == 0
     return Result(
@@ -674,6 +689,7 @@ def check_airlock_quarantine(repo: Path) -> Result:
         text=True,
         cwd=str(repo),
         timeout=120,
+        env=gate_env(),
     )
     if proc.returncode != 0:
         return Result("airlock quarantines hostile payloads", False, proc.stderr[:200])
@@ -984,6 +1000,7 @@ def check_onboarding(repo: Path) -> Result:
         text=True,
         cwd=str(repo),
         timeout=180,
+        env=gate_env(),
     )
     if proc.returncode != 0:
         return Result("onboards an unseen repository", False, proc.stderr[:200])
@@ -1162,6 +1179,7 @@ def check_sessions_see_each_other(repo: Path) -> Result:
         subprocess.run(
             ["sh", "-c", f'"{sys.executable}" "{BIN / "session-start"}"; exit 0'],
             input=event, capture_output=True, text=True, cwd=repo, timeout=60,
+            env=gate_env(),
         )
 
     ctx = resolve(repo)
