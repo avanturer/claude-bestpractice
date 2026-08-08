@@ -1,5 +1,46 @@
 # Changelog
 
+## v1.18.0
+
+Verifying this plugin was writing 1,052 lines into the founder's own settings, and nothing
+could remove a block whose repository had been deleted. Both are mine, from v1.15.0 (#121).
+
+### Verification no longer writes to a real person's settings
+
+`policy` writes to `~/.claude/settings.json` on purpose — that is the feature. Under test,
+every integration case provisions a temporary repository and runs the real hooks in it, and
+those hooks inherited the ambient `HOME`. One `make check` added 1,052 entries; one
+`claude-bp-doctor` added 68. A machine that had verified a few releases was asking the
+classifier to consider 288 repositories, 287 of them gone — 336 KB of prose, read on every
+call in every project on that machine.
+
+Fixed twice on purpose. `tests/conftest.py` points `HOME` at a sandbox before the first test
+module is imported, and the doctor gives every gate it runs a per-run sandbox of its own —
+that is the cause. And `policy` refuses to write about a repository under the temp root into
+a settings file that is not, which makes the class of accident unrepeatable from a call site
+nobody has written yet. Measured after: 0 written, from 392 in the two test files that were
+worst.
+
+The doctor's leak was not only a test problem — it wrote into the settings of anyone who ran
+`claude-bp-doctor`, which the plugin tells them to run on install.
+
+### A block for a repository that is gone can be dropped
+
+`--apply` touches only its own repository's marker, which is right for two live repositories
+and left no path at all for a dead one. `claude-bp policy --prune` drops the blocks this
+plugin wrote whose path is no longer on disk, and the dry run and the board report the count
+first.
+
+Deleting rather than reporting, which is the opposite of how dead `permissions.allow` rules
+and stale instruction lines are treated — the difference is authorship. Those are lines the
+founder wrote and only they should remove them. These are lines the plugin wrote about
+repositories that no longer exist, and leaving them means the founder hand-editing settings
+to clean up after the plugin's own test suite.
+
+Not on disk at all, rather than "not a git repository": an unmounted disk whose mount point
+still exists keeps its block. And since the plugin's own commands are vouched for, the agent
+runs the prune — the founder never touches the file.
+
 ## v1.17.0
 
 Five symptoms from one eleven-hour measuring session. Four were this plugin's.

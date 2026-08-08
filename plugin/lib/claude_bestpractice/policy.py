@@ -28,6 +28,7 @@ their instruction files, for the same reason.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -117,6 +118,35 @@ def _remotes(ctx: GitContext) -> list[str]:
     return out
 
 
+# A repository under the system temp root is a fixture, and a fixture must never write
+# prose about itself into a real person's settings. This plugin's own verification did
+# exactly that: one `make check` added 1,052 entries to the ambient `HOME`, and a machine
+# that had verified a few releases was asking the classifier to consider 288 repositories,
+# 287 of them gone — 336 KB of it, read on every call in every project (#121).
+#
+# The cause is fixed at the call sites, which now pass an explicit HOME. This is the second
+# lock, and it is the one that makes the accident impossible to repeat from a call site
+# nobody has written yet: an explicit `home` means the caller is deliberately aiming at a
+# sandbox, so only the DEFAULT — the real person's file — is refused.
+def _under_temp(path: Path) -> bool:
+    import tempfile
+
+    try:
+        return tempfile.gettempdir() in (str(parent) for parent in path.resolve().parents)
+    except OSError:
+        return False
+
+
+def _would_be_an_accident(ctx: GitContext, home: Path | None) -> bool:
+    """A throwaway repository writing about itself into a REAL person's settings.
+
+    Both halves matter. A fixture writing into a sandbox home is the doctor proving this
+    path works and must go through; a fixture writing into `~/.claude/settings.json` is the
+    accident — and the two are told apart by where the file is, not by who called.
+    """
+    return _under_temp(ctx.worktree_root) and not _under_temp(settings_path(home))
+
+
 @dataclass
 class Delta:
     """What applying would change, computed before anything is written."""
@@ -124,6 +154,9 @@ class Delta:
     add: list[str] = field(default_factory=list)
     remove: list[str] = field(default_factory=list)
     dead: list[str] = field(default_factory=list)
+    # Blocks this plugin wrote for repositories that are no longer on disk. Counted here
+    # so the dry run and the board can say so; dropped only by `prune`.
+    vanished: list[str] = field(default_factory=list)
 
     @property
     def in_sync(self) -> bool:
@@ -139,7 +172,60 @@ def delta(ctx: GitContext, test_command: list[str], home: Path | None = None) ->
         add=[line for line in wanted if line not in current],
         remove=[line for line in current if line not in wanted],
         dead=dead_rules(settings),
+        vanished=sorted(_gone(settings)),
     )
+
+
+# `[claude-bestpractice /path/to/repo]` at the head of an entry we wrote.
+_MARKED = re.compile(r"^\[claude-bestpractice ([^\]]+)\]")
+
+
+def _repository_of(entry: str) -> str:
+    found = _MARKED.match(entry.strip())
+    return found.group(1) if found else ""
+
+
+def _gone(settings: dict) -> set[str]:
+    """Repositories our own blocks name that are no longer on disk."""
+    out = set()
+    for entry in _entries(settings, ENVIRONMENT):
+        named = _repository_of(entry)
+        if named and not Path(named).exists():
+            out.add(named)
+    return out
+
+
+def prune(home: Path | None = None) -> list[str]:
+    """Drop this plugin's blocks for repositories that no longer exist. Returns which.
+
+    Only lines this plugin wrote, identified by its own marker, and only when the path they
+    name is not on disk at all — not merely "not a git repository", so an unmounted disk
+    whose mount point still exists keeps its block.
+
+    Deleting rather than reporting, which is the opposite of what this module does with the
+    founder's dead `permissions.allow` rules — and the difference is authorship. Those are
+    lines they wrote and only they should remove. These are lines this plugin wrote about
+    repositories that are gone, and leaving them means the founder hand-editing their
+    settings to clean up after the plugin's own test suite, which is the shape #113 was
+    filed about.
+    """
+    settings = read(home)
+    entries = _entries(settings, ENVIRONMENT)
+    doomed = _gone(settings)
+    if not doomed:
+        return []
+
+    kept = [entry for entry in entries if _repository_of(entry) not in doomed]
+    auto = settings.get("autoMode")
+    if not isinstance(auto, dict):
+        auto = {}
+    auto[ENVIRONMENT] = kept
+    settings["autoMode"] = auto
+
+    path = settings_path(home)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    store.atomic_write(path, json.dumps(settings, indent=2, ensure_ascii=False), mode=0o600)
+    return sorted(doomed)
 
 
 # Prefix rules the vouch now answers by predicate, so the hand-written entry does nothing.
@@ -183,6 +269,10 @@ def apply(ctx: GitContext, test_command: list[str], home: Path | None = None) ->
     found = delta(ctx, test_command, home)
     if found.in_sync:
         return found
+    if _would_be_an_accident(ctx, home):
+        # Nothing is written, and the delta is still returned: a caller that wants to know
+        # what WOULD be written is not the caller doing damage.
+        return found
 
     settings = read(home)
     mark = marker(ctx)
@@ -215,11 +305,16 @@ def refresh(ctx: GitContext, test_command: list[str], home: Path | None = None) 
     to run it, and for the doctor to prove the path works.
     """
     found = apply(ctx, test_command, home)
-    if found.in_sync and not found.dead:
+    if found.in_sync and not found.dead and not found.vanished:
         return ""
     parts = []
     if not found.in_sync:
         parts.append(f"refreshed {len(found.add)} fact(s) about this repository")
+    if found.vanished:
+        parts.append(
+            f"{len(found.vanished)} block(s) name a repository that is gone — run "
+            "`claude-bp policy --prune` yourself, it drops only blocks this plugin wrote"
+        )
     if found.dead:
         parts.append(
             f"{len(found.dead)} rule(s) in the founder's permissions.allow no longer do "

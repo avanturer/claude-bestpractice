@@ -15,6 +15,7 @@ import json
 import subprocess
 import sys
 import unittest
+from pathlib import Path
 
 from helpers import BIN, RepoCase, git
 
@@ -236,6 +237,86 @@ class TestAStandingRuleWhoseSubjectIsGone(RepoCase):
         proc = self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
         context = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
         self.assertNotIn("STANDING RULES OUT OF DATE", context)
+
+
+class TestVerificationNeverWritesToARealPersonsSettings(PolicyCase):
+    """One `make check` added 1,052 entries to a real machine's `autoMode.environment`,
+    naming 287 directories that no longer existed — 336 KB of prose about temporary
+    repositories, read by the classifier on every call in every project (#121).
+
+    Fixed at the cause (every subprocess gets a sandbox HOME, in `tests/conftest.py` and
+    in the doctor) and again here, so a call site nobody has written yet cannot repeat it.
+    """
+
+    def test_a_fixture_repository_does_not_write_into_a_real_home(self):
+        self.assertTrue(policy._would_be_an_accident(self.ctx(), Path("/home/someone")))
+        before = policy.read(Path("/home/someone"))
+        found = policy.apply(self.ctx(), self.checks(), Path("/home/someone"))
+        self.assertEqual(before, policy.read(Path("/home/someone")))
+        self.assertTrue(found.add, "the delta is still computed; only the write is refused")
+
+    def test_a_fixture_repository_writing_into_a_sandbox_is_the_doctor_doing_its_job(self):
+        self.assertFalse(policy._would_be_an_accident(self.ctx(), self.home))
+        policy.apply(self.ctx(), self.checks(), self.home)
+        self.assertTrue([e for e in self.read()["autoMode"]["environment"]
+                         if e.startswith(policy.marker(self.ctx()))])
+
+    def test_the_sandbox_is_in_place_whichever_runner_is_driving(self):
+        """If this fails, every integration test in the suite is writing to whoever ran it.
+
+        It did fail, on the first full run: the sandbox lived in `conftest.py`, and
+        `make test` runs unittest, which never loads one — so it worked under pytest while
+        the gate that actually decides whether a release ships did not have it."""
+        import os
+        import tempfile
+
+        self.assertTrue(os.environ["HOME"].startswith(tempfile.gettempdir()), os.environ["HOME"])
+
+
+class TestABlockForARepositoryThatIsGone(PolicyCase):
+    """`--apply` touches only this repository's marker, which is right for two live
+    repositories and left no path at all for a dead one — so the founder was hand-editing
+    their settings to clean up after the plugin's own test suite (#121)."""
+
+    def written(self, *paths: str) -> None:
+        self.settings.write_text(json.dumps({"autoMode": {"environment": [
+            "a rule the founder wrote",
+            *[f"[claude-bestpractice {p}] a fact about it" for p in paths],
+        ]}}), encoding="utf-8")
+
+    def test_a_block_naming_a_path_that_is_gone_is_dropped(self):
+        self.written("/tmp/definitely-not-here-12345")
+        self.assertEqual(["/tmp/definitely-not-here-12345"], policy.prune(self.home))
+        self.assertEqual(["a rule the founder wrote"], self.read()["autoMode"]["environment"])
+
+    def test_a_block_for_a_repository_still_on_disk_is_kept(self):
+        self.written(str(self.repo))
+        self.assertEqual([], policy.prune(self.home))
+        self.assertEqual(2, len(self.read()["autoMode"]["environment"]))
+
+    def test_the_founders_own_lines_are_never_dropped(self):
+        """Their dead `permissions.allow` rules are reported and left; these are lines this
+        plugin wrote about repositories that are gone, which is why they may be deleted."""
+        self.written("/tmp/definitely-not-here-12345")
+        policy.prune(self.home)
+        self.assertIn("a rule the founder wrote", self.read()["autoMode"]["environment"])
+
+    def test_nothing_to_prune_writes_nothing(self):
+        self.written(str(self.repo))
+        before = self.settings.read_text(encoding="utf-8")
+        self.assertEqual([], policy.prune(self.home))
+        self.assertEqual(before, self.settings.read_text(encoding="utf-8"))
+
+    def test_the_count_is_reported_before_anything_is_dropped(self):
+        self.written("/tmp/definitely-not-here-12345", "/tmp/also-gone-98765")
+        found = policy.delta(self.ctx(), self.checks(), self.home)
+        self.assertEqual(2, len(found.vanished))
+        self.assertEqual(2, len(self.read()["autoMode"]["environment"]) - 1)
+
+    def test_the_board_names_the_command_the_agent_runs(self):
+        self.written("/tmp/definitely-not-here-12345")
+        said = policy.refresh(self.ctx(), self.checks(), self.home)
+        self.assertIn("claude-bp policy --prune", said)
 
 
 if __name__ == "__main__":

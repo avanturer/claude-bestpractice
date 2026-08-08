@@ -315,7 +315,7 @@ def cmd_set(ctx, key: str, value: str) -> int:
     return 0
 
 
-def cmd_policy(ctx, write: bool) -> int:
+def cmd_policy(ctx, write: bool, prune: bool) -> int:
     """Keep the derivable half of the auto-mode policy current, without the founder.
 
     Two layers answer "may this proceed unattended" — the classifier from prose in the
@@ -326,6 +326,16 @@ def cmd_policy(ctx, write: bool) -> int:
     from anything the agent says: running this cannot widen what may proceed. Grants are
     not written here at all.
     """
+    if prune:
+        dropped = policy.prune()
+        heading("AUTO-MODE POLICY")
+        print(f"  settings: {policy.settings_path()}")
+        if not dropped:
+            print("  no blocks name a repository that is gone")
+        for path in dropped:
+            print(f"  dropped the block for {path} — not on disk")
+        return 0
+
     cfg = config.load(ctx)
     found = policy.apply(ctx, cfg.test_command) if write else policy.delta(ctx, cfg.test_command)
 
@@ -339,6 +349,10 @@ def cmd_policy(ctx, write: bool) -> int:
         print(f"  {'dropped' if write else 'would drop'} (no longer true): {entry[:150]}")
     if not write and not found.in_sync:
         print("  `claude-bp policy --apply` writes them")
+
+    if found.vanished:
+        print(f"  {len(found.vanished)} block(s) name a repository that is gone — "
+              "`claude-bp policy --prune` drops them")
 
     if found.dead:
         heading("HAND-WRITTEN RULES THAT NO LONGER DO ANYTHING")
@@ -366,6 +380,8 @@ def main() -> int:
     rules = sub.add_parser(
         "policy", help="keep auto mode told what this repository is, and name dead rules")
     rules.add_argument("--apply", action="store_true", help="write it, rather than showing it")
+    rules.add_argument("--prune", action="store_true",
+                       help="drop this plugin's own blocks for repositories that are gone")
     switch = sub.add_parser(
         "set", help="change a gate switch the founder has asked for in their own words")
     switch.add_argument("key", help="a config key, e.g. scope_drift_block")
@@ -385,7 +401,7 @@ def main() -> int:
     if args.command == "set":
         return cmd_set(ctx, args.key, args.value)
     if args.command == "policy":
-        return cmd_policy(ctx, args.apply)
+        return cmd_policy(ctx, args.apply, args.prune)
     return cmd_status(ctx)
 
 
