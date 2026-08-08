@@ -46,6 +46,12 @@ _NOISE = {"e.g.", "i.e.", "etc.", "vs."}
 _ENVELOPES = (
     "ide_opened_file", "ide_selection", "ide_diagnostics", "system-reminder",
     "background-task", "command-name", "command-message", "local-command-stdout",
+    # Added after `<task-notification>` — a shape not on this list — was taken as the task
+    # and quoted back at a session whose 136 changed files were then all drift (#118). The
+    # list is the cheap half of that fix; `is_harness_block` is the half that does not
+    # depend on having guessed every name the harness will ever use.
+    "task-notification", "github-webhook-activity", "untrusted_external_data",
+    "command-args", "local-command-caveat",
 )
 _ENVELOPE_BLOCK = re.compile(
     r"<(" + "|".join(_ENVELOPES) + r")\b[^>]*>.*?</\1\s*>", re.S | re.I
@@ -90,6 +96,29 @@ _CONTINUATION = re.compile(
 )
 
 
+# The whole message is one XML element and nothing else: `<tag …> … </tag>` with no prose
+# outside it. Every block the harness injects has that shape, and a founder does not type
+# it — when they paste XML they paste it INTO a sentence, which is why this asks about the
+# whole message rather than about brackets appearing anywhere in it.
+_ONE_BLOCK = re.compile(r"\A<([a-z][\w-]*)\b[^>]*>.*</\1\s*>\Z", re.S | re.I)
+
+
+def is_harness_block(text: str) -> bool:
+    """Was this written by the harness rather than by the founder?
+
+    A name list cannot answer this, and trying was the defect: `background-task` was on it
+    and `task-notification` was not, so a background-task completion notice became the
+    session's task statement — and the scope-drift refusal then quoted a tool-use id back
+    at an agent that had no way to satisfy it, in the middle of unattended overnight work
+    (#118). This asks about the SHAPE, which does not change when the harness adds a block.
+
+    Nothing is stripped on the strength of this. It decides only whether the text may
+    become the record of what the founder asked for.
+    """
+    stripped = text.strip()
+    return bool(stripped) and bool(_ONE_BLOCK.match(stripped))
+
+
 def is_statement_of_work(prompt: str, paths: list[str]) -> bool:
     """Does this prompt say what the session is doing, or only that it should carry on?
 
@@ -102,7 +131,7 @@ def is_statement_of_work(prompt: str, paths: list[str]) -> bool:
     finish.
     """
     text = " ".join(prompt.split())
-    if is_pasted_output(prompt):
+    if is_pasted_output(prompt) or is_harness_block(prompt):
         return False
     if paths:
         return True
@@ -231,8 +260,14 @@ def main() -> None:
         # that cannot satisfy it. And an empty statement is the honest state here: it
         # leaves `task_paths` empty, which disables the drift check rather than enforcing
         # it against a shell prompt (#106).
-        if is_statement_of_work(safe, fresh) or (not rec.task_statement
-                                                 and not is_pasted_output(safe)):
+        # The fallback does not extend to a harness block either, and for the same reason
+        # as a paste: «Делай» is better than nothing, a tool-use id is not (#118).
+        if is_statement_of_work(safe, fresh) or (
+            not rec.task_statement
+            and safe
+            and not is_pasted_output(safe)
+            and not is_harness_block(safe)
+        ):
             # Marked when cut, because the drift refusal quotes this back as "Task was:"
             # and a fragment presented as the whole instruction is a claim the founder
             # cannot check. Reported as issue #41, where "…перезапустил д" was shown.

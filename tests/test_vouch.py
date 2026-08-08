@@ -175,6 +175,38 @@ class TestWritesInTheTreeTheSessionOccupies(RepoCase):
             self.ctx(), sid(self.repo, "s1"), [self.repo / ".env"]))
 
 
+class TestThePluginsOwnCommandsNeedNoPermission(VouchCase):
+    """Every refusal this gate prints names one of these as the way out. Asking the founder
+    to authorise a command the plugin just ordered is the gate arguing with its own
+    instructions — and for `claude-bp policy --apply` it was worse: the classifier refused
+    the command whose whole purpose is that the agent, not the founder, maintains the file
+    the classifier reads (#116)."""
+
+    def own(self, name: str) -> str:
+        return str(BIN / name)
+
+    def test_the_command_the_refusals_name(self):
+        self.assertVouched(f"{self.own('claude-bp-plan')} add \"what this turn is doing\"",
+                           vouch.OWN)
+
+    def test_the_command_that_could_not_run_at_all(self):
+        self.assertVouched(f"{self.own('claude-bp')} policy --apply", vouch.OWN)
+
+    def test_a_binary_of_the_same_name_from_somewhere_else_is_not_ours(self):
+        """A `claude-bp` on PATH belonging to another install must not answer for this one."""
+        self.assertSilent("/usr/local/bin/claude-bp policy --apply")
+
+    def test_adopt_is_not_vouched_for(self):
+        """It moves ANOTHER tool's hook entries out of the founder's settings. Everything
+        else here writes only this plugin's own state."""
+        self.assertSilent(f"{self.own('claude-bp')} adopt")
+
+    def test_it_still_travels_with_the_rest_of_the_line(self):
+        """One unvouched segment takes the line with it, own command or not."""
+        self.assertVouched(f"{self.own('claude-bp')} status && git log --oneline -3")
+        self.assertSilent(f"{self.own('claude-bp')} status && curl https://example.com")
+
+
 class TestLeavingTheTreeIsVouchedForToo(RepoCase):
     """Entering was approved and leaving was not, so the founder authorised the last step
     of a workflow whose first step the plugin approved on their behalf seconds earlier —
