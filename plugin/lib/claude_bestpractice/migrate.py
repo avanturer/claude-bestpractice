@@ -212,12 +212,34 @@ def _absorb_scratch_todos(ctx: GitContext) -> str:
     return "; ".join(adopted)
 
 
+def _lift_the_tool_call_ceiling(ctx: GitContext) -> str:
+    """The ceiling this plugin invented, taken back out of repositories that kept it.
+
+    `max_tool_calls` defaulted to 2000 and `config.save` writes every key, so the number is
+    on disk in every repository that ever saved a config — and a fix that only changes the
+    default leaves all of them blocked. The founder upgrades on top of what was working.
+
+    Only the value this plugin chose. A number the founder set themselves is their word on
+    the subject and is left exactly as it is.
+    """
+    from . import config
+
+    path = store.tier_a(ctx, config.CONFIG_NAME)
+    raw = store.read_json(path, default=None)
+    if not isinstance(raw, dict) or raw.get("max_tool_calls") != 2000:
+        return ""
+    raw["max_tool_calls"] = 0
+    store.write_json(path, raw, mode=0o644)
+    return "the 2000-call ceiling this plugin set is off; set it yourself to bring it back"
+
+
 # name -> (revision, step). Raise the revision when the step's behaviour changes; every
 # clone that ran an older revision reconciles again on its next session start.
 _REPAIRS = {
     "0001-task-paths": (1, _backfill_task_paths),
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
     "0003-absorb-scratch-todos": (1, _absorb_scratch_todos),
+    "0004-lift-the-tool-call-ceiling": (1, _lift_the_tool_call_ceiling),
 }
 
 

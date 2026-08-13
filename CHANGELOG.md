@@ -1,5 +1,33 @@
 # Changelog
 
+## v1.20.0
+
+The tool-call ceiling is off, and it is taken back out of repositories that kept it.
+
+### There is no ceiling unless somebody asks for one
+
+A ceiling catches DURATION. A runaway is a SHAPE — and the two guards that read shape,
+`max_repeat_signature` and `loop_detect`, are what actually stop one. By count alone an
+eleven-hour measuring session is indistinguishable from a loop, so the ceiling only ever
+fired on the wrong one; and when it fired it refused everything, including the read that
+would have shown the measurement that had just finished.
+
+v1.17.0 fixed three defects in how it counted. That left a fourth: the thing itself.
+`max_tool_calls` now defaults to 0, which means off. The key stays, because a number
+somebody chose is a different thing from a number this plugin invented — any value above
+zero enforces exactly as before.
+
+The shape detectors are unchanged and still hold: four identical calls in a row is still
+refused, and still clears the moment anything else happens.
+
+### And it is lifted where it is already written down
+
+`config.save` writes every key, so `"max_tool_calls": 2000` is on disk in every repository
+that ever saved a config. Changing the default alone would have left all of them blocked —
+and the founder upgrades on top of what was working. `migrate._REPAIRS` gained
+`0004-lift-the-tool-call-ceiling`, which turns off exactly the number this plugin chose and
+leaves any other value alone, because a number the founder set is their word on the subject.
+
 ## v1.19.0
 
 Worktrees, end to end: the board tells the truth about what is closed, moving around never

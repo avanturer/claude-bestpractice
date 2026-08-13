@@ -296,6 +296,32 @@ class TestTheCeilingCountsWorkRatherThanAttempts(GateCase):
         except (json.JSONDecodeError, KeyError, TypeError):
             return ""
 
+    def test_there_is_no_ceiling_unless_somebody_asks_for_one(self):
+        """A ceiling catches DURATION; a runaway is a SHAPE, and the two detectors that
+        read shape are what actually stop one. By count alone an eleven-hour measuring
+        session is indistinguishable from a loop — so the ceiling only ever fired on the
+        wrong one, and when it fired it refused everything, including the read that would
+        have shown the measurement it had just finished."""
+        self.start()
+        # Varied on purpose: twelve IDENTICAL calls are caught by the repeat detector, and
+        # that is the guard that should catch them. What must not stop is ordinary work.
+        for n in range(12):
+            self.assertEqual("allow", self.decide(f"git log --oneline -{n + 1}"))
+
+    def test_the_shape_detectors_still_hold_without_a_ceiling(self):
+        """What the ceiling was standing in for, done by the guards that read behaviour."""
+        self.start()
+        for _ in range(4):
+            self.decide("git status --short")
+        self.assertEqual("deny", self.decide("git status --short"))
+
+    def test_a_number_somebody_chose_is_still_enforced(self):
+        self.configure(max_tool_calls=2)
+        self.start()
+        self.decide("git status --short")
+        self.decide("git status --short")
+        self.assertEqual("deny", self.decide("git status --short"))
+
     def test_a_call_this_gate_refused_does_not_count_towards_the_ceiling(self):
         """Every refusal pushed the session closer to a wall it would then hit for having
         been refused."""
