@@ -285,6 +285,49 @@ def reap_unused(ctx: GitContext, live: set) -> list[str]:
     return removed
 
 
+def stranded(ctx: GitContext) -> list[str]:
+    """Trees this plugin made, that nobody is standing in, that git refused to remove.
+
+    The reaper is built out of commands that REFUSE — `git worktree remove` without
+    `--force` will not touch a tree with modifications — so a session that died mid-edit
+    leaves a tree no sweep will ever clear. That is correct, and it is also how eight of
+    them accumulate: the plugin will not delete the work and nothing names it either.
+
+    Reported, never removed. Naming them is the whole fix: an agent can finish one, commit
+    it, or remove it deliberately; a sweep cannot decide which.
+    """
+    from . import sessions
+
+    try:
+        live = {record.session_id for record in sessions.live_sessions(ctx)}
+    except Exception:  # noqa: BLE001 - a report must never be what breaks a session start
+        return []
+    out: list[str] = []
+    try:
+        records = sorted(store.tier_b(ctx, "worktrees").glob("*.json"))
+    except OSError:
+        return out
+    for record in records:
+        found = _abandoned(ctx, store.read_json(record, default={}) or {}, live)
+        if not found:
+            continue
+        path = Path(found[0])
+        if path.is_dir() and _holds_work(path):
+            out.append(found[0])
+    return out
+
+
+def _holds_work(tree: Path) -> bool:
+    """Is there anything in this tree a `git worktree remove` would refuse to lose?"""
+    from . import delivery
+    from .gitctx import GitError, resolve
+
+    try:
+        return delivery.dirty(resolve(tree))
+    except (GitError, OSError):
+        return False
+
+
 def _abandoned(ctx: GitContext, body: dict, live: set) -> tuple | None:
     """(path, branch) when this record describes a tree we made and nobody is in."""
     if not body.get("provisioned_by_plugin"):

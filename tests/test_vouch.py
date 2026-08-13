@@ -175,6 +175,33 @@ class TestWritesInTheTreeTheSessionOccupies(RepoCase):
             self.ctx(), sid(self.repo, "s1"), [self.repo / ".env"]))
 
 
+class TestMovingAroundIsNotAQuestion(VouchCase):
+    """This gate orders a session into its own worktree. A `cd` back into that tree went
+    to the classifier, so the founder was asked to authorise the move the plugin had just
+    demanded — and when a shell had landed in the main checkout, the way back was the thing
+    being asked about (#123)."""
+
+    def test_walking_back_into_my_own_tree(self):
+        self.assertVouched(f"cd {self.repo}", vouch.MOVE)
+
+    def test_doing_nothing_at_all(self):
+        self.assertVouched("pwd", vouch.MOVE)
+        self.assertVouched("true", vouch.MOVE)
+
+    def test_a_move_out_of_the_repository_is_still_left_alone(self):
+        self.assertSilent(f"cd {self.repo.parent}")
+
+    def test_a_move_does_not_carry_a_read_with_it(self):
+        """`cd` elsewhere buys the move and nothing else: reads and writes are still judged
+        against the tree this session owns."""
+        outside = self.repo.parent / "elsewhere"
+        outside.mkdir(exist_ok=True)
+        self.assertSilent(f"cd {outside} && cat secrets.txt")
+
+    def test_a_real_command_after_a_move_is_judged_on_its_own(self):
+        self.assertVouched("cd src && git status", vouch.READ)
+
+
 class TestThePluginsOwnCommandsNeedNoPermission(VouchCase):
     """Every refusal this gate prints names one of these as the way out. Asking the founder
     to authorise a command the plugin just ordered is the gate arguing with its own

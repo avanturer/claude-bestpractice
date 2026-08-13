@@ -1,5 +1,48 @@
 # Changelog
 
+## v1.19.0
+
+Worktrees, end to end: the board tells the truth about what is closed, moving around never
+asks, and trees the sweep cannot clear are named instead of piling up (#123).
+
+### Closing a task sticks
+
+`load_all` reads every worktree of the clone and keeps the most advanced copy, and `next`
+was ranked above `done`. So closing a task in your own worktree was outvoted by every
+sibling still carrying the queued copy: ten tasks closed, ten still in NEXT, and a board
+that cannot say what is finished is not a board. The ranking follows the lifecycle now —
+a task file only moves forward, so the copy that travelled furthest is the one written last.
+
+`startable` had the same bug one level down: asking for `next` alone scanned only `next/`
+directories, so the dedup never ran and it offered work this clone had already finished.
+A state is now resolved across every tree first and filtered afterwards.
+
+The trade, stated: a task closed by mistake in one tree now hides an active `doing` copy in
+another. That costs the session working on it nothing — it holds its own file — against a
+board that was wrong about everything ever closed.
+
+### Moving around is not a question
+
+A line that is only navigation vouched for nothing, because navigation contributes no
+reason of its own. So `cd` back into the worktree this gate had just ordered the session
+into went to the classifier, along with `pwd` and `true` — and a session whose shell had
+landed in the main checkout was asked to authorise the way back. Navigation anywhere inside
+the clone is now vouched for outright. Reads and writes are still judged against the tree
+the session owns, so a `cd` elsewhere buys the move and nothing else.
+
+### Trees the sweep cannot clear are named
+
+The sweep is built out of commands that REFUSE — `git worktree remove` without `--force`
+will not touch a tree with modifications — so a session that died mid-edit leaves a tree no
+sweep will ever clear. That is correct, and it is also how eight of them accumulate: the
+plugin will not delete the work, and until now nothing named it either. The board reports
+them, never removes them, and says explicitly to ask before discarding anything.
+
+Measured on four finished trees with every session gone: the empty one, the merged one and
+the one with unmerged commits are all swept (the branch survives in the last case, so
+nothing committed is lost). The one holding uncommitted work stays — and is now the only
+one the founder has to think about.
+
 ## v1.18.0
 
 Verifying this plugin was writing 1,052 lines into the founder's own settings, and nothing

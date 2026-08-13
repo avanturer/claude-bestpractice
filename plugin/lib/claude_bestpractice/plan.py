@@ -158,15 +158,19 @@ def load_all(ctx: GitContext, state: str = "") -> list[Task]:
     those branches is clean — different slugs, different filenames — and deduping by id
     would silently drop one of two real tasks on every such merge.
     """
-    states = [state] if state else list(STATES)
     best: dict[str, Task] = {}
+    # Always every state, even when one was asked for. Scanning only the requested
+    # directory cannot see that a sibling has moved the task on, so the dedup above never
+    # runs: `startable` counted a task this worktree had closed, because it looked in
+    # `next/` alone and found the stale copy (#123).
     for root in sibling_worktrees(ctx) or [ctx.worktree_root]:
         label = "" if root.resolve() == ctx.worktree_root.resolve() else root.name
-        for task in _tasks_under(root, states, label):
+        for task in _tasks_under(root, list(STATES), label):
             previous = best.get(task.path.name)
             if previous is None or _rank(task) > _rank(previous):
                 best[task.path.name] = task
-    return sorted(best.values(), key=lambda t: (STATES.index(t.state), t.id, t.title))
+    resolved = [t for t in best.values() if not state or t.state == state]
+    return sorted(resolved, key=lambda t: (STATES.index(t.state), t.id, t.title))
 
 
 def _tasks_under(root: Path, states: list[str], label: str) -> list[Task]:
@@ -184,9 +188,19 @@ def _tasks_under(root: Path, states: list[str], label: str) -> list[Task]:
     return out
 
 
-# doing outranks next outranks done: what is in flight is what a session must not
-# collide with, and a local copy wins a tie so a claim acts on a file we own.
-_ADVANCEMENT = {DOING: 3, NEXT: 2, DONE: 1}
+# Lifecycle order, because a task file only ever moves forward: the copy that has travelled
+# furthest is the one that was written last, and that is the truth when copies disagree.
+#
+# `next` used to outrank `done`, to keep a stale closure from hiding work in flight. The
+# cost was the board: closing a task in your own worktree was outvoted by every sibling
+# still carrying the old `next` copy, so with ten worktrees ten closed tasks all came back
+# as NEXT and stayed there. Reported as a board that cannot be read (#123).
+#
+# The trade, stated: a task closed by mistake in one tree now hides an active `doing` copy
+# in another. That costs the session working on it nothing — it holds its own file — and
+# it costs the board one wrong row, against a board that was wrong about everything ever
+# closed. A local copy still wins a tie, so a claim acts on a file we own.
+_ADVANCEMENT = {DONE: 4, PAUSED: 3, DOING: 2, NEXT: 1}
 
 
 def _rank(task: Task) -> tuple[int, int]:

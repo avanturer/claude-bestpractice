@@ -177,6 +177,26 @@ def _swept_line(removed: list) -> str:
     )
 
 
+def _stranded_line(ctx: GitContext) -> str:
+    """Trees nobody is in that the sweep cannot clear, because they hold work.
+
+    The sweep removes what it can, silently and correctly. What it refuses is what piles
+    up — and until this, nothing said so. Empty in a repository whose trees are all either
+    occupied or clean, which is the steady state (#123).
+    """
+    left = worktree.stranded(ctx)
+    if not left:
+        return ""
+    shown = ", ".join(Path(p).name for p in left[:3])
+    more = f" (+{len(left) - 3} more)" if len(left) > 3 else ""
+    return (
+        f"\nABANDONED WORKTREES: {len(left)} tree(s) nobody is in are holding uncommitted "
+        f"work — {shown}{more}. The sweep will not delete work, so they stay until someone "
+        "decides: finish and merge, or `git worktree remove --force`. Ask the founder "
+        "before discarding anything."
+    )
+
+
 def _knowledge_line(ctx: GitContext) -> str:
     """Say so when this repository has no knowledge layer. Once, and then never.
 
@@ -318,6 +338,7 @@ def main() -> None:
     body += "\n" + _autonomy_line(cfg.autonomy)
     body += _armed_line(ctx)
     body += _swept_line(swept)
+    body += _stranded_line(ctx)
     body += _knowledge_line(ctx)
     body += _stale_rules_line(ctx)
     body += _hidden_line(ctx)
