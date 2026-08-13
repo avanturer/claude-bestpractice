@@ -498,6 +498,93 @@ class TestTheGateDoesNotQuoteItselfAsTheTask(GateCase):
         self.assertEqual(real, sessions.get(self.ctx(), sid(self.repo, "s1")).task_statement)
 
 
+class TestWhatCompactionDestroysIsHandedBack(GateCase):
+    """The checkpoint has been written on every compaction since the first release and
+    never read — the exact pattern `provenance` opens by naming as how memory features
+    fail. Compaction is the largest destroyer of in-context state, so the half that matters
+    is the restore."""
+
+    def compacted(self, session: str = "s1"):
+        return self.gate("session-start", {
+            "session_id": session, "hook_event_name": "SessionStart",
+            "source": "compact", "cwd": str(self.repo),
+        })
+
+    def context(self, proc) -> str:
+        return json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
+
+    def long_session(self):
+        self.start()
+        self.gate("prompt-capture", {
+            "session_id": "s1", "hook_event_name": "UserPromptSubmit", "cwd": str(self.repo),
+            "prompt": "довести пайплайн дообучения до конца: статьи, прошлые попытки, данные",
+        })
+        self.gate("checkpoint", {"session_id": "s1", "hook_event_name": "PreCompact",
+                                 "trigger": "auto", "cwd": str(self.repo)})
+
+    def test_the_opening_request_survives_the_compaction(self):
+        self.long_session()
+        self.assertIn("довести пайплайн", self.context(self.compacted()))
+
+    def test_it_is_marked_as_captured_rather_than_summarised_now(self):
+        self.long_session()
+        said = self.context(self.compacted())
+        self.assertIn("RESTORED AFTER COMPACTION", said)
+        self.assertIn("written at the time", said)
+
+    def test_an_ordinary_start_pays_nothing_for_this(self):
+        """It costs the always-on budget exactly zero, which is why it can afford to be
+        generous when it does fire."""
+        self.long_session()
+        proc = self.gate("session-start", {"session_id": "s1", "cwd": str(self.repo),
+                                           "hook_event_name": "SessionStart", "source": "startup"})
+        self.assertNotIn("RESTORED AFTER COMPACTION", self.context(proc))
+
+    def test_a_compaction_with_nothing_captured_says_nothing(self):
+        self.start()
+        self.assertNotIn("RESTORED AFTER COMPACTION", self.context(self.compacted()))
+
+
+class TestAutoModeDenialsAreVisible(GateCase):
+    """This plugin decides one half of the permission question and the classifier decides
+    the other. Until `PermissionDenied` existed nothing here could see the other half, so
+    every "it asked me again" arrived as a screenshot."""
+
+    def denied(self, tool: str, tool_input: dict):
+        return self.gate("permission-denied", {
+            "session_id": "s1", "hook_event_name": "PermissionDenied",
+            "tool_name": tool, "tool_input": tool_input, "cwd": str(self.repo),
+        })
+
+    def test_a_denial_is_recorded_and_reported(self):
+        self.start()
+        self.assertEqual(0, self.denied("EnterWorktree", {"path": "/somewhere/else"}).returncode)
+        proc = self.gate("session-start", {"session_id": "s2", "cwd": str(self.repo),
+                                           "hook_event_name": "SessionStart", "source": "startup"})
+        said = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("AUTO MODE REFUSED", said)
+        self.assertIn("EnterWorktree", said)
+
+    def test_it_never_blocks_because_the_denial_already_happened(self):
+        self.start()
+        self.assertEqual(0, self.denied("Bash", {"command": "ssh prod"}).returncode)
+
+    def test_a_credential_in_the_denied_command_is_scrubbed(self):
+        self.start()
+        self.denied("Bash", {"command": 'DB_PASSWORD="hunter2hunter2" ./deploy.sh'})
+        proc = self.gate("session-start", {"session_id": "s2", "cwd": str(self.repo),
+                                           "hook_event_name": "SessionStart", "source": "startup"})
+        said = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertNotIn("hunter2hunter2", said)
+
+    def test_nothing_denied_says_nothing(self):
+        self.start()
+        proc = self.gate("session-start", {"session_id": "s2", "cwd": str(self.repo),
+                                           "hook_event_name": "SessionStart", "source": "startup"})
+        self.assertNotIn("AUTO MODE REFUSED",
+                         json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"])
+
+
 class TestPreTool(GateCase):
     def decision(self, proc: subprocess.CompletedProcess) -> str | None:
         try:

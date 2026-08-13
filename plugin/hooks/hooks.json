@@ -10,7 +10,6 @@
     "Verify with `plugin/bin/claude-bp-doctor`, which proves each gate by attempting a",
     "known-bad action rather than reading this file back."
   ],
-
   "hooks": {
     "Setup": [
       {
@@ -25,7 +24,6 @@
         ]
       }
     ],
-
     "WorktreeCreate": [
       {
         "hooks": [
@@ -38,7 +36,6 @@
         ]
       }
     ],
-
     "SessionStart": [
       {
         "matcher": "startup|resume|clear|compact",
@@ -52,7 +49,6 @@
         ]
       }
     ],
-
     "UserPromptSubmit": [
       {
         "hooks": [
@@ -64,7 +60,6 @@
         ]
       }
     ],
-
     "PreToolUse": [
       {
         "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|EnterWorktree",
@@ -86,7 +81,6 @@
         ]
       }
     ],
-
     "SubagentStart": [
       {
         "hooks": [
@@ -98,7 +92,6 @@
         ]
       }
     ],
-
     "PreCompact": [
       {
         "hooks": [
@@ -111,7 +104,6 @@
         ]
       }
     ],
-
     "Stop": [
       {
         "hooks": [
@@ -120,6 +112,16 @@
             "command": "${CLAUDE_PLUGIN_ROOT}/bin/evidence-gate",
             "timeout": 900,
             "statusMessage": "claude-bestpractice: verifying"
+          }
+        ]
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/permission-denied"
           }
         ]
       }
