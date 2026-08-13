@@ -471,6 +471,49 @@ class TestGitItselfReachesIntoOtherTrees(PolicyCase):
             self.assertEqual(self.bash(mine, command)[0], "allow")
 
 
+class TestTreesTheSweepCannotClearAreNamed(PolicyCase):
+    """The sweep is built out of commands that refuse: `git worktree remove` without
+    `--force` will not touch a tree with modifications. That is correct, and it is also how
+    eight trees accumulate — the plugin will not delete the work and nothing named it
+    either (#123)."""
+
+    def provisioned(self, session: str, task: str):
+        from claude_bestpractice import hookio, worktree
+
+        return worktree.provision(self.ctx(), task, hookio.compose_session_id(session, str(self.repo)))
+
+    def test_a_tree_holding_uncommitted_work_is_named(self):
+        from claude_bestpractice import worktree
+
+        tree = self.provisioned("dead", "a task nobody finished")
+        (tree / "wip.py").write_text("x = 1\n", encoding="utf-8")
+        self.assertEqual([str(tree)], worktree.stranded(self.ctx()))
+
+    def test_a_clean_tree_is_not_named_because_the_sweep_takes_it(self):
+        from claude_bestpractice import worktree
+
+        self.provisioned("dead", "a task where nothing happened")
+        self.assertEqual([], worktree.stranded(self.ctx()))
+
+    def test_a_tree_somebody_is_standing_in_is_not_named(self):
+        from claude_bestpractice import hookio, sessions, worktree
+
+        tree = self.provisioned("alive", "a task in progress")
+        (tree / "wip.py").write_text("x = 1\n", encoding="utf-8")
+        sessions.register(self.ctx(), self.session_record(
+            hookio.compose_session_id("alive", str(self.repo))))
+        self.assertEqual([], worktree.stranded(self.ctx()))
+
+    def test_the_board_says_it_and_never_discards_anything(self):
+        tree = self.provisioned("dead", "a task nobody finished")
+        (tree / "wip.py").write_text("x = 1\n", encoding="utf-8")
+        proc = self.run_hook("session-start", {"session_id": "fresh", "hook_event_name": "SessionStart"})
+        context = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("ABANDONED WORKTREES", context)
+        self.assertIn("Ask the founder before discarding", context)
+        self.assertTrue((tree / "wip.py").exists(), "the report must never delete the work")
+
+
 class TestWorktreeNamesAndCleanup(PolicyCase):
     """Three findings from a real run, all of them about what provisioning leaves behind."""
 

@@ -227,6 +227,51 @@ class TestCli(PlanCase):
         self.assertIn("plan is empty", self.run_cli("list").stdout)
 
 
+class TestClosingATaskSticksAcrossWorktrees(RepoCase):
+    """Ten tasks closed in a worktree all came back as NEXT and stayed there: `load_all`
+    reads every worktree of the clone and keeps the most advanced copy, and `next` was
+    ranked above `done`. With ten worktrees one closure was outvoted by nine stale copies,
+    and the board stopped being readable (#123)."""
+
+    def two_trees(self):
+        from claude_bestpractice import plan
+
+        task = plan.add(self.ctx(), "починить импортер", paths=["src/app.py"])
+        self.commit("file the task")
+        other = self.add_worktree("sibling")
+        return task, other
+
+    def test_done_in_one_tree_is_done_everywhere(self):
+        from claude_bestpractice import plan
+        from claude_bestpractice.gitctx import resolve
+
+        task, other = self.two_trees()
+        plan.complete(resolve(other), task.id)
+        self.assertEqual(1, plan.summary(self.ctx())["done"])
+        self.assertEqual(0, plan.summary(self.ctx())["next"])
+
+    def test_a_claim_still_outranks_a_stale_queued_copy(self):
+        """The reason the ranking existed: what is in flight is what a session must not
+        collide with."""
+        from claude_bestpractice import plan
+        from claude_bestpractice.gitctx import resolve
+
+        task, other = self.two_trees()
+        plan.claim(resolve(other), task.id, "someone", "feat/x")
+        self.assertEqual(1, plan.summary(self.ctx())["doing"])
+
+    def test_what_another_tree_closed_is_not_offered_as_ready_to_start(self):
+        """`startable` asked only for `next`, so the dedup never ran and it counted a task
+        this clone had already finished."""
+        from claude_bestpractice import plan
+        from claude_bestpractice.gitctx import resolve
+
+        task, other = self.two_trees()
+        self.assertEqual(1, len(plan.startable(self.ctx())), "the fixture proves nothing")
+        plan.complete(resolve(other), task.id)
+        self.assertEqual([], plan.startable(self.ctx()))
+
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -56,6 +56,11 @@ WRITE = (
     "into every OTHER tree is this plugin's own rule; the same answer, inverted, is a "
     "vouch rather than a prompt."
 )
+MOVE = (
+    "claude-bestpractice: this only moves around inside the repository, or does nothing at "
+    "all. A session asked to work in its own worktree has to be able to walk back into it, "
+    "and a rule that makes `cd` a question is a rule that strands the session it directs."
+)
 EXIT = (
     "claude-bestpractice: one tree per session is this gate's rule, and leaving is the last "
     "step of the convention it publishes. Approving the way in and asking about the way out "
@@ -312,15 +317,24 @@ def _commits_here(root: Path, here: Path, argv: list[str]) -> bool:
     return _inside(root, here) and _paths_are_ours(root, here, ["git", *arguments[1:]])
 
 
-def _walk(here: Path, root: Path, argv: list[str]) -> Path | None:
-    """The directory the next segment runs in, or None when it leaves this tree."""
+def _walk(here: Path, root: Path, argv: list[str], clone: Path | None = None) -> Path | None:
+    """The directory the next segment runs in, or None when it leaves this clone.
+
+    The CLONE and not this session's own tree. Walking into the main checkout changes
+    nothing by itself, and refusing to vouch for it left a session that had stepped out
+    unable to be told, without a prompt, how to step back. Reads and writes are still
+    judged against the session's OWN root, so a `cd` elsewhere buys nothing beyond the
+    move itself.
+    """
     if _program(argv) != "cd":
         return here
     targets = _arguments(argv)
     if not targets:
         return None
     moved = _resolve(here, targets[0])
-    return moved if moved is not None and _inside(root, moved) else None
+    if moved is None:
+        return None
+    return moved if _inside(root, moved) or (clone and _inside(clone, moved)) else None
 
 
 def for_bash(ctx: GitContext, line: str, test_command: list[str], cwd: Path | None = None) -> str:
@@ -332,22 +346,40 @@ def for_bash(ctx: GitContext, line: str, test_command: list[str], cwd: Path | No
     here = (cwd or ctx.worktree_root).resolve()
     if not _inside(root, here):
         return ""
+    # The main checkout of this clone, reached without asking git: worktrees live under it.
+    try:
+        clone = ctx.common_dir.parent.resolve()
+    except OSError:
+        clone = None
 
     reasons: list[str] = []
     for argv in parsed:
-        if not _accountable(argv):
+        here, reason = _judge(root, here, clone, argv, test_command)
+        if here is None:
             return ""
-        if _program(argv) in _NAVIGATION:
-            here = _walk(here, root, argv)
-            if here is None:
-                return ""
-            continue
-        reason = _classify(root, here, argv, test_command)
-        if not reason:
-            return ""
-        if reason not in reasons:
+        if reason and reason not in reasons:
             reasons.append(reason)
-    return "\n".join(reasons)
+    # A line that is ONLY navigation vouched for nothing, because navigation contributes no
+    # reason — so `cd <my own worktree>`, `pwd` and `true` all went to the classifier, and
+    # the founder was asked to authorise a session walking back into the tree this gate had
+    # ordered it into (#123).
+    return "\n".join(reasons) if reasons else MOVE
+
+
+def _judge(root: Path, here: Path, clone: Path | None, argv: list[str],
+           test_command: list[str]) -> tuple:
+    """One segment: where the next one runs, and why this one needs no permission.
+
+    `(None, "")` ends the vouch for the whole line — one unqualified segment takes the
+    line with it, because `allow_tool` approves the line and there is no half of it to
+    approve.
+    """
+    if not _accountable(argv):
+        return None, ""
+    if _program(argv) in _NAVIGATION:
+        return _walk(here, root, argv, clone), ""
+    reason = _classify(root, here, argv, test_command)
+    return (here, reason) if reason else (None, "")
 
 
 def _classify(root: Path, here: Path, argv: list[str], test_command: list[str]) -> str:
@@ -493,6 +525,7 @@ def surface(ctx: GitContext, test_command: list[str]) -> list[str]:
         "in this session's own tree",
         "opening a pull request, and merging one this gate has just found no blockers for",
         "this plugin's own commands, which are what its refusals tell you to run",
+        "moving around inside this repository: cd, pwd, and doing nothing at all",
         "each segment of a compound command judged alone; one unvouched segment ends it",
         "not: the network, production, git push, credentials, anything outside this tree",
     ]
