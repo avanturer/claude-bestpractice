@@ -1,5 +1,51 @@
 # Changelog
 
+## v1.21.0
+
+Compaction stops losing the thread, the last worktrees that still prompt are moved, and
+this plugin can finally see what auto mode refused.
+
+### What compaction destroys is handed back
+
+The checkpoint has been written on every compaction since the first release and never read
+— which is the exact pattern `provenance` opens by naming as how memory features fail:
+capture something on every checkpoint and never look at it again. This plugin was doing it
+to itself, while compaction is the largest destroyer of in-context state there is.
+
+`SessionStart` with `source: compact` now hands the checkpoint back: what was asked, what
+was underway, and which files had moved, written at the time rather than summarised
+afterwards. It fires on compaction and nowhere else, so the always-on budget pays nothing
+for it — which is why it can afford to be generous when it does fire.
+
+Nothing here asks the model to prepare for a compaction. Preparation happens at write time,
+by the ledger and the attempt log; this is the restore, and it is a hook rather than a
+request.
+
+### The last trees that still prompt are moved
+
+`EnterWorktree` prompts on any path outside `.claude/worktrees/`, unconditionally, before
+permissions are consulted. v1.14.0 changed where new trees are made and left the existing
+ones exactly where they were — so every entry into a tree provisioned before that release
+still asked, and would have forever.
+
+`0005-trees-into-the-no-prompt-zone` moves them with `git worktree move`, which carries the
+branch and any uncommitted work across; verified against a dirty tree. Without `--force`,
+so a locked tree or one with submodules is left alone rather than broken, and the registry
+is re-pointed or the next refusal would send a session to a path that no longer exists.
+
+### Auto mode's refusals are visible
+
+`PermissionDenied` fires when auto mode denies a tool call. Until it existed, this plugin
+decided one half of the permission question and could not see the other half at all — every
+"it asked me again" arrived as a screenshot, and eight worktree rules sat in
+`permissions.allow` with six of them inert and nobody able to say which.
+
+Recorded and reported, never overturned. `retry: true` is available on this event and is
+deliberately unused: a call this gate was willing to vouch for never reaches the classifier,
+because `allow_tool` ends the pipeline — so a denial arriving here is one the plugin did not
+approve, and reversing it would be the gate approving by the back door what it declined at
+the front. Credentials in the denied command are scrubbed before anything is written.
+
 ## v1.20.0
 
 The tool-call ceiling is off, and it is taken back out of repositories that kept it.

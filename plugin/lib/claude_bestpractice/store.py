@@ -57,6 +57,28 @@ def tier_a(ctx: GitContext, *parts: str) -> Path:
 _VISIBILITY_PROBE = ("plan", "next", ".visibility-probe")
 
 
+def newest_checkpoint(ctx: GitContext, session_id: str) -> str:
+    """The last thing written before this session's context was compacted, or "".
+
+    The checkpoint was written on every compaction and never read back — the exact pattern
+    `provenance` opens by naming as the way memory features fail: capture something on
+    every checkpoint and never look at it again. Compaction is the largest destroyer of
+    in-context state, so the half that matters is the restore.
+    """
+    directory = tier_a(ctx, "checkpoints")
+    try:
+        found = sorted(directory.glob("*.md"))
+    except OSError:
+        return ""
+    mine = [p for p in found if session_id and session_id[:8] in p.name] or found
+    if not mine:
+        return ""
+    try:
+        return mine[-1].read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
 def hidden_from_git(ctx: GitContext) -> str:
     """Where Tier A is being hidden from git, verbatim, or "" when git can see it.
 

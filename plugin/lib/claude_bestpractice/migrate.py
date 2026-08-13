@@ -28,6 +28,7 @@ command.
 from __future__ import annotations
 
 import re
+import subprocess
 import time
 from pathlib import Path, PurePosixPath
 
@@ -212,6 +213,58 @@ def _absorb_scratch_todos(ctx: GitContext) -> str:
     return "; ".join(adopted)
 
 
+def _move_trees_into_the_no_prompt_zone(ctx: GitContext) -> str:
+    """Trees this plugin made beside the repository, moved to where entering never asks.
+
+    `EnterWorktree` prompts for approval on any path outside `.claude/worktrees/`,
+    unconditionally, before permissions are consulted — so every tree provisioned before
+    v1.14.0 asks the founder for authorisation on every entry, forever. Changing where new
+    ones are made left the existing eight exactly as they were.
+
+    `git worktree move` and not a delete-and-recreate: it carries the branch and the
+    uncommitted work with it, verified against a dirty tree. Without `--force`, so a locked
+    tree or one with submodules is left alone rather than broken.
+    """
+    from . import worktree
+
+    home = worktree.home_of(ctx)
+    moved = []
+    try:
+        records = sorted(store.tier_b(ctx, "worktrees").glob("*.json"))
+    except OSError:
+        return ""
+    for record in records:
+        body = store.read_json(record, default={}) or {}
+        current = Path(str(body.get("path") or ""))
+        if not body.get("provisioned_by_plugin") or not current.is_dir():
+            continue
+        # One guard, covering both cases: a tree already under the home resolves to itself,
+        # and a sibling whose name is taken is left where it is rather than colliding.
+        # Belt over braces, and said so rather than dressed up as a rule — `git worktree
+        # move` refuses a self-move on its own, so no test can tell this line from its
+        # absence. It saves a pointless subprocess, which is the honest claim for it. The
+        # safety here is git's refusal, exactly as in the reaper.
+        target = home / current.name
+        if target.exists():
+            continue
+        worktree.hide(ctx)
+        home.mkdir(parents=True, exist_ok=True)
+        done = subprocess.run(
+            ["git", "worktree", "move", str(current), str(target)],
+            cwd=str(ctx.worktree_root), capture_output=True,
+            encoding="utf-8", errors="surrogateescape", timeout=120,
+        )
+        if done.returncode != 0:
+            continue
+        body["path"] = str(target)
+        store.write_json(record, body)
+        moved.append(target.name)
+    if not moved:
+        return ""
+    return (f"{len(moved)} worktree(s) moved under .claude/worktrees/, where entering them "
+            "no longer asks for approval")
+
+
 def _lift_the_tool_call_ceiling(ctx: GitContext) -> str:
     """The ceiling this plugin invented, taken back out of repositories that kept it.
 
@@ -240,6 +293,7 @@ _REPAIRS = {
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
     "0003-absorb-scratch-todos": (1, _absorb_scratch_todos),
     "0004-lift-the-tool-call-ceiling": (1, _lift_the_tool_call_ceiling),
+    "0005-trees-into-the-no-prompt-zone": (1, _move_trees_into_the_no_prompt_zone),
 }
 
 

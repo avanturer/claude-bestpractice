@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""PermissionDenied: record what auto mode refused, so a prompt is never a mystery.
+
+This plugin decides one half of the permission question and the classifier decides the
+other, and until this event existed the plugin could not see the other half at all. Every
+report of "it asked me again" arrived as a screenshot, because nothing on this side knew a
+denial had happened — which is how eight worktree rules sat in `permissions.allow` with
+six of them inert and nobody able to say which.
+
+Records only. `retry: true` is available here and is deliberately not used: a call this
+plugin was willing to vouch for never reaches the classifier, because `allow_tool` ends
+the pipeline. So a denial arriving here is one the plugin did NOT approve, and overturning
+it would be the gate approving by the back door what it declined at the front.
+
+Fails open, and never blocks: the denial has already happened, and the exit code is
+documented as ignored.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from claude_bestpractice import hookio, redact, store  # noqa: E402
+
+DENIALS = "auto-mode-denials.json"
+
+# Enough to see a pattern, few enough that the file cannot grow without bound.
+KEEP = 20
+
+
+def main() -> None:
+    event = hookio.read_event()
+    ctx = hookio.repo(event.cwd or os.getcwd())
+
+    tool = event.tool_name or "unknown"
+    detail = str((event.tool_input or {}).get("command") or "")
+    if not detail:
+        detail = str((event.tool_input or {}).get("file_path") or "")
+
+    path = store.tier_b(ctx, DENIALS)
+    kept = store.read_json(path, default=[])
+    if not isinstance(kept, list):
+        kept = []
+    kept.append({
+        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "tool": tool,
+        "detail": redact.scrub(detail)[:160],
+        "session_id": event.session_id,
+    })
+    store.write_json(path, kept[-KEEP:])
+    hookio.emit_silent()
+
+
+if __name__ == "__main__":
+    hookio.guard(main, fail_closed=False)

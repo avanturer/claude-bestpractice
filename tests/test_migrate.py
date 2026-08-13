@@ -8,7 +8,7 @@ import sys
 import contextlib
 import unittest
 
-from helpers import BIN, RepoCase
+from helpers import BIN, RepoCase, git
 
 from claude_bestpractice import migrate, plan, store
 
@@ -231,6 +231,64 @@ def only_repair(name: str, revision: int, step):
     finally:
         migrate._REPAIRS.clear()
         migrate._REPAIRS.update(original)
+
+
+class TestOldTreesMoveWhereEnteringNeverAsks(RepoCase):
+    """`EnterWorktree` prompts on any path outside `.claude/worktrees/`, unconditionally,
+    before permissions are consulted. v1.14.0 changed where NEW trees are made and left the
+    existing ones exactly where they were, so every entry into them still asked (#111)."""
+
+    def legacy(self, name: str = "legacy"):
+        from claude_bestpractice import worktree
+
+        sibling = self.repo.parent / f"{self.repo.name}-{name}"
+        git(["worktree", "add", "-q", str(sibling), "-b", f"feat/{name}"], self.repo)
+        worktree.record(self.ctx(), name, str(sibling), f"feat/{name}", True, "old-session")
+        return sibling
+
+    def home(self):
+        return self.repo / ".claude" / "worktrees"
+
+    def test_a_sibling_tree_is_moved_into_the_no_prompt_zone(self):
+        sibling = self.legacy()
+        migrate.repair(self.ctx())
+        self.assertFalse(sibling.exists())
+        self.assertTrue((self.home() / sibling.name).is_dir())
+
+    def test_uncommitted_work_travels_with_it(self):
+        """`git worktree move`, not delete-and-recreate. Verified against a dirty tree."""
+        sibling = self.legacy()
+        (sibling / "wip.py").write_text("unfinished = True\n", encoding="utf-8")
+        migrate.repair(self.ctx())
+        moved = self.home() / sibling.name
+        self.assertEqual("unfinished = True\n", (moved / "wip.py").read_text(encoding="utf-8"))
+
+    def test_the_branch_survives(self):
+        sibling = self.legacy()
+        migrate.repair(self.ctx())
+        branches = git(["branch", "--format=%(refname:short)"], self.repo).split()
+        self.assertIn("feat/legacy", branches)
+
+    def test_the_registry_points_at_the_new_place(self):
+        """Or the next refusal sends the session back to a path that no longer exists."""
+        from claude_bestpractice import worktree
+
+        self.legacy()
+        migrate.repair(self.ctx())
+        found = worktree.mine(self.ctx(), "old-session")
+        self.assertIsNotNone(found)
+        self.assertTrue(str(found).startswith(str(self.home())), found)
+
+    def test_a_tree_already_in_the_right_place_is_not_reported_as_moved(self):
+        """Asserting only that it survives proves nothing — moving it onto itself would
+        pass that too. What must be true is that the repair had nothing to say."""
+        from claude_bestpractice import hookio, worktree
+
+        made = worktree.provision(self.ctx(), "a current task",
+                                  hookio.compose_session_id("s1", str(self.repo)))
+        changed = migrate.repair(self.ctx())
+        self.assertTrue(made.is_dir())
+        self.assertEqual([], [line for line in changed if "no-prompt-zone" in line])
 
 
 class TestTheCeilingIsTakenBackOutOnUpgrade(RepoCase):

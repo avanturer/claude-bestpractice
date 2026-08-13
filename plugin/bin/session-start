@@ -177,6 +177,62 @@ def _swept_line(removed: list) -> str:
     )
 
 
+# What a restored checkpoint may cost. Compaction has just freed the whole window, so this
+# is the cheapest moment in a session to spend a little — and it is spent nowhere else:
+# every other session start returns nothing from here.
+MAX_RESTORED = 2_400
+
+
+def _restored_line(ctx: GitContext, event) -> str:
+    """After a compaction, hand back what the window just destroyed.
+
+    The checkpoint was written on every compaction since the first release and never read.
+    That is the pattern `provenance` opens by naming as how memory features fail — capture
+    on every checkpoint, never look again — and this plugin was doing it to itself.
+
+    Only on `compact`. A resume did not lose anything, and a startup has nothing to lose,
+    so this costs the always-on budget nothing at all.
+    """
+    if str(event.raw.get("source") or "") != "compact":
+        return ""
+    text = store.newest_checkpoint(ctx, event.session_id)
+    if not text:
+        return ""
+    body = text.split("---", 2)[-1].strip()
+    if len(body) > MAX_RESTORED:
+        body = body[:MAX_RESTORED] + "\n[…truncated; the whole checkpoint is on disk]"
+    return (
+        "\n\nRESTORED AFTER COMPACTION — this is what the window held before it was "
+        "compacted, written at the time by this plugin rather than summarised now. Treat it "
+        "as the record of what was asked and what was underway, and keep working from it:\n"
+        + body
+    )
+
+
+def _denied_line(ctx: GitContext) -> str:
+    """What auto mode refused, so the next fix can be aimed rather than guessed.
+
+    This plugin decides one half of the permission question and the classifier decides the
+    other, and until the `PermissionDenied` event existed nothing here could see the other
+    half. Every "it asked me again" arrived as a screenshot.
+
+    Empty in a repository where nothing has been denied, which is the steady state once
+    the vouch covers the work.
+    """
+    denials = store.read_json(store.tier_b(ctx, "auto-mode-denials.json"), default=[])
+    if not isinstance(denials, list) or not denials:
+        return ""
+    recent = denials[-3:]
+    shown = "; ".join(f"{d.get('tool', '?')} {str(d.get('detail') or '')[:40]}".strip()
+                      for d in recent)
+    return (
+        f"\nAUTO MODE REFUSED {len(denials)} call(s) here, most recently: {shown}. "
+        "This gate did not vouch for those, so the classifier decided. If one of them is "
+        "ordinary work in this repository, say so — the answer is a narrower rule, never a "
+        "broader one."
+    )
+
+
 def _stranded_line(ctx: GitContext) -> str:
     """Trees nobody is in that the sweep cannot clear, because they hold work.
 
@@ -339,6 +395,8 @@ def main() -> None:
     body += _armed_line(ctx)
     body += _swept_line(swept)
     body += _stranded_line(ctx)
+    body += _denied_line(ctx)
+    body += _restored_line(ctx, event)
     body += _knowledge_line(ctx)
     body += _stale_rules_line(ctx)
     body += _hidden_line(ctx)
