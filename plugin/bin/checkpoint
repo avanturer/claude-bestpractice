@@ -76,6 +76,106 @@ def read_user_turns(transcript_path: str) -> list[str]:
     return turns
 
 
+DEMANDED = "compaction-notes-demanded.json"
+
+
+def _demand_the_notes_once(ctx, event, rec, changed) -> None:
+    """Block the compaction once, so what only this window knows gets written down first.
+
+    Everything else in this file is a flush: it copies what is already on disk. The gap it
+    cannot close is the substance that never left the conversation — the finding reasoned
+    out and never filed, the approach abandoned and never recorded. After compaction the
+    model is nearly new, and that material is simply gone.
+
+    `PreCompact` is the one event that can block, and this is the one thing worth blocking
+    for. It replaces the founder having to say "prepare for the compaction" by hand, which
+    is what they were doing — at the right moment, with the window still holding the
+    context, and without them present.
+
+    ONCE per session, and marked BEFORE the block is raised: a session that ignores this,
+    crashes, or hits it again on the next compaction must not meet it twice. One
+    unignorable interruption is the whole budget. And only when work actually happened —
+    a session that changed nothing has nothing to write down.
+    """
+    if not changed:
+        return
+    path = store.tier_b(ctx, DEMANDED)
+    seen = store.read_json(path, default=[])
+    if not isinstance(seen, list):
+        seen = []
+    if event.session_id in seen:
+        return
+    store.write_json(path, (seen + [event.session_id])[-40:])
+
+    task = ""
+    if rec and rec.task_statement:
+        task = f"\nThis session was asked: {rec.task_statement[:200]}\n"
+    hookio.block(
+        "claude-bestpractice: this window is about to be compacted, and after it you will be "
+        "nearly new. What is on disk survives; what is only in this conversation does not.\n"
+        f"{task}"
+        "Write down now, before anything else — this is the last moment the material still "
+        "exists:\n"
+        "  - what you have LEARNED that is not in the code yet: update the body of your "
+        "task with `claude-bp-plan add`/`claim` or edit the task file directly.\n"
+        "  - what you TRIED and abandoned, and why: `claude-bp-attempt record` — an approach "
+        "ruled out and not written down is one the next window will try again.\n"
+        "  - anything decided that outlives this task: `claude-bp-decide`.\n"
+        "Then let the compaction proceed. This will not be raised again in this session, so "
+        "if you skip it the material is gone."
+    )
+
+
+def _carried(ctx, rec) -> list:
+    """The goal, the plan, and what has already been ruled out.
+
+    A restored window needs the shape of the work, not only the last few turns: what this
+    session is for, what is in flight beside it, and which approaches are already dead. All
+    three are on disk before this hook runs — the ledger, the board and the attempt log —
+    so carrying them into the checkpoint is a read and a join.
+    """
+    from claude_bestpractice import attempts, board, plan
+
+    out = ["", "## The work this window was doing", ""]
+    try:
+        mine = [t for t in plan.load_all(ctx, plan.DOING)
+                if not rec or t.owner == rec.session_id]
+        others = [t for t in plan.load_all(ctx, plan.DOING) if t not in mine]
+        for task in mine:
+            out.append(f"- CLAIMED BY THIS SESSION: {task.id} {task.title}")
+            if task.body:
+                out.append(f"  {task.body[:400]}")
+            if task.paths:
+                out.append(f"  paths: {', '.join(task.paths[:10])}")
+        for task in plan.load_all(ctx, plan.NEXT)[:6]:
+            out.append(f"- queued: {task.id} {task.title}")
+        for task in others:
+            out.append(f"- another session: {task.id} {task.title}")
+    except Exception:  # noqa: BLE001 - a checkpoint that dies saves nothing
+        out.append("- (the ledger could not be read)")
+
+    out += ["", "## Already ruled out — do not try these again", ""]
+    try:
+        tried = attempts.load_all(ctx)[-8:]
+        # `list.extend` returns None, so `extend(...) or append(...)` always appends — the
+        # "(none recorded)" line printed underneath a real attempt on the first run.
+        out.extend(f"- {a.title}: {a.why[:200]}" for a in tried)
+        if not tried:
+            out.append("- (none recorded)")
+    except Exception:  # noqa: BLE001
+        out.append("- (the attempt log could not be read)")
+
+    out += ["", "## Open items", ""]
+    try:
+        items = board.open_items(ctx)[:8]
+        out.extend(f"- {str(i.get('text', ''))[:200]}" for i in items)
+        if not items:
+            out.append("- (none)")
+    except Exception:  # noqa: BLE001
+        out.append("- (the board could not be read)")
+    return out
+
+
 def main() -> None:
     event = hookio.read_event()
     ctx = hookio.repo(event.cwd or os.getcwd())
@@ -124,11 +224,17 @@ def main() -> None:
     else:
         lines.append("- (none)")
 
+    # Everything durable this window was working from, gathered so the restore is one read
+    # rather than a scavenger hunt. All of it already exists on disk — this is a snapshot,
+    # not a summary, and still costs no model call.
+    lines.extend(_carried(ctx, rec))
+
     stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
     name = f"{stamp}-{(event.session_id or 'anon')[:8]}.md"
     path = store.tier_a(ctx, "checkpoints", name)
     store.atomic_write(path, "\n".join(lines) + "\n", mode=0o644)
 
+    _demand_the_notes_once(ctx, event, rec, changed)
     hookio.emit_silent()
 
 

@@ -347,12 +347,21 @@ class TestMemoryStaysHonest(Scenario):
         proc = self.hook(
             "checkpoint", session_id="s1", hook_event_name="PreCompact", trigger="auto"
         )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # Exit 2: a session that changed files is stopped once, so what only this window
+        # knows gets written down before it collapses. The flush happens either way, which
+        # is what the rest of this test is about — the block is on top of it, never instead.
+        self.assertEqual(proc.returncode, 2, proc.stdout)
         saved = list((self.repo / ".claude" / "claude-bestpractice" / "checkpoints").glob("*.md"))
         self.assertEqual(len(saved), 1)
         text = saved[0].read_text()
         self.assertIn("src/billing.js @ ", text)
         self.assertIn("baseline_commit:", text)
+
+        # And the next compaction is not stopped: one interruption is the whole budget.
+        again = self.hook(
+            "checkpoint", session_id="s1", hook_event_name="PreCompact", trigger="auto"
+        )
+        self.assertEqual(again.returncode, 0, again.stderr)
 
     def test_reindex_rebuilds_everything_derived(self):
         """Tier B must always be safe to delete, and that path must be exercised."""
