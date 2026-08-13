@@ -233,6 +233,39 @@ def only_repair(name: str, revision: int, step):
         migrate._REPAIRS.update(original)
 
 
+class TestTheCeilingIsTakenBackOutOnUpgrade(RepoCase):
+    """`max_tool_calls` defaulted to 2000 and `config.save` writes every key, so the number
+    is on disk in every repository that ever saved a config. A fix that only changed the
+    default would leave all of them blocked, and the founder upgrades on top of what was
+    working."""
+
+    def configured(self, value):
+        path = store.tier_a(self.ctx(), "config.json")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"max_tool_calls": value}), encoding="utf-8")
+        return path
+
+    def value(self, path):
+        return json.loads(path.read_text(encoding="utf-8"))["max_tool_calls"]
+
+    def test_the_number_this_plugin_chose_is_lifted(self):
+        path = self.configured(2000)
+        migrate.repair(self.ctx())
+        self.assertEqual(0, self.value(path))
+
+    def test_a_number_the_founder_chose_is_their_word_and_is_left_alone(self):
+        path = self.configured(5000)
+        migrate.repair(self.ctx())
+        self.assertEqual(5000, self.value(path))
+
+    def test_a_config_without_the_key_does_not_gain_one(self):
+        path = store.tier_a(self.ctx(), "config.json")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"require_worktree": False}), encoding="utf-8")
+        migrate.repair(self.ctx())
+        self.assertNotIn("max_tool_calls", json.loads(path.read_text(encoding="utf-8")))
+
+
 class TestAnUpgradeReconcilesRatherThanTicksOff(RepoCase):
     """The founder upgrades on top of what was working, several versions at a time. A
     repair recorded as done under code that has since changed is exactly the case a

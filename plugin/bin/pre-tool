@@ -470,7 +470,7 @@ def main() -> None:
     # not a ceiling, it is the end of the session — and the message below names that
     # command, so refusing it would be this gate advertising a door it has just locked
     # (the shape of #108, in a place where the founder may not be awake to open it).
-    over_ceiling = rec.tool_calls >= cfg.max_tool_calls
+    over_ceiling = cfg.max_tool_calls > 0 and rec.tool_calls >= cfg.max_tool_calls
     escaping = event.tool_name == "Bash" and vouch.own_command(str(ti.get("command", "")))
     if over_ceiling and not escaping:
         hookio.deny_tool(

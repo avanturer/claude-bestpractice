@@ -64,7 +64,16 @@ class Config:
     loop_detect: bool = True
     leases_enabled: bool = True
     lease_ttl_seconds: float = 1800.0
-    max_tool_calls: int = 2_000
+    # Off. A ceiling on tool calls catches DURATION, and a runaway is a SHAPE — the two
+    # detectors that read shape, `max_repeat_signature` and `loop_detect`, are what
+    # actually stop one. By count alone an eleven-hour measuring session is indistinguishable
+    # from a loop, so the ceiling only ever fired on the wrong one, and when it fired it
+    # refused everything including the read that would have shown the result.
+    #
+    # Kept as a key rather than deleted: somebody may want a ceiling, and a number they
+    # chose is a different thing from a number this plugin invented. Any value above zero
+    # enforces again.
+    max_tool_calls: int = 0
     max_repeat_signature: int = 3
     require_worktree: bool = True
     # Hours a claimed task may sit untouched before it goes back to the queue. The board's
