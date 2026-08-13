@@ -1,5 +1,39 @@
 # Changelog
 
+## v1.22.0
+
+Nobody has to say "prepare for the compaction" any more.
+
+v1.21.0 built the restore: what was captured is handed back afterwards. It left the half
+that decides whether anything WAS captured — substance that never left the conversation
+cannot be restored by anything, because nothing wrote it down.
+
+### The compaction is blocked once, for the notes
+
+`PreCompact` is the one event that can block, and this is the one thing worth blocking for.
+A session that has actually changed files is stopped exactly once, at the moment the window
+still holds the material, and told to write down the three things a restored window cannot
+reconstruct: what it has learned that is not in the code yet, what it tried and abandoned
+and why, and anything decided that outlives the task. Each names the command that files it.
+
+Once per session, marked before the block is raised, so a session that ignores it, crashes,
+or meets the next compaction is never stopped again — one unignorable interruption is the
+whole budget. A session that changed nothing is never stopped at all. The checkpoint is
+written either way: the block is on top of the flush, never instead of it.
+
+### The checkpoint carries the shape of the work, not just the last few turns
+
+It now snapshots the claimed task with its body and paths, what is queued beside it, what
+other sessions hold, the approaches already ruled out, and the open items. All of it is on
+disk before the hook runs, so this is a read and a join — still no model call, still
+extractive, as the file has promised since it was written.
+
+So a restored window opens with the goal, the plan, the findings and the dead ends, rather
+than with a summary of the last few messages.
+
+Found while testing it: `list.extend` returns None, so `extend(...) or append(...)` always
+appends, and "(none recorded)" printed underneath a real attempt on the very first run.
+
 ## v1.21.0
 
 Compaction stops losing the thread, the last worktrees that still prompt are moved, and

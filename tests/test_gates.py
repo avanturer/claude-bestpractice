@@ -540,9 +540,86 @@ class TestWhatCompactionDestroysIsHandedBack(GateCase):
                                            "hook_event_name": "SessionStart", "source": "startup"})
         self.assertNotIn("RESTORED AFTER COMPACTION", self.context(proc))
 
+    def test_the_goal_the_plan_and_the_dead_ends_all_come_back(self):
+        """A restored window needs the shape of the work, not the last few turns: what this
+        session is for, what it learned, and which approaches are already dead."""
+        from claude_bestpractice import attempts, hookio, plan
+
+        self.start()
+        ctx = self.ctx()
+        task = plan.add(ctx, "довести пайплайн дообучения до конца",
+                        body="LoRA r=16 лучше r=8; данные до 2024 шумные",
+                        paths=["train/pipeline.py"])
+        plan.claim(ctx, task.id, sid(self.repo, "s1"), "feat/pipeline")
+        attempts.record(ctx, "полное дообучение без LoRA", "не влезает в 80GB, OOM", ["train/pipeline.py"])
+        self.write("train/pipeline.py", "run = True\n")
+        self.gate("checkpoint", {"session_id": "s1", "hook_event_name": "PreCompact",
+                                 "trigger": "auto", "cwd": str(self.repo)})
+
+        said = self.context(self.compacted())
+        self.assertIn("довести пайплайн", said)
+        self.assertIn("LoRA r=16", said)
+        self.assertIn("не влезает в 80GB", said)
+
+    def test_an_empty_ledger_does_not_claim_there_is_nothing_while_showing_something(self):
+        """`list.extend` returns None, so `extend(...) or append(...)` always appends —
+        "(none recorded)" printed underneath a real attempt on the first run."""
+        from claude_bestpractice import attempts
+
+        self.start()
+        attempts.record(self.ctx(), "an approach", "why it failed", ["a.py"])
+        self.write("a.py", "x = 1\n")
+        self.gate("checkpoint", {"session_id": "s1", "hook_event_name": "PreCompact",
+                                 "trigger": "auto", "cwd": str(self.repo)})
+        said = self.context(self.compacted())
+        ruled_out = said.split("Already ruled out")[1].split("##")[0]
+        self.assertIn("an approach", ruled_out)
+        self.assertNotIn("(none recorded)", ruled_out)
+
     def test_a_compaction_with_nothing_captured_says_nothing(self):
         self.start()
         self.assertNotIn("RESTORED AFTER COMPACTION", self.context(self.compacted()))
+
+
+class TestTheCompactionIsBlockedOnceForTheNotes(GateCase):
+    """Everything else the checkpoint does is a flush of what is already on disk. The gap
+    it cannot close is the substance that never left the conversation — the finding
+    reasoned out and never filed, the approach abandoned and never recorded. After
+    compaction the model is nearly new and that material is gone.
+
+    `PreCompact` is the one event that can block, and this is the one thing worth blocking
+    for: it replaces the founder saying "prepare for the compaction" by hand."""
+
+    def compact(self, session: str = "s1"):
+        return self.gate("checkpoint", {"session_id": session, "hook_event_name": "PreCompact",
+                                        "trigger": "auto", "cwd": str(self.repo)})
+
+    def test_a_session_that_did_work_is_stopped_once(self):
+        self.start()
+        self.write("pipeline.py", "run = True\n")
+        proc = self.compact()
+        self.assertEqual(2, proc.returncode, proc.stdout)
+        self.assertIn("claude-bp-attempt record", proc.stderr)
+
+    def test_it_is_never_raised_twice(self):
+        """A session that ignores this, crashes, or meets the next compaction must not be
+        stopped again. One unignorable interruption is the whole budget."""
+        self.start()
+        self.write("pipeline.py", "run = True\n")
+        self.assertEqual(2, self.compact().returncode)
+        self.assertEqual(0, self.compact().returncode)
+
+    def test_a_session_that_changed_nothing_is_not_stopped(self):
+        self.start()
+        self.assertEqual(0, self.compact().returncode)
+
+    def test_the_checkpoint_is_written_even_when_it_blocks(self):
+        """The block is on top of the flush, never instead of it."""
+        self.start()
+        self.write("pipeline.py", "run = True\n")
+        self.compact()
+        found = list((self.repo / ".claude" / "claude-bestpractice" / "checkpoints").iterdir())
+        self.assertTrue(found)
 
 
 class TestAutoModeDenialsAreVisible(GateCase):
