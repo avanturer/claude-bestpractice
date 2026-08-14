@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-1.23.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-1.24.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-738%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-26%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -156,6 +156,19 @@ them — instead of staying in flight forever.
 A session that goes quiet is **not** treated as dead. Reaping on silence meant a founder
 who thought for fifteen minutes came back to a session whose every gate had stopped
 enforcing, so death now requires the process to be gone or its pid recycled.
+
+The board above is injected **once**, at session start — injecting it every turn costs
+O(T²) against O(T). So four facts that cannot wait for a restart are **delivered** instead,
+into the inbox socket Claude Code binds for each session: the holder of a contended lease
+hears that somebody is blocked on it, a merge tells everyone their baseline moved, a red
+suite tells everyone before they build on the break, and whoever was waiting on a card
+hears when it lands.
+
+A hook does the delivering, so nothing here needs the model's cooperation or your
+confirmation. Notes are deduplicated on the claim, capped at two per drain, and retired
+rather than delivered once thirty minutes old — a stale note reads as current, which is
+worse than silence. Requires Claude Code 2.1.224+ on macOS or Linux; where messaging is
+unavailable the plugin is simply silent.
 
 ### A work ledger that merges
 

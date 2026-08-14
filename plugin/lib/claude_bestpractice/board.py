@@ -118,7 +118,7 @@ def add_open_item(
     """
     now = time.time()
     paths = list(subject_paths or [])
-    key = _item_key(text, branch, paths)
+    key = item_key(text, branch, paths)
     prior = _open_with_key(ctx, key)
     record = {
         "id": prior["id"] if prior else item_id,
@@ -138,7 +138,7 @@ def add_open_item(
     store.append_jsonl(store.tier_b(ctx, OPEN_ITEMS_FILE), record)
 
 
-def _item_key(text: str, branch: str, paths: list[str]) -> str:
+def item_key(text: str, branch: str, paths: list[str]) -> str:
     """What makes two sightings the same item: the claim, where, and about what."""
     payload = "\x00".join([" ".join(text.split())[:280].lower(), branch, *sorted(paths)])
     return hashlib.sha256(payload.encode("utf-8", "replace")).hexdigest()[:16]

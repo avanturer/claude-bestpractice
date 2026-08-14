@@ -107,9 +107,13 @@ def _sessions_dir(ctx: GitContext) -> Path:
     return store.ensure_dir(store.tier_b(ctx, SESSIONS_DIR))
 
 
+def safe_id(session_id: str) -> str:
+    """A session id reduced to something that can be a filename and stay one."""
+    return "".join(c if c.isalnum() or c in "-_" else "_" for c in session_id)[:120]
+
+
 def _record_path(ctx: GitContext, session_id: str) -> Path:
-    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in session_id)[:120]
-    return _sessions_dir(ctx) / f"{safe}.json"
+    return _sessions_dir(ctx) / f"{safe_id(session_id)}.json"
 
 
 def pid_alive(pid: int) -> bool:

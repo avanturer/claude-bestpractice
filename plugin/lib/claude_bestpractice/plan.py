@@ -640,7 +640,22 @@ def complete(ctx: GitContext, task_id: str) -> tuple[Task | None, str]:
     task = find(ctx, task_id)
     if task is None:
         return None, f"no task {task_id}"
-    return _move(task, DONE), ""
+    landed = _move(task, DONE)
+
+    # Whoever was waiting on this is waiting right now, in a session that will not be
+    # restarted for hours. `startable` already answers "what can begin"; nobody reads it
+    # again once they have decided they are blocked, so the answer has to travel to them.
+    from . import inbox, sessions
+
+    live = {s.session_id for s in sessions.live_sessions(ctx)}
+    for waiting in load_all(ctx):
+        if task_id in waiting.after and waiting.owner in live and not blockers(ctx, waiting):
+            inbox.post(
+                ctx, waiting.owner,
+                f"{task_id} is done — {waiting.id} is no longer blocked.",
+                sender=task_id,
+            )
+    return landed, ""
 
 
 def release(ctx: GitContext, session_id: str) -> int:

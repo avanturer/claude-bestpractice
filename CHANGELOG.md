@@ -1,5 +1,62 @@
 # Changelog
 
+## v1.24.0
+
+A running session can be told something.
+
+### The hole this closes
+
+The board is injected once, at session start — decision 0003, because injecting it every
+turn costs O(T^2) against O(T). That bought a cheap board and left one hole: a session
+already running could not be told anything new. A lease taken on the file it is editing, a
+baseline that moved under it, a suite that went red on the path it holds — all of it waited
+for a restart that an eleven-hour session never performs.
+
+Claude Code 2.1.224 and later bind a unix inbox socket per session and export its address
+and per-session token to hooks, before any hook runs. So the fact can be delivered by a
+hook: no cooperation from the model, and no prompt to the founder.
+
+### The route, and why it is indirect
+
+A session writes a note addressed to a peer into Tier B. The peer's own `pre-tool` hook
+delivers it into its own socket, with its own token, at its next tool call. Nothing handles
+another session's credentials; the message arrives in the class Claude Code calls `child`
+rather than `peer`, so no inbound dialog can hold it; and "at its next tool call" is
+precisely the moment before that session acts on what it does not yet know.
+
+Four facts, and no more — a delivered note costs the recipient exactly what a typed prompt
+costs:
+
+- the holder of a lease is told another session is blocked on it;
+- everyone is told when a branch merged and their baseline went stale;
+- everyone is told when the suite went red;
+- whoever was waiting on a card is told when it lands.
+
+Deduplicated on the claim itself, capped at two per drain, and retired rather than
+delivered once thirty minutes old: arriving late is worse than not arriving, because a
+stale note reads as current.
+
+### What is undocumented, and what is done about it
+
+The frame is not in the documentation. Claude Code prints it in its own `[uds-messaging]`
+log line, and the receiver's checks were read off the binary: a connection that does not
+authenticate is closed, a frame without a valid `type` is ignored, a `user` frame whose
+content is not a string is ignored, a line over a mebibyte drops the connection.
+
+So it is not asserted, it is used. `claude-bp-doctor` queues a note, runs the real gate
+against a real socket, and reads back the frames. A release that changes the frame turns a
+check red instead of letting the channel go quietly dead.
+
+Costs nothing standing: no always-on tokens, since a note exists only when a fact does, and
+no new hook entries, since the drain rides in the `PreToolUse` entry that was already there.
+
+### Also
+
+- `claude-bp reindex` no longer eats an undelivered note. Tier B is described as derived
+  and a queued note is not — the lease conflict that produced it happened at a moment no
+  rescan can reconstruct — so the queue is carried across a purge like the other records of
+  events.
+
 ## v1.23.1
 
 The limits line says where the live number is.

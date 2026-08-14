@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -54,7 +55,9 @@ def gate_env(home: Path | None = None) -> dict:
     return {"HOME": str(home or _HOME), "PATH": os.environ.get("PATH", "")}
 
 
-def run_gate(gate: str, event: dict, cwd: Path) -> subprocess.CompletedProcess:
+def run_gate(
+    gate: str, event: dict, cwd: Path, extra_env: dict | None = None
+) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(BIN / gate)],
         input=json.dumps(event),
@@ -62,7 +65,7 @@ def run_gate(gate: str, event: dict, cwd: Path) -> subprocess.CompletedProcess:
         text=True,
         cwd=str(cwd),
         timeout=120,
-        env=gate_env(),
+        env={**gate_env(), **(extra_env or {})},
     )
 
 
@@ -298,6 +301,98 @@ def check_loop_denied(repo: Path) -> Result:
         False,
         f"six identical calls all allowed: {(last.stdout if last else '')[:160]}",
     )
+
+
+TOLD = "a running session can be told"
+
+
+def check_a_running_session_can_be_told(repo: Path) -> Result:
+    """A fact reaches a session that is already running, without waiting for a restart.
+
+    Proved by using the channel end to end rather than by asserting it. The frame is not in
+    the documentation — Claude Code prints it in its own `[uds-messaging]` log line — so a
+    release that changes it has to turn something red here, or the board would simply go
+    quiet and nobody would find out for weeks.
+
+    No listener thread: a `SOCK_STREAM` socket that is listening accepts into the backlog,
+    so a two-hundred-byte write lands in the buffer and can be read after the gate exits.
+    """
+    from claude_bestpractice import inbox
+    from claude_bestpractice.gitctx import resolve
+
+    if not hasattr(socket, "AF_UNIX"):
+        return Result(TOLD, True, "no AF_UNIX here, and no Claude Code messaging either")
+
+    start_session(repo, "doctor-told")
+    # The COMPOSED identity — (harness id, worktree) — because that is what the gate will
+    # compose for itself and look the queue up under.
+    me = hookio.HookEvent({"session_id": "doctor-told", "cwd": str(repo)}).session_id
+    listening = Path(tempfile.mkdtemp(dir="/tmp"))
+    address = str(listening / "d.sock")
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        server.bind(address)
+        server.listen(4)
+        told = inbox.post(resolve(repo), me, "the suite is RED")
+        run_gate(
+            "pre-tool",
+            {
+                "session_id": "doctor-told",
+                "hook_event_name": "PreToolUse",
+                "cwd": str(repo),
+                "tool_name": "Edit",
+                "tool_input": {"file_path": str(repo / "told.py"), "new_string": "x = 1"},
+            },
+            repo,
+            extra_env={inbox.SOCKET_ENV: address, inbox.TOKEN_ENV: "doctor"},
+        )
+        frames = read_frames(server)
+    finally:
+        server.close()
+        shutil.rmtree(listening, ignore_errors=True)
+
+    authenticated = any(f.get("type") == "auth" for f in frames)
+    carried = any("the suite is RED" in str(f.get("message", {}).get("content", "")) for f in frames)
+    ok = told and authenticated and carried
+    return Result(
+        TOLD,
+        ok,
+        # Precisely what was proved: the gate queued it, drained it, and wrote the frame
+        # the receiver reads. The receiver itself is Claude Code's, and a check cannot
+        # stand up one of those — so this says "in the frame it reads", not "it read it".
+        "the gate delivered it, authenticated, in the frame the receiver reads"
+        if ok
+        else f"queued={told} authenticated={authenticated} carried={carried}",
+    )
+
+
+def read_frames(server) -> list[dict]:
+    """Everything waiting in the backlog, as parsed frames. Never blocks past a second."""
+    frames: list[dict] = []
+    server.settimeout(1.0)
+    while True:
+        try:
+            conn, _ = server.accept()
+        except OSError:
+            return frames
+        conn.settimeout(1.0)
+        buffered = b""
+        try:
+            while True:
+                chunk = conn.recv(65536)
+                if not chunk:
+                    break
+                buffered += chunk
+        except OSError as exc:
+            # Surfaced as a frame rather than dropped: a check that read half a message
+            # and reported "nothing arrived" would send somebody after the wrong bug.
+            buffered += json.dumps({"type": "read-error", "detail": str(exc)}).encode()
+        conn.close()
+        for line in buffered.decode("utf-8", "replace").splitlines():
+            try:
+                frames.append(json.loads(line))
+            except json.JSONDecodeError:
+                frames.append({"type": "unparseable", "raw": line})
 
 
 def check_lease_conflict_denied(repo: Path) -> Result:
@@ -1261,6 +1356,7 @@ def main() -> int:
             check_secret_write_denied,
             check_loop_denied,
             check_lease_conflict_denied,
+            check_a_running_session_can_be_told,
             check_evidence_gate_blocks,
             check_evidence_gate_accepts,
             check_ledger_demand,

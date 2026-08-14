@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import attempts, board, config, discipline, drafts, evidence, hookio, options, pullrequest, sessions, stage, store  # noqa: E402
+from claude_bestpractice import attempts, board, config, discipline, drafts, evidence, hookio, inbox, options, pullrequest, sessions, stage, store  # noqa: E402
 from claude_bestpractice.gitctx import changed_files, resolve  # noqa: E402
 
 BLOCK_COUNTER = "_consecutive_blocks"
@@ -354,6 +354,15 @@ def main() -> None:
             )
         if not verdict.ok:
             problems.append(verdict.reason)
+            # A red suite is everyone's problem: the board tells them "fix it before new
+            # work", but the board is injected once at session start, so a session already
+            # running builds on top of the break for hours without ever being told.
+            if evidence.red(ctx):
+                inbox.broadcast(
+                    ctx, rec.session_id,
+                    f"the suite is RED on {rec.branch} — someone else's turn just failed "
+                    "it. Anything you finish on top of this is finished on a break.",
+                )
         elif verdict.unverified:
             # Allowed, but never silently. The alternative to recording this is either
             # blocking a repository that has no runnable suite — which the founder
