@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import board, ci, config, hookio, knowledge, migrate, onboard, plan, policy, sessions, stage, store, upgrade, worktree  # noqa: E402
+from claude_bestpractice import board, ci, config, hookio, knowledge, limits, migrate, onboard, plan, policy, sessions, stage, store, upgrade, worktree  # noqa: E402
 from claude_bestpractice.gitctx import GitContext, resolve, stash_baseline  # noqa: E402
 
 
@@ -396,6 +396,8 @@ def main() -> None:
     body += _swept_line(swept)
     body += _stranded_line(ctx)
     body += _denied_line(ctx)
+    # Silent until a status line has run once, and silent again when the numbers go stale.
+    body += limits.line(ctx)
     body += _restored_line(ctx, event)
     body += _knowledge_line(ctx)
     body += _stale_rules_line(ctx)

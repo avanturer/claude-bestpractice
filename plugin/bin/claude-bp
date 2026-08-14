@@ -315,6 +315,36 @@ def cmd_set(ctx, key: str, value: str) -> int:
     return 0
 
 
+def cmd_statusline(_ctx, install: bool) -> int:
+    """Show, or wire in, the one route by which this session learns its own limits.
+
+    Claude Code hands the account's five-hour and weekly usage to exactly one consumer —
+    the `statusLine` command, on stdin. Hooks never see it, there is no `usage` subcommand
+    and nothing on disk holds it. So the status line is not decoration here: it is the
+    bridge, and without it the board simply says nothing.
+    """
+    from claude_bestpractice import limits
+
+    command = str(BIN / "claude-bp-statusline")
+    heading("STATUS LINE")
+    current = limits.installed()
+    if not install:
+        print(f"  configured: {current or '(none)'}")
+        print(f"  this plugin's: {command}")
+        print("  `claude-bp statusline --install` wires it in when nothing else is there")
+        return 0
+
+    ok, found = limits.install(command)
+    if not ok:
+        print(f"  a status line is already configured: {found}")
+        print("  Left alone — it is your display, not this plugin's state.")
+        print(f"  To carry the limits too, have it also run: {command}")
+        return 0
+    print(f"  installed: {found}")
+    print("  Restart Claude Code, and the board will start reporting what the account has left.")
+    return 0
+
+
 def cmd_policy(ctx, write: bool, prune: bool) -> int:
     """Keep the derivable half of the auto-mode policy current, without the founder.
 
@@ -382,6 +412,9 @@ def main() -> int:
     rules.add_argument("--apply", action="store_true", help="write it, rather than showing it")
     rules.add_argument("--prune", action="store_true",
                        help="drop this plugin's own blocks for repositories that are gone")
+    bar = sub.add_parser(
+        "statusline", help="the bridge that lets a session see the account's own limits")
+    bar.add_argument("--install", action="store_true", help="wire it in if nothing else is there")
     switch = sub.add_parser(
         "set", help="change a gate switch the founder has asked for in their own words")
     switch.add_argument("key", help="a config key, e.g. scope_drift_block")
@@ -400,6 +433,8 @@ def main() -> int:
         return cmd_adopt(ctx, args.dry_run, args.restore)
     if args.command == "set":
         return cmd_set(ctx, args.key, args.value)
+    if args.command == "statusline":
+        return cmd_statusline(ctx, args.install)
     if args.command == "policy":
         return cmd_policy(ctx, args.apply, args.prune)
     return cmd_status(ctx)
