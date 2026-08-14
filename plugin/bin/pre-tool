@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
 import re  # noqa: E402
 
-from claude_bestpractice import ci, config, evidence, gitpolicy, hookio, pullrequest, redact, sessions, shellcmd, stage, store, vouch  # noqa: E402
+from claude_bestpractice import ci, config, evidence, gitpolicy, hookio, inbox, pullrequest, redact, sessions, shellcmd, stage, store, vouch  # noqa: E402
 from claude_bestpractice.gitctx import resolve  # noqa: E402
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
@@ -405,6 +405,12 @@ def main() -> None:
         # secret scan and the leases could be disabled with `rm`.
         rec = sessions.adopt(ctx, event.session_id)
 
+    # What another session needed this one to know, delivered into this session's own
+    # inbox before the call it is about to make. The board is injected once at session
+    # start (decision 0003), so without this a running session never learns anything new
+    # — and this is the last moment before it acts on what it does not yet know.
+    inbox.drain(ctx, event.session_id)
+
     sig = signature(event)
     history = list(rec.tool_signatures.get("_history", [])) if isinstance(rec.tool_signatures.get("_history"), list) else []
     history.append(sig)
@@ -541,6 +547,15 @@ def main() -> None:
                 # and an obligation the founder has already watched be merged is worse
                 # than useless on the board.
                 pullrequest.settle(ctx, ctx.branch, pullrequest.MERGED)
+                # Every other session's baseline just went stale. They measure their diff
+                # from a commit that is no longer where the branch begins, so drift and
+                # scope both read wrong until they take the merge in.
+                inbox.broadcast(
+                    ctx, event.session_id,
+                    f"{ctx.branch} was merged. Your baseline is behind — take the base "
+                    "branch in before you finish, or your diff is measured from the "
+                    "wrong commit.",
+                )
         elif pullrequest.opens_a_pull_request(event.tool_name, command):
             # No number: a PreToolUse hook sees the request, never the response, and the
             # number only exists in the response. The branch identifies the obligation,
@@ -818,6 +833,15 @@ def main() -> None:
             if owner:
                 other = sessions.get(ctx, owner)
                 where = f" on branch {other.branch}" if other else ""
+                # The refused session learns from the denial below. The HOLDER learns
+                # nothing at all unless it is told, and it is the only one that can end
+                # the wait — by finishing with the file or letting it go.
+                inbox.post(
+                    ctx, owner,
+                    f"another session is blocked on {touched[0]} — you hold the lease. "
+                    "Finish with it or move off it.",
+                    sender=event.session_id,
+                )
                 hookio.deny_tool(
                     f"claude-bestpractice: session {owner[:8]}{where} is editing {touched[0]} right now. "
                     "Work on something else, or coordinate before touching this file — "

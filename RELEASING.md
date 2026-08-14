@@ -27,6 +27,27 @@ state leaking between tests, and sharding is what hides it. `make check` stays s
 Reach for a single module before either — `python3 -m pytest tests/test_gitpolicy.py` is
 twelve seconds, and most of a fix is answered by one file.
 
+## Proving a new test proves something
+
+A test written alongside the code it covers passes for two different reasons, and only one
+of them is worth anything. So break the behaviour on purpose and confirm the test goes red.
+
+Two ways that exercise has silently produced nothing, both found here rather than
+theorised:
+
+- **The mutation never applied.** A replacement string that does not match the source
+  leaves the file untouched, the run is green, and the green means nothing. Assert the
+  anchor appears exactly once and that the text actually changed, before running anything.
+- **The run measured the previous mutation.** CPython validates a `.pyc` against
+  `(source mtime seconds, source size)`, so two mutations written inside the same second
+  can collide there and the interpreter reuses stale bytecode. Three mutations were
+  reported as survivors this way, one of which was provably caught when run by hand. Sweep
+  `__pycache__` and run with `-B` and `PYTHONDONTWRITEBYTECODE=1`.
+
+A surviving mutation is a defect in the test, not a nuisance. Both survivors that remained
+after fixing the harness above were real: one asserted a type check using a value the check
+never reached, the other asserted tolerance that a lower layer was already providing.
+
 ## Cutting one
 
 1. Bump the version in all six places (`tools/check_shipped.py` names them and refuses a

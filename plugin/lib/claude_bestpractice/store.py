@@ -388,6 +388,14 @@ CARRIED = (
 # `failing-suite.json` is deliberately absent: the red ledger is Tier A, committed, and
 # this function never reaches it.
 
+# Same rule, one directory rather than one file. A note another session queued is an event
+# too — the lease conflict that produced it happened at a moment that rescanning cannot
+# reconstruct — and it is a directory only because a file per recipient is what keeps eight
+# sessions off one lock.
+CARRIED_DIRS = (
+    "inbox",                  # inbox.DIRNAME — facts queued for a session, not yet read
+)
+
 
 def purge_tier_b(ctx: GitContext) -> None:
     """Drop derived coordination state, keeping the records that cannot be rebuilt.
@@ -403,7 +411,20 @@ def purge_tier_b(ctx: GitContext) -> None:
         return
 
     kept = {name: (root / name).read_bytes() for name in CARRIED if (root / name).is_file()}
+    # Held BESIDE the root, not in the system temp directory: a move within one filesystem
+    # is atomic and cannot half-copy, and `/tmp` is frequently a different mount.
+    carry = root.parent / f".{root.name}.carry"
+    shutil.rmtree(carry, ignore_errors=True)
+    for name in CARRIED_DIRS:
+        if (root / name).is_dir():
+            ensure_dir(carry)
+            shutil.move(str(root / name), str(carry / name))
+
     shutil.rmtree(root)
     ensure_dir(root)
     for name, blob in kept.items():
         atomic_write(root / name, blob.decode("utf-8", "surrogateescape"))
+    for name in CARRIED_DIRS:
+        if (carry / name).is_dir():
+            shutil.move(str(carry / name), str(root / name))
+    shutil.rmtree(carry, ignore_errors=True)
