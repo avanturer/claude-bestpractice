@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.23.1
+
+The limits line says where the live number is.
+
+v1.23.0 carried the account's usage from the status line to the board. The board is injected
+once at session start — decision 0003, because re-injecting per turn costs O(T^2) against
+O(T) — while the status line rewrites its file continuously. So an eleven-hour session was
+holding an eleven-hour-old percentage, which is the length of session where the number
+matters most.
+
+The line now says so, and names the file. Reading it is a plain read inside the repository,
+which this gate already vouches for, so a session about to start something long can check
+what it actually has left rather than what it had this morning.
+
 ## v1.23.0
 
 A session can see what the account has left.
