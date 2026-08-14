@@ -97,7 +97,13 @@ def line(ctx: GitContext, now: float | None = None) -> str:
                          _window("week", kept.get("seven_day") or {}, now)) if p]
     if not parts:
         return ""
-    return "\nlimits: " + " · ".join(parts)
+    # Where the LIVE number is, because this one ages. The status line rewrites that file
+    # continuously while the session runs, but the board is injected once at session start
+    # — decision 0003, and re-injecting per turn costs O(T^2) against O(T). So an
+    # eleven-hour session is holding an eleven-hour-old percentage unless it goes and looks,
+    # and the only thing that makes looking possible is knowing where.
+    return ("\nlimits: " + " · ".join(parts)
+            + f" (as at session start; live: {store.tier_b(ctx, FILE)})")
 
 
 # `~/.claude/settings.json`, the only place a status line can be configured.

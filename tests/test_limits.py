@@ -16,7 +16,7 @@ import unittest
 
 from helpers import BIN, RepoCase
 
-from claude_bestpractice import limits
+from claude_bestpractice import limits, store
 
 
 def payload(five=23.5, week=41.2, five_in=7860, week_in=273_600, **extra):
@@ -42,6 +42,15 @@ class TestWhatTheStatusLineCarries(RepoCase):
         said = limits.line(self.ctx())
         self.assertIn("resets in 2h1", said)
         self.assertIn("resets in 3d", said)
+
+    def test_it_says_where_the_live_number_is(self):
+        """The board is injected once at session start (decision 0003), and the status line
+        rewrites the file continuously — so an eleven-hour session holds an eleven-hour-old
+        percentage unless it goes and looks. Knowing where is what makes looking possible."""
+        limits.record(self.ctx(), payload())
+        said = limits.line(self.ctx())
+        self.assertIn("as at session start", said)
+        self.assertIn(str(store.tier_b(self.ctx(), limits.FILE)), said)
 
     def test_nothing_is_said_before_a_status_line_has_ever_run(self):
         self.assertEqual("", limits.line(self.ctx()))
