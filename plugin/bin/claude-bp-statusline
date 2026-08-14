@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+"""The status line, and the one place the account's limits can be caught.
+
+Claude Code hands `rate_limits.five_hour` and `rate_limits.seven_day` to exactly one
+consumer: the `statusLine` command, on stdin. Hooks never see them. So this prints a line
+for the founder AND writes the numbers where the board can read them, which is the only
+route by which the model ever learns what it has left.
+
+Prints something useful even when nothing can be recorded — a status line that fails is a
+status line the founder turns off, and then the bridge is gone with it.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from claude_bestpractice import limits  # noqa: E402
+from claude_bestpractice.gitctx import resolve  # noqa: E402
+
+
+def _bar(used: float, width: int = 10) -> str:
+    filled = int(round(min(100.0, max(0.0, used)) / 100 * width))
+    return "█" * filled + "░" * (width - filled)
+
+
+def main() -> int:
+    try:
+        payload = json.loads(sys.stdin.read() or "{}")
+    except (ValueError, OSError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    parts = []
+    model = ((payload.get("model") or {}).get("display_name") or "").strip()
+    if model:
+        parts.append(model)
+    workspace = (payload.get("workspace") or {}).get("current_dir") or payload.get("cwd") or ""
+    if workspace:
+        parts.append(Path(workspace).name)
+    branch = (payload.get("workspace") or {}).get("git_worktree")
+    if branch:
+        parts.append(f"⌥{branch}")
+
+    window = payload.get("context_window") or {}
+    used = window.get("used_percentage")
+    if used is not None:
+        parts.append(f"ctx {_bar(float(used))} {float(used):.0f}%")
+
+    rate = payload.get("rate_limits") or {}
+    for name, key in (("5h", "five_hour"), ("wk", "seven_day")):
+        body = rate.get(key) or {}
+        if body.get("used_percentage") is not None:
+            parts.append(f"{name} {float(body['used_percentage']):.0f}%")
+
+    # The reason this file exists. Failure here must never cost the founder their status
+    # line, so it is last and it is swallowed by the guard below.
+    try:
+        limits.record(resolve(payload.get("cwd") or os.getcwd()), payload)
+    except Exception:  # noqa: BLE001 - a status line that raises is one nobody keeps
+        pass
+
+    print(" · ".join(parts) if parts else "claude-bestpractice")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except Exception:  # noqa: BLE001
+        print("claude-bestpractice")
+        raise SystemExit(0)

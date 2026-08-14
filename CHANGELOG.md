@@ -1,5 +1,46 @@
 # Changelog
 
+## v1.23.0
+
+A session can see what the account has left.
+
+### Where the number lives, and why it never reached the model
+
+Claude Code knows the five-hour and weekly usage of the account it is running under, and
+hands both to exactly one consumer: the `statusLine` command, on stdin, as
+`rate_limits.five_hour` and `rate_limits.seven_day`. Hooks never receive it. There is no
+`claude usage` subcommand. Nothing on disk holds it, and the transcript does not carry it.
+All four were checked before anything was built.
+
+That one consumer shows the numbers to the founder. The model — which is the thing about to
+start a two-hour rehearsal or a forty-agent sweep — could not see them at all.
+
+### The bridge
+
+`claude-bp-statusline` prints a status line and records what it was handed. The board reads
+it back at session start:
+
+```
+limits: 5h 24% (resets in 2h10m) · week 41% (resets in 3d3h)
+```
+
+Silent until a status line has run once, and silent again once the numbers go stale — six
+hours, which outlives the five-hour window itself, so nothing survives a reset and is
+presented as current. A stale percentage reads as live and is worse than none.
+
+Deliberately not a warning and deliberately not a throttle. What counts as "too little
+left" depends on what it is about to be spent on, and deciding to stop working is a
+spending decision that belongs to the founder. The session gets to say "there is 4% of the
+week left, this sweep will not finish" before starting, instead of dying halfway.
+
+### Installing it never takes over yours
+
+`claude-bp statusline --install` writes the key only when nothing is there. A status bar is
+the founder's own display, not state this plugin owns — the opposite of the `policy` rule,
+and the reason is that taking over somebody's status line is how a tool gets uninstalled.
+When one is already configured it is left exactly as it is, and the command prints what to
+add to carry the limits too.
+
 ## v1.22.0
 
 Nobody has to say "prepare for the compaction" any more.
