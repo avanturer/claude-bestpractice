@@ -557,7 +557,7 @@ class TestTheReaperReachesOtherWorktrees(RepoCase):
         from claude_bestpractice.gitctx import resolve
 
         ctx = self.ctx()
-        task = plan.add(ctx, "ship the thing")
+        task = plan.add(ctx, "ship the thing", done_when="stated", paths=["src/app.py"])
         plan.claim(ctx, task.id, "ghost", "feat/x")
 
         other = self.repo.parent / "sibling"

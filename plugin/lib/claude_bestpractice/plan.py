@@ -647,6 +647,30 @@ def amend(ctx: GitContext, task_id: str, note: str = "", paths: list[str] | None
     return _load(task.path, task.state), ""
 
 
+def _unplanned(task: Task) -> str:
+    """Why this card cannot be started yet, or "" when it carries a plan.
+
+    Separate from `claim` so the rule reads as one thing rather than as four branches
+    inside a function that is also about ownership and liveness.
+    """
+    fixes = {
+        "--done-when": '--done-when "<what has to become true>"',
+        "--paths": "--paths <files you expect to touch>",
+    }
+    missing = [
+        need for need, got in (("--done-when", task.done_when.strip()), ("--paths", task.paths))
+        if not got
+    ]
+    if not missing:
+        return ""
+    how = " ".join(fixes[need] for need in missing)
+    return (
+        f"task {task.id} cannot be started without a plan: {' and '.join(missing)}.\n"
+        f"  claude-bp-plan update {task.id} {how}\n"
+        "One line each is enough. The paths are what the drift gate measures against."
+    )
+
+
 def claim(ctx: GitContext, task_id: str, session_id: str, branch: str) -> tuple[Task | None, str]:
     """Take ownership. Returns (task, error). A task owned by a LIVE session is refused.
 
@@ -666,25 +690,32 @@ def claim(ctx: GitContext, task_id: str, session_id: str, branch: str) -> tuple[
         if holder and sessions.is_live(ctx, holder):
             return None, f"task {task.id} is held by live session {task.owner[:8]}"
 
+    # The plan, demanded where the plan has to exist. `pre-tool` already refuses a write
+    # that no claimed card covers, so requiring it HERE is what makes "no code without a
+    # plan" binding — and it costs the founder nothing, where the harness's own plan mode
+    # ends in an approval dialog they spent several releases removing.
+    #
+    # At `claim` and not at `add`: filing a rough card has to stay a single line, or the
+    # board stops being written to. Starting one is the moment the plan is owed.
+    if task.owner != session_id:
+        unplanned = _unplanned(task)
+        if unplanned:
+            return None, unplanned
+
     return _move(task, DOING, owner=session_id, branch=branch), ""
 
 
 def complete(ctx: GitContext, task_id: str) -> tuple[Task | None, str]:
+    """Close a card. The finish condition is demanded at `claim`, not here.
+
+    v1.26.0 demanded it at this end, which was the right rule at the wrong moment: a card
+    that reaches `doing` has been through `claim`, so by the time anything is closed the
+    condition already exists, and the check here could only ever fire for a file edited by
+    hand. Asked where the plan is owed instead — before the work, not after it.
+    """
     task = find(ctx, task_id)
     if task is None:
         return None, f"no task {task_id}"
-    if not task.done_when.strip():
-        # The one place this plugin took an assertion. Everywhere else a finish is
-        # accepted on evidence (decision 0002) — and the field's own comment already said
-        # a task with no `done_when` is closed on the model's judgement. Refused here
-        # rather than demanded at `add`, because a session knows least when it files a
-        # card and most when it is about to call the work finished.
-        return None, (
-            f"task {task.id} has no finish condition, so closing it would be your word "
-            f"rather than a check.\n"
-            f"  claude-bp-plan update {task.id} --done-when \"<what had to become true>\"\n"
-            f"Then close it. Write what a later session could verify, not what you did."
-        )
     landed = _move(task, DONE)
 
     # Whoever was waiting on this is waiting right now, in a session that will not be

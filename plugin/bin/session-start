@@ -360,11 +360,17 @@ def _hidden_line(ctx: GitContext) -> str:
     if not where:
         return ""
     source = where.split(":", 1)[0]
+    # The COUNT, because "a layer is hidden" is an abstraction and "eleven records die with
+    # this clone" is a decision. Measured from what git actually tracks rather than from
+    # what the exclude rule says, so a file committed before the rule appeared is not
+    # counted as lost — several are, and reporting them would make the number untrustworthy.
+    lost = store.ignored_tier_a(ctx)
+    cost = f"{len(lost)} record(s) not in git" if lost else "nothing lost yet"
     return (
-        f"\nGIT CANNOT SEE `{store.TIER_A_DIRNAME}/` — hidden by {where}. Parked tasks, "
-        "attempts and decisions are being written where nothing will ever commit them, so "
-        f"they die with this worktree. Fix the rule in {source} before parking anything; "
-        "the plugin does not edit it, because it did not write it."
+        f"\nGIT CANNOT SEE `{store.TIER_A_DIRNAME}/` — hidden by {where}; {cost}. Parked "
+        "tasks, attempts and decisions are being written where nothing will ever commit "
+        f"them, so they die with this clone. Fix the rule in {source}; the plugin does not "
+        "edit it, because it did not write it."
     )
 
 
@@ -428,6 +434,8 @@ def main() -> None:
     body += _restored_line(ctx, event)
     body += _knowledge_line(ctx)
     body += _stale_rules_line(ctx)
+    # Silent until the layer actually grew, and silent again once it is trimmed back.
+    body += knowledge.rules_growth(ctx)
     body += _hidden_line(ctx)
     line = _worktree_line(ctx, cfg)
     body += line

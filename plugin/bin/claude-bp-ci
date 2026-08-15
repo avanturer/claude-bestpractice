@@ -27,7 +27,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Choose where the checks run.")
     parser.add_argument(
         "command", nargs="?", default="status",
-        choices=["status", "local", "github", "off", "record-green"],
+        choices=["status", "local", "github", "off", "record-green", "green-covers-tree"],
     )
     parser.add_argument(
         "ran", nargs="?", default="", help="with `record-green`, the command that passed"
@@ -50,6 +50,14 @@ def main() -> int:
 
         evidence.record_green(ctx, args.ran.split() or ["pre-push"])
         return 0
+
+    if args.command == "green-covers-tree":
+        # Exit 0 only when the suite was observed green on EXACTLY this tree. The hook
+        # skips on 0 and runs on anything else, so every uncertain answer — no record, a
+        # dirty tree, an unreadable stamp — costs a run rather than granting a pass.
+        from claude_bestpractice import evidence
+
+        return 0 if evidence.green_covers_tree(ctx) else 1
 
     if args.print_test_command:
         # The hook needs the SAME command the Stop gate resolves, or the two disagree

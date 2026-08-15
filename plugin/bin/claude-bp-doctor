@@ -459,7 +459,8 @@ def _claim_a_task(repo: Path, session_id: str, paths: str) -> None:
     from claude_bestpractice.gitctx import resolve
 
     ctx = resolve(repo)
-    task = plan.add(ctx, "doctor scenario", paths=[p for p in paths.split(",") if p])
+    task = plan.add(ctx, "doctor scenario", done_when="the suite passes",
+                    paths=[p for p in paths.split(",") if p])
     # Composed, because that is the identity every gate reads — the raw id owns nothing.
     plan.claim(ctx, task.id, hookio.compose_session_id(session_id, str(repo)), ctx.branch)
 
@@ -1126,7 +1127,10 @@ def check_plan_ledger(repo: Path) -> Result:
     from claude_bestpractice.gitctx import resolve
 
     ctx = resolve(repo)
-    task = plan.add(ctx, "doctor task")
+    # A card carries its plan, because `claim` refuses one without: the finish
+    # condition and the files, stated before the work rather than after it.
+    task = plan.add(ctx, "doctor task", done_when="the ledger moves it",
+                    paths=["src/app.py"])
     if task.state != plan.NEXT:
         return Result("plan ledger claims and reclaims", False, "task did not land in next")
 

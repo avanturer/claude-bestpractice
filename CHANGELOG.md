@@ -1,5 +1,84 @@
 # Changelog
 
+## v1.27.0
+
+No code without a plan, a shell edit is no longer invisible to the board, and three
+records of memory stop being lost in silence.
+
+### A card is not started without a plan
+
+The harness has a plan mode, and it cannot be used for this: it ends by asking whether the
+plan is acceptable, and this plugin exists for a founder who spent several releases
+removing exactly that question. There is no setting that auto-approves a plan.
+
+So the plan is demanded in this plugin's own currency, where nothing has to be asked.
+`pre-tool` already refuses a write no claimed card covers; `claim` now refuses a card that
+does not say what finishing means and which files it expects to touch. Filing a card stays
+a single line — a rough note has to stay cheap or the board stops being written to — and
+starting one is the moment the plan is owed.
+
+The paths are not bookkeeping: the scope-drift gate measures a session's actual writes
+against exactly that list, and most cards named none, so most sessions were measured
+against nothing.
+
+**v1.26.0's rule at `done` is removed as superseded.** A card in `doing` has been through
+`claim`, so the finish condition always exists by the time anything is closed, and the
+check there could only ever fire for a file edited by hand. Right rule, wrong end.
+
+### The board is demanded before a shell edit too (#141)
+
+The ledger gate only ever looked at `Write` and `Edit`, while the leases and the secret
+scan in the same file already resolved what a `sed -i` or a heredoc lands on. So a session
+editing through the shell wrote for a whole turn with the board saying those files were
+free — which is the one window the board exists to cover — and heard about it at the Stop
+gate, when eighteen files had changed and there was nothing left to protect.
+
+The reported case also blamed the demand being conditional on a captured task statement.
+That was tried and taken back out: `prompt-capture` sets the statement from any first
+prompt that is not pasted output, so it is set in substantially every real session, and
+removing the condition changed behaviour for every session on the strength of a case that
+could not be reproduced here. The narrow gap left open — a session whose first prompt was
+pasted output — still gets the Stop demand.
+
+### The instruction layer is watched for a ratchet
+
+An instruction layer is appended to after every bug and almost never read back. Its
+**size** reads as acceptable for months while it doubles, because there is no moment at
+which it is obviously too big.
+
+The size is now recorded with a date, and the board says so when the layer grew notably
+inside a week. Reported, never acted on: which standing instruction has outlived its
+reason is a judgement about the founder's own words, and this plugin does not hold the pen
+on those (decision 0007). It holds the pen on the fact that they grew. A layer trimmed
+back stops being reported rather than being held against anyone.
+
+### A hidden ledger says what it is costing
+
+The board reported that git could not see Tier A and never said what that costs. "A layer
+is hidden" is an abstraction; "two records die with this clone" is a decision. It now
+counts them — asked of git rather than of the rule, so a record committed before the rule
+appeared is not counted as lost.
+
+Found by looking: this repository was losing two, both entries in the ledger of what had
+already been tried and failed.
+
+### A green run is stamped with the tree it was green on
+
+`record_green` wrote a command, a time and a branch, none of which can tell "green now"
+from "green three edits ago". So the push gate had no choice but to re-run the suite it
+had just watched pass — five minutes per push for an answer that could not differ.
+
+The record now carries `HEAD^{tree}`, and the hook skips only on an exact match. Every
+uncertain answer costs a run rather than granting a pass: a dirty tree hashes to nothing,
+a record written before this release has no stamp, and either means run it again.
+
+### Upgrading
+
+Cards already in the queue carry no finish condition and often no paths, so the first
+`claim` of each will refuse and name the two arguments. There is no repair step for this
+and there should not be: inventing a finish condition would be the plugin writing the
+founder's plan.
+
 ## v1.26.0
 
 The board stops accepting a word for a finish, the queue stops being a sink, and a session

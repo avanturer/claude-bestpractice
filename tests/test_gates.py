@@ -549,7 +549,7 @@ class TestWhatCompactionDestroysIsHandedBack(GateCase):
         ctx = self.ctx()
         task = plan.add(ctx, "довести пайплайн дообучения до конца",
                         body="LoRA r=16 лучше r=8; данные до 2024 шумные",
-                        paths=["train/pipeline.py"])
+                        paths=["train/pipeline.py"], done_when="stated")
         plan.claim(ctx, task.id, sid(self.repo, "s1"), "feat/pipeline")
         attempts.record(ctx, "полное дообучение без LoRA", "не влезает в 80GB, OOM", ["train/pipeline.py"])
         self.write("train/pipeline.py", "run = True\n")
@@ -781,7 +781,7 @@ class TestPreTool(GateCase):
         from claude_bestpractice import plan
 
         self.start()
-        plan.add(self.ctx(), "a task the ledger already holds")
+        plan.add(self.ctx(), "a task the ledger already holds", done_when="stated", paths=["src/app.py"])
         proc = self.gate("pre-tool", {
             "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Write",
             "tool_input": {
@@ -990,7 +990,7 @@ class TestEvidenceGate(GateCase):
         instruction. Identity is (harness id, worktree) in the CLI too."""
         self.start()
         self.write("feature.py", "x = 1\n")
-        task = plan.add(self.ctx(), "what this turn is doing", paths=["feature.py"])
+        task = plan.add(self.ctx(), "what this turn is doing", paths=["feature.py"], done_when="stated")
         claimed = subprocess.run(
             [sys.executable, str(BIN / "claude-bp-plan"), "claim", task.id],
             capture_output=True, text=True, cwd=str(self.repo), timeout=60,
@@ -1125,6 +1125,51 @@ class TestDoctorAndReindex(GateCase):
         from claude_bestpractice import sessions
 
         self.assertIsNotNone(sessions.get(self.ctx(), sid(self.repo, "keepme")))
+
+
+class TestTheBoardIsDemandedBeforeAShellWrite(RepoCase):
+    """Issue #141. The ledger gate only ever looked at `Write`/`Edit`, while the leases
+    and the secret scan in the same file already resolved what a `sed -i` or a heredoc
+    lands on — so a whole turn of shell edits happened with the board saying the files
+    were free, which is the one window the board exists to cover.
+    """
+
+    def writing(self, command: str):
+        return self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse",
+            "tool_name": "Bash", "tool_input": {"command": command},
+        })
+
+    def decision(self, proc) -> str:
+        import json
+
+        try:
+            return json.loads(proc.stdout or "{}").get(
+                "hookSpecificOutput", {}).get("permissionDecision", "")
+        except json.JSONDecodeError:
+            return ""
+
+    def working_on(self, statement: str = "add a csv export") -> None:
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
+        self.run_hook("prompt-capture", {
+            "session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": statement,
+        })
+
+    def test_a_shell_edit_with_no_card_is_refused(self):
+        self.working_on()
+        proc = self.writing("sed -i 's/a/b/' src/billing.js")
+        self.assertEqual("deny", self.decision(proc))
+        self.assertIn("nothing on the board", proc.stdout)
+
+    def test_a_heredoc_write_with_no_card_is_refused(self):
+        self.working_on()
+        proc = self.writing("cat > src/billing.js <<'EOF'\nexport const x = 1\nEOF")
+        self.assertEqual("deny", self.decision(proc))
+
+    def test_a_shell_edit_the_board_covers_is_allowed(self):
+        self.working_on()
+        self.claim_a_task("s1", "src/billing.js")
+        self.assertNotEqual("deny", self.decision(self.writing("sed -i 's/a/b/' src/billing.js")))
 
 
 if __name__ == "__main__":

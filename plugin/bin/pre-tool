@@ -798,22 +798,30 @@ def main() -> None:
         # Never a wedge: the way out is a Bash command, and Bash is not what this refuses.
         # The ledger's own files are exempt, or filing the card would be refused by the
         # rule demanding one.
-        # Only once the founder has actually said what this session is for. A card is for
-        # work somebody asked for; a session with no statement has no task to card yet, and
-        # demanding one there is the gate inventing a process rather than recording one.
-        # The Stop demand still catches that session at the end, where the board has to be
-        # true regardless of how the work arrived.
-        if (cfg.require_task and rec.task_statement
-                and event.tool_name in WRITE_TOOLS and touched):
+        # Every write, not just the structured ones: this file already resolves what a
+        # `sed -i` or a heredoc lands on — the leases and the secret scan both read it —
+        # and leaving the ledger gate on `WRITE_TOOLS` alone meant a whole turn of shell
+        # edits was invisible to the board while it happened.
+        #
+        # Still only once the founder has said what this session is for. Dropping that was
+        # tried while fixing #141 and taken back out: `prompt-capture` sets the statement
+        # from any first prompt that is not pasted output, so it is set in substantially
+        # every real session — meaning the demand already fires at the first write there,
+        # and removing the condition changed behaviour for every session on the strength
+        # of a case that could not be reproduced. The half of #141 that IS proven is the
+        # shell one above; a session whose first prompt was a paste still gets the Stop
+        # demand, and is the narrow case left open deliberately.
+        if cfg.require_task and rec.task_statement and writing_now:
             from claude_bestpractice import plan
 
-            if not _ledger_covers(ctx, event.session_id, touched):
+            if not _ledger_covers(ctx, event.session_id, writing_now):
                 hookio.deny_tool(
                     f"claude-bestpractice: nothing on the board says this session is working "
-                    f"on {touched[0]}.\n"
+                    f"on {writing_now[0]}.\n"
                     "  Every sibling session reads the board to decide what is safe to "
-                    "touch, and unlisted work is invisible to all of them.\n"
-                    f'  claude-bp-plan add "<what you are about to do>" --paths {touched[0]}\n'
+                    "touch, and unlisted work is invisible to all of them — so this is "
+                    "asked BEFORE the write, while there is still something to protect.\n"
+                    f'  claude-bp-plan add "<what you are about to do>" --paths {writing_now[0]}\n'
                     "  then: claude-bp-plan claim <id>   (or claim the task you are on)"
                 )
 

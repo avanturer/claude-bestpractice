@@ -123,8 +123,13 @@ class TestFullLifecycle(Scenario):
         # With the finish condition, because closing takes one: a card that says nothing
         # about finishing can only be closed on the model's word, which is the assertion
         # decision 0002 refuses everywhere else. Stating it here is the realistic arc.
+        # Both halves of the plan, and the paths are the ones this scenario really writes:
+        # `claim` refuses a card without them, and the drift gate measures the session's
+        # actual writes against exactly this list — so a fixture naming a file it never
+        # touches would fail for drift instead of proving the arc.
         self.cli("claude-bp-plan", "add", "Add CSV export to billing",
-                 "--done-when", "the suite passes with a csv export test")
+                 "--done-when", "the suite passes with a csv export test",
+                 "--paths", "src/billing.js,src/api.js,junit.xml")
         self.assertEqual(plan.summary(self.ctx())["next"], 1)
 
         board_text = self.context_of(
@@ -274,7 +279,7 @@ class TestTwoSessionsInParallel(Scenario):
         ctx = self.ctx()
         sessions.register(ctx, self.session_record("ghost", pid=999_999_999))
         sessions.acquire_lease(ctx, "ghost", "src/billing.js")
-        task = plan.add(ctx, "orphaned work")
+        task = plan.add(ctx, "orphaned work", paths=["src/app.py"])
         plan.claim(ctx, task.id, "ghost", ctx.branch)
 
         self.hook("session-start", session_id="alive", hook_event_name="SessionStart")
@@ -298,11 +303,11 @@ class TestTwoSessionsInParallel(Scenario):
         """The property everything else rests on, exercised through the real files."""
         self.build_app()
         ctx = self.ctx()
-        plan.add(ctx, "on main")
+        plan.add(ctx, "on main", paths=["src/app.py"])
         self.commit("plan on main")
 
         git(["checkout", "-qb", "feature"], self.repo)
-        plan.add(ctx, "on feature")
+        plan.add(ctx, "on feature", paths=["src/app.py"])
         self.commit("plan on feature")
 
         git(["checkout", "-q", "main"], self.repo)
@@ -371,7 +376,7 @@ class TestMemoryStaysHonest(Scenario):
         """Tier B must always be safe to delete, and that path must be exercised."""
         self.build_app()
         self.hook("session-start", session_id="s1", hook_event_name="SessionStart")
-        plan.add(self.ctx(), "durable task")
+        plan.add(self.ctx(), "durable task", paths=["src/app.py"])
 
         proc = self.cli("claude-bp-reindex")
         self.assertEqual(proc.returncode, 0, proc.stderr)

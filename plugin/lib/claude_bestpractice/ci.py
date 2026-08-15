@@ -75,6 +75,14 @@ if [ -x "$_original" ]; then
     "$_original" "$@" || exit $?
 fi
 
+# Already proven on THIS EXACT TREE, so running it again cannot change the answer. The
+# stamp is the tree hash, not a timestamp: a dirty tree stamps to nothing and a single
+# edit changes it, so the only thing this can skip is work already done. Five minutes a
+# push, for an answer that could not differ.
+if __GREEN_COVERS__ >/dev/null 2>&1; then
+    exit 0
+fi
+
 if [ -f Makefile ] && grep -q '^check:' Makefile; then
     make check || exit $?
     __RECORD_GREEN__ 'make check' >/dev/null 2>&1 || true
@@ -161,6 +169,20 @@ def _recorder() -> str:
     return f"{quote(sys.executable)} {quote(str(recorder))} record-green"
 
 
+def _green_check() -> str:
+    """The command that answers whether this exact tree was already proven green.
+
+    Absolute for the same reason as `_recorder`, and its FAILURE is the safe answer: the
+    hook only skips when this exits 0, so a missing interpreter, a stripped environment or
+    an unreadable record all mean the suite runs.
+    """
+    import sys
+    from shlex import quote
+
+    checker = Path(__file__).resolve().parent.parent.parent / "bin" / "claude-bp-ci"
+    return f"{quote(sys.executable)} {quote(str(checker))} green-covers-tree"
+
+
 def hook_body(ctx: GitContext | None = None) -> str:
     """The hook script, with this project's own test command baked into the middle tier.
 
@@ -190,6 +212,7 @@ def hook_body(ctx: GitContext | None = None) -> str:
         )
     body = HOOK_TEMPLATE.replace("__TEST_COMMAND__", rendered)
     body = body.replace("__RECORD_GREEN__", _recorder())
+    body = body.replace("__GREEN_COVERS__", _green_check())
     return body.replace("__VERSION__", __version__)
 
 
