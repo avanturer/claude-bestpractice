@@ -25,9 +25,15 @@ class RestartCase(RepoCase):
     def held_then_lost(self, title: str = "wire up the exporter"):
         """A session that claimed work, died, and was reaped by a sibling.
 
-        The pid is set to 1 rather than to something absent: it is alive and is not this
-        process, so the record fails on the FINGERPRINT the way a recycled pid does, which
-        is the case the reaper is actually built around.
+        Every condition the reaper reads is stated here rather than inherited from the
+        machine. `pid_trust` in particular: `session-start` derives it by walking the
+        process tree for the CLI, so it is `owner` under a real session and `parent` on a
+        CI runner — and `parent` makes `_pid_says_dead` answer "alive" unconditionally.
+        This fixture passed locally and failed on the runner for exactly that reason.
+
+        The pid is 1 with a mismatched fingerprint rather than something absent: alive,
+        not this process, so the record dies on the FINGERPRINT the way a recycled pid
+        does, which is the case the reaper is actually built around.
         """
         ctx = self.ctx()
         me = sid(self.repo, "worker")
@@ -35,7 +41,20 @@ class RestartCase(RepoCase):
         task = plan.add(ctx, title)
         plan.claim(ctx, task.id, me, ctx.branch)
 
-        sessions.touch(ctx, me, pid=1, pid_fingerprint="not-the-process-that-was")
+        sessions.touch(
+            ctx, me,
+            pid=1,
+            pid_fingerprint="not-the-process-that-was",
+            pid_trust=sessions.PID_TRUST_OWNER,
+        )
+        # The precondition, asserted rather than assumed. Without this the fixture can
+        # quietly describe a LIVE session on some other machine, and every test below then
+        # passes or fails for a reason that has nothing to do with reclaiming.
+        self.assertFalse(
+            sessions.is_live(ctx, sessions.get(ctx, me)),
+            "fixture failed to kill the session, so nothing below is about a restart",
+        )
+
         sibling = sid(self.repo, "sibling")
         sessions.register(ctx, session_record_for(ctx, sibling))
         sessions.reap(ctx, exclude=sibling)
