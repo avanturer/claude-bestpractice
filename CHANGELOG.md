@@ -32,6 +32,24 @@ founder then has to answer by hand.
 The line now carries the path this plugin provisioned for that session, and stays silent
 for a session already standing in a worktree.
 
+### An upgrade repairs the hook it installed under the old name (#146)
+
+This project was called founder-os once, and hooks written then say so. Every routine in
+`ci` matched only the current marker, so such a hook was invisible as ours: never
+refreshed, and — worse — treated as a stranger's and *displaced*, chaining `exec make
+check` in front of a body that then runs the suite a second time.
+
+It also predates the tree-hash short circuit and the green-run recorder. Which is how the
+optimisation shipped in v1.27.0 — "the push gate no longer re-runs the suite it just
+watched pass" — had, in the repository that wrote it, **never once fired**. Nothing looked
+wrong: the hook ran, the checks were green, every push just cost four minutes it did not
+need to. Found by checking a claim instead of repeating it.
+
+A hook in either spelling of our name is now recognised as ours and rewritten in place,
+and a hook the old name had displaced is carried across to the filename the new body
+chains — otherwise the repair itself would leave a husky script on disk, unreferenced and
+silently not running.
+
 ### Three tests that proved nothing, caught before they shipped
 
 Writing the acceptance tests set a task statement, which arms the ledger gate added in
