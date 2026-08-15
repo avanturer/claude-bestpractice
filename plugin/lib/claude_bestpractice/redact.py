@@ -30,8 +30,8 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         "assigned-secret",
         re.compile(
-            r"(?i)\b([A-Z0-9_]*(?:SECRET|PASSWORD|PASSWD|TOKEN|APIKEY|API_KEY|PRIVATE_KEY|CREDENTIAL)[A-Z0-9_]*)"
-            r"[\"']?\s*[:=]\s*[\"']?([^\s\"',;]{8,})"
+            r"(?i)\b(?P<name>[A-Z0-9_]*(?:SECRET|PASSWORD|PASSWD|TOKEN|APIKEY|API_KEY|PRIVATE_KEY|CREDENTIAL)[A-Z0-9_]*)"
+            r"[\"']?\s*[:=]\s*(?P<quote>[\"']?)(?P<value>[^\s\"',;]{8,})"
         ),
     ),
     # Connection strings leak credentials in the authority component.
@@ -110,9 +110,39 @@ def _is_measurement(value: str) -> bool:
     return bool(_MEASUREMENT.match(value.strip().strip("\"'")))
 
 
-def _is_not_a_secret(value: str) -> bool:
-    """Values the assignment form matches that cannot be credentials."""
-    return _is_indirection(value) or _is_measurement(value)
+# A dotted code reference is not a literal, and only a literal can be a credential worth
+# rotating. `TOKEN` is in the name list above and belongs there, but in machine-learning
+# code it is overwhelmingly a generation limit read off a config object:
+# `max_tokens=args.max_new_tokens`, `{"max_tokens": args.max_new_tokens}`. Every one of
+# those read as an assigned secret, which made the inference code of a real project
+# un-editable — and the issue reporting it could not be filed either, because quoting the
+# gate's own message tripped the same gate (#138).
+#
+# Segments must each be an identifier, so `wJalrXUtnFEMI/K7…` and `AKIA…` are untouched.
+# UNQUOTED only, which is what separates `args.max_new_tokens` from `"hunter2.correct"`.
+_REFERENCE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+[)\]},]*$")
+
+
+def _is_reference(value: str) -> bool:
+    return bool(_REFERENCE.match(value.strip()))
+
+
+def _is_not_a_secret(match: "re.Match") -> bool:
+    """Values the assignment form matches that cannot be credentials.
+
+    Takes the match rather than the value because one of the three tests needs to know
+    whether the value was QUOTED, and that is the only thing separating a reference to a
+    number from a password that happens to contain a dot.
+
+    Residual cost, stated rather than hidden: an unquoted lowercase dotted password in a
+    `.env` file is missed. Narrow, and the direction is chosen deliberately — a scanner
+    that makes ordinary code un-editable gets worked around, and a worked-around scanner
+    protects nothing at all.
+    """
+    value = match.group("value")
+    if _is_indirection(value) or _is_measurement(value):
+        return True
+    return not match.group("quote") and _is_reference(value)
 
 
 def scrub(text: str) -> str:
@@ -123,7 +153,7 @@ def scrub(text: str) -> str:
     for name, pattern in _PATTERNS:
         if name == "assigned-secret":
             out = pattern.sub(
-                lambda m: m.group(0) if _is_not_a_secret(m.group(2)) else f"{m.group(1)}={REDACTED}",
+                lambda m: m.group(0) if _is_not_a_secret(m) else f"{m.group('name')}={REDACTED}",
                 out,
             )
         elif name == "url-credentials":
@@ -143,7 +173,7 @@ def find(text: str) -> list[str]:
     hits: set[str] = set()
     for name, pattern in _PATTERNS:
         for match in pattern.finditer(text or ""):
-            if name == "assigned-secret" and _is_not_a_secret(match.group(2)):
+            if name == "assigned-secret" and _is_not_a_secret(match):
                 continue
             # Skipped rather than broken out of: one development default early in a file
             # must not stop the scan before a real credential later in it.

@@ -1,5 +1,69 @@
 # Changelog
 
+## v1.26.0
+
+The board stops accepting a word for a finish, the queue stops being a sink, and a session
+running old code finally says so.
+
+### A code reference is not a credential (#138)
+
+`max_tokens=args.max_new_tokens` was refused as an assigned secret. `TOKEN` is in the
+name list and belongs there, but in machine-learning code it is overwhelmingly a
+generation limit read off a config object — so the scanner made the inference code of a
+real project un-editable, and an earlier fix that exempted bare numbers did not reach a
+value that is an attribute rather than a literal.
+
+The issue reporting it could not be filed either: quoting the gate's own message tripped
+the same gate. A closed loop, for the second time in this file's history.
+
+Now a value that is an **unquoted dotted code reference** is not a secret, because only a
+literal can be one. Each segment must be an identifier, so `wJalrXUtnFEMI/K7…` and `AKIA…`
+are untouched, and the quote is what separates `args.max_new_tokens` from
+`"hunter2.correct"`. Residual cost, stated rather than hidden: an unquoted lowercase
+dotted password in a `.env` file is missed. That direction is chosen deliberately — a
+scanner that makes ordinary code un-editable gets worked around, and a worked-around
+scanner protects nothing.
+
+### Closing a card takes a finish condition
+
+`done_when` was carried through every transition and required nowhere, so closing a card
+was a rename: the work was finished because the model said so. That is the assertion
+decision 0002 refuses everywhere else, and the field's own comment in `plan.py` had said
+as much for months.
+
+`claude-bp-plan done` now refuses a card with no finish condition and hands over the way
+through. Required at **close**, not at `add`: a session knows least when it files a card
+and most when it is about to call the work finished.
+
+### The queue stops being a one-way sink
+
+`sweep_idle` returns stalled work to `next` and nothing has ever taken anything out, so
+every card ever filed and not done still stands in the queue. Empty in this repository and
+sixty deep in the one this plugin is actually used to build.
+
+A card untouched in `next` beyond `task_queue_stale_days` (21 by default, 0 turns it off)
+moves to `paused` carrying the reason. Set aside, never deleted: `claude-bp-plan resume`
+brings it straight back, and the file was never removed.
+
+### A checkout install is told it is stale
+
+The staleness detector only understood one install shape. `superseded_by` compares the
+running copy against its SIBLING directories, which answers nothing at all when the copy
+is a git checkout — every `install.sh` install — because a checkout has no version
+directory to have siblings in. So a founder could update through the marketplace, restart
+the machine, and keep running the old code with the board saying nothing. Reported as a
+session insisting it was 1.17.0 the day after an update and a full restart.
+
+The whole of the CLI's plugin cache is now searched, so both install shapes are covered,
+and still without a single network call.
+
+### Also
+
+- `product.md` said the native task system was "subsumed and gated" and that one of four
+  review paths was integrated. Neither was true — the plugin references neither. The
+  non-goal now says what is actually the case, and why: a list nothing depends on drifts
+  without limit, and the ledger works because the Stop gate makes it load-bearing.
+
 ## v1.25.0
 
 Two refusals that were about the wrong thing.

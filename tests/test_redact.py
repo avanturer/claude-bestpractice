@@ -115,5 +115,49 @@ class TestAMeasurementIsNotACredential(unittest.TestCase):
         self.assertIn("stripe-key", redact.find("SECRET_KEY = 'sk_live_abcdefghijklmnop'"))
 
 
+class TestACodeReferenceIsNotACredential(unittest.TestCase):
+    """Issue #138. `TOKEN` is in the name list and belongs there, but in machine-learning
+    code it is overwhelmingly a generation limit read off a config object. Flagging that
+    made the inference code of a real project un-editable — and the issue reporting it
+    could not be filed either, because quoting the gate's own message tripped the gate.
+    """
+
+    def test_a_generation_limit_read_off_a_config_object_is_not_a_secret(self):
+        self.assertEqual([], redact.find(
+            "sampling = SamplingParams(temperature=0.0, max_tokens=args.max_new_tokens)"))
+
+    def test_the_dictionary_form_too(self):
+        self.assertEqual([], redact.find('{"max_tokens": args.max_new_tokens}'))
+
+    def test_a_quoted_value_containing_a_dot_is_still_a_secret(self):
+        """What separates a reference from a literal is the quotes, and nothing else.
+        Without this the rule would wave through any password with a dot in it."""
+        self.assertIn("assigned-secret", redact.find('password = "hunter2.correctbattery"'))
+
+    def test_a_bare_word_is_still_a_secret(self):
+        self.assertIn("assigned-secret", redact.find("password = admin123456"))
+
+    def test_a_real_key_assigned_to_a_secret_shaped_name_is_still_caught(self):
+        found = redact.find('api_token = "sk-ant-api03-abc123def456ghi789jkl012mno345"')
+        self.assertIn("assigned-secret", found)
+        self.assertIn("anthropic-key", found)
+
+    def test_an_aws_secret_is_still_caught(self):
+        self.assertIn("assigned-secret", redact.find(
+            'AWS_SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"'))
+
+    def test_scrub_still_removes_the_real_one(self):
+        """A value ONLY the assignment rule catches. An `sk-ant-…` key here would be
+        redacted by its own pattern whatever the assignment branch did, so the test would
+        pass with that branch removed entirely — proving nothing about the change."""
+        cleaned = redact.scrub('DATABASE_PASSWORD = "correcthorsebatterystaple"')
+        self.assertNotIn("correcthorsebatterystaple", cleaned)
+        self.assertIn(redact.REDACTED, cleaned)
+
+    def test_scrub_leaves_the_reference_alone(self):
+        line = "max_tokens=args.max_new_tokens"
+        self.assertEqual(line, redact.scrub(line))
+
+
 if __name__ == "__main__":
     unittest.main()

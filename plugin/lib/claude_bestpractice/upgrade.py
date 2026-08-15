@@ -104,15 +104,53 @@ def orphaned(root: Path | None = None) -> bool:
     return bool(root and (root / ORPHAN_MARKER).exists())
 
 
-def stale_line(root: Path | None = None) -> str:
+# Where the CLI unpacks every marketplace install, whatever marketplace it came from.
+CACHE = Path(".claude") / "plugins" / "cache"
+
+
+def newer_in_the_cache(home: Path | None = None) -> str | None:
+    """A newer version unpacked anywhere in the CLI's cache, or None.
+
+    `superseded_by` only sees SIBLINGS of the running copy, so it answers nothing at all
+    for a copy that is not itself in a version directory — which is every `install.sh`
+    install, because those run from a git checkout. That founder updates through the
+    marketplace, the CLI unpacks a new version somewhere else entirely, the session keeps
+    running the checkout, and the board stays silent because the only detector it had was
+    looking at the wrong place. Reported as a session insisting it was 1.17.0 the day after
+    an update and a full machine restart.
+
+    Offline by construction: it reads directories the CLI already wrote.
+    """
+    root = (home or Path.home()) / CACHE
+    try:
+        # The glob does the filtering that a name check used to: whichever marketplace it
+        # came from, only OUR plugin's directory is opened.
+        cached = [
+            entry.name
+            for plugin_dir in root.glob("*/claude-bestpractice")
+            for entry in plugin_dir.iterdir()
+            if entry.is_dir() and _VERSION_DIR.match(entry.name)
+        ]
+    except OSError:
+        return None
+    newer = [name for name in cached if _key(name) > _key(__version__)]
+    return max(newer, key=_key) if newer else None
+
+
+def stale_line(root: Path | None = None, home: Path | None = None) -> str:
     """One line for the board, and only when it is true. Empty is the normal answer.
 
     Never a guess: this fires when a newer copy is on disk, not when one might exist
     upstream. Checking upstream would need the network on every session start, and a
     session start that waits on github is a worse product than one that misses a release.
+
+    Two places are searched, because there are two install shapes. `root` covers a
+    marketplace install, where the newer version is a sibling directory. `home` covers the
+    rest of the CLI's cache, which is the only thing that can see a newer version when
+    this copy is a git checkout and has no version directory to have siblings in.
     """
     root = root or install_root()
-    newer = superseded_by(root)
+    newer = superseded_by(root) or newer_in_the_cache(home)
     if newer:
         return (
             f"\nthis session is running claude-bestpractice {__version__}, but {newer} is "
