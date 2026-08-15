@@ -81,6 +81,27 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "$comment": [
+          "The only event that carries a pull request's NUMBER. PreToolUse records the",
+          "obligation and never sees the response, so every record used to say 0 and the",
+          "merge gate could not tell its own pull request from somebody else's (#135).",
+          "",
+          "Matched on the structured tools only. Adding `Bash` here would spawn a process",
+          "on every shell call to catch `gh pr create`, and an unlearned number now means",
+          "'do not judge', which is the safe direction."
+        ],
+        "matcher": ".*create_pull_request",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/pr-opened",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
     "SubagentStart": [
       {
         "hooks": [

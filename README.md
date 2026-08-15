@@ -4,9 +4,9 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-1.24.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-738%20passing-2ea44f)](#verified)
-[![doctor](https://img.shields.io/badge/doctor-26%20checks-2ea44f)](#verified)
+[![version](https://img.shields.io/badge/version-1.25.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-1193%20passing-2ea44f)](#verified)
+[![doctor](https://img.shields.io/badge/doctor-33%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
 [![context](https://img.shields.io/badge/always--on%20context-332%20tokens-blue)](#context-cost)
@@ -82,7 +82,7 @@ any gate fails to fire. Gates that silently do nothing are worse than no gates.
 
 Read that claim narrowly, because it is narrow: the doctor builds its own throwaway
 repository and attacks that. It proves **the gates work**, not that they are correctly
-wired into *your* project — so "All 26 checks passed" is a statement about this software,
+wired into *your* project — so "All 33 checks passed" is a statement about this software,
 never a clean bill of health for your repository. `claude-bp status` is the one that
 looks at yours.
 
@@ -354,7 +354,7 @@ against a cap of 400 — roughly 0.1 % of a 200k window.
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 738 tests · 26 doctor checks · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 1193 tests · 33 doctor checks · budget
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration

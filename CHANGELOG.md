@@ -1,5 +1,64 @@
 # Changelog
 
+## v1.25.0
+
+Two refusals that were about the wrong thing.
+
+### The merge gate judged the branch you were standing in (#135)
+
+A session on a long-lived branch ran `gh pr merge 501` for an unrelated three-file
+documentation pull request, opened from another worktree off `main`. The gate refused, and
+the reasons it gave — an unverified finish, uncommitted changes, a SQL-interpolation
+finding in an experiments directory — were all true of the session's own branch and none
+of them of the thing being merged.
+
+The gate already meant to check this. `gated_by` compares the number the command names
+against the number on its own record, and returns "not ours" when they differ. That check
+had never once fired, because **every record carried number 0**: the obligation is written
+in `PreToolUse`, which sees the request and never the response, and the number exists only
+in the response.
+
+So the plugin now learns its own numbers. A `PostToolUse` entry — the only event that
+carries the answer — writes the number onto the record that already exists. With the
+number known, the existing comparison starts working, and a numbered merge the record
+cannot confirm is no longer judged at all rather than judged against the wrong branch.
+
+The protection that mattered is unchanged: an unnumbered `gh pr merge` is this branch's own
+pull request by definition and is judged exactly as before, and a numbered merge of a pull
+request this plugin opened is judged as before too.
+
+One narrow loss, stated rather than hidden: a pull request opened by `gh pr create`, whose
+number the structured-tool matcher does not see, and one opened before this release, are
+both unconfirmable — so a numbered merge of either is not judged. That is the conservative
+direction of the bug being fixed, and it heals on the next pull request opened through the
+GitHub tool.
+
+### A claim did not survive a process restart (#131)
+
+Closing VS Code, a WSL crash, a resume after compaction: the session id is unchanged and
+the pid is not, so a sibling's reaper correctly released the claim of a session that was,
+from its own point of view, still working. It came back owning nothing. The first Stop then
+refused the turn for having no task on the board and printed a demand naming 336 changed
+files belonging to somebody else, suggesting a **new** task be filed for work already on
+the board. It happened three times in one day on one session.
+
+The release is now remembered — in the git common dir, because it is coordination state
+rather than truth about the work — and a returning session takes back what is still free.
+It goes through `claim`, which already refuses a task a live session holds, so a returning
+session cannot take work a sibling picked up, and can take work a sibling picked up and
+then died holding. The board says which ids came back, because a session that restarted has
+no memory of losing them.
+
+### Not this plugin: #132, #133, #134
+
+Three refusals reported against the worktree guard — `eval` matched as a substring in a
+`--search` argument, a compound command refused for being compound, and a latch that
+blocked every command including the one the error text demanded — come from Claude Code's
+own worktree isolation, not from here. This time with positive evidence rather than the
+absence of a string: all three messages are in the CLI binary, including the branch
+`if (kind !== "simple") return "…too complex to verify that it stays inside the worktree"`.
+They are worth filing upstream; nothing in this plugin can turn them off.
+
 ## v1.24.0
 
 A running session can be told something.
