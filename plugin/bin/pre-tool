@@ -104,10 +104,6 @@ PRODUCTION_DEPLOY = re.compile(
     r"kubectl\s+.*--context[= ]\S*prod|fly\s+deploy(?!.*--config)|railway\s+up\b)"
 )
 
-# An explicit, typed acknowledgement. Not a config flag: a flag gets set once and then
-# permanently disables the gate, which is how these die.
-OVERRIDE = "CLAUDE_BESTPRACTICE_I_ACCEPT_DATA_LOSS"
-
 
 def signature(event: hookio.HookEvent) -> str:
     """Identify a repeated action without keying on volatile detail.
@@ -681,13 +677,26 @@ def main() -> None:
             rel = touched[0] if touched else ""
             if rel and any(rel.startswith(d) for d in MIGRATION_DIRS):
                 body = proposed_content(event)
-                if DESTRUCTIVE_DDL.search(body) and OVERRIDE not in body:
-                    hookio.deny_tool(
-                        "claude-bestpractice: destructive DDL in a migration. This is irreversible and "
-                        "data-shaped — the tests pass either way and corruption surfaces only "
-                        "under production concurrency. Use an expand-contract migration, or "
-                        f"include the literal token {OVERRIDE} in a comment to accept the loss."
-                    )
+                if DESTRUCTIVE_DDL.search(body):
+                    # The literal used to live IN THE MIGRATION, which the session writes,
+                    # so the gate on irreversible data loss was openable by the party it
+                    # gates — the same hole decision 0006 closed for config switches and
+                    # v1.28.0 closed for merges and promotions. This was the last one.
+                    if not config.approved(ctx, config.APPROVE_MIGRATION):
+                        hookio.deny_tool(
+                            "claude-bestpractice: destructive DDL in a migration. This is irreversible "
+                            "and data-shaped — the tests pass either way and corruption surfaces "
+                            "only under production concurrency.\n"
+                            "  Use an expand-contract migration, or show the founder the "
+                            "statement and what it drops. When they accept the loss they say "
+                            "`migration ok`, and that allows exactly one.\n"
+                            "  Their word is read from their own message; a token you write "
+                            "into the migration is not their word."
+                        )
+                    # Spent here rather than after the call: a PreToolUse hook never sees
+                    # the result, and a write that failed is re-authorised by the founder
+                    # rather than by its own retry.
+                    config.clear_switch(ctx, config.APPROVE_MIGRATION)
 
     # Before any write is examined: may this session write HERE at all? Writes only, so
     # reads, searches and `git worktree add` itself stay free — a rule that blocks the

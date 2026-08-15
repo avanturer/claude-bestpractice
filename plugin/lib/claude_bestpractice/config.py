@@ -277,18 +277,20 @@ def switches_in(text: str) -> dict[str, str]:
 # writes reaches this: only the founder's own turns pass through `prompt-capture`.
 APPROVE_MERGE = "approve:merge"
 APPROVE_RELEASE = "approve:release"
+APPROVE_MIGRATION = "approve:migration"
 
 # Anchored to the END of a line, so it has to be something the founder said rather than
 # a fragment of a sentence about it. "we should merge okay soon" matched before this
 # and would have authorised a merge nobody asked for.
 _APPROVAL = re.compile(
-    r"(?im)(?:^|[\s,;:—–-])(?P<subject>merge|release|deploy)\s+(?:ok|okay|accepted)\s*[.!]?\s*$"
+    r"(?im)(?:^|[\s,;:—–-])(?P<subject>merge|release|deploy|migration)\s+(?:ok|okay|accepted)\s*[.!]?\s*$"
 )
 
 _APPROVAL_KEYS = {
     "merge": APPROVE_MERGE,
     "release": APPROVE_RELEASE,
     "deploy": APPROVE_RELEASE,
+    "migration": APPROVE_MIGRATION,
 }
 
 

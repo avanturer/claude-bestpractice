@@ -1,5 +1,48 @@
 # Changelog
 
+## v1.29.0
+
+The last self-authorising gate is closed, and a restarted session stops guessing where it lives.
+
+### Destructive DDL takes the founder's word (was: "Found and not fixed")
+
+v1.28.0 named this and did not fix it. The gate on irreversible data loss opened on a
+literal inside the migration — and the session writes the migration. So the one gate
+standing over `DROP TABLE` was openable by the party it gates, by typing a comment.
+
+It now takes `migration ok` from the founder's own message, read by the hook that reads
+their messages, **consumed on use**. A token in the file authorises nothing, and that case
+is a test rather than a claim.
+
+That was the last of them. Config switches (0006), merges, promotions and now data loss
+all travel the same road: a literal this plugin prints, spoken by the founder, spent once.
+
+### The worktree instruction names the tree instead of leaving it to guess
+
+Reported from a live session: after a restart the session announced it was returning to
+its worktree, called `EnterWorktree` on the directory it was already standing in, and was
+refused — *"is the current working directory"*.
+
+The standing line said *"use `EnterWorktree` with the path"* and named no path. Its own
+docstring claimed otherwise. So a session outside its tree had to invent the argument, and
+one that had already moved invented its own working directory. A wasted call — and for a
+tree beside the repository rather than under `.claude/worktrees/`, a permission prompt the
+founder then has to answer by hand.
+
+The line now carries the path this plugin provisioned for that session, and stays silent
+for a session already standing in a worktree.
+
+### Three tests that proved nothing, caught before they shipped
+
+Writing the acceptance tests set a task statement, which arms the ledger gate added in
+v1.27.0 — so the writes were refused for having no card and never reached the gate under
+test. `deny` is `deny` from outside. Three tests passed while proving nothing, and the
+doctor check failed the same way twice: once on the ledger, once on the loop detector,
+which counts five probes at one path as exactly the repetition it exists to stop.
+
+Every assertion here now names the gate it means, and the fixtures state their
+preconditions instead of assuming them.
+
 ## v1.28.0
 
 Nothing ships without the founder having seen it.

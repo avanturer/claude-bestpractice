@@ -4,8 +4,8 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-1.28.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-1235%20passing-2ea44f)](#已验证)
+[![version](https://img.shields.io/badge/version-1.29.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-1241%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-33%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#运行要求)
@@ -174,6 +174,22 @@ Stop gate **丢弃智能体的自述文字**，自己去运行你的测试套件
 它也会升级而不是把人卡死：连续四次被拦截之后，它记录一次"未经验证的完成"并放行该轮，
 因为一个永远挡住创始人工作流的 gate，就是一个会被卸载的 gate。
 
+### 三件需要你亲口许可的事
+
+有些操作无法通过重跑来撤销，而且再多的绿色也不能说明那正是你想要的。每一件都在等待**你
+自己**消息里的一个字面量——由读取你消息的那个钩子读到——并且**用过即失效**：一句话，一次
+操作，绝不会变成长期授权。
+
+| 你输入 | 允许的操作 | 次数 |
+| --- | --- | --- |
+| `merge ok` | 合并已打开的 PR | 一次合并 |
+| `release ok` | 发布到生产环境 | 一次发布 |
+| `migration ok` | 迁移中的破坏性 DDL | 一次迁移 |
+
+字面量锚定在行尾，所以"如果 migration ok 我们就发"是在谈论迁移，而不是批准它。会话写下
+的任何内容都无法代替这些词：只有你自己的发言才能到达记录它们的钩子。这正是关键所在——
+守卫不可逆操作的闸门，不该由它所守卫的那一方来打开。
+
 ### 机械地抓住垃圾代码——在你的仓库里
 
 针对本回合新增的行，提交审查会标记七类问题：吞掉的异常、裸 `except`、调试残留、被关掉的
@@ -283,7 +299,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 ## 已验证
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 1235 个测试 · 33 项 doctor 检查 · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 1241 个测试 · 33 项 doctor 检查 · budget
 ```
 
 doctor 通过**真的去做那件坏事**来证明 gate 有效，而不是把配置读回来对一遍——
