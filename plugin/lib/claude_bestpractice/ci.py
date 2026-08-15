@@ -50,6 +50,14 @@ BACKUP_SUFFIX = ".claude-bestpractice.bak"
 # thing that prevents it.
 DISPLACED_NAME = "pre-push.claude-bestpractice-original"
 
+# What this project called itself before it was renamed. A hook written then is OURS —
+# it just says so in the old words — and every routine here recognised only the current
+# marker, so it was never upgraded and never could be. It predates both the tree-hash
+# short circuit and the green-run recorder, which is why the optimisation shipped in
+# v1.27.0 had, in the repository that wrote it, never once fired (#146).
+FOUNDER_OS_MARKER = "# founder-os pre-push gate"
+FOUNDER_OS_DISPLACED_NAME = "pre-push.founder-os-original"
+
 # Set by `claude-bp-ci off`, read by `ensure`. Its whole job is to make an opt-out stick
 # across the session start that would otherwise put the hook straight back.
 DECLINED_NAME = "pre-push-declined"
@@ -225,8 +233,9 @@ def stamped_version(ctx: GitContext) -> str:
     for line in text.splitlines():
         if line.startswith(STAMP):
             return line[len(STAMP):].strip()
-    # Ours, but from before stamping existed. Any stamped version is newer than that.
-    return "0" if MARKER in text else ""
+    # Ours, but from before stamping existed — in either spelling. Any stamped version
+    # is newer than that, so "0" is what makes `refresh()` rewrite it.
+    return "0" if (MARKER in text or FOUNDER_OS_MARKER in text) else ""
 
 
 def refresh(ctx: GitContext) -> bool:
@@ -242,12 +251,32 @@ def refresh(ctx: GitContext) -> bool:
     current = stamped_version(ctx)
     if not current or current == __version__:
         return False
+    _carry_the_displaced_hook(ctx)
     try:
         hook_path(ctx).write_text(hook_body(ctx), encoding="utf-8")
         _make_executable(hook_path(ctx))
     except OSError:
         return False
     return True
+
+
+def _carry_the_displaced_hook(ctx: GitContext) -> None:
+    """Move a hook the OLD name displaced to where the new body looks for it.
+
+    The old body chained `pre-push.founder-os-original`; the new one chains
+    `pre-push.claude-bestpractice-original`. Rewriting the body without moving the file
+    would leave a husky or lefthook hook on disk, unreferenced and silently not running —
+    the one failure this module has always refused to cause, arriving through the repair
+    meant to prevent it.
+
+    Never overwrites: an existing file under the new name is the current arrangement and
+    is left alone.
+    """
+    old = hooks_dir(ctx) / FOUNDER_OS_DISPLACED_NAME
+    new = hooks_dir(ctx) / DISPLACED_NAME
+    with contextlib.suppress(OSError):
+        if old.exists() and not new.exists():
+            old.rename(new)
 
 
 def hooks_dir(ctx: GitContext) -> Path:
@@ -271,10 +300,17 @@ def hook_path(ctx: GitContext) -> Path:
 
 
 def installed(ctx: GitContext) -> bool:
+    """Ours, in either spelling of our name.
+
+    The old spelling has to count, or `ensure()` treats our own hook as a stranger's and
+    DISPLACES it — chaining `exec make check` in front of a body that then runs the suite
+    a second time. Worse than the staleness it was trying to fix.
+    """
     try:
-        return MARKER in hook_path(ctx).read_text(encoding="utf-8")
+        text = hook_path(ctx).read_text(encoding="utf-8")
     except OSError:
         return False
+    return MARKER in text or FOUNDER_OS_MARKER in text
 
 
 def _make_executable(path: Path) -> None:

@@ -885,3 +885,106 @@ class TestAStaleHookIsBroughtUpToDate(RepoCase):
         ci.install(ctx)
         displaced = path.parent / ci.DISPLACED_NAME
         self.assertIn("husky", displaced.read_text(encoding="utf-8"))
+
+
+class TestAHookFromBeforeTheRenameIsOurs(CICase):
+    """The project was called founder-os once, and hooks written then say so.
+
+    Every routine here matched only the current marker, so such a hook was invisible as
+    ours: never refreshed, and — worse — treated as a stranger's and displaced, chaining
+    `exec make check` in front of a body that then ran the suite again. It also predates
+    the tree-hash short circuit and the green-run recorder, which is how the optimisation
+    shipped in v1.27.0 had never once fired in the repository that wrote it (#146).
+    """
+
+    LEGACY = (
+        "#!/bin/sh\n"
+        "# founder-os pre-push gate\n"
+        '_original="$(dirname "$0")/pre-push.founder-os-original"\n'
+        'if [ -x "$_original" ]; then "$_original" "$@" || exit $?; fi\n'
+        "exec make check\n"
+    )
+
+    def founder_os_hook(self):
+        from claude_bestpractice import ci
+
+        path = ci.hook_path(self.ctx())
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self.LEGACY)
+        path.chmod(0o755)
+        return path
+
+    def test_it_is_recognised_as_ours(self):
+        from claude_bestpractice import ci
+
+        self.founder_os_hook()
+        self.assertTrue(ci.installed(self.ctx()))
+
+    def test_an_upgrade_rewrites_it_in_place(self):
+        from claude_bestpractice import ci
+
+        path = self.founder_os_hook()
+        self.assertTrue(ci.ensure(self.ctx())[0])
+        body = path.read_text()
+        self.assertIn(ci.MARKER, body)
+        self.assertNotIn(ci.FOUNDER_OS_MARKER, body)
+
+    def test_the_rewritten_hook_carries_what_the_old_one_lacked(self):
+        """The whole point: the short circuit and the recorder it never had."""
+        from claude_bestpractice import ci
+
+        path = self.founder_os_hook()
+        ci.ensure(self.ctx())
+        body = path.read_text()
+        self.assertIn("green-covers-tree", body)
+        self.assertIn("record-green", body)
+
+    def test_a_hook_the_old_name_displaced_is_carried_across(self):
+        """The old body chained `pre-push.founder-os-original`, the new one chains a
+        different filename. Rewriting without moving the file leaves a husky hook on disk,
+        unreferenced and silently not running — through the repair meant to prevent it."""
+        from claude_bestpractice import ci
+
+        self.founder_os_hook()
+        theirs = ci.hooks_dir(self.ctx()) / ci.FOUNDER_OS_DISPLACED_NAME
+        theirs.write_text("#!/bin/sh\necho THEIR-CHECK-RAN\nexit 0\n")
+        theirs.chmod(0o755)
+
+        ci.ensure(self.ctx())
+
+        carried = ci.hooks_dir(self.ctx()) / ci.DISPLACED_NAME
+        self.assertTrue(carried.exists(), "their hook was left where nothing reads it")
+        proc = subprocess.run(
+            ["sh", str(ci.hook_path(self.ctx()))],
+            cwd=str(self.repo), capture_output=True, text=True, timeout=60,
+        )
+        self.assertIn("THEIR-CHECK-RAN", proc.stdout)
+
+    def test_a_strangers_hook_is_still_displaced_and_never_rewritten(self):
+        """Recognising one more marker must not turn into recognising everything."""
+        from claude_bestpractice import ci
+
+        path = ci.hook_path(self.ctx())
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("#!/bin/sh\n# husky\necho THEIR-CHECK-RAN\nexit 0\n")
+        path.chmod(0o755)
+
+        self.assertFalse(ci.installed(self.ctx()))
+        ci.ensure(self.ctx())
+        displaced = ci.hooks_dir(self.ctx()) / ci.DISPLACED_NAME
+        self.assertIn("husky", displaced.read_text())
+
+    def test_carrying_never_overwrites_the_arrangement_already_there(self):
+        """A file already under the new name IS the current chain. Moving the old one on
+        top of it would replace a hook that runs with one that was superseded."""
+        from claude_bestpractice import ci
+
+        self.founder_os_hook()
+        (ci.hooks_dir(self.ctx()) / ci.FOUNDER_OS_DISPLACED_NAME).write_text("#!/bin/sh\nexit 0\n")
+        current = ci.hooks_dir(self.ctx()) / ci.DISPLACED_NAME
+        current.write_text("#!/bin/sh\necho CURRENT-CHECK-RAN\nexit 0\n")
+        current.chmod(0o755)
+
+        ci.ensure(self.ctx())
+
+        self.assertIn("CURRENT-CHECK-RAN", current.read_text())

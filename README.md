@@ -4,8 +4,8 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-1.28.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-1235%20passing-2ea44f)](#verified)
+[![version](https://img.shields.io/badge/version-1.29.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-1247%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-33%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
@@ -215,10 +215,15 @@ The failure this closes is a session that agrees the change, opens the pull requ
 then stops — waiting for an approval nobody asked it to wait for. The PR sits, the session
 ends, and nothing in the repository remembers it.
 
-There are exactly two ways it can end, and no third:
+There are exactly three ways it can end, and no fourth:
 
-**Merged, by the session that opened it.** No approval step, because there is no reviewer.
-A turn that tries to end on an open pull request is interrupted and told to merge it.
+**Waiting for you.** Passing checks say the code works. They say nothing about whether the
+work is wanted, and in a repository that deploys from the trunk a merge is a step towards
+shipping it. So a green pull request you have not accepted is left open, and the turn is
+told it is waiting for you rather than the other way round.
+
+**Merged, by the session that opened it.** Once you say `merge ok`, it opens, checks and
+merges on its own without asking again.
 
 **Handed to you, with the blockers named.** When the final check finds something the merge
 is *refused* — not negotiated, not repaired. That half is what makes the first half safe:
@@ -236,6 +241,24 @@ one of them is one an agent walks past on its first `Bash` call.
 It interrupts **once** per pull request and then carries it on the board, so ignoring it,
 crashing, or hitting the escalation ceiling cannot turn a reminder into a wedge. Off with
 `{"manage_pull_requests": false}`.
+
+### The three things that wait for your word
+
+Some actions cannot be undone by re-running them, and no amount of green says you wanted
+them. Each waits for a literal in a message **of yours**, read by the hook that reads your
+messages, and each is **spent when it is used** — one word, one action, never a standing
+grant.
+
+| You type | It allows | Once |
+| --- | --- | --- |
+| `merge ok` | merging the open pull request | one merge |
+| `release ok` | promoting to production | one promotion |
+| `migration ok` | destructive DDL in a migration | one migration |
+
+Anchored to the end of a line, so *"we should merge okay soon"* is talk about a merge and
+not one. Nothing the session writes can stand in for these — only your own turns reach the
+hook that records them, which is the whole point: the gate on an irreversible action must
+not be openable by the party it gates.
 
 ### Slop caught mechanically — in your repository
 
@@ -354,7 +377,7 @@ against a cap of 400 — roughly 0.1 % of a 200k window.
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 1235 tests · 33 doctor checks · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 1247 tests · 33 doctor checks · budget
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration

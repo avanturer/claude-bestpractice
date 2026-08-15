@@ -162,12 +162,58 @@ class TestMigrationGate(GateCase):
         # session's own tree (#102) is not a refusal any more than silence is.
         self.assertNotEqual("deny", self.decision(self.migration("ALTER TABLE users ADD COLUMN nickname text;")))
 
-    def test_override_token_permits_it(self):
-        """A typed acknowledgement, not a config flag that gets set once and forgotten."""
+    def say(self, prompt: str, session_id: str = "s1") -> None:
+        """The founder speaking, recorded the way it actually arrives — through the hook
+        that reads their message. Writing the acceptance into the store directly would
+        prove the gate against a shape production never produces.
+
+        Speaking sets this session's task statement, which arms the ledger gate — so the
+        board is satisfied here too. Without it these tests are refused for having no
+        card and never reach the migration gate at all, which is how three of them
+        passed while proving nothing.
+        """
+        self.claim_a_task(session_id, "migrations/0002_change.sql")
+        self.gate("prompt-capture", {
+            "session_id": session_id,
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": prompt,
+        })
+
+    def refused_over_the_data(self, proc) -> bool:
+        """Refused by THIS gate. `deny` alone is satisfied by any gate above it."""
+        reason = ""
+        try:
+            reason = json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+        except (json.JSONDecodeError, KeyError, TypeError):
+            return False
+        return "destructive DDL" in reason
+
+    def test_a_token_in_the_migration_no_longer_opens_the_gate(self):
+        """The session writes the migration, so a literal inside it authorised nothing."""
         self.reach_traction()
         self.start()
-        proc = self.migration("-- CLAUDE_BESTPRACTICE_I_ACCEPT_DATA_LOSS\nDROP TABLE users;")
-        self.assertNotEqual("deny", self.decision(proc))
+        self.assertTrue(self.refused_over_the_data(
+            self.migration("-- CLAUDE_BESTPRACTICE_I_ACCEPT_DATA_LOSS\nDROP TABLE users;")))
+
+    def test_the_founders_word_permits_it(self):
+        self.reach_traction()
+        self.start()
+        self.say("checked the column, nothing reads it any more. migration ok")
+        self.assertNotEqual("deny", self.decision(self.migration("DROP TABLE users;")))
+
+    def test_one_word_permits_one_migration(self):
+        """Spent on use, so accepting one drop is not a standing grant over the schema."""
+        self.reach_traction()
+        self.start()
+        self.say("checked the column, nothing reads it any more. migration ok")
+        self.assertNotEqual("deny", self.decision(self.migration("DROP TABLE users;")))
+        self.assertTrue(self.refused_over_the_data(self.migration("DROP TABLE orders;")))
+
+    def test_talking_about_a_migration_is_not_accepting_one(self):
+        self.reach_traction()
+        self.start()
+        self.say("if the migration ok then we ship, but check the column first")
+        self.assertTrue(self.refused_over_the_data(self.migration("DROP TABLE users;")))
 
     def test_prototype_stage_does_not_gate_migrations(self):
         """A three-day prototype does not get the ceremony a revenue system needs."""

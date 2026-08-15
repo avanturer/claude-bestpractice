@@ -716,7 +716,9 @@ def check_stage_gated_rules(repo: Path) -> Result:
     """Later gates must stay off at prototype and switch themselves on by stage."""
     start_session(repo, "doctor-stage")
 
-    def write_migration(body: str):
+    def write_migration(body: str, name: str = "0002.sql"):
+        # The file varies because the loop detector counts repeats of the same call, and
+        # five probes at one path is exactly what it exists to stop. Caught here.
         (repo / "migrations").mkdir(exist_ok=True)
         return run_gate(
             "pre-tool",
@@ -726,7 +728,7 @@ def check_stage_gated_rules(repo: Path) -> Result:
                 "cwd": str(repo),
                 "tool_name": "Write",
                 "tool_input": {
-                    "file_path": str(repo / "migrations" / "0002.sql"),
+                    "file_path": str(repo / "migrations" / name),
                     "content": body,
                 },
             },
@@ -758,13 +760,37 @@ def check_stage_gated_rules(repo: Path) -> Result:
     # question this check asks is whether the additive migration was REFUSED. Reading
     # silence as the only shape of "allowed" made a vouch indistinguishable from a denial.
     allowed = decision(write_migration("ALTER TABLE users ADD COLUMN nick text;")) != "deny"
-    ok = denied and allowed
+
+    # The literal used to live in the migration, which the session writes. Proving the
+    # refusal alone would have passed then too, so the check has to prove the door as
+    # well: it opens on the founder's word and on nothing the session can compose.
+    self_authorised = decision(write_migration(
+        "-- CLAUDE_BESTPRACTICE_I_ACCEPT_DATA_LOSS\nDROP TABLE users;", "0003.sql")) == "deny"
+    run_gate(
+        "prompt-capture",
+        {
+            "session_id": "doctor-stage",
+            "hook_event_name": "UserPromptSubmit",
+            "cwd": str(repo),
+            "prompt": "checked it, nothing reads that table. migration ok",
+        },
+        repo,
+    )
+    # Speaking gives the session a task statement, which arms the ledger gate — so the
+    # board has to be satisfied or the write is refused for having no card and never
+    # reaches the gate under test. That refusal reads identically from out here.
+    _claim_a_task(repo, "doctor-stage", "migrations/0004.sql")
+    on_the_word = decision(write_migration("DROP TABLE users;", "0004.sql")) != "deny"
+
+    ok = denied and allowed and self_authorised and on_the_word
     return Result(
         "stage gates scale with the repo",
         ok,
-        "off at prototype, destructive DDL denied at traction, additive allowed"
+        "off at prototype, refused at traction, a token in the file refused too, "
+        "dropped on the founder's word"
         if ok
-        else f"denied={denied} additive_allowed={allowed}",
+        else f"denied={denied} additive_allowed={allowed} "
+        f"token_refused={self_authorised} word_worked={on_the_word}",
     )
 
 

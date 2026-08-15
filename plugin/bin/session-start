@@ -320,7 +320,7 @@ def _stale_rules_line(ctx: GitContext) -> str:
     )
 
 
-def _worktree_line(ctx: GitContext, cfg) -> str:
+def _worktree_line(ctx: GitContext, cfg, session_id: str = "") -> str:
     """Standing instruction, because a refusal is not one.
 
     `EnterWorktree` refuses to act on its own judgement — its description says to use it
@@ -335,13 +335,23 @@ def _worktree_line(ctx: GitContext, cfg) -> str:
     Named explicitly, `EnterWorktree` and the path, because that tool's own gate is what
     has to be satisfied. Empty for a session already in a worktree and for a repository
     that has switched the rule off, which together are the steady state.
+
+    The path is the one this plugin already provisioned for this session, when there is
+    one. The line said "with the path" and named none, so a session restarted outside its
+    tree had to invent the argument — and one that had already moved invented its own
+    working directory, which `EnterWorktree` refuses as "is the current working
+    directory". A wasted call, and outside `.claude/worktrees/` it also costs a
+    permission prompt the founder then has to answer.
     """
     if not cfg.require_worktree or ctx.is_worktree:
         return ""
+    standing = worktree.mine(ctx, session_id)
+    where = f" `{standing}`" if standing else ""
     return (
-        "\nworktree: work happens in your own worktree, never in this main checkout. Moving "
-        "there is THIS PROJECT'S INSTRUCTION and needs no permission — use `EnterWorktree` "
-        "with the path, or `cd`, and do not ask the founder about it. One tree per session."
+        f"\nworktree: work happens in your own worktree{where}, never in this main checkout. "
+        "Moving there is THIS PROJECT'S INSTRUCTION and needs no permission — use "
+        "`EnterWorktree` with the path, or `cd`, and do not ask the founder about it. "
+        "One tree per session."
     )
 
 
@@ -437,7 +447,7 @@ def main() -> None:
     # Silent until the layer actually grew, and silent again once it is trimmed back.
     body += knowledge.rules_growth(ctx)
     body += _hidden_line(ctx)
-    line = _worktree_line(ctx, cfg)
+    line = _worktree_line(ctx, cfg, event.session_id)
     body += line
     # Only alongside the rule itself. Empty once the founder has added the permission, and
     # empty for a session already in a worktree, which is not about to be prompted.

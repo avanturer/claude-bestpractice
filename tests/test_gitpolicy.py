@@ -1204,3 +1204,57 @@ class TestASessionDoesNotBlockItself(PolicyCase):
 
         decision, reason = self.bash(f"git -C {tree} merge origin/main")
         self.assertEqual("deny", decision, reason)
+
+
+class TestTheStandingInstructionNamesTheTree(RepoCase):
+    """The line said "use `EnterWorktree` with the path" and named no path.
+
+    A session restarted outside its tree had to invent the argument, and one that had
+    already moved invented its own working directory — which `EnterWorktree` refuses as
+    "is the current working directory". A wasted call, and for a tree beside the
+    repository rather than under `.claude/worktrees/` it also spends a permission prompt
+    the founder has to answer by hand.
+    """
+
+    def setUp(self) -> None:
+        # Off by default in a prototype, and this is a rule about the rule being ON.
+        # Without it every assertion here passes on an empty string.
+        super().setUp()
+        self.configure(require_worktree=True)
+
+    def context(self, session: str = "s1") -> str:
+        proc = self.run_hook("session-start", {"session_id": session, "hook_event_name": "SessionStart"})
+        body = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("never in this main checkout", body,
+                      "precondition: the standing line has to be armed at all")
+        return body
+
+    def test_the_line_carries_the_tree_this_session_already_has(self):
+        from claude_bestpractice import hookio, worktree
+
+        made = worktree.provision(self.ctx(), "work", hookio.compose_session_id("s1", str(self.repo)))
+        self.assertIsNotNone(made, "nothing to name if provisioning failed")
+        self.assertIn(str(made), self.context())
+
+    def test_a_session_with_no_tree_yet_is_still_told_to_move(self):
+        """Naming the path must not become a condition for the instruction existing."""
+        self.context()
+
+    def test_a_session_already_in_a_worktree_is_told_nothing(self):
+        """It is standing where the instruction would send it; repeating it is the
+        wasted call this fix is about.
+
+        Differential on purpose. The armed config is committed first so the new checkout
+        carries it, and the main checkout is asserted to BE told in the same repository —
+        otherwise the absence proves only that the rule was off over there.
+        """
+        self.commit()
+        tree = self.add_worktree("already-there")
+        self.context()
+        proc = self.run_hook(
+            "session-start",
+            {"session_id": "s2", "hook_event_name": "SessionStart"},
+            cwd=tree,
+        )
+        body = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertNotIn("never in this main checkout", body)
