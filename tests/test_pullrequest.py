@@ -57,6 +57,16 @@ class PRCase(RepoCase):
     # did not have to agree (#135).
     PR_NUMBER = 48
 
+    def accept(self, session_id: str = "s1") -> None:
+        """The founder's word, recorded the way it actually arrives — through the hook
+        that reads their message. Writing it into the store directly would prove the gate
+        against a shape production never produces."""
+        self.gate("prompt-capture", {
+            "session_id": session_id,
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "looks good to me, merge ok",
+        })
+
     def open_a_pr(self, session_id: str = "s1", number: int = 0):
         """Open one the way a session does: the request, then the response.
 
@@ -114,7 +124,9 @@ class TestTheMergeIsJudged(PRCase):
         self.commit("add the app module")
         evidence.record_green(self.ctx(), ["pytest"])
 
-    def merge(self, session_id: str = "s1"):
+    def merge(self, session_id: str = "s1", accepted: bool = True):
+        if accepted:
+            self.accept(session_id)
         return self.tool(
             "mcp__github__merge_pull_request",
             {"owner": "o", "repo": "r", "pullNumber": PRCase.PR_NUMBER}, session_id,
@@ -254,7 +266,9 @@ class TestMergingWhatThisGateJustClearedIsNotAQuestion(PRCase):
         self.commit("add the app module")
         evidence.record_green(self.ctx(), ["pytest"])
 
-    def merge(self):
+    def merge(self, accepted: bool = True):
+        if accepted:
+            self.accept()
         return self.tool("mcp__github__merge_pull_request",
                          {"owner": "o", "repo": "r", "pullNumber": PRCase.PR_NUMBER})
 
@@ -341,12 +355,32 @@ class TestAPullRequestIsNeverLeftHanging(PRCase):
             "session_id": session_id, "hook_event_name": "Stop", "stop_hook_active": active,
         })
 
-    def test_a_turn_cannot_end_quietly_on_an_open_pull_request(self):
+    def test_a_green_pull_request_the_founder_has_not_seen_waits_for_them(self):
+        """Issue #140. Green means the code works, never that the work is wanted, and the
+        demand used to say "there is no reviewer and no approval step in this repository"
+        — true about GitHub, false about the product. A session told "не кати, буду
+        смотреть" was instructed to merge anyway on every turn."""
         self.write("src/app.py", "x = 1\n")
         self.commit("add the app module")
         evidence.record_green(self.ctx(), ["pytest"])
         self.start()
         self.open_a_pr()
+
+        proc = self.stop()
+        self.assertEqual(2, proc.returncode, proc.stdout)
+        self.assertIn("waiting for the founder", proc.stderr)
+        self.assertIn("merge ok", proc.stderr, "the way through must be named")
+        self.assertNotIn("Merge it now", proc.stderr)
+
+    def test_once_the_founder_has_accepted_it_the_turn_cannot_end_quietly(self):
+        """The other half, and the reason this is not simply a softer gate: once the word
+        is given the assistant merges on its own, without asking again."""
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+        self.open_a_pr()
+        self.accept()
 
         proc = self.stop()
         self.assertEqual(2, proc.returncode, proc.stdout)
@@ -410,6 +444,9 @@ class TestAPullRequestIsNeverLeftHanging(PRCase):
         evidence.record_green(self.ctx(), ["pytest"])
         self.start()
         self.open_a_pr()
+        # Accepted first, because an unaccepted merge is refused now and the obligation
+        # would still be open — which would make this pass for the wrong reason.
+        self.accept()
         self.tool("mcp__github__merge_pull_request", {"owner": "o", "repo": "r", "pullNumber": PRCase.PR_NUMBER})
 
         self.assertEqual("", pullrequest.line(self.ctx()))
@@ -450,6 +487,100 @@ class TestTheLedger(RepoCase):
         pullrequest.settle(ctx, "feat/a", pullrequest.MERGED)
         self.assertEqual(["feat/b"], [r["branch"] for r in pullrequest.outstanding(ctx)])
 
+
+class TestAMergeWaitsForTheFoundersWord(PRCase):
+    """Issue #140. The merge gate treated passing checks as acceptance. Checks say the
+    code works; they say nothing about whether the work is wanted, and in a repository
+    that deploys from the trunk a merge is a step towards shipping it.
+
+    The word travels the road decision 0006 built for switches: a literal this plugin
+    printed, read from the FOUNDER's own message by the hook that reads their messages,
+    stored where no session can write it, and consumed on use. Prose is not interpreted —
+    0006 rejected that outright, and acceptance is the higher stake of the two.
+    """
+
+    def green(self) -> None:
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+
+    def merging(self):
+        return self.tool("mcp__github__merge_pull_request",
+                         {"owner": "o", "repo": "r", "pullNumber": PRCase.PR_NUMBER})
+
+    def test_an_unaccepted_merge_is_refused_however_green_it_is(self):
+        self.green()
+        self.start()
+        self.open_a_pr()
+        proc = self.merging()
+        self.assertEqual("deny", self.decision(proc))
+        self.assertIn("not been accepted", self.reason(proc))
+        self.assertIn("merge ok", self.reason(proc), "the way through must be named")
+
+    def test_the_founders_word_allows_it(self):
+        self.green()
+        self.start()
+        self.open_a_pr()
+        self.accept()
+        self.assertNotEqual("deny", self.decision(self.merging()))
+
+    def test_one_word_authorises_one_merge(self):
+        """Otherwise the first acceptance becomes a standing grant over everything after."""
+        self.green()
+        self.start()
+        self.open_a_pr()
+        self.accept()
+        self.merging()
+
+        self.open_a_pr(number=PRCase.PR_NUMBER)
+        self.assertEqual("deny", self.decision(self.merging()))
+
+    def test_talking_about_a_merge_is_not_accepting_one(self):
+        """The failure mode decision 0006 named: a gate switched by phrasing."""
+        from claude_bestpractice import config
+
+        for said in ("we should merge okay soon", "is the merge ok for you?",
+                     "do not merge ok this yet"):
+            self.assertEqual({}, config.approvals_in(said), said)
+
+
+class TestPromotingToProductionTakesTheFoundersWord(PRCase):
+    """The literal used to be a token IN THE COMMAND, which the session composes — so the
+    gate on the one irreversible action was openable by the party it gates. Decision 0006
+    closed that hole for config switches and this was left behind."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        # The gate scales with the repository's maturity and is off at prototype, which is
+        # what a fresh fixture is. A test that skipped this would assert on a gate that
+        # never ran.
+        self.configure(stage_override="traction")
+
+    def deploying(self):
+        return self.tool("Bash", {"command": "fly deploy"})
+
+    def approve(self) -> None:
+        self.gate("prompt-capture", {
+            "session_id": "s1", "hook_event_name": "UserPromptSubmit",
+            "prompt": "checked the preview, release ok",
+        })
+
+    def test_a_promotion_nobody_approved_is_refused(self):
+        self.start()
+        proc = self.deploying()
+        self.assertEqual("deny", self.decision(proc))
+        self.assertIn("release ok", self.reason(proc))
+
+    def test_the_founders_word_allows_one_promotion(self):
+        self.start()
+        self.approve()
+        self.assertNotEqual("deny", self.decision(self.deploying()))
+
+    def test_it_is_spent_on_that_promotion(self):
+        self.start()
+        self.approve()
+        self.deploying()
+        self.assertEqual("deny", self.decision(self.deploying()))
 
 if __name__ == "__main__":
     unittest.main()

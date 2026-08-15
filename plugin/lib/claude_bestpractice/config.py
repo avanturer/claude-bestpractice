@@ -262,6 +262,49 @@ def switches_in(text: str) -> dict[str, str]:
     return out
 
 
+# The founder's acceptance of work, in the same store and on the same terms as a switch:
+# a literal this plugin printed for them to repeat, recorded from THEIR message where no
+# session can write it, and consumed on use.
+#
+# Two of them, because they authorise different things. `merge ok` says a branch has been
+# looked at and may land — the assistant then opens, checks and merges on its own, which
+# is the whole point. `release ok` says one promotion to production may happen; it is
+# spent immediately, so it can never become a standing grant.
+#
+# Prose is deliberately not read. Decision 0006 rejected that for switches — "a regex
+# judging language would be a gate switched by phrasing" — and acceptance is the higher
+# stake of the two. `merge ok` cannot be phrased into by accident, and nothing the model
+# writes reaches this: only the founder's own turns pass through `prompt-capture`.
+APPROVE_MERGE = "approve:merge"
+APPROVE_RELEASE = "approve:release"
+
+# Anchored to the END of a line, so it has to be something the founder said rather than
+# a fragment of a sentence about it. "we should merge okay soon" matched before this
+# and would have authorised a merge nobody asked for.
+_APPROVAL = re.compile(
+    r"(?im)(?:^|[\s,;:—–-])(?P<subject>merge|release|deploy)\s+(?:ok|okay|accepted)\s*[.!]?\s*$"
+)
+
+_APPROVAL_KEYS = {
+    "merge": APPROVE_MERGE,
+    "release": APPROVE_RELEASE,
+    "deploy": APPROVE_RELEASE,
+}
+
+
+def approvals_in(text: str) -> dict[str, str]:
+    """Acceptances the founder gave in their own message. Usually empty."""
+    return {
+        _APPROVAL_KEYS[found["subject"].lower()]: "yes"
+        for found in _APPROVAL.finditer(text or "")
+    }
+
+
+def approved(ctx: GitContext, key: str) -> bool:
+    """Has the founder authorised this, in a message of their own?"""
+    return asked_for(ctx, key) is not None
+
+
 def record_switches(ctx: GitContext, asked: dict[str, str]) -> None:
     if not asked:
         return
