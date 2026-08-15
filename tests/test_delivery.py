@@ -124,7 +124,7 @@ class TestWhatShipped(DeliveryCase):
     def test_it_reports_delivered_work_not_files(self):
         from claude_bestpractice import delivery, plan
 
-        task = plan.add(self.ctx(), "Add CSV export to the billing page", done_when="stated")
+        task = plan.add(self.ctx(), "Add CSV export to the billing page", done_when="stated", paths=["src/app.py"])
         plan.claim(self.ctx(), task.id, "s1", "main")
         plan.complete(self.ctx(), task.id)
 
@@ -222,7 +222,7 @@ class TestPullRequestReadiness(DeliveryCase):
     def test_the_body_is_written_for_someone_who_does_not_read_diffs(self):
         from claude_bestpractice import delivery, plan
 
-        task = plan.add(self.ctx(), "Add CSV export to the billing page", done_when="stated")
+        task = plan.add(self.ctx(), "Add CSV export to the billing page", done_when="stated", paths=["src/app.py"])
         plan.claim(self.ctx(), task.id, "s1", "main")
         plan.complete(self.ctx(), task.id)
 

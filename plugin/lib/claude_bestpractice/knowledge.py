@@ -21,9 +21,11 @@ dead APIs on 15 of 17 samples, where no retrieval at all produced 0 of 17.
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import store
 from .gitctx import GitContext
 
 RULES_DIR = ".claude/rules"
@@ -183,6 +185,58 @@ def instruction_bytes(ctx: GitContext) -> int:
         except OSError:
             continue
     return total
+
+
+# What the size measurement above cannot see: the DERIVATIVE. An instruction layer is
+# appended to after every bug and almost never read back — measured across 1,867
+# repositories, agentic prompts more than tripled over their lifetime and the older an
+# instruction got, the less likely it was ever deleted. The size alone reads as acceptable
+# for months while it doubles, because there is no moment at which it is obviously too big.
+#
+# Reported, never acted on. Which standing instruction has outlived its reason is a
+# judgement about the founder's own words, and this plugin does not hold the pen on those
+# (decision 0007). It holds the pen on the fact that they grew.
+RULES_FILE = "rules-size.json"
+GROWTH_REPORTED_AT = 1.25
+GROWTH_WINDOW_DAYS = 7.0
+
+
+def _rules_history(ctx: GitContext) -> dict:
+    got = store.read_json(store.tier_b(ctx, RULES_FILE), default={})
+    return got if isinstance(got, dict) else {}
+
+
+def _record_reading(ctx: GitContext, current: int, now: float) -> int:
+    """Add today's size to the history and answer with the oldest still in the window."""
+    history = _rules_history(ctx)
+    readings = [r for r in history.get("readings", []) if isinstance(r, dict)]
+    cutoff = now - GROWTH_WINDOW_DAYS * 86_400
+    kept = [r for r in readings if float(r.get("at") or 0) >= cutoff]
+    oldest = min(kept, key=lambda r: float(r["at"])) if kept else None
+
+    kept.append({"at": now, "bytes": current})
+    store.write_json(store.tier_b(ctx, RULES_FILE), {"readings": kept[-64:]})
+    return int(oldest.get("bytes") or 0) if oldest else 0
+
+
+def rules_growth(ctx: GitContext, now: float | None = None) -> str:
+    """One line when the instruction layer has grown notably, and nothing otherwise.
+
+    The oldest reading inside the window is the baseline, so a layer that grew and was
+    then trimmed stops being reported rather than being held against the founder forever.
+    """
+    now = time.time() if now is None else now
+    current = instruction_bytes(ctx)
+    if not current:
+        return ""
+
+    was = _record_reading(ctx, current, now)
+    if not was or current < was * GROWTH_REPORTED_AT:
+        return ""
+    return (
+        f"\nrules layer: {was} -> {current} bytes this week, loaded on every turn of every "
+        "session. Growing is normal; nobody ever reads one back to retire what is spent."
+    )
 
 
 # A path-shaped token: an explicit separator, or a bare filename with an extension. Only

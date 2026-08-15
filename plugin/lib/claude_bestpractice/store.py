@@ -105,6 +105,30 @@ def hidden_from_git(ctx: GitContext) -> str:
     return out.split("\t", 1)[0].strip() if out else ""
 
 
+def ignored_tier_a(ctx: GitContext) -> list[str]:
+    """Durable records an ignore rule is keeping out of git — the ones that die here.
+
+    `--ignored` with `--exclude-standard` is the combination that LISTS what the rules
+    hide; `--others --exclude-standard` alone filters exactly those out and answers with
+    the ordinary untracked files instead, which is the opposite question. Checked against
+    a repository that had two, not reasoned about.
+
+    Asked of git rather than of the rule text: a file committed BEFORE the rule appeared
+    stays tracked and is not lost, and counting it would make the number untrustworthy at
+    the moment somebody has to act on it.
+    """
+    from .gitctx import _run
+
+    try:
+        out = _run(
+            ["ls-files", "--others", "--ignored", "--exclude-standard", TIER_A_DIRNAME],
+            ctx.worktree_root, check=False,
+        )
+    except Exception:  # noqa: BLE001 - a count is a diagnostic; never fail a session over one
+        return []
+    return [line for line in (out or "").splitlines() if line.strip()]
+
+
 def tier_b(ctx: GitContext, *parts: str) -> Path:
     return ctx.common_dir.joinpath(TIER_B_DIRNAME, *parts)
 

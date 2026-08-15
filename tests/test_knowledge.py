@@ -300,6 +300,58 @@ class TestSubagentHook(KnowledgeCase):
         self.assertNotIn("additionalContext", proc.stdout)
 
 
+class TestTheRulesLayerIsWatchedForARatchet(RepoCase):
+    """An instruction layer is appended to after every bug and almost never read back.
+    The SIZE reads as acceptable for months while it doubles, because there is no moment
+    at which it is obviously too big — so what is reported is the growth, not the size.
+
+    Reported only. Which standing instruction has outlived its reason is a judgement about
+    the founder's own words, and this plugin does not hold the pen on those (decision 0007).
+    """
+
+    def rules(self, size: int) -> None:
+        path = self.repo / knowledge.RULES_DIR / "team.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x" * size)
+
+    def test_a_first_reading_says_nothing(self):
+        self.rules(1000)
+        self.assertEqual("", knowledge.rules_growth(self.ctx(), now=1000.0))
+
+    def test_growth_is_reported_with_both_numbers(self):
+        self.rules(1000)
+        knowledge.rules_growth(self.ctx(), now=1000.0)
+        self.rules(3000)
+        said = knowledge.rules_growth(self.ctx(), now=1000.0 + 2 * 86_400)
+        self.assertIn("1000 -> 3000", said)
+        self.assertIn("every turn", said)
+
+    def test_a_layer_that_was_trimmed_back_stops_being_reported(self):
+        """Otherwise the line becomes a permanent accusation about work already done."""
+        self.rules(1000)
+        knowledge.rules_growth(self.ctx(), now=1000.0)
+        self.rules(3000)
+        knowledge.rules_growth(self.ctx(), now=1000.0 + 2 * 86_400)
+        self.rules(1100)
+        self.assertEqual("", knowledge.rules_growth(self.ctx(), now=1000.0 + 3 * 86_400))
+
+    def test_ordinary_drift_is_not_a_ratchet(self):
+        self.rules(1000)
+        knowledge.rules_growth(self.ctx(), now=1000.0)
+        self.rules(1100)
+        self.assertEqual("", knowledge.rules_growth(self.ctx(), now=1000.0 + 86_400))
+
+    def test_a_reading_older_than_the_window_is_not_the_baseline(self):
+        """A layer that grew over a year is not news; a layer that grew this week is."""
+        self.rules(1000)
+        knowledge.rules_growth(self.ctx(), now=1000.0)
+        self.rules(3000)
+        stale = 1000.0 + (knowledge.GROWTH_WINDOW_DAYS + 1) * 86_400
+        self.assertEqual("", knowledge.rules_growth(self.ctx(), now=stale))
+
+    def test_a_repository_with_no_rules_of_its_own_is_silent(self):
+        self.assertEqual("", knowledge.rules_growth(self.ctx(), now=1000.0))
+
 if __name__ == "__main__":
     unittest.main()
 

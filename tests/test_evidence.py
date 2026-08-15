@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import os
 import time
 import unittest
 
 from helpers import RepoCase, git
 
-from claude_bestpractice import evidence
+from claude_bestpractice import evidence, store
 from claude_bestpractice.gitctx import changed_files
 
 JUNIT_PASS = '<?xml version="1.0"?><testsuite name="s" tests="4" failures="0" errors="0"></testsuite>'
@@ -216,6 +217,52 @@ class TestScopeDrift(unittest.TestCase):
             evidence.scope_drift(changed=["a.py", "b.py"], task_paths=[], exempt=[]), []
         )
 
+
+class TestAGreenRunIsStampedWithItsTree(RepoCase):
+    """`record_green` wrote a command, a time and a branch — none of which can tell "green
+    now" from "green three edits ago". So the push gate had no choice but to re-run the
+    suite it had just watched pass: five minutes a push for an answer that could not
+    differ. The stamp is the same content-addressed evidence used everywhere else here.
+    """
+
+    def test_the_tree_it_was_green_on_is_recorded(self):
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.assertTrue(evidence.green_covers_tree(self.ctx()))
+
+    def test_one_edit_is_enough_to_stop_covering_it(self):
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.write("src/app.py", "x = 2\n")
+        self.commit("change it")
+        self.assertFalse(evidence.green_covers_tree(self.ctx()))
+
+    def test_a_dirty_tree_is_never_covered(self):
+        """Uncommitted content is not in the tree at all, so no hash can stand for it."""
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.write("src/app.py", "x = 3  # not committed\n")
+        self.assertEqual("", evidence.tree_hash(self.ctx()))
+        self.assertFalse(evidence.green_covers_tree(self.ctx()))
+
+    def test_a_record_with_no_stamp_covers_nothing(self):
+        """Every green written before this release. Unknown must mean run it again."""
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+        path = evidence._green_path(self.ctx())
+        record = json.loads(path.read_text())
+        record.pop("tree")
+        path.write_text(json.dumps(record))
+        self.assertFalse(evidence.green_covers_tree(self.ctx()))
+
+    def test_nothing_green_covers_nothing(self):
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        self.assertFalse(evidence.green_covers_tree(self.ctx()))
 
 if __name__ == "__main__":
     unittest.main()

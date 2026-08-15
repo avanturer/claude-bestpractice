@@ -30,7 +30,7 @@ class PlanCase(RepoCase):
 
 class TestLifecycle(PlanCase):
     def test_add_lands_in_next(self):
-        task = plan.add(self.ctx(), "Export invoices as CSV", done_when="stated")
+        task = plan.add(self.ctx(), "Export invoices as CSV", done_when="stated", paths=["src/app.py"])
         self.assertEqual(task.state, plan.NEXT)
         self.assertEqual(task.id, "0001")
         self.assertIn("export-invoices-as-csv", task.path.name)
@@ -38,7 +38,7 @@ class TestLifecycle(PlanCase):
     def test_state_is_the_directory(self):
         """A transition is a rename, which is why parallel branches merge cleanly."""
         ctx = self.ctx()
-        task = plan.add(ctx, "Ship it", done_when="stated")
+        task = plan.add(ctx, "Ship it", done_when="stated", paths=["src/app.py"])
         self.assertTrue(task.path.parent.name == plan.NEXT)
 
         claimed, _ = plan.claim(ctx, task.id, "s1", "main")
@@ -50,13 +50,13 @@ class TestLifecycle(PlanCase):
 
     def test_ids_increment(self):
         ctx = self.ctx()
-        self.assertEqual(plan.add(ctx, "first", done_when="stated").id, "0001")
-        self.assertEqual(plan.add(ctx, "second", done_when="stated").id, "0002")
+        self.assertEqual(plan.add(ctx, "first", done_when="stated", paths=["src/app.py"]).id, "0001")
+        self.assertEqual(plan.add(ctx, "second", done_when="stated", paths=["src/app.py"]).id, "0002")
 
     def test_summary_counts_each_state(self):
         ctx = self.ctx()
-        a = plan.add(ctx, "one", done_when="stated")
-        plan.add(ctx, "two", done_when="stated")
+        a = plan.add(ctx, "one", done_when="stated", paths=["src/app.py"])
+        plan.add(ctx, "two", done_when="stated", paths=["src/app.py"])
         plan.claim(ctx, a.id, "s1", "main")
         counts = plan.summary(ctx)
         self.assertEqual((counts["next"], counts["doing"], counts["done"]), (1, 1, 0))
@@ -70,7 +70,7 @@ class TestClaiming(PlanCase):
     def test_a_live_session_holds_its_claim(self):
         ctx = self.ctx()
         self.session("alpha")
-        task = plan.add(ctx, "shared work", done_when="stated")
+        task = plan.add(ctx, "shared work", done_when="stated", paths=["src/app.py"])
         plan.claim(ctx, task.id, "alpha", "main")
 
         _, error = plan.claim(ctx, task.id, "beta", "feature")
@@ -80,7 +80,7 @@ class TestClaiming(PlanCase):
         """Otherwise a crashed session leaves work marked in-flight forever."""
         ctx = self.ctx()
         self.session("ghost", pid=999_999_999)
-        task = plan.add(ctx, "orphaned work", done_when="stated")
+        task = plan.add(ctx, "orphaned work", done_when="stated", paths=["src/app.py"])
         plan.claim(ctx, task.id, "ghost", "main")
 
         claimed, error = plan.claim(ctx, task.id, "beta", "feature")
@@ -90,14 +90,14 @@ class TestClaiming(PlanCase):
     def test_reclaiming_your_own_task_is_allowed(self):
         ctx = self.ctx()
         self.session("alpha")
-        task = plan.add(ctx, "mine", done_when="stated")
+        task = plan.add(ctx, "mine", done_when="stated", paths=["src/app.py"])
         plan.claim(ctx, task.id, "alpha", "main")
         _, error = plan.claim(ctx, task.id, "alpha", "main")
         self.assertEqual(error, "")
 
     def test_a_done_task_cannot_be_claimed(self):
         ctx = self.ctx()
-        task = plan.add(ctx, "finished", done_when="stated")
+        task = plan.add(ctx, "finished", done_when="stated", paths=["src/app.py"])
         plan.complete(ctx, task.id)
         _, error = plan.claim(ctx, task.id, "s1", "main")
         self.assertIn("already done", error)
@@ -105,7 +105,7 @@ class TestClaiming(PlanCase):
     def test_reaping_releases_claims(self):
         ctx = self.ctx()
         self.session("ghost", pid=999_999_999)
-        task = plan.add(ctx, "orphaned", done_when="stated")
+        task = plan.add(ctx, "orphaned", done_when="stated", paths=["src/app.py"])
         plan.claim(ctx, task.id, "ghost", "main")
 
         sessions.reap(ctx)
@@ -120,34 +120,34 @@ class TestParallelWorktrees(PlanCase):
         from claude_bestpractice.gitctx import resolve
 
         main_ctx = self.ctx()
-        plan.add(main_ctx, "on main", done_when="stated")
+        plan.add(main_ctx, "on main", done_when="stated", paths=["src/app.py"])
 
         wt_ctx = resolve(self.add_worktree("feature"))
-        task = plan.add(wt_ctx, "on feature", done_when="stated")
+        task = plan.add(wt_ctx, "on feature", done_when="stated", paths=["src/app.py"])
         self.assertEqual(task.id, "0002")
 
     def test_tasks_are_separate_files(self):
         ctx = self.ctx()
         for i in range(5):
-            plan.add(ctx, f"task {i}", done_when="stated")
+            plan.add(ctx, f"task {i}", done_when="stated", paths=["src/app.py"])
         files = list(plan.plan_dir(ctx, plan.NEXT).glob("*.md"))
         self.assertEqual(len(files), 5)
 
     def test_two_branches_adding_tasks_merge_without_conflict(self):
         """The property the whole substrate decision rests on."""
         ctx = self.ctx()
-        plan.add(ctx, "base task", done_when="stated")
+        plan.add(ctx, "base task", done_when="stated", paths=["src/app.py"])
         git(["add", "-A"], self.repo)
         git(["commit", "-qm", "base"], self.repo)
 
         git(["checkout", "-qb", "feature-a"], self.repo)
-        plan.add(ctx, "from a", done_when="stated")
+        plan.add(ctx, "from a", done_when="stated", paths=["src/app.py"])
         git(["add", "-A"], self.repo)
         git(["commit", "-qm", "a"], self.repo)
 
         git(["checkout", "-q", "main"], self.repo)
         git(["checkout", "-qb", "feature-b"], self.repo)
-        plan.add(ctx, "from b", done_when="stated")
+        plan.add(ctx, "from b", done_when="stated", paths=["src/app.py"])
         git(["add", "-A"], self.repo)
         git(["commit", "-qm", "b"], self.repo)
 
@@ -163,8 +163,8 @@ class TestBoardRendering(PlanCase):
     def test_in_flight_comes_before_next(self):
         ctx = self.ctx()
         self.session("alpha")
-        upcoming = plan.add(ctx, "later thing", done_when="stated")
-        active = plan.add(ctx, "current thing", done_when="stated")
+        upcoming = plan.add(ctx, "later thing", done_when="stated", paths=["src/app.py"])
+        active = plan.add(ctx, "current thing", done_when="stated", paths=["src/app.py"])
         plan.claim(ctx, active.id, "alpha", "main")
 
         rendered = plan.render_for_board(ctx)
@@ -177,14 +177,14 @@ class TestBoardRendering(PlanCase):
 
     def test_done_count_is_reported(self):
         ctx = self.ctx()
-        task = plan.add(ctx, "shipped", done_when="stated")
+        task = plan.add(ctx, "shipped", done_when="stated", paths=["src/app.py"])
         plan.complete(ctx, task.id)
-        plan.add(ctx, "pending", done_when="stated")
+        plan.add(ctx, "pending", done_when="stated", paths=["src/app.py"])
         self.assertIn("(1 done)", plan.render_for_board(ctx))
 
     def test_the_board_shows_the_plan(self):
         ctx = self.ctx()
-        plan.add(ctx, "visible on the board", done_when="stated")
+        plan.add(ctx, "visible on the board", done_when="stated", paths=["src/app.py"])
         proc = self.run_hook(
             "session-start", {"session_id": "s1", "hook_event_name": "SessionStart"}
         )
@@ -216,15 +216,22 @@ class TestCli(PlanCase):
         which decision 0002 refuses everywhere else.
         """
         self.run_cli("add", "Do the thing")
+
+        # Starting is where the plan is owed. `pre-tool` refuses a write no claimed card
+        # covers, so refusing the claim is what makes "no code without a plan" binding —
+        # and it costs the founder nothing, unlike the harness's own plan mode, which ends
+        # in an approval dialog.
+        unplanned = self.run_cli("claim", "0001", "--session", "s1")
+        self.assertEqual(unplanned.returncode, 1)
+        self.assertIn("--done-when", unplanned.stderr)
+        self.assertIn("--paths", unplanned.stderr)
+        self.assertIn("NEXT", self.run_cli("list").stdout, "the refusal left it unclaimed")
+
+        self.run_cli("update", "0001", "--done-when", "the parser accepts a csv",
+                     "--paths", "src/parser.py")
         self.assertEqual(self.run_cli("claim", "0001", "--session", "s1").returncode, 0)
         self.assertIn("DOING", self.run_cli("list").stdout)
 
-        refused = self.run_cli("done", "0001")
-        self.assertEqual(refused.returncode, 1)
-        self.assertIn("--done-when", refused.stderr, "the refusal must name the way through")
-        self.assertIn("DOING", self.run_cli("list").stdout, "the refusal left it in flight")
-
-        self.run_cli("update", "0001", "--done-when", "the exporter writes a csv")
         self.assertEqual(self.run_cli("done", "0001").returncode, 0)
         self.assertIn("DONE", self.run_cli("list").stdout)
 
@@ -233,8 +240,8 @@ class TestCli(PlanCase):
         out, so `next` was a one-way sink: every card ever filed and not done still stood
         in it. Empty here and sixty deep in the repository the founder builds in."""
         ctx = self.ctx()
-        stale = plan.add(ctx, "nobody wants this", done_when="stated")
-        fresh = plan.add(ctx, "filed just now", done_when="stated")
+        stale = plan.add(ctx, "nobody wants this", done_when="stated", paths=["src/app.py"])
+        fresh = plan.add(ctx, "filed just now", done_when="stated", paths=["src/app.py"])
         self.aged(stale, hours=30 * 24, state=plan.NEXT)
 
         moved = plan.sweep_queue(ctx, days=21)
@@ -245,7 +252,7 @@ class TestCli(PlanCase):
 
     def test_setting_aside_says_why_and_is_undone_by_one_command(self):
         ctx = self.ctx()
-        stale = plan.add(ctx, "nobody wants this", done_when="stated")
+        stale = plan.add(ctx, "nobody wants this", done_when="stated", paths=["src/app.py"])
         self.aged(stale, hours=30 * 24, state=plan.NEXT)
         plan.sweep_queue(ctx, days=21)
 
@@ -255,7 +262,7 @@ class TestCli(PlanCase):
 
     def test_the_sweep_is_off_at_zero(self):
         ctx = self.ctx()
-        stale = plan.add(ctx, "nobody wants this", done_when="stated")
+        stale = plan.add(ctx, "nobody wants this", done_when="stated", paths=["src/app.py"])
         self.aged(stale, hours=99 * 24, state=plan.NEXT)
         self.assertEqual([], plan.sweep_queue(ctx, days=0))
         self.assertEqual(plan.NEXT, plan.find(ctx, stale.id).state)
@@ -265,11 +272,11 @@ class TestCli(PlanCase):
         editing this minute and one abandoned three days ago read identically."""
         ctx = self.ctx()
         self.session("ghost", pid=999_999_999)
-        dead = plan.add(ctx, "orphaned", done_when="stated")
+        dead = plan.add(ctx, "orphaned", done_when="stated", paths=["src/app.py"])
         plan.claim(ctx, dead.id, "ghost", "main")
 
         self.session("alive")
-        held = plan.add(ctx, "in hand", done_when="stated")
+        held = plan.add(ctx, "in hand", done_when="stated", paths=["src/app.py"])
         plan.claim(ctx, held.id, "alive", "main")
 
         out = self.run_cli("list").stdout
@@ -361,7 +368,7 @@ class TestTheLedgerIsVisibleToGit(PlanCase):
         healthy once and has been hidden since. Checked against git, not reasoned about.
         """
         ctx = self.ctx()
-        task = plan.add(ctx, "already committed", done_when="stated")
+        task = plan.add(ctx, "already committed", done_when="stated", paths=["src/app.py"])
         git(["add", "-f", str(task.path.relative_to(ctx.worktree_root))], ctx.worktree_root)
         git(["commit", "-qm", "commit one task before the rule appears"], ctx.worktree_root)
 
@@ -406,27 +413,27 @@ class TestWhetherAChatIsOnIt(PlanCase):
     def test_a_live_holder_reads_as_active(self):
         ctx = self.ctx()
         self.session("alpha")
-        task = plan.add(ctx, "current work", done_when="stated")
+        task = plan.add(ctx, "current work", done_when="stated", paths=["src/app.py"])
         plan.claim(ctx, task.id, "alpha", "main")
         self.assertIn("active in", plan.activity(ctx, plan.find(ctx, task.id)))
 
     def test_a_dead_holder_reads_as_reclaimable(self):
         ctx = self.ctx()
         self.session("ghost", pid=999_999_999)
-        task = plan.add(ctx, "abandoned", done_when="stated")
+        task = plan.add(ctx, "abandoned", done_when="stated", paths=["src/app.py"])
         plan.claim(ctx, task.id, "ghost", "main")
         self.assertIn("reclaimable", plan.activity(ctx, plan.find(ctx, task.id)))
 
     def test_an_unclaimed_task_claims_nothing(self):
         ctx = self.ctx()
-        task = plan.add(ctx, "nobody's", done_when="stated")
+        task = plan.add(ctx, "nobody's", done_when="stated", paths=["src/app.py"])
         self.assertEqual("", plan.activity(ctx, task))
 
     def test_nothing_about_activity_is_written_to_the_file(self):
         """The whole point. A file that carries it can carry it wrongly."""
         ctx = self.ctx()
         self.session("alpha")
-        task = plan.add(ctx, "current work", done_when="stated")
+        task = plan.add(ctx, "current work", done_when="stated", paths=["src/app.py"])
         plan.claim(ctx, task.id, "alpha", "main")
         text = plan.find(ctx, task.id).path.read_text(encoding="utf-8")
         self.assertNotIn("active", text)
@@ -435,7 +442,7 @@ class TestWhetherAChatIsOnIt(PlanCase):
 class TestPausingSaysWhatWouldLiftIt(PlanCase):
     def test_a_pause_without_a_blocker_is_refused(self):
         ctx = self.ctx()
-        task = plan.add(ctx, "blocked work", done_when="stated")
+        task = plan.add(ctx, "blocked work", done_when="stated", paths=["src/app.py"])
         paused, problem = plan.pause(ctx, task.id, "later")
         self.assertIsNone(paused)
         self.assertIn("what would lift it", problem)
@@ -445,7 +452,7 @@ class TestPausingSaysWhatWouldLiftIt(PlanCase):
         opposite, and conflating them sends session after session at work that cannot
         move."""
         ctx = self.ctx()
-        task = plan.add(ctx, "blocked work", done_when="stated")
+        task = plan.add(ctx, "blocked work", done_when="stated", paths=["src/app.py"])
         paused, problem = plan.pause(ctx, task.id, "waiting on the schema decision in #41")
         self.assertEqual("", problem)
         self.assertEqual(plan.PAUSED, paused.state)
@@ -457,7 +464,7 @@ class TestPausingSaysWhatWouldLiftIt(PlanCase):
 
     def test_resuming_clears_the_blocker(self):
         ctx = self.ctx()
-        task = plan.add(ctx, "blocked work", done_when="stated")
+        task = plan.add(ctx, "blocked work", done_when="stated", paths=["src/app.py"])
         plan.pause(ctx, task.id, "waiting on the schema decision in #41")
         resumed, problem = plan.resume(ctx, task.id)
         self.assertEqual("", problem)
@@ -507,7 +514,7 @@ class TestTasksThatAreNotIndependent(PlanCase):
     def test_an_order_survives_the_transition_that_records_it(self):
         """Every field added to this model has been dropped by a move at least once."""
         ctx = self.ctx()
-        first = plan.add(ctx, "fix the prohibited flag", done_when="stated")
+        first = plan.add(ctx, "fix the prohibited flag", done_when="stated", paths=["src/app.py"])
         second = plan.add(ctx, "score zero for prohibited only", after=[first.id],
                           together=["0009"], paths=["backend/app.py"], done_when="stated")
 
@@ -537,13 +544,13 @@ class TestTasksThatAreNotIndependent(PlanCase):
         """Waiting on a task that does not exist is waiting forever; reading that as
         clear would be the silent failure rather than the visible one."""
         ctx = self.ctx()
-        task = plan.add(ctx, "waits on a typo", after=["9999"], done_when="stated")
+        task = plan.add(ctx, "waits on a typo", after=["9999"], done_when="stated", paths=["src/app.py"])
         self.assertEqual(["9999"], plan.blockers(ctx, task))
 
     def test_a_blocker_clears_when_the_earlier_task_lands(self):
         ctx = self.ctx()
-        first = plan.add(ctx, "lands first", done_when="stated")
-        second = plan.add(ctx, "comes after", after=[first.id], done_when="stated")
+        first = plan.add(ctx, "lands first", done_when="stated", paths=["src/app.py"])
+        second = plan.add(ctx, "comes after", after=[first.id], done_when="stated", paths=["src/app.py"])
         self.assertEqual([first.id], plan.blockers(ctx, second))
 
         plan.complete(ctx, first.id)
@@ -553,9 +560,9 @@ class TestTasksThatAreNotIndependent(PlanCase):
         """The question an implementing session opens with, answerable without reading a
         design document — which is the acceptance criterion the issue names."""
         ctx = self.ctx()
-        first = plan.add(ctx, "lands first", done_when="stated")
-        plan.add(ctx, "comes after", after=[first.id], done_when="stated")
-        plan.add(ctx, "independent", done_when="stated")
+        first = plan.add(ctx, "lands first", done_when="stated", paths=["src/app.py"])
+        plan.add(ctx, "comes after", after=[first.id], done_when="stated", paths=["src/app.py"])
+        plan.add(ctx, "independent", done_when="stated", paths=["src/app.py"])
 
         startable = {t.title for t in plan.startable(ctx)}
         self.assertEqual({"lands first", "independent"}, startable)
@@ -570,8 +577,8 @@ class TestTheOrderIsVisibleWithoutOpeningTheTask(PlanCase):
 
     def test_list_marks_what_is_waiting_and_counts_what_is_ready(self):
         ctx = self.ctx()
-        first = plan.add(ctx, "lands first", done_when="stated")
-        plan.add(ctx, "comes after", after=[first.id], done_when="stated")
+        first = plan.add(ctx, "lands first", done_when="stated", paths=["src/app.py"])
+        plan.add(ctx, "comes after", after=[first.id], done_when="stated", paths=["src/app.py"])
 
         out = self.plan_cli("list").stdout
         self.assertIn(f"[after {first.id}]", out)
@@ -579,8 +586,8 @@ class TestTheOrderIsVisibleWithoutOpeningTheTask(PlanCase):
 
     def test_claim_says_the_earlier_task_has_not_landed(self):
         ctx = self.ctx()
-        first = plan.add(ctx, "lands first", done_when="stated")
-        second = plan.add(ctx, "comes after", after=[first.id], done_when="stated")
+        first = plan.add(ctx, "lands first", done_when="stated", paths=["src/app.py"])
+        second = plan.add(ctx, "comes after", after=[first.id], done_when="stated", paths=["src/app.py"])
 
         proc = self.plan_cli("claim", second.id)
         self.assertEqual(0, proc.returncode, proc.stderr)

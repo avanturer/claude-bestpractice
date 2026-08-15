@@ -38,7 +38,7 @@ class RestartCase(RepoCase):
         ctx = self.ctx()
         me = sid(self.repo, "worker")
         self.start("worker")
-        task = plan.add(ctx, title)
+        task = plan.add(ctx, title, done_when="the exporter writes a csv", paths=["src/app.py"])
         plan.claim(ctx, task.id, me, ctx.branch)
 
         sessions.touch(

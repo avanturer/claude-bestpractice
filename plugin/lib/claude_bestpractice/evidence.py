@@ -1177,6 +1177,38 @@ def _green_path(ctx: GitContext, branch: str = ""):
     return store.tier_b(ctx, "green", f"{name}.json")
 
 
+def tree_hash(ctx: GitContext) -> str:
+    """The content of the tracked tree, as one hash, or "" when it cannot be read.
+
+    `HEAD^{tree}` covers what is committed; a dirty tree deliberately hashes to nothing so
+    that "green" can never be claimed for content that is not in the tree at all. The push
+    gate needs both halves of that: the same tree means the same answer, and anything else
+    means run it again.
+    """
+    from .gitctx import _run
+
+    try:
+        if _run(["status", "--porcelain"], ctx.worktree_root, check=False).strip():
+            return ""
+        return _run(["rev-parse", "HEAD^{tree}"], ctx.worktree_root, check=False).strip()
+    except Exception:  # noqa: BLE001 - no hash means no shortcut, which is the safe answer
+        return ""
+
+
+def green_covers_tree(ctx: GitContext, branch: str = "") -> bool:
+    """Was the suite observed green on exactly the tree that is here now?
+
+    False whenever anything is uncertain — no record, no stamp, a dirty tree, a different
+    tree. The only thing this can do is skip work already done; it can never accept work
+    that was not.
+    """
+    here = tree_hash(ctx)
+    if not here:
+        return False
+    record = last_green(ctx, branch) or {}
+    return str(record.get("tree") or "") == here
+
+
 def record_green(ctx: GitContext, command: list[str]) -> None:
     """Remember that a run was OBSERVED to pass, positively.
 
@@ -1186,7 +1218,18 @@ def record_green(ctx: GitContext, command: list[str]) -> None:
     """
     store.write_json(
         _green_path(ctx),
-        {"command": command, "at": time.time(), "branch": ctx.branch},
+        {
+            "command": command,
+            "at": time.time(),
+            "branch": ctx.branch,
+            # WHAT was green, not just when. A command, a time and a branch cannot tell
+            # "green now" from "green three edits ago", so the push gate had no choice but
+            # to re-run the suite it had just watched pass — five minutes per push, for an
+            # answer that could not differ. The tree hash is the same content-addressed
+            # evidence this plugin uses everywhere else, and it fails safe: unreadable
+            # means empty means re-run.
+            "tree": tree_hash(ctx),
+        },
         mode=0o644,
     )
 

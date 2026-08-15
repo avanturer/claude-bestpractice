@@ -257,5 +257,32 @@ class TestGuardedJson(RepoCase):
             )
 
 
+class TestWhatAnIgnoreRuleIsCosting(RepoCase):
+    """The board reported that Tier A was hidden and never said what that costs. "A layer
+    is hidden" is an abstraction; "two records die with this clone" is a decision."""
+
+    def hide(self) -> None:
+        exclude = self.repo / ".git" / "info" / "exclude"
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        exclude.write_text(f"{store.TIER_A_DIRNAME}/attempts/\n")
+
+    def test_records_an_ignore_rule_keeps_out_of_git_are_counted(self):
+        self.hide()
+        self.write(f"{store.TIER_A_DIRNAME}/attempts/0001-a.md", "what failed\n")
+        self.write(f"{store.TIER_A_DIRNAME}/attempts/0002-b.md", "what else failed\n")
+        self.assertEqual(2, len(store.ignored_tier_a(self.ctx())))
+
+    def test_a_record_committed_before_the_rule_appeared_is_not_counted(self):
+        """It is tracked, so it is not lost — and counting it would make the number
+        untrustworthy at the moment somebody has to act on it."""
+        self.write(f"{store.TIER_A_DIRNAME}/attempts/0001-a.md", "what failed\n")
+        self.commit("keep the ledger")
+        self.hide()
+        self.assertEqual([], store.ignored_tier_a(self.ctx()))
+
+    def test_nothing_hidden_counts_nothing(self):
+        self.write(f"{store.TIER_A_DIRNAME}/attempts/0001-a.md", "what failed\n")
+        self.assertEqual([], store.ignored_tier_a(self.ctx()))
+
 if __name__ == "__main__":
     unittest.main()
