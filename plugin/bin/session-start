@@ -407,6 +407,10 @@ def main() -> None:
     # point is that the board's account of what is in flight is true when it is read.
     if cfg.task_idle_hours > 0:
         plan.sweep_idle(ctx, cfg.task_idle_hours)
+    # The other half. `sweep_idle` returns stalled work TO the queue and nothing has ever
+    # taken anything out of it, so `next` only ever grew. Set aside, not deleted: one
+    # `claude-bp-plan resume` brings it straight back.
+    plan.sweep_queue(ctx, cfg.task_queue_stale_days)
 
     resolved_stage, _signals = stage.current(ctx, cfg.stage_override)
     send_captured_defects(ctx, cfg)

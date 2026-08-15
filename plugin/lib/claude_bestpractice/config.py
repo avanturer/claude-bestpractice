@@ -80,6 +80,7 @@ class Config:
     # whole claim is that it says what is in flight; a row nobody is working on is that
     # claim being false. Zero switches the sweep off.
     task_idle_hours: float = 24.0
+    task_queue_stale_days: float = 21.0
     # Work that changed files while the ledger says nothing is in flight. Same shape as
     # every other Stop demand: satisfied once per session, then never seen again.
     require_task: bool = True
@@ -124,6 +125,7 @@ class Config:
             "max_repeat_signature": self.max_repeat_signature,
             "require_worktree": self.require_worktree,
             "task_idle_hours": self.task_idle_hours,
+            "task_queue_stale_days": self.task_queue_stale_days,
             "require_task": self.require_task,
             "block_unfinished_work": self.block_unfinished_work,
             "compare_dependencies": self.compare_dependencies,
@@ -210,6 +212,7 @@ _EXPECTED: dict[str, type] = {
     "max_repeat_signature": int,
     "require_worktree": bool,
     "task_idle_hours": float,
+    "task_queue_stale_days": float,
     "require_task": bool,
     "block_unfinished_work": bool,
     "compare_dependencies": bool,

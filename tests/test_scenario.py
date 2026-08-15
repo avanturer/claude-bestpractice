@@ -120,7 +120,11 @@ class TestFullLifecycle(Scenario):
         )
 
     def phase_plan_and_start(self) -> None:
-        self.cli("claude-bp-plan", "add", "Add CSV export to billing")
+        # With the finish condition, because closing takes one: a card that says nothing
+        # about finishing can only be closed on the model's word, which is the assertion
+        # decision 0002 refuses everywhere else. Stating it here is the realistic arc.
+        self.cli("claude-bp-plan", "add", "Add CSV export to billing",
+                 "--done-when", "the suite passes with a csv export test")
         self.assertEqual(plan.summary(self.ctx())["next"], 1)
 
         board_text = self.context_of(

@@ -12,9 +12,17 @@ sessions in parallel, and reads almost none of the resulting code.
 ## Non-goals
 - **Not a memory engine.** The harness already stores and loads memory. This owns
   curation, not storage.
-- **Not a code reviewer.** Four first-party review paths already exist. Pick one,
-  disable the rest, and integrate.
-- **Not a task manager.** The native task system is subsumed and gated, never replaced.
+- **Not a code reviewer.** Four first-party review paths already exist; this one reviews a
+  commit at the moment it is made and leaves the others alone. Since 2.1.215 the harness
+  no longer runs `/verify` or `/code-review` unasked, so nothing has to be disabled.
+- **Not a task manager, and never a second list.** The ledger is the only board, and it
+  works because it is load-bearing: the Stop gate refuses a turn whose work no card
+  claims, so it cannot drift far from the truth without blocking work. The harness's own
+  task tools are NOT integrated, gated or mirrored — they are simply unused, and since
+  2.1.233 they are off by default on current models. Measured side by side in one session:
+  the ledger held twelve cards with nothing stranded, while the native list still carried
+  eight finished six releases earlier and re-injected them on nearly every turn. **A list
+  nothing depends on drifts without limit. Never add one.**
 - **Not a persuasion layer.** Anything that only asks the model nicely belongs in a
   prompt, not here.
 - **Not for teams.** Every design trade-off assumes one owner and no reviewer.

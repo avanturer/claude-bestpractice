@@ -125,7 +125,7 @@ class RepoCase(unittest.TestCase):
         from claude_bestpractice import plan
 
         ctx = self.ctx()
-        task = plan.add(ctx, "what this turn is doing", paths=list(paths))
+        task = plan.add(ctx, "what this turn is doing", paths=list(paths), done_when="stated")
         plan.claim(ctx, task.id, sid(self.repo, session_id), ctx.branch)
         return task
 

@@ -10,11 +10,15 @@ from __future__ import annotations
 
 import json
 import subprocess
+import shutil
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 from helpers import REPO_ROOT
+
+from claude_bestpractice import upgrade
 
 TOOL = REPO_ROOT / "tools" / "check_shipped.py"
 
@@ -256,6 +260,50 @@ def _run(repo: Path) -> subprocess.CompletedProcess:
         [sys.executable, str(repo / "tools" / "check_shipped.py")],
         cwd=str(repo), capture_output=True, text=True, timeout=180,
     )
+
+
+class TestACopyOutsideTheCacheIsStillTold(unittest.TestCase):
+    """An `install.sh` install runs from a git checkout, so the running copy is not in a
+    version directory and `superseded_by` — which only looks at SIBLINGS — answers None.
+
+    The founder then updates through the marketplace, the CLI unpacks the new version
+    somewhere else, and the session keeps running the checkout while the board says
+    nothing. Reported as a session insisting it was 1.17.0 the day after an update and a
+    full machine restart.
+    """
+
+    def cache(self, *versions: str) -> Path:
+        home = Path(tempfile.mkdtemp(prefix="claude-bestpractice-home-"))
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        for version in versions:
+            (home / upgrade.CACHE / "someone" / "claude-bestpractice" / version).mkdir(
+                parents=True, exist_ok=True)
+        return home
+
+    def test_a_newer_version_unpacked_elsewhere_is_found(self):
+        home = self.cache("99.0.0")
+        self.assertEqual("99.0.0", upgrade.newer_in_the_cache(home))
+
+    def test_an_older_one_is_not_mistaken_for_newer(self):
+        self.assertIsNone(upgrade.newer_in_the_cache(self.cache("0.0.1")))
+
+    def test_the_newest_wins_when_several_are_lying_around(self):
+        self.assertEqual("99.1.0", upgrade.newer_in_the_cache(self.cache("99.0.0", "99.1.0")))
+
+    def test_another_plugin_is_not_ours(self):
+        home = Path(tempfile.mkdtemp(prefix="claude-bestpractice-home-"))
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        (home / upgrade.CACHE / "someone" / "other-plugin" / "99.0.0").mkdir(parents=True)
+        self.assertIsNone(upgrade.newer_in_the_cache(home))
+
+    def test_the_board_says_it_even_from_a_checkout(self):
+        """`root=None` here is the checkout case: no version directory to compare against."""
+        said = upgrade.stale_line(root=None, home=self.cache("99.0.0"))
+        self.assertIn("99.0.0", said)
+        self.assertIn("Restart", said)
+
+    def test_nothing_is_said_when_nothing_is_newer(self):
+        self.assertEqual("", upgrade.stale_line(root=None, home=self.cache()))
 
 
 if __name__ == "__main__":

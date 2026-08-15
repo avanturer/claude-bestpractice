@@ -489,6 +489,39 @@ def sweep_idle(ctx: GitContext, hours: float = IDLE_HOURS) -> list[Task]:
     return moved
 
 
+# A queue is only an answer to "what can I start" while somebody would actually start it.
+# `sweep_idle` moves `doing` back to `next` and nothing has ever moved anything OUT, so
+# `next` is a one-way sink: every card ever filed and not done is still standing in it.
+# Empty in this repository and 60+ deep in the one the founder actually builds in.
+QUEUE_STALE_DAYS = 21.0
+
+
+def sweep_queue(ctx: GitContext, days: float = QUEUE_STALE_DAYS) -> list[Task]:
+    """Set aside queued work nobody has picked up, with the reason written on it.
+
+    To `paused`, which is the state for waiting on something nameable — and this is
+    waiting on the one thing that is always nameable: somebody deciding it still matters.
+    `sweep_idle` refuses `paused` for the opposite case and is right to; work that was in
+    flight is waiting on nobody and belongs where anyone can take it.
+
+    Deleting is not on the table. `claude-bp-plan resume` brings it straight back, and the
+    file was never removed — so the cost of being wrong here is one command.
+    """
+    if days <= 0:
+        return []
+    now = time.time()
+    moved: list[Task] = []
+    for task in load_all(ctx, NEXT):
+        idle = _stale_for(task, now, days * 24.0)
+        if not idle or task.owner:
+            continue
+        blocker = f"nobody picked this up in {int(idle // 24)}d — resume it if it still matters"
+        parked = _move(task, PAUSED, blocker=blocker)
+        if parked:
+            moved.append(parked)
+    return moved
+
+
 def _rewrite_body(task: Task) -> None:
     """Persist an amended body in place, leaving the frontmatter as it stands."""
     meta, _ = _frontmatter(task.path.read_text(encoding="utf-8"))
@@ -640,6 +673,18 @@ def complete(ctx: GitContext, task_id: str) -> tuple[Task | None, str]:
     task = find(ctx, task_id)
     if task is None:
         return None, f"no task {task_id}"
+    if not task.done_when.strip():
+        # The one place this plugin took an assertion. Everywhere else a finish is
+        # accepted on evidence (decision 0002) — and the field's own comment already said
+        # a task with no `done_when` is closed on the model's judgement. Refused here
+        # rather than demanded at `add`, because a session knows least when it files a
+        # card and most when it is about to call the work finished.
+        return None, (
+            f"task {task.id} has no finish condition, so closing it would be your word "
+            f"rather than a check.\n"
+            f"  claude-bp-plan update {task.id} --done-when \"<what had to become true>\"\n"
+            f"Then close it. Write what a later session could verify, not what you did."
+        )
     landed = _move(task, DONE)
 
     # Whoever was waiting on this is waiting right now, in a session that will not be
