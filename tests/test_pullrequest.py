@@ -25,11 +25,8 @@ class PRCase(RepoCase):
         git(["checkout", "-q", "-b", "feat/x"], self.repo)
 
     def gate(self, name: str, event: dict) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            [sys.executable, str(BIN / name)],
-            input=json.dumps({"cwd": str(self.repo), **event}),
-            capture_output=True, text=True, cwd=str(self.repo), timeout=180,
-        )
+        """The shared runner, kept under the name this file already reads by."""
+        return self.run_hook(name, event)
 
     def start(self, session_id: str = "s1") -> None:
         self.gate("session-start", {"session_id": session_id, "hook_event_name": "SessionStart"})
@@ -54,12 +51,30 @@ class PRCase(RepoCase):
             return ""
         return payload.get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
 
-    def open_a_pr(self, session_id: str = "s1"):
-        return self.tool(
-            "mcp__github__create_pull_request",
-            {"owner": "o", "repo": "r", "title": "t", "head": "feat/x", "base": "main"},
-            session_id,
-        )
+    # The pull request a case opens is the pull request it then merges. Two matching
+    # literals in different classes is not that relationship, it is a coincidence — and
+    # while the number went unlearned, every one of these tests passed BECAUSE the numbers
+    # did not have to agree (#135).
+    PR_NUMBER = 48
+
+    def open_a_pr(self, session_id: str = "s1", number: int = 0):
+        """Open one the way a session does: the request, then the response.
+
+        Both halves, because the number only exists in the second. A fixture that fired
+        only PreToolUse left every record saying number 0 — which is the production bug
+        behind #135, and modelling it here would make these tests prove the broken shape.
+        """
+        number = number or self.PR_NUMBER
+        tool_input = {"owner": "o", "repo": "r", "title": "t", "head": "feat/x", "base": "main"}
+        opened = self.tool("mcp__github__create_pull_request", tool_input, session_id)
+        self.gate("pr-opened", {
+            "session_id": session_id,
+            "hook_event_name": "PostToolUse",
+            "tool_name": "mcp__github__create_pull_request",
+            "tool_input": tool_input,
+            "tool_response": {"url": f"https://github.com/o/r/pull/{number}"},
+        })
+        return opened
 
 
 class TestOpeningRecordsAnObligation(PRCase):
@@ -102,7 +117,7 @@ class TestTheMergeIsJudged(PRCase):
     def merge(self, session_id: str = "s1"):
         return self.tool(
             "mcp__github__merge_pull_request",
-            {"owner": "o", "repo": "r", "pullNumber": 48}, session_id,
+            {"owner": "o", "repo": "r", "pullNumber": PRCase.PR_NUMBER}, session_id,
         )
 
     def test_a_ready_branch_merges_with_no_approval_step(self):
@@ -241,7 +256,7 @@ class TestMergingWhatThisGateJustClearedIsNotAQuestion(PRCase):
 
     def merge(self):
         return self.tool("mcp__github__merge_pull_request",
-                         {"owner": "o", "repo": "r", "pullNumber": 48})
+                         {"owner": "o", "repo": "r", "pullNumber": PRCase.PR_NUMBER})
 
     def test_a_merge_this_gate_found_nothing_against_needs_no_permission(self):
         self.remote()
@@ -395,7 +410,7 @@ class TestAPullRequestIsNeverLeftHanging(PRCase):
         evidence.record_green(self.ctx(), ["pytest"])
         self.start()
         self.open_a_pr()
-        self.tool("mcp__github__merge_pull_request", {"owner": "o", "repo": "r", "pullNumber": 1})
+        self.tool("mcp__github__merge_pull_request", {"owner": "o", "repo": "r", "pullNumber": PRCase.PR_NUMBER})
 
         self.assertEqual("", pullrequest.line(self.ctx()))
         self.assertEqual(0, self.stop().returncode)
@@ -462,6 +477,57 @@ class TestAPullRequestThisPluginNeverSaw(PRCase):
         self.start()
         evidence.record_red(self.ctx(), ["pytest"], "1 failed")
         self.assertNotEqual("deny", self.decision(self.tool("Bash", {"command": "gh pr merge 91"})))
+
+
+class TestMergingSomebodyElsesPullRequest(PRCase):
+    """Issue #135. A session on a long-lived branch merges an unrelated small pull request
+    opened from another worktree, and is refused with this branch's problems.
+
+    The number is what makes it decidable, and the plugin never learns its own: `opened`
+    runs in PreToolUse, which sees the request and never the response, so every record
+    carries number 0. The guard that was meant to say "not ours" therefore never fired.
+    """
+
+    def test_a_numbered_merge_is_not_judged_on_a_branch_it_is_not_about(self):
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        self.start()
+        self.open_a_pr()
+        evidence.record_red(self.ctx(), ["pytest"], "1 failed")
+
+        proc = self.tool("Bash", {"command": "gh pr merge 501 --squash"})
+        self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
+
+    def test_merging_someone_elses_does_not_discharge_this_branchs_obligation(self):
+        """Worse than the refusal: settling on somebody else's merge makes the plugin
+        forget that this branch still owes a pull request, and it never asks again.
+
+        The branch is deliberately CLEAN. With problems on it the merge is refused and
+        settling is never reached, so the test would pass whether or not the branch is the
+        one being judged — passing for a reason that has nothing to do with its name.
+        """
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+        git(["remote", "add", "origin", "https://github.com/o/r.git"], self.repo)
+        self.start()
+        self.open_a_pr()
+
+        proc = self.tool("Bash", {"command": "gh pr merge 501 --squash"})
+        self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
+        still_open = [r["branch"] for r in pullrequest.outstanding(self.ctx())]
+        self.assertIn("feat/x", still_open, "somebody else's merge discharged this branch")
+
+    def test_the_branch_this_session_is_on_is_still_judged_when_it_is_the_one_merging(self):
+        """The protection that must survive the fix: an unnumbered merge is this branch's
+        own pull request, and there the local checks are known to be about it."""
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        self.start()
+        self.open_a_pr()
+        evidence.record_red(self.ctx(), ["pytest"], "1 failed")
+
+        self.assertEqual("deny", self.decision(self.tool("Bash", {"command": "gh pr merge --squash"})))
 
 
 class TestAFindingFromMainIsNotThisPullRequests(PRCase):

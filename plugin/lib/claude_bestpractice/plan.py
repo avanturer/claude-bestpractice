@@ -668,6 +668,7 @@ def release(ctx: GitContext, session_id: str) -> int:
     case is the normal one here rather than the exception.
     """
     released = 0
+    freed: list[str] = []
     for root in sibling_worktrees(ctx) or [ctx.worktree_root]:
         directory = root / store.TIER_A_DIRNAME / PLAN_DIR / DOING
         if not directory.is_dir():
@@ -677,7 +678,55 @@ def release(ctx: GitContext, session_id: str) -> int:
             if task and task.owner == session_id:
                 _move_to(path, root / store.TIER_A_DIRNAME / PLAN_DIR / NEXT, task)
                 released += 1
+                freed.append(task.id)
+    if freed:
+        _remember_release(ctx, freed, session_id)
     return released
+
+
+# Who held what, so a session that comes back can be given it back. Tier B, because this
+# is coordination state rather than truth about the work: it dies with the clone, and
+# losing it costs one manual re-claim rather than a wrong ledger (decision 0001).
+RELEASED_FILE = "released-claims.json"
+
+
+def _remember_release(ctx: GitContext, task_ids: list[str], session_id: str) -> None:
+    with store.guarded_json(store.tier_b(ctx, RELEASED_FILE), default={}) as box:
+        table = box[0] if isinstance(box[0], dict) else {}
+        for task_id in task_ids:
+            table[task_id] = {"session_id": session_id, "at": time.time()}
+        box[0] = table
+
+
+def reclaim(ctx: GitContext, session_id: str) -> list[str]:
+    """Give a returning session back the work the reaper took from it.
+
+    A process restart — VS Code closed, WSL fell over, a resume after compaction — leaves
+    the session id unchanged and the pid dead, so a sibling's reaper releases the claim
+    correctly and the session comes back owning nothing. The first Stop then refuses the
+    turn for having no task on the board, and the demand it prints suggests filing a NEW
+    one, which is how a board grows duplicates of work already on it (#131).
+
+    Through `claim`, which already refuses a task held by a LIVE session — so a returning
+    session cannot take back work a sibling picked up, and can take back work a sibling
+    picked up and then died holding. A stricter check here was tried and removed: it
+    duplicated that rule and got the dead-holder case wrong in the process.
+
+    Each memory is spent whether or not it was used, so a task legitimately re-planned
+    weeks later is never silently pulled back into a session that has moved on.
+    """
+    taken: list[str] = []
+    with store.guarded_json(store.tier_b(ctx, RELEASED_FILE), default={}) as box:
+        table = box[0] if isinstance(box[0], dict) else {}
+        mine = [tid for tid, row in table.items()
+                if isinstance(row, dict) and row.get("session_id") == session_id]
+        for task_id in mine:
+            task, _ = claim(ctx, task_id, session_id, ctx.branch)
+            if task is not None:
+                taken.append(task_id)
+            table.pop(task_id, None)
+        box[0] = table
+    return taken
 
 
 def _move_to(path: Path, target_dir: Path, task: Task) -> None:

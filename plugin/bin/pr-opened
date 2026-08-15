@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+"""PostToolUse: learn the pull request number, which the request never carries.
+
+`opened` is recorded in PreToolUse, and a PreToolUse hook sees the request and never the
+response — so every obligation went on the board with number 0. The merge gate's own "is
+this merge about this branch?" check then had nothing to compare against, and a numbered
+merge of somebody else's pull request was judged against whatever branch the session
+happened to be standing in, and refused with that branch's problems (#135).
+
+This event is the only one that carries the answer. It writes exactly one field onto a
+record that already exists, blocks nothing, and is silent.
+
+Fails open. A number that did not get learned costs a numbered merge its judgement, which
+is the conservative direction; a hook that raised would cost the founder a tool call.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from claude_bestpractice import hookio, pullrequest  # noqa: E402
+
+
+def main() -> None:
+    event = hookio.read_event()
+    command = str(event.tool_input.get("command", "")) if event.tool_name == "Bash" else ""
+    if not pullrequest.opens_a_pull_request(event.tool_name, command):
+        hookio.emit_silent()
+
+    ctx = hookio.repo(event.cwd or os.getcwd())
+    number = pullrequest.number_in(event.raw.get("tool_response"))
+    if number:
+        # The same branch the obligation was filed under, derived the same way, or the
+        # record this is meant to complete is not the one that gets stamped.
+        head = pullrequest.head_of(
+            event.tool_name, command, event.tool_input, event.cwd or os.getcwd()
+        ) or ctx.branch
+        pullrequest.learn_number(ctx, head, number)
+    hookio.emit_silent()
+
+
+if __name__ == "__main__":
+    hookio.guard(main, fail_closed=False)

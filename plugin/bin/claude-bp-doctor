@@ -1324,6 +1324,17 @@ def check_a_pull_request_is_merged_or_reported(repo: Path) -> Result:
         return payload.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
 
     call("mcp__github__create_pull_request", {"base": "main"})
+    # The response, which is the only place the NUMBER exists. Without it every record
+    # says 0, the merge gate cannot tell its own pull request from somebody else's, and
+    # the numbered merge below is not judged at all (#135) — so a check that skipped this
+    # half would be proving the gate on a shape production never sees.
+    run_gate("pr-opened", {
+        "session_id": "doctor-pr", "cwd": str(repo),
+        "hook_event_name": "PostToolUse",
+        "tool_name": "mcp__github__create_pull_request",
+        "tool_input": {"base": "main"},
+        "tool_response": {"url": "https://github.com/o/r/pull/1"},
+    }, repo)
     recorded = len(pullrequest.outstanding(resolve(repo))) == 1
 
     evidence.record_red(resolve(repo), ["pytest"], "1 failed")

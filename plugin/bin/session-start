@@ -159,6 +159,21 @@ def _armed_line(ctx: GitContext) -> str:
     return line
 
 
+def _reclaimed_line(returned: list) -> str:
+    """Say that the work came back, because the alternative is filing it twice.
+
+    A session that restarted has no memory of losing the claim; it sees an unowned task
+    that looks like its own work and, told by the Stop gate that nothing on the board is
+    its, files a second one. Naming the ids here is what makes that unnecessary.
+    """
+    if not returned:
+        return ""
+    return (
+        f"\nreclaimed: {', '.join(returned)} — this session held it before the restart "
+        "and it was still free. Carry on with it; do not file it again."
+    )
+
+
 def _swept_line(removed: list) -> str:
     """Say what was deleted. Deleting directories is the only destructive thing this
     plugin does on its own initiative, and it was the only one it did not report — while
@@ -363,6 +378,13 @@ def main() -> None:
     me = build_record(ctx, event)
     sessions.register(ctx, me)
 
+    # Before the board is built, so what it says is in flight is true when it is read.
+    # A process restart leaves the session id alone and the pid dead, so a sibling's
+    # reaper correctly released this session's claim and it comes back owning nothing —
+    # after which the first Stop refuses the turn and tells it to file a NEW task for work
+    # already on the board (#131). Only what is still free is taken back.
+    returned = plan.reclaim(ctx, me.session_id)
+
     others = sessions.live_sessions(ctx, exclude=me.session_id)
 
     # The plugin creates worktrees unasked, so clearing away the ones nobody is in is the
@@ -394,6 +416,7 @@ def main() -> None:
     body += "\n" + _autonomy_line(cfg.autonomy)
     body += _armed_line(ctx)
     body += _swept_line(swept)
+    body += _reclaimed_line(returned)
     body += _stranded_line(ctx)
     body += _denied_line(ctx)
     # Silent until a status line has run once, and silent again when the numbers go stale.

@@ -546,6 +546,11 @@ def main() -> None:
                 # Recorded on the way through: a PreToolUse hook never sees the result,
                 # and an obligation the founder has already watched be merged is worse
                 # than useless on the board.
+                #
+                # `ctx.branch` is right here and not an oversight: `gated_by` resolves the
+                # obligation by the CURRENT branch, so a merge that reaches this line is
+                # always this branch's. A merge of somebody else's is not gated at all and
+                # never arrives (#135) — which is what makes settling here safe.
                 pullrequest.settle(ctx, ctx.branch, pullrequest.MERGED)
                 # Every other session's baseline just went stale. They measure their diff
                 # from a commit that is no longer where the branch begins, so drift and

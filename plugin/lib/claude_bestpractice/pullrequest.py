@@ -118,6 +118,42 @@ def opened(ctx: GitContext, branch: str, base: str, session_id: str,
     })
 
 
+def number_in(payload: Any) -> int:
+    """The pull request number in whatever a create call answered with, or 0.
+
+    Two shapes reach this from one event: a structured tool returns an object, and
+    `gh pr create` prints the URL on stdout. Both end in `/pull/<n>`, so the URL is the
+    reliable half and a `number` field is taken when it is there.
+    """
+    if isinstance(payload, dict):
+        found = payload.get("number")
+        if isinstance(found, int) and found > 0:
+            return found
+    text = payload if isinstance(payload, str) else store.dumps(payload)
+    match = re.search(r"/pull/(\d+)", str(text))
+    return int(match.group(1)) if match else 0
+
+
+def learn_number(ctx: GitContext, branch: str, number: int) -> bool:
+    """Fill in the number of an obligation already on record. True when it landed.
+
+    The number is the only thing that makes "is this merge about this branch?" decidable
+    without a network call, and the request that opens a pull request does not carry it.
+
+    The latest answer wins. A write-once guard was tried and taken back out: `opened`
+    already refuses to replace an OPEN record, so a second pull request on the same branch
+    keeps the first record — and pinning the first NUMBER onto it would leave the gate
+    judging merges against a pull request that no longer exists.
+    """
+    record = _records(ctx).get(branch)
+    if not record or record.get("state") != OPEN:
+        return False
+    if number <= 0:
+        return False
+    _write(ctx, {**record, "number": number})
+    return True
+
+
 def settle(ctx: GitContext, branch: str, state: str) -> None:
     """Discharge the obligation — merged, or closed without merging."""
     record = _records(ctx).get(branch)
@@ -605,6 +641,11 @@ def gated_by(ctx: GitContext, number: int, current: bool = False) -> dict[str, A
     record = _records(ctx).get(ctx.branch)
     if not record or record.get("state") != OPEN:
         return {"branch": ctx.branch, "base": ""} if current else None
-    if number and int(record.get("number") or 0) and number != int(record["number"]):
-        return None
-    return record
+    if not number:
+        return record
+    # A NAMED number is this branch's only when the record can confirm it. Treating
+    # "cannot tell" as "ours" is what refused an unrelated merge with this branch's
+    # problems, in a session whose real work was somewhere else entirely (#135). Every
+    # record used to carry number 0, because `opened` runs in PreToolUse and never sees
+    # the response that contains the number; `learn_number` is what fills it in now.
+    return record if number == int(record.get("number") or 0) else None
