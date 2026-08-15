@@ -4,8 +4,8 @@
 
 **Память, координация и принуждение для разработки продукта в нескольких параллельных сессиях Claude Code.**
 
-[![version](https://img.shields.io/badge/version-1.29.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-1247%20passing-2ea44f)](#проверено)
+[![version](https://img.shields.io/badge/version-1.30.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-1252%20passing-2ea44f)](#проверено)
 [![doctor](https://img.shields.io/badge/doctor-33%20checks-2ea44f)](#проверено)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#требования)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#требования)
@@ -200,12 +200,13 @@ Stop-гейт **выбрасывает прозу агента** и сам за�
 
 | Вы пишете | Что разрешает | Сколько раз |
 | --- | --- | --- |
-| `merge ok` | смержить открытый PR | один мерж |
-| `release ok` | выкатить в прод | один выкат |
-| `migration ok` | разрушающий DDL в миграции | одну миграцию |
+| `+merge` | смержить открытый PR | один мерж |
+| `+release` | выкатить в прод | один выкат |
+| `+migration` | разрушающий DDL в миграции | одну миграцию |
 
-Литерал привязан к концу строки, поэтому «если migration ok, то катим» — это разговор о
-миграции, а не разрешение на неё. Ничто, написанное сессией, эти слова не заменяет:
+Литерал привязан к концу строки, поэтому «если `+migration`, то катим» — это разговор о
+миграции, а не разрешение на неё. Префикс — символ, а не слово «ok», потому что «ok»
+английское, а гейт не должен зависеть от того, на каком языке идёт разговор. Ничто, написанное сессией, эти слова не заменяет:
 до хука, который их записывает, доходят только ваши собственные ходы. В этом и смысл —
 гейт на необратимом действии не должен открываться той стороной, которую он сторожит.
 
@@ -326,7 +327,7 @@ claude-bp-ci off        # снять pre-push хук
 ## Проверено
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 1247 тестов · 33 проверки доктора · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 1252 тестов · 33 проверки доктора · budget
 ```
 
 Доктор доказывает гейты **попыткой сделать плохое**, а не чтением конфигурации обратно —

@@ -541,7 +541,7 @@ def main() -> None:
                         "wanted — and main deploys, so merging is a step towards shipping "
                         "it.\n"
                         "  Show them what changed and ask. When they are happy they say "
-                        "`merge ok`, and this allows the merge once.\n"
+                        "`+merge` — copy it exactly — and this allows the merge once.\n"
                         "  Their word is read from their own message; nothing you write "
                         "can stand in for it."
                     )
@@ -663,7 +663,8 @@ def main() -> None:
                     "claude-bestpractice: promoting to production is the one action that cannot be "
                     "undone by re-running it, and it has not been approved.\n"
                     "  Deploy to a preview environment instead, or show the founder what "
-                    "would ship and wait. When they are ready they say `release ok`, and "
+                    "would ship and wait. When they are ready they say `+release` — copied "
+                    "exactly — and "
                     "that allows exactly one promotion.\n"
                     "  Rollback stays automatic; promotion does not."
                 )
@@ -689,7 +690,7 @@ def main() -> None:
                             "only under production concurrency.\n"
                             "  Use an expand-contract migration, or show the founder the "
                             "statement and what it drops. When they accept the loss they say "
-                            "`migration ok`, and that allows exactly one.\n"
+                            "`+migration` — copied exactly — and that allows exactly one.\n"
                             "  Their word is read from their own message; a token you write "
                             "into the migration is not their word."
                         )

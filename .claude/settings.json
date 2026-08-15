@@ -4,5 +4,16 @@
     "allow": [
       "Bash(git push:*)"
     ]
+  },
+  "enabledPlugins": {
+    "claude-bestpractice@claude-bestpractice": true
+  },
+  "extraKnownMarketplaces": {
+    "claude-bestpractice": {
+      "source": {
+        "source": "github",
+        "repo": "avanturer/claude-bestpractice"
+      }
+    }
   }
 }

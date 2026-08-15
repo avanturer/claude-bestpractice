@@ -386,7 +386,7 @@ def stop_demand(record: dict[str, Any], problems: list[str], accepted: bool = Tr
             f"claude-bestpractice: pull request {named} is open, passes every check, and is "
             "waiting for the founder rather than for you.\n"
             "Show them what changed — the outcome, not the diff — and leave it open. When "
-            "they are happy they say `merge ok`, and you then merge it yourself without "
+            "they are happy they say `+merge`, and you then merge it yourself without "
             "asking again.\n"
             "This will not be raised again."
         )

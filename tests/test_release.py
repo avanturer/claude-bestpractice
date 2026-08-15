@@ -469,3 +469,44 @@ class TestWindowsShims(unittest.TestCase):
         leave a shim silently pointing at the old one."""
         for shim in self.BIN.glob("*.cmd"):
             self.assertIn("%~dp0%~n0", shim.read_text(encoding="utf-8"), shim.name)
+
+
+class TestThisRepositoryRunsUnderItsOwnPlugin(unittest.TestCase):
+    """The gates were never applied to the work that writes them.
+
+    Everything known about their behaviour came from the doctor and from tests in
+    sandboxes: both prove the mechanism fires on prepared state, and neither says how it
+    behaves in a live turn. The difference stopped being theoretical when a merge of
+    unaccepted work went straight through in a session where the plugin was not installed,
+    hours after that very refusal shipped (#144).
+
+    The declaration is committed so it travels. The version installed from it is whatever
+    is on the default branch — the RELEASED plugin, not the working tree — so a session
+    editing a gate is judged by the gate its users have, and a half-written one cannot
+    lock the repository that is writing it.
+    """
+
+    SETTINGS = REPO_ROOT / ".claude" / "settings.json"
+    PLUGIN = "claude-bestpractice@claude-bestpractice"
+
+    def settings(self) -> dict:
+        return json.loads(self.SETTINGS.read_text(encoding="utf-8"))
+
+    def test_the_plugin_is_enabled_for_this_repository(self):
+        self.assertIs(True, self.settings().get("enabledPlugins", {}).get(self.PLUGIN))
+
+    def test_the_marketplace_is_declared_and_carries_no_machine_path(self):
+        """`--scope project` writes an ABSOLUTE directory path by default, which is
+        correct on the machine that ran it and wrong in the repository. Declared against
+        the GitHub repo instead, which is the same string everywhere."""
+        source = self.settings().get("extraKnownMarketplaces", {}).get(
+            "claude-bestpractice", {}).get("source", {})
+        self.assertEqual("github", source.get("source"))
+        self.assertEqual("avanturer/claude-bestpractice", source.get("repo"))
+
+    def test_the_release_checklist_says_when_to_refresh_it(self):
+        """A snapshot pinned to the default branch goes stale at the next release, and
+        nothing refreshes it on its own. If the step is not written down it is not done."""
+        body = (REPO_ROOT / "RELEASING.md").read_text(encoding="utf-8")
+        self.assertIn("claude plugin marketplace update", body)
+        self.assertIn("claude plugin update", body)
