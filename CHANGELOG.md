@@ -1,5 +1,50 @@
 # Changelog
 
+## v1.30.0
+
+The word that opens a gate stops being English, and the repository starts running under
+the plugin it writes.
+
+### `+merge`, `+release`, `+migration` (#147)
+
+The literal was `merge ok`. The founder of this repository writes Russian, said
+**«мерджи»** — the most natural thing they could say — and it opened nothing. The refusal
+would have answered by asking them to say it in English instead.
+
+Two bugs had been hiding each other: the gate never ran in the session where this was
+written, because the plugin was not installed there either.
+
+Adding Russian words was the obvious repair and is the wrong one. Мерж, мердж, смержи,
+мержим — the forms do not end, and every one missed is a refusal in the face of somebody
+certain they had allowed it.
+
+So the half that was English is the half that goes. `+` carries no language; the nouns
+stay, because «мерж», «релиз» and «миграция» *are* these words. Still anchored to the end
+of a line, so a sentence about a merge is not one — and now a bare noun at the end of a
+line ("what is left is the merge") cannot authorise either, which the old literal's tests
+never covered.
+
+Every refusal prints the exact string to copy rather than describing it.
+
+### This repository runs under the plugin it develops (#144)
+
+The gates were never applied to the work that writes them. Everything known about their
+behaviour came from the doctor and from sandboxed tests — both prove the mechanism fires
+on prepared state, neither says how it behaves in a live turn. That stopped being
+theoretical when a merge of unaccepted work went straight through hours after that very
+refusal shipped.
+
+The marketplace and the enablement are now committed in `.claude/settings.json`, declared
+against the GitHub repository rather than a directory: `--scope project` writes an
+absolute path by default, which is right on the machine that ran it and wrong in the
+repository.
+
+The version installed is whatever is on the default branch — the **released** plugin, not
+the working tree. So a session editing a gate is judged by the gate its users have, and a
+half-written one cannot lock the repository that is writing it. The cost is that the
+installed copy trails the tree until the release step re-arms it, which is now step 5 of
+cutting a release rather than something anyone has to remember.
+
 ## v1.29.0
 
 The last self-authorising gate is closed, and a restarted session stops guessing where it lives.

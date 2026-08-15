@@ -198,21 +198,21 @@ class TestMigrationGate(GateCase):
     def test_the_founders_word_permits_it(self):
         self.reach_traction()
         self.start()
-        self.say("checked the column, nothing reads it any more. migration ok")
+        self.say("checked the column, nothing reads it any more. +migration")
         self.assertNotEqual("deny", self.decision(self.migration("DROP TABLE users;")))
 
     def test_one_word_permits_one_migration(self):
         """Spent on use, so accepting one drop is not a standing grant over the schema."""
         self.reach_traction()
         self.start()
-        self.say("checked the column, nothing reads it any more. migration ok")
+        self.say("checked the column, nothing reads it any more. +migration")
         self.assertNotEqual("deny", self.decision(self.migration("DROP TABLE users;")))
         self.assertTrue(self.refused_over_the_data(self.migration("DROP TABLE orders;")))
 
     def test_talking_about_a_migration_is_not_accepting_one(self):
         self.reach_traction()
         self.start()
-        self.say("if the migration ok then we ship, but check the column first")
+        self.say("if +migration then we ship, but check the column first")
         self.assertTrue(self.refused_over_the_data(self.migration("DROP TABLE users;")))
 
     def test_prototype_stage_does_not_gate_migrations(self):

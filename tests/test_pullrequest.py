@@ -64,7 +64,7 @@ class PRCase(RepoCase):
         self.gate("prompt-capture", {
             "session_id": session_id,
             "hook_event_name": "UserPromptSubmit",
-            "prompt": "looks good to me, merge ok",
+            "prompt": "looks good to me, +merge",
         })
 
     def open_a_pr(self, session_id: str = "s1", number: int = 0):
@@ -369,7 +369,7 @@ class TestAPullRequestIsNeverLeftHanging(PRCase):
         proc = self.stop()
         self.assertEqual(2, proc.returncode, proc.stdout)
         self.assertIn("waiting for the founder", proc.stderr)
-        self.assertIn("merge ok", proc.stderr, "the way through must be named")
+        self.assertIn("+merge", proc.stderr, "the way through must be named")
         self.assertNotIn("Merge it now", proc.stderr)
 
     def test_once_the_founder_has_accepted_it_the_turn_cannot_end_quietly(self):
@@ -515,7 +515,7 @@ class TestAMergeWaitsForTheFoundersWord(PRCase):
         proc = self.merging()
         self.assertEqual("deny", self.decision(proc))
         self.assertIn("not been accepted", self.reason(proc))
-        self.assertIn("merge ok", self.reason(proc), "the way through must be named")
+        self.assertIn("+merge", self.reason(proc), "the way through must be named")
 
     def test_the_founders_word_allows_it(self):
         self.green()
@@ -540,8 +540,36 @@ class TestAMergeWaitsForTheFoundersWord(PRCase):
         from claude_bestpractice import config
 
         for said in ("we should merge okay soon", "is the merge ok for you?",
-                     "do not merge ok this yet"):
+                     "if +merge then we ship, but not yet", "мерджи",
+                     # Ending on the bare noun. Without the symbol required, every one of
+                     # these authorises — and they are ordinary things to say.
+                     "what is left is the merge", "остался только merge",
+                     "next step: release", "расскажи, что такое migration"):
             self.assertEqual({}, config.approvals_in(said), said)
+
+    def test_a_symbol_inside_a_word_is_not_the_literal(self):
+        """`+` has to start the token. Without that, any word ending in the symbol plus
+        the noun authorises — and the symbol was chosen precisely because it cannot turn
+        up by accident."""
+        from claude_bestpractice import config
+
+        for said in ("a+merge", "cherry-pick+merge", "git diff HEAD~1+merge"):
+            self.assertEqual({}, config.approvals_in(said), said)
+
+    def test_the_literal_does_not_depend_on_the_language_being_spoken(self):
+        """`merge ok` was English, and this founder writes Russian. The most natural
+        thing they could say — «мерджи» — opened nothing, and the refusal answered by
+        asking them to say it in English instead (#147).
+
+        The nouns stay, because they are the words spoken in both. The word that had to
+        go is `ok`, which is the half that was English.
+        """
+        from claude_bestpractice import config
+
+        for said in ("всё нравится, +merge",
+                     "посмотрел на превью, красиво. +release",
+                     "проверил, эту таблицу никто не читает. +migration"):
+            self.assertNotEqual({}, config.approvals_in(said), said)
 
 
 class TestPromotingToProductionTakesTheFoundersWord(PRCase):
@@ -562,14 +590,14 @@ class TestPromotingToProductionTakesTheFoundersWord(PRCase):
     def approve(self) -> None:
         self.gate("prompt-capture", {
             "session_id": "s1", "hook_event_name": "UserPromptSubmit",
-            "prompt": "checked the preview, release ok",
+            "prompt": "checked the preview, +release",
         })
 
     def test_a_promotion_nobody_approved_is_refused(self):
         self.start()
         proc = self.deploying()
         self.assertEqual("deny", self.decision(proc))
-        self.assertIn("release ok", self.reason(proc))
+        self.assertIn("+release", self.reason(proc))
 
     def test_the_founders_word_allows_one_promotion(self):
         self.start()

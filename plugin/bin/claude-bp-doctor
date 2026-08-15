@@ -772,7 +772,7 @@ def check_stage_gated_rules(repo: Path) -> Result:
             "session_id": "doctor-stage",
             "hook_event_name": "UserPromptSubmit",
             "cwd": str(repo),
-            "prompt": "checked it, nothing reads that table. migration ok",
+            "prompt": "checked it, nothing reads that table. +migration",
         },
         repo,
     )
@@ -1378,7 +1378,7 @@ def check_a_pull_request_is_merged_or_reported(repo: Path) -> Result:
     unaccepted = call("mcp__github__merge_pull_request", {"pullNumber": 1})
     run_gate("prompt-capture", {
         "session_id": "doctor-pr", "cwd": str(repo),
-        "hook_event_name": "UserPromptSubmit", "prompt": "looked at it, merge ok",
+        "hook_event_name": "UserPromptSubmit", "prompt": "looked at it, +merge",
     }, repo)
     merged = not call("mcp__github__merge_pull_request", {"pullNumber": 1})
     settled = pullrequest.outstanding(resolve(repo)) == []

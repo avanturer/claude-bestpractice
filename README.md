@@ -4,8 +4,8 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-1.29.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-1247%20passing-2ea44f)](#verified)
+[![version](https://img.shields.io/badge/version-1.30.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-1252%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-33%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
@@ -222,7 +222,7 @@ work is wanted, and in a repository that deploys from the trunk a merge is a ste
 shipping it. So a green pull request you have not accepted is left open, and the turn is
 told it is waiting for you rather than the other way round.
 
-**Merged, by the session that opened it.** Once you say `merge ok`, it opens, checks and
+**Merged, by the session that opened it.** Once you say `+merge`, it opens, checks and
 merges on its own without asking again.
 
 **Handed to you, with the blockers named.** When the final check finds something the merge
@@ -251,12 +251,13 @@ grant.
 
 | You type | It allows | Once |
 | --- | --- | --- |
-| `merge ok` | merging the open pull request | one merge |
-| `release ok` | promoting to production | one promotion |
-| `migration ok` | destructive DDL in a migration | one migration |
+| `+merge` | merging the open pull request | one merge |
+| `+release` | promoting to production | one promotion |
+| `+migration` | destructive DDL in a migration | one migration |
 
-Anchored to the end of a line, so *"we should merge okay soon"* is talk about a merge and
-not one. Nothing the session writes can stand in for these — only your own turns reach the
+Anchored to the end of a line, so *"if `+merge` then we ship"* is talk about a merge and
+not one. The prefix is a symbol rather than the word "ok" because "ok" is English and the
+gate should not depend on which language you happen to be writing in. Nothing the session writes can stand in for these — only your own turns reach the
 hook that records them, which is the whole point: the gate on an irreversible action must
 not be openable by the party it gates.
 
@@ -377,7 +378,7 @@ against a cap of 400 — roughly 0.1 % of a 200k window.
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 1247 tests · 33 doctor checks · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 1252 tests · 33 doctor checks · budget
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration

@@ -57,6 +57,22 @@ never reached, the other asserted tolerance that a lower layer was already provi
 3. `make check` green.
 4. Open the pull request, merge it. The release workflow cuts the tag and publishes the
    notes from the CHANGELOG. A session cannot push a tag; that is why this is a workflow.
+5. Re-arm this repository under what just shipped:
+
+   ```
+   claude plugin marketplace update claude-bestpractice
+   claude plugin update claude-bestpractice@claude-bestpractice
+   ```
+
+   This repository develops the plugin and runs under it, at the version on the default
+   branch rather than the working tree — so a session editing a gate is judged by the gate
+   its users have, and a half-written one cannot lock the repository writing it. The
+   trade is that the installed copy is one release behind the tree until this step runs,
+   which is why it is a step and not a hope.
+
+   On a machine that has never had it, `claude plugin install
+   claude-bestpractice@claude-bestpractice` once; the marketplace and the enablement are
+   already committed in `.claude/settings.json`.
 
 ## When a release turns out to be bad
 

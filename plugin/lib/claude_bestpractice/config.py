@@ -266,24 +266,33 @@ def switches_in(text: str) -> dict[str, str]:
 # a literal this plugin printed for them to repeat, recorded from THEIR message where no
 # session can write it, and consumed on use.
 #
-# Two of them, because they authorise different things. `merge ok` says a branch has been
+# Three of them, because they authorise different things. `+merge` says a branch has been
 # looked at and may land — the assistant then opens, checks and merges on its own, which
-# is the whole point. `release ok` says one promotion to production may happen; it is
-# spent immediately, so it can never become a standing grant.
+# is the whole point. `+release` says one promotion to production may happen, `+migration`
+# one destructive statement. Each is spent immediately, so none can become a standing
+# grant.
 #
 # Prose is deliberately not read. Decision 0006 rejected that for switches — "a regex
 # judging language would be a gate switched by phrasing" — and acceptance is the higher
-# stake of the two. `merge ok` cannot be phrased into by accident, and nothing the model
-# writes reaches this: only the founder's own turns pass through `prompt-capture`.
+# stake of the two. Nothing the model writes reaches this either: only the founder's own
+# turns pass through `prompt-capture`.
 APPROVE_MERGE = "approve:merge"
 APPROVE_RELEASE = "approve:release"
 APPROVE_MIGRATION = "approve:migration"
 
-# Anchored to the END of a line, so it has to be something the founder said rather than
-# a fragment of a sentence about it. "we should merge okay soon" matched before this
-# and would have authorised a merge nobody asked for.
+# A SYMBOL, not the word "ok". The literal was `merge ok`, and the founder of this
+# repository writes Russian — so the most natural thing they could say, «мерджи», opened
+# nothing, and the refusal answered by asking them to say it in English instead. Adding
+# Russian words was the obvious repair and is the wrong one: мерж, мердж, смержи, мержим,
+# and every form missed is a refusal in the face of somebody who is certain they allowed
+# it (#147).
+#
+# `+` carries no language. The nouns stay because they are already the words spoken in
+# both — «мерж», «релиз», «миграция» are these words. Still anchored to the END of a
+# line, so a sentence ABOUT a merge is not one: "we should merge okay soon" authorised
+# one before that anchor existed.
 _APPROVAL = re.compile(
-    r"(?im)(?:^|[\s,;:—–-])(?P<subject>merge|release|deploy|migration)\s+(?:ok|okay|accepted)\s*[.!]?\s*$"
+    r"(?im)(?:^|\s)\+(?P<subject>merge|release|deploy|migration)\s*[.!]?\s*$"
 )
 
 _APPROVAL_KEYS = {
