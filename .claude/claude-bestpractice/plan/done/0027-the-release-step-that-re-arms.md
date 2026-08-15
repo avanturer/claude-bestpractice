@@ -1,8 +1,8 @@
 ---
 id: 0027
 title: The release step that re-arms the plugin actually works, and stale policy blocks are pruned without being asked
-state: doing
-owner: 809accde-09d7-579a-83ce-07f12018a368-540300b0
+state: done
+owner: 
 branch: claude/vscode-plugin-project-management-r34avz
 paths: RELEASING.md, plugin/bin/session-start, plugin/lib/claude_bestpractice/policy.py
 source: 
@@ -11,7 +11,7 @@ blocker:
 after: 
 with: 
 created_at: 2026-08-15T16:01:06Z
-updated_at: 2026-08-15T16:01:12Z
+updated_at: 2026-08-15T16:04:09Z
 ---
 
 (no detail)

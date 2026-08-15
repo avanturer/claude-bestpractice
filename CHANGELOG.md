@@ -1,5 +1,45 @@
 # Changelog
 
+## v1.31.0
+
+The plugin stops asking the founder to clean up after it, and the step that arms this
+repository actually works.
+
+### 2.6 MB of settings nobody was ever going to prune
+
+`policy.prune` drops blocks this plugin wrote for repositories no longer on disk, and its
+docstring has always argued its own case: *"leaving them means the founder hand-editing
+their settings to clean up after the plugin's own test suite."* The board then named the
+command and asked them to run it.
+
+Nobody ran it. `~/.claude/settings.json` reached **2.6 MB across 8,712 entries**, 2,176 of
+them naming repositories gone for months — and every session start parsed all of it in
+order to print one advisory line about itself. After the prune: 8 entries, 2,329 bytes.
+
+It now happens at session start instead of being suggested. Still only blocks this plugin
+wrote, still only for paths not on disk at all, and the founder's own dead
+`permissions.allow` rules are still reported and never touched — the line decision 0008
+draws stays exactly where it was.
+
+Found by looking at a number that was too large to be right, not by a failing test.
+
+### The release step that arms this repository did not work
+
+v1.30.0 added step 5 of cutting a release: re-point this repository at what just shipped.
+The command as written failed the first time it ran — `claude plugin update` defaults to
+`user` scope, the enablement is committed so the install is project-scoped, and the answer
+was *"Plugin is not installed at scope user"*.
+
+`--scope project` is in the step now, with the reason beside it, and a test refuses a
+`RELEASING.md` that has lost it.
+
+### Proven on its author
+
+This is the first release where the plugin enforced itself while being written. It refused
+a write to the main checkout mid-release, provisioned a worktree, and named the path — the
+fix from v1.29.0 doing its job on the session that shipped it. The work moved and
+continued.
+
 ## v1.30.0
 
 The word that opens a gate stops being English, and the repository starts running under
