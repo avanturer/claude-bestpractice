@@ -533,6 +533,26 @@ def main() -> None:
                 ctx, number, pullrequest.about_current_branch(event.tool_name, command)
             )
             if gated is not None:
+                # Green is not accepted. The checks say the code works; they say nothing
+                # about whether the founder wants what was built, and in a repository that
+                # deploys from the trunk a merge is a step towards shipping it. So the
+                # merge waits for their word — and once it is given, the assistant opens,
+                # checks and merges on its own, which is the arrangement they asked for.
+                if not config.approved(ctx, config.APPROVE_MERGE):
+                    hookio.deny_tool(
+                        "claude-bestpractice: this pull request has not been accepted by the founder "
+                        "yet. Passing checks mean the code works, not that the work is "
+                        "wanted — and main deploys, so merging is a step towards shipping "
+                        "it.\n"
+                        "  Show them what changed and ask. When they are happy they say "
+                        "`merge ok`, and this allows the merge once.\n"
+                        "  Their word is read from their own message; nothing you write "
+                        "can stand in for it."
+                    )
+                # Spent here rather than after the call, because a PreToolUse hook never
+                # sees the result: one word authorises one merge either way, and a merge
+                # that failed is re-authorised by the founder rather than by its own retry.
+                config.clear_switch(ctx, config.APPROVE_MERGE)
                 base = str(gated.get("base") or "") or gitpolicy.default_branch(ctx) or "main"
                 # The pull request's own head, not the tree this session is standing in.
                 problems = pullrequest.blockers(ctx, base, str(gated.get("branch") or ""))
@@ -637,12 +657,22 @@ def main() -> None:
                 any(PRODUCTION_DEPLOY.search(" ".join(argv)) for argv in shellcmd.acting(command))
                 if parsed else bool(PRODUCTION_DEPLOY.search(command))
             )
-            if deploying and OVERRIDE not in command:
+            if deploying and not config.approved(ctx, config.APPROVE_RELEASE):
+                # The literal used to be a token IN THE COMMAND, which the session writes
+                # — so the gate on the one irreversible action was openable by the party
+                # it gates. Decision 0006 closed exactly that hole for config switches and
+                # this was left behind. The founder's own word now, consumed on use, so it
+                # can never become a standing grant.
                 hookio.deny_tool(
-                    "claude-bestpractice: promoting to production is the one action that cannot be undone "
-                    "by re-running it. Deploy to a preview environment instead, or ask the human "
-                    "to promote. Rollback stays automatic; promotion does not."
+                    "claude-bestpractice: promoting to production is the one action that cannot be "
+                    "undone by re-running it, and it has not been approved.\n"
+                    "  Deploy to a preview environment instead, or show the founder what "
+                    "would ship and wait. When they are ready they say `release ok`, and "
+                    "that allows exactly one promotion.\n"
+                    "  Rollback stays automatic; promotion does not."
                 )
+            if deploying:
+                config.clear_switch(ctx, config.APPROVE_RELEASE)
         if event.tool_name in WRITE_TOOLS or event.tool_name == "Bash":
             # Bash reaches migrations the same way it reaches everything else. Denying
             # `DROP TABLE` through Write while allowing the identical bytes through

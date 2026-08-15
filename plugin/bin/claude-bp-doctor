@@ -1345,16 +1345,26 @@ def check_a_pull_request_is_merged_or_reported(repo: Path) -> Result:
     refused = call("mcp__github__merge_pull_request", {"pullNumber": 1})
 
     evidence.clear_red(resolve(repo), ["pytest"])
+
+    # Green is not accepted. Proved in both directions here, because the whole point of
+    # the change is that one of them used to be missing: the gate read passing checks as
+    # the founder's approval and demanded a merge of work they had asked to look at first.
+    unaccepted = call("mcp__github__merge_pull_request", {"pullNumber": 1})
+    run_gate("prompt-capture", {
+        "session_id": "doctor-pr", "cwd": str(repo),
+        "hook_event_name": "UserPromptSubmit", "prompt": "looked at it, merge ok",
+    }, repo)
     merged = not call("mcp__github__merge_pull_request", {"pullNumber": 1})
     settled = pullrequest.outstanding(resolve(repo)) == []
 
-    ok = recorded and refused and merged and settled
+    ok = recorded and refused and unaccepted and merged and settled
     return Result(
         "a pull request is merged or reported, never left open",
         ok,
-        "refused over a red suite, merged once green, obligation discharged"
+        "refused over a red suite, refused again unaccepted, merged on the founder's word"
         if ok
-        else f"recorded={recorded} refused={refused} merged={merged} settled={settled}",
+        else f"recorded={recorded} refused={refused} unaccepted={unaccepted} "
+             f"merged={merged} settled={settled}",
     )
 
 

@@ -245,6 +245,9 @@ def main() -> None:
         # remedy every gate names has to be one the session can perform and cannot perform
         # alone, and the founder saying it is the only thing that satisfies both (#108).
         config.record_switches(ctx, config.switches_in(safe))
+        # Acceptance travels the same road as a switch, and for the same reason: it is
+        # the founder's own word, recorded where the session being gated cannot write it.
+        config.record_switches(ctx, config.approvals_in(safe))
         # Paths ACCUMULATE where the statement replaces. A later instruction naming more
         # files genuinely widens what is in scope, and dropping the earlier ones would make
         # the files the founder first asked for into drift. Bounded, because unbounded

@@ -1,5 +1,54 @@
 # Changelog
 
+## v1.28.0
+
+Nothing ships without the founder having seen it.
+
+### A merge waits for their word, and then needs nothing else (#140)
+
+The merge gate read passing checks as approval, and the Stop demand said so out loud:
+*"there is no reviewer and no approval step in this repository"*. True about GitHub, false
+about the product. The reviewer is the founder and the review happens in the chat — so a
+session that had been told *«сразу не кати в прод, буду визуально смотреть»* was ordered
+to merge anyway on every turn, and had to argue its way out in writing each time. In a
+repository that deploys from the trunk, that is not a neutral instruction.
+
+Checks say the code works. They say nothing about whether the work is wanted.
+
+A green pull request the founder has not accepted is now **left open**, and the Stop gate
+says it is waiting for them rather than for the session. Once they say `merge ok`, the
+assistant opens, checks and merges on its own without asking again — which is the
+arrangement asked for, and the reason this is not simply a softer gate.
+
+### Promoting to production takes their word too
+
+The deploy gate let a promotion through if the command carried a literal token — and the
+session composes the command. So the gate on the one action that cannot be undone by
+re-running it was openable by the party it gates. Decision 0006 closed exactly that hole
+for config switches; this was left behind.
+
+It now takes the founder's own word, `release ok`, **consumed on use**, so it can never
+become a standing grant.
+
+### Why a literal and not intent
+
+Decision 0006 rejected reading prose for switches — *"a regex judging language would be a
+gate switched by phrasing"* — and acceptance is the higher stake of the two. So the word
+travels the same road: a literal this plugin prints, read from the founder's own message
+by the hook that reads their messages, stored where no session can write it, spent on use.
+Nothing the model writes can stand in for it, because only the founder's turns reach
+`prompt-capture` at all.
+
+The matcher is anchored to the end of a line. An earlier draft matched *"we should merge
+okay soon"* — which would have authorised a merge nobody asked for — and that case is now
+a test.
+
+### Found and not fixed
+
+The destructive-migration gate still opens on a literal inside the command, which is the
+same hole in a different place. Not touched here: a different risk, a wider blast radius,
+and not what this release was asked to do.
+
 ## v1.27.0
 
 No code without a plan, a shell edit is no longer invisible to the board, and three

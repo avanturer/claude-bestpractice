@@ -370,14 +370,31 @@ def merge_refusal(record: dict[str, Any], problems: list[str]) -> str:
     )
 
 
-def stop_demand(record: dict[str, Any], problems: list[str]) -> str:
-    """The one interruption a pull request gets: merge it, or say why it cannot be."""
+def stop_demand(record: dict[str, Any], problems: list[str], accepted: bool = True) -> str:
+    """The one interruption a pull request gets: merge it, or say why it cannot be.
+
+    `accepted` is the founder's word, and without it this does not demand a merge at all.
+    The demand used to read "there is no reviewer and no approval step in this repository",
+    which was true about GitHub and false about the product: the reviewer is the founder
+    and the review happens in the chat. So a session that had been told "не кати, буду
+    смотреть" was instructed on every turn to merge anyway, and had to argue its way out
+    in writing (#140).
+    """
     named = f"#{record['number']}" if record.get("number") else f"on {record.get('branch', '')}"
+    if not problems and not accepted:
+        return (
+            f"claude-bestpractice: pull request {named} is open, passes every check, and is "
+            "waiting for the founder rather than for you.\n"
+            "Show them what changed — the outcome, not the diff — and leave it open. When "
+            "they are happy they say `merge ok`, and you then merge it yourself without "
+            "asking again.\n"
+            "This will not be raised again."
+        )
     if not problems:
         return (
-            f"claude-bestpractice: pull request {named} is open and passes every check, and this "
-            "turn was about to end without it being merged.\n"
-            "Merge it now. There is no reviewer and no approval step in this repository — a "
+            f"claude-bestpractice: pull request {named} is open, the founder has accepted it and "
+            "every check passes, and this turn was about to end without it being merged.\n"
+            "Merge it now. Their word is already given and it is spent on this merge — a "
             "pull request left open is work that is finished everywhere except where it "
             "counts.\n"
             "If you believe it genuinely must not be merged yet, say so to the founder in "

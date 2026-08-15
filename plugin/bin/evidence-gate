@@ -214,7 +214,9 @@ def main() -> None:
                 session_id=rec.session_id,
                 subject_paths=[],
             )
-            hookio.block(pullrequest.stop_demand(waiting, blocking))
+            hookio.block(pullrequest.stop_demand(
+                waiting, blocking, accepted=config.approved(ctx, config.APPROVE_MERGE)
+            ))
         elif not pullrequest.known(ctx, ctx.branch) and not pullrequest.demanded(ctx, ctx.branch):
             # Finished work that never became a pull request. Same budget as the demand
             # above — one interruption, marked before it is raised, so a session that
