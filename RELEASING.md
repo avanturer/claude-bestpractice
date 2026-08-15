@@ -61,8 +61,13 @@ never reached, the other asserted tolerance that a lower layer was already provi
 
    ```
    claude plugin marketplace update claude-bestpractice
-   claude plugin update claude-bestpractice@claude-bestpractice
+   claude plugin update claude-bestpractice@claude-bestpractice --scope project
    ```
+
+   `--scope project` is not optional: the enablement is committed in the repository, so
+   the install is project-scoped, and `update` defaults to `user` and fails with
+   *"Plugin is not installed at scope user"*. Written down because this step shipped
+   without it and did not work the first time it was run.
 
    This repository develops the plugin and runs under it, at the version on the default
    branch rather than the working tree — so a session editing a gate is judged by the gate

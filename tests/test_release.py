@@ -510,3 +510,10 @@ class TestThisRepositoryRunsUnderItsOwnPlugin(unittest.TestCase):
         body = (REPO_ROOT / "RELEASING.md").read_text(encoding="utf-8")
         self.assertIn("claude plugin marketplace update", body)
         self.assertIn("claude plugin update", body)
+
+    def test_the_release_checklist_names_the_scope_the_update_needs(self):
+        """`update` defaults to user scope and the enablement is committed, so the install
+        is project-scoped: without the flag it fails with "not installed at scope user".
+        The step shipped without it and did not work the first time it was run."""
+        body = (REPO_ROOT / "RELEASING.md").read_text(encoding="utf-8")
+        self.assertIn("claude plugin update claude-bestpractice@claude-bestpractice --scope project", body)

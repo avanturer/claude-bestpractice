@@ -313,10 +313,45 @@ class TestABlockForARepositoryThatIsGone(PolicyCase):
         self.assertEqual(2, len(found.vanished))
         self.assertEqual(2, len(self.read()["autoMode"]["environment"]) - 1)
 
-    def test_the_board_names_the_command_the_agent_runs(self):
-        self.written("/tmp/definitely-not-here-12345")
+    def test_a_session_start_drops_them_instead_of_asking(self):
+        """Asking was the whole defect. `prune` has always argued its own case in its
+        docstring, and the board only ever named the command — so nobody ran it, the file
+        reached 2.6 MB across 8,712 entries, and every session start parsed all of it to
+        print one line about itself."""
+        self.written("/tmp/definitely-not-here-12345", "/tmp/also-gone-98765")
         said = policy.refresh(self.ctx(), self.checks(), self.home)
-        self.assertIn("claude-bp policy --prune", said)
+
+        self.assertNotIn("yourself", said, "still asking the founder to do it")
+        self.assertIn("dropped 2 block(s)", said)
+        left = self.read()["autoMode"]["environment"]
+        self.assertEqual([], [e for e in left if "not-here-12345" in e or "also-gone" in e])
+
+    def test_it_says_nothing_when_there_was_nothing_to_drop(self):
+        """Silent in the steady state, which is every session after the first."""
+        self.written(str(self.repo))
+        policy.refresh(self.ctx(), self.checks(), self.home)
+        self.assertEqual("", policy.refresh(self.ctx(), self.checks(), self.home))
+
+    def test_a_drop_is_never_silent_just_because_the_facts_were_current(self):
+        """The interesting state is in-sync AND something dropped. Writing to the
+        founder's settings and saying nothing is indistinguishable from a session that
+        edited their file on a whim, which is the rule `repaired_line` exists for."""
+        self.written(str(self.repo))
+        policy.refresh(self.ctx(), self.checks(), self.home)
+        self.assertEqual("", policy.refresh(self.ctx(), self.checks(), self.home))
+
+        settings = self.read()
+        settings["autoMode"]["environment"].append(
+            "[claude-bestpractice /tmp/definitely-not-here-12345] a fact about it")
+        self.settings.write_text(json.dumps(settings), encoding="utf-8")
+
+        self.assertIn("dropped 1 block(s)", policy.refresh(self.ctx(), self.checks(), self.home))
+
+    def test_the_founders_own_lines_survive_a_session_start(self):
+        """The prune became automatic; the line it must never cross did not move."""
+        self.written("/tmp/definitely-not-here-12345")
+        policy.refresh(self.ctx(), self.checks(), self.home)
+        self.assertIn("a rule the founder wrote", self.read()["autoMode"]["environment"])
 
 
 if __name__ == "__main__":

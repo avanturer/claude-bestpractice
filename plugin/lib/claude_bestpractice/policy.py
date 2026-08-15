@@ -304,16 +304,26 @@ def refresh(ctx: GitContext, test_command: list[str], home: Path | None = None) 
     what the command may do. `claude-bp policy --apply` remains, for a founder who wants
     to run it, and for the doctor to prove the path works.
     """
+    # Dropped here, not suggested. `prune` has always argued its own case — these are
+    # lines this plugin wrote about repositories that are gone, and leaving them means the
+    # founder hand-editing their settings to clean up after the plugin's test suite — but
+    # the board only ever ASKED them to run it. Nobody did: the file reached 2.6 MB and
+    # 8,712 entries, 2,176 of them naming repositories that had not existed for months,
+    # and every session start parsed all of it to print one advisory line about itself.
+    #
+    # Still only our own blocks, and still only when the path is not on disk at all. The
+    # founder's own dead rules are reported and never touched, which is the same line
+    # decision 0008 draws everywhere else: the plugin holds the pen on facts, never grants.
+    dropped = prune(home)
     found = apply(ctx, test_command, home)
-    if found.in_sync and not found.dead and not found.vanished:
+    if found.in_sync and not found.dead and not dropped:
         return ""
     parts = []
     if not found.in_sync:
         parts.append(f"refreshed {len(found.add)} fact(s) about this repository")
-    if found.vanished:
+    if dropped:
         parts.append(
-            f"{len(found.vanished)} block(s) name a repository that is gone — run "
-            "`claude-bp policy --prune` yourself, it drops only blocks this plugin wrote"
+            f"dropped {len(dropped)} block(s) naming a repository that is gone"
         )
     if found.dead:
         parts.append(
