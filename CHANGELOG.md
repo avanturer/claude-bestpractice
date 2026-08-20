@@ -1,5 +1,35 @@
 # Changelog
 
+## v1.36.0
+
+The board demand stops asking about work that is already on the trunk.
+
+### It measured from where the session started, not from what the siblings can see (#149)
+
+> Nothing on the board says this session is working: 46 file(s) changed and no task in the
+> ledger is claimed by it.
+
+Said to a session whose task was closed, whose pull request was merged, whose backend was
+deployed and whose OTA had shipped — over a tree identical to the trunk, with nothing
+uncommitted.
+
+The count came from `baseline_commit`, which is where the session **started**. By the time
+the work is merged that number only grows, and the demand it drives has nothing left to
+protect: every file it names is already in the trunk, visible to every sibling. Claiming
+something to satisfy it is worse than not — it puts work on the board that is not
+happening, and the board is only worth reading because it does not lie.
+
+The demand now asks the question it actually means: is there anything here a sibling
+cannot see? That is commits this branch adds over the base, or edits not yet committed.
+Neither means nothing to warn about; either still refuses, unchanged.
+
+It fails **loud**. In a repository where the trunk cannot be determined at all — no
+`origin/HEAD`, no branch by a trunk name — the demand stands, because a gate that stands
+down whenever it is unsure stands down in every unusual repository. That branch is a test.
+
+This one had reported itself three times in the session that fixed it, on a clean tree
+with an empty board.
+
 ## v1.35.0
 
 `isolation: "worktree"` could not start an agent, because the hook named a tree it never
