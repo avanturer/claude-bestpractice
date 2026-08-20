@@ -75,6 +75,21 @@ HOOK_TEMPLATE = f"""#!/bin/sh
 # leaves a record, which a silently-skipped hosted run does not.
 set -e
 
+# Git exports these to every hook, and everything the checks run inherits them — so a
+# test suite that shells out to git stops talking to its own sandboxes and starts talking
+# to THIS repository. Measured, not feared: one push through this hook set core.bare=true
+# on the live repository, replaced user.name/user.email with a test fixture's identity,
+# deleted the `origin` remote and overwrote `main` with fixture commits. 1,062 tests
+# "failed" because they were all operating on the wrong repository (#151).
+#
+# Unset rather than overridden: the checks must resolve the repository from the working
+# directory, exactly as they do when a human runs them.
+# Only the ones that RETARGET git. `GIT_EXEC_PATH` is deliberately left alone: it tells
+# git where its own helpers live, and clearing it breaks git rather than protecting it.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR
+unset GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX GIT_NAMESPACE GIT_QUARANTINE_PATH
+unset GIT_CONFIG_COUNT GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM
+
 # A pre-push hook that was already here runs first, with the same stdin and arguments
 # git gave us, and its refusal is still a refusal. Displacing a husky or lefthook hook
 # without running it would switch off a check you rely on.
