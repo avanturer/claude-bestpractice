@@ -1056,3 +1056,42 @@ class TestTheHookDoesNotAimTheChecksAtThisRepository(CICase):
         saw = witness.read_text(encoding="utf-8").split()
         self.assertEqual(str(self.repo.resolve()), str(Path(saw[1]).resolve()),
                          "the checks were pointed at another work tree")
+
+
+class TestTheEvidenceCommandsSayWhatTheyDid(CICase):
+    """A command that performs no visible action, changes no state the caller can see and
+    prints nothing is indistinguishable from a failing one — and that ambiguity was the
+    report, not a detail of it (#152).
+
+    `record-green` wrote to Tier B while the founder watched the Tier A fallback, and
+    `green-covers-tree` answered only through an exit code that reads as success in both
+    directions.
+    """
+
+    def ci(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(BIN / "claude-bp-ci"), *args],
+            capture_output=True, text=True, cwd=str(self.repo), timeout=120,
+        )
+
+    def test_record_green_says_what_it_recorded_and_where(self):
+        self.make_check(0)
+        proc = self.ci("record-green", "make check")
+        self.assertIn("recorded green", proc.stdout)
+        self.assertIn("make check", proc.stdout)
+        self.assertIn("green", proc.stdout)
+
+    def test_it_says_when_a_failure_it_could_not_clear_remains(self):
+        """The state the founder was in, and could not see: green recorded, red standing,
+        no output either way."""
+        from claude_bestpractice import evidence
+
+        self.make_check(0)
+        evidence.record_red(self.ctx(), ["make", "test"], "1 failed")
+        proc = self.ci("record-green", "make check")
+        self.assertIn("REMAINS", proc.stdout)
+        self.assertIn("make test", proc.stdout)
+
+    def test_green_covers_tree_says_which_way_it_went(self):
+        self.make_check(0)
+        self.assertIn("not covered", self.ci("green-covers-tree").stdout)

@@ -149,6 +149,19 @@ class TestTheMergeIsJudged(PRCase):
         self.assertEqual("deny", self.decision(proc))
         self.assertIn("red", self.reason(proc))
 
+    def test_the_refusal_names_the_run_it_judged(self):
+        """"the test suite is red" over a suite that passes is unanswerable from outside:
+        a real failure and a record left behind by a two-minute one ten days ago read
+        identically, and the only ways forward are to guess or to ignore the gate (#152)."""
+        self.green()
+        self.start()
+        self.open_a_pr()
+        evidence.record_red(self.ctx(), ["make", "test"], "2 failed")
+
+        reason = self.reason(self.merge())
+        self.assertIn("make test", reason, "the refusal did not name the command")
+        self.assertIn("clears it", reason, "the refusal did not name the way out")
+
     def test_uncommitted_work_refuses_the_merge(self):
         self.green()
         self.start()

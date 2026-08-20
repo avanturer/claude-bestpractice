@@ -178,7 +178,13 @@ class TestPullRequestReadiness(DeliveryCase):
         from claude_bestpractice import delivery, evidence
 
         evidence.record_red(self.ctx(), ["pytest"], "1 failed")
-        self.assertIn("the test suite is red", delivery.ready(self.ctx(), "main"))
+        problems = delivery.ready(self.ctx(), "main")
+        # The blocker now names the run it judged, so this matches on the substring: a
+        # bare "the test suite is red" is what left the founder unable to tell a real
+        # failure from a ten-day-old record (#152).
+        said = [p for p in problems if p.startswith("the test suite is red")]
+        self.assertEqual(1, len(said), problems)
+        self.assertIn("pytest", said[0])
 
     def test_uncommitted_changes_block_it(self):
         from claude_bestpractice import delivery

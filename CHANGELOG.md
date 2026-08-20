@@ -1,5 +1,53 @@
 # Changelog
 
+## v1.34.0
+
+A pull request that could not be merged, over a suite that passed, with no command that
+changed either.
+
+### A green run reported by the hook never cleared the red record (#152)
+
+`clear_red` was reached from the two paths where this plugin RUNS the suite and reads its
+output, and never from the pre-push hook that reports a run the project made itself. So a
+branch that went red for two minutes stayed red to the merge gate **forever**, whatever
+passed afterwards.
+
+As met: `make test` green, 2436 passed, exit 0 — and the gate refusing the merge with
+*"the test suite is red"* over a record ten days old, from a different branch.
+
+`record_green` clears it now, under the same rule the other two paths already enforce: the
+**same command** passing. A narrower suite passing still says nothing about the wider one
+that failed.
+
+### The commands said nothing, so a working one looked broken
+
+> Whether `record-green` is broken or whether I am calling it wrong. That ambiguity is
+> itself the report.
+
+It was working. It writes to Tier B, keyed by branch, while the file being watched was the
+Tier A fallback — and it printed nothing either way, so there was no way to tell. Same for
+`green-covers-tree`, which answered only through an exit code that reads as success in
+both directions.
+
+Both print now. `record-green` says what it recorded and where, and — this is the part
+that would have ended the sitting — says when a failure it could **not** clear remains,
+naming the command that would clear it.
+
+### The refusal names the run it judged
+
+*"The test suite is red"* over a suite that passes is unanswerable from outside: a real
+failure and a record left behind by a two-minute one read identically, and the only ways
+forward are to guess at the invocation or to ignore the gate. Both are things a merge gate
+must not push somebody toward.
+
+It now reads: *the test suite is red — recorded for `make test`, 10d ago; that same
+command passing clears it.* The age is `first_seen`, so it says how long the branch has
+been broken rather than when it was last noticed.
+
+The first version of that line defaulted a missing stamp to zero and announced
+**"20685d ago"** — 1970 wearing the clothes of a measurement. Caught by the test that
+asserted the age, and an absent stamp now reads as absent.
+
 ## v1.33.0
 
 The worktree that kept asking for permission, and a repository that could declare itself

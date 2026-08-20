@@ -1213,13 +1213,28 @@ def green_covers_tree(ctx: GitContext, branch: str = "") -> bool:
     return str(record.get("tree") or "") == here
 
 
-def record_green(ctx: GitContext, command: list[str]) -> None:
-    """Remember that a run was OBSERVED to pass, positively.
+def record_green(ctx: GitContext, command: list[str]) -> bool:
+    """Remember that a run was OBSERVED to pass, positively. Returns whether it also
+    cleared a recorded failure.
 
     Needed because "no red record" and "verified green" are different states and were
     being reported as the same one. A repository where nothing has ever run has no red
     record either.
+
+    Clearing the red record was missing here, and only here. `clear_red` was reached from
+    the two paths where this plugin RUNS the suite and reads its output, never from the
+    pre-push hook that reports a run the project made itself — so a branch that went red
+    for two minutes stayed red to the merge gate forever, whatever passed afterwards. The
+    founder saw a green suite, a gate saying "the test suite is red", and no command that
+    changed either (#152).
+
+    Same rules as everywhere else: `clear_red` still requires the SAME command, so a
+    narrower suite passing cannot erase a wider one's failure. Without the run's output
+    there is no executed count to check, and the declared-count guard inside `clear_red`
+    stands in for it — which is why this passes `None` rather than a number it does not
+    have.
     """
+    cleared = clear_red(ctx, command)
     store.write_json(
         _green_path(ctx),
         {
@@ -1236,6 +1251,7 @@ def record_green(ctx: GitContext, command: list[str]) -> None:
         },
         mode=0o644,
     )
+    return cleared
 
 
 def last_green(ctx: GitContext, branch: str = "") -> dict | None:
@@ -1319,6 +1335,45 @@ def clear_red(
 
     store.tier_a(ctx, RED_SUITE_FILE).unlink(missing_ok=True)
     return True
+
+
+def red_problem(ctx: GitContext, branch: str = "") -> str:
+    """The blocker line for a recorded failure, naming the run it judged. "" when green.
+
+    "the test suite is red" over a suite that passes is unanswerable from outside: a real
+    failure and a record left behind by a two-minute one ten days ago read identically,
+    and the only ways forward are to guess at the invocation or to ignore the gate — the
+    two things a merge gate must not push somebody toward (#152).
+
+    One builder for both callers, because the merge gate asks about a pull request's head
+    and the ship report asks about this branch, and a message that differed between them
+    would be two answers to the same question.
+    """
+    entry = red(ctx)
+    if not entry or (branch and entry.get("branch") != branch):
+        return ""
+    ran = " ".join(entry.get("command") or ["?"])
+    return (f"the test suite is red — recorded for `{ran}`{_ago(entry)}; "
+            "that same command passing clears it")
+
+
+def _ago(entry: dict) -> str:
+    """How long the failure has stood, or nothing when the record cannot say.
+
+    `first_seen`, which is the field this record actually carries and is preserved across
+    re-observations — so this is how long the branch has been broken, not when it was last
+    noticed. An absent stamp reads as absent: the first version defaulted it to zero and
+    announced "20685d ago", which is 1970 wearing the clothes of a measurement.
+    """
+    try:
+        stamped = float(entry.get("first_seen") or 0)
+    except (TypeError, ValueError):
+        return ""
+    since = time.time() - stamped
+    if not stamped or since <= 0:
+        return ""
+    days = int(since // 86400)
+    return f", {days}d ago" if days else f", {max(1, int(since // 3600))}h ago"
 
 
 def red(ctx: GitContext) -> dict | None:

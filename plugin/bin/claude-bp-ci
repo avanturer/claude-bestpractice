@@ -48,7 +48,22 @@ def main() -> int:
         # was asked for evidence only a session in the branch's own tree could create.
         from claude_bestpractice import evidence
 
-        evidence.record_green(ctx, args.ran.split() or ["pre-push"])
+        # Prints. A command that performs no visible action, changes no state the caller
+        # can see and says nothing is indistinguishable from a failing one — which is
+        # exactly how it was reported: "whether record-green is broken or whether I am
+        # calling it wrong; that ambiguity is itself the report" (#152).
+        ran = args.ran.split() or ["pre-push"]
+        cleared = evidence.record_green(ctx, ran)
+        where = evidence._green_path(ctx)
+        print(f"recorded green: {' '.join(ran)} on {ctx.branch}")
+        print(f"  {where}")
+        if cleared:
+            print("  cleared the recorded failure for this branch")
+        elif evidence.red(ctx):
+            entry = evidence.red(ctx)
+            print(f"  a recorded failure REMAINS: {' '.join(entry.get('command') or [])} "
+                  f"on {entry.get('branch') or '?'} — only that same command passing "
+                  "clears it")
         return 0
 
     if args.command == "green-covers-tree":
@@ -57,7 +72,13 @@ def main() -> int:
         # dirty tree, an unreadable stamp — costs a run rather than granting a pass.
         from claude_bestpractice import evidence
 
-        return 0 if evidence.green_covers_tree(ctx) else 1
+        # Says which way it went. The exit code alone reads as success in both directions
+        # to anyone checking `echo $?` — 0 means covered, and 0 is also what a command
+        # that did nothing returns.
+        covered = evidence.green_covers_tree(ctx)
+        print("covered: this tree was observed green" if covered
+              else "not covered: the suite must run again on this tree")
+        return 0 if covered else 1
 
     if args.print_test_command:
         # The hook needs the SAME command the Stop gate resolves, or the two disagree

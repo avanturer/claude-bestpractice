@@ -8,6 +8,7 @@ passing and the suite reported OK.
 from __future__ import annotations
 
 import json
+import time
 import subprocess
 import sys
 import unittest
@@ -420,3 +421,78 @@ class TestAMissingRunnerIsNotACodeFailure(RepoCase):
         self.assertFalse(verdict.ok)
         self.assertIn("environment problem", verdict.reason)
         self.assertIsNone(evidence.red(self.ctx()), "an unrunnable suite was filed as red")
+
+
+class TestAGreenRunReportedByTheHookClearsTheRed(RepoCase):
+    """`clear_red` was reached from the two paths where this plugin RUNS the suite and
+    reads its output, and never from the pre-push hook that reports a run the project made
+    itself. So a branch that went red for two minutes stayed red to the merge gate
+    forever, whatever passed afterwards.
+
+    As met: a green suite, a gate saying "the test suite is red", and no command that
+    changed either — *"whether record-green is broken or whether I am calling it wrong;
+    that ambiguity is itself the report"* (#152).
+    """
+
+    def red(self, command: list[str], tail: str = "1 failed, 5 passed") -> None:
+        from claude_bestpractice import evidence
+
+        evidence.record_red(self.ctx(), command, tail)
+
+    def still_red(self) -> bool:
+        from claude_bestpractice import evidence
+
+        return evidence.red(self.ctx()) is not None
+
+    def test_the_same_command_passing_clears_it(self):
+        from claude_bestpractice import evidence
+
+        self.red(["make", "test"])
+        self.assertTrue(self.still_red(), "precondition: the branch has to be recorded red")
+
+        self.assertTrue(evidence.record_green(self.ctx(), ["make", "test"]))
+        self.assertFalse(self.still_red(), "a green suite could not clear its own failure")
+
+    def test_a_different_command_passing_does_not(self):
+        """The rule the two runner paths already enforce, and it does not relax here: a
+        narrower suite passing says nothing about the one that failed."""
+        from claude_bestpractice import evidence
+
+        self.red(["make", "test"])
+        self.assertFalse(evidence.record_green(self.ctx(), ["pytest", "tests/test_new.py"]))
+        self.assertTrue(self.still_red())
+
+    def test_the_age_of_an_unstamped_record_is_not_invented(self):
+        """The first version defaulted a missing stamp to zero and announced "20685d ago",
+        which is 1970 wearing the clothes of a measurement."""
+        from claude_bestpractice import evidence, store
+
+        self.red(["make", "test"])
+        path = store.tier_a(self.ctx(), evidence.RED_SUITE_FILE)
+        entry = json.loads(path.read_text(encoding="utf-8"))
+        entry.pop("first_seen", None)
+        path.write_text(json.dumps(entry), encoding="utf-8")
+
+        said = evidence.red_problem(self.ctx())
+        self.assertIn("make test", said, "precondition: the blocker still has to fire")
+        self.assertNotIn("ago", said)
+
+    def test_the_age_is_how_long_it_has_been_broken(self):
+        """`first_seen`, preserved across re-observations — not when it was last noticed."""
+        from claude_bestpractice import evidence, store
+
+        self.red(["make", "test"])
+        path = store.tier_a(self.ctx(), evidence.RED_SUITE_FILE)
+        entry = json.loads(path.read_text(encoding="utf-8"))
+        entry["first_seen"] = time.time() - 10 * 86400
+        path.write_text(json.dumps(entry), encoding="utf-8")
+
+        self.assertIn("10d ago", evidence.red_problem(self.ctx()))
+
+    def test_the_green_is_still_recorded_either_way(self):
+        """Declining to clear the red must not also throw away the green observation."""
+        from claude_bestpractice import evidence
+
+        self.red(["make", "test"])
+        evidence.record_green(self.ctx(), ["pytest", "-q"])
+        self.assertIsNotNone(evidence.last_green(self.ctx()))
