@@ -1025,7 +1025,10 @@ def _uncommitted(ctx: GitContext) -> set[str]:
 
     try:
         listed = subprocess.run(
-            ["git", "status", "--porcelain"], cwd=str(ctx.worktree_root),
+            # Forced, not left to the repository: `status.showUntrackedFiles=no` makes a
+            # bare `--porcelain` answer "clean" over a tree full of untracked files.
+            ["git", "status", "--porcelain", "--untracked-files=normal"],
+            cwd=str(ctx.worktree_root),
             capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=30,
         ).stdout
     except (OSError, subprocess.SubprocessError):
@@ -1188,7 +1191,8 @@ def tree_hash(ctx: GitContext) -> str:
     from .gitctx import _run
 
     try:
-        if _run(["status", "--porcelain"], ctx.worktree_root, check=False).strip():
+        if _run(["status", "--porcelain", "--untracked-files=normal"],
+                ctx.worktree_root, check=False).strip():
             return ""
         return _run(["rev-parse", "HEAD^{tree}"], ctx.worktree_root, check=False).strip()
     except Exception:  # noqa: BLE001 - no hash means no shortcut, which is the safe answer

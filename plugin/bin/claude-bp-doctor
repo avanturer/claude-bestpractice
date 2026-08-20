@@ -1236,7 +1236,7 @@ def check_worktree_provisioning(repo: Path) -> Result:
     # And the reason those trees used to sit outside the repository, paid rather than
     # dropped: provisioning must not leave the founder's status reporting untracked work.
     listed = subprocess.run(
-        ["git", "status", "--porcelain"], cwd=str(repo),
+        ["git", "status", "--porcelain", "--untracked-files=normal"], cwd=str(repo),
         capture_output=True, text=True, timeout=60,
     ).stdout
     hidden = ".claude/worktrees" not in listed

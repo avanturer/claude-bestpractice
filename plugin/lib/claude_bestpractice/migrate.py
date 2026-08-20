@@ -213,6 +213,90 @@ def _absorb_scratch_todos(ctx: GitContext) -> str:
     return "; ".join(adopted)
 
 
+
+def _our_trees(records: list) -> dict:
+    """The trees this plugin provisioned, keyed by where they are now."""
+    found = {}
+    for record in records:
+        body = store.read_json(record, default={}) or {}
+        current = Path(str(body.get("path") or ""))
+        if body.get("provisioned_by_plugin") and current.is_dir():
+            found[current.resolve()] = (record, body)
+    return found
+
+
+def _repoint(ours: dict, was: Path, now: Path) -> None:
+    """Follow a moved tree in our registry, or the next refusal names a path that is gone.
+
+    Silent for a tree we never recorded — the founder's own, which is now moved too and
+    has nothing here to update.
+    """
+    record, body = ours.get(was.resolve(), (None, None))
+    if record is None:
+        return
+    body["path"] = str(now)
+    store.write_json(record, body)
+
+
+def _trees_that_still_prompt(ctx: GitContext, home: Path) -> list[Path]:
+    """Every worktree entering still asks about, ours and the founder's alike.
+
+    Going by our own records alone was the whole defect: a tree the founder made by hand,
+    or one the CLI's `--worktree` flag made, has no record here — so the repair could not
+    see it and never would, and entering it asked for authorisation on every session,
+    forever. Reported three times before the cause was looked for in this function rather
+    than in the CLI's changelog.
+
+    Git is the register that knows about all of them.
+
+    Skipped: a tree already under `home` is where it should be; the tree THIS session is
+    standing in cannot be moved out from under itself; and a tree a live session records
+    as its own belongs to work in progress — moving a directory out from under a running
+    session breaks it.
+
+    The main checkout is skipped too, and that line is belt over braces rather than a
+    rule: `git worktree move` refuses the main working tree on its own, so no test can
+    tell the check from its absence. Said plainly rather than dressed up, and kept because
+    it saves a pointless subprocess — the same honest claim the sibling guard below makes.
+    """
+    from .gitctx import worktree_paths
+
+    try:
+        registered = worktree_paths(ctx)
+    except Exception:  # noqa: BLE001 - a repair must never be what breaks a session start
+        return []
+    keep = _trees_to_leave_alone(ctx)
+    if keep is None:
+        return []
+    return [p for p in registered if p not in keep and _still_prompts(p, home)]
+
+
+def _trees_to_leave_alone(ctx: GitContext) -> set[Path] | None:
+    """Paths moving would break: the main checkout, this session's tree, and any tree a
+    live session records as its own.
+
+    `None` when the live sessions cannot be read — which is not the same as "none are
+    live" and must not collapse into it. Unknown means move nothing: the alternative is
+    relocating a directory out from under a session that is working in it, and a repair
+    that does that is worse than the prompt it came to remove.
+    """
+    from . import sessions, worktree
+
+    keep = {worktree.main_checkout(ctx).resolve(), ctx.worktree_root.resolve()}
+    try:
+        return keep | {Path(rec.worktree).resolve() for rec in sessions.live_sessions(ctx)}
+    except Exception:  # noqa: BLE001 - a repair must never be what breaks a session start
+        return None
+
+
+def _still_prompts(path: Path, home: Path) -> bool:
+    """A directory that exists and is not already in the no-prompt zone."""
+    try:
+        return path.is_dir() and home.resolve() not in path.parents
+    except OSError:
+        return False
+
+
 def _move_trees_into_the_no_prompt_zone(ctx: GitContext) -> str:
     """Trees this plugin made beside the repository, moved to where entering never asks.
 
@@ -233,11 +317,10 @@ def _move_trees_into_the_no_prompt_zone(ctx: GitContext) -> str:
         records = sorted(store.tier_b(ctx, "worktrees").glob("*.json"))
     except OSError:
         return ""
-    for record in records:
-        body = store.read_json(record, default={}) or {}
-        current = Path(str(body.get("path") or ""))
-        if not body.get("provisioned_by_plugin") or not current.is_dir():
-            continue
+    by_path = _our_trees(records)
+    theirs = [p for p in _trees_that_still_prompt(ctx, home) if p.resolve() not in by_path]
+
+    for current in [p for p in _trees_that_still_prompt(ctx, home) if p.resolve() in by_path]:
         # One guard, covering both cases: a tree already under the home resolves to itself,
         # and a sibling whose name is taken is left where it is rather than colliding.
         # Belt over braces, and said so rather than dressed up as a rule — `git worktree
@@ -256,13 +339,34 @@ def _move_trees_into_the_no_prompt_zone(ctx: GitContext) -> str:
         )
         if done.returncode != 0:
             continue
-        body["path"] = str(target)
-        store.write_json(record, body)
+        _repoint(by_path, current, target)
         moved.append(target.name)
-    if not moved:
-        return ""
-    return (f"{len(moved)} worktree(s) moved under .claude/worktrees/, where entering them "
-            "no longer asks for approval")
+    return _worktree_repair_note(moved, theirs)
+
+
+def _worktree_repair_note(moved: list, theirs: list) -> str:
+    """What the repair did, and what it deliberately only named.
+
+    Named and not moved: going by our own records alone is what hid these for three
+    reports — but a tree this plugin did not make may have an editor or a shell sitting in
+    it, and `git worktree move` under a running process breaks it. Our own trees are
+    different: the registry says who is in them.
+    """
+    said = []
+    if moved:
+        said.append(f"{len(moved)} worktree(s) moved under .claude/worktrees/, where "
+                    "entering them no longer asks for approval")
+    if theirs:
+        shown = ", ".join(str(p) for p in theirs[:3])
+        more = f" (+{len(theirs) - 3} more)" if len(theirs) > 3 else ""
+        said.append(
+            f"{len(theirs)} worktree(s) this plugin did not make sit outside "
+            f".claude/worktrees/, so entering them asks for approval every time: {shown}"
+            f"{more}. Move one with `git worktree move <path> "
+            "<repo>/.claude/worktrees/<name>`, or allow `EnterWorktree` once in "
+            "~/.claude/settings.json"
+        )
+    return "; ".join(said)
 
 
 def _lift_the_tool_call_ceiling(ctx: GitContext) -> str:
@@ -293,7 +397,7 @@ _REPAIRS = {
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
     "0003-absorb-scratch-todos": (1, _absorb_scratch_todos),
     "0004-lift-the-tool-call-ceiling": (1, _lift_the_tool_call_ceiling),
-    "0005-trees-into-the-no-prompt-zone": (1, _move_trees_into_the_no_prompt_zone),
+    "0005-trees-into-the-no-prompt-zone": (2, _move_trees_into_the_no_prompt_zone),
 }
 
 

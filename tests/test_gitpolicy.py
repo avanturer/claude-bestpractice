@@ -1249,7 +1249,17 @@ class TestTheStandingInstructionNamesTheTree(RepoCase):
         otherwise the absence proves only that the rule was off over there.
         """
         self.commit()
-        tree = self.add_worktree("already-there")
+        # Under `.claude/worktrees/`, where provisioned trees actually live. A tree beside
+        # the repository is one the migration now MOVES on session start (#151 follow-up),
+        # so putting it there would be testing the migration, not this rule — and the
+        # first version of this test failed for exactly that reason, with the hook's cwd
+        # deleted out from under it.
+        from claude_bestpractice import worktree as wt
+
+        home = wt.home_of(self.ctx())
+        home.mkdir(parents=True, exist_ok=True)
+        tree = home / "already-there"
+        git(["worktree", "add", "-q", "-b", "already-there", str(tree)], self.repo)
         self.context()
         proc = self.run_hook(
             "session-start",

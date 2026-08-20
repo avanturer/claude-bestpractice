@@ -1,5 +1,76 @@
 # Changelog
 
+## v1.33.0
+
+The worktree that kept asking for permission, and a repository that could declare itself
+clean.
+
+### The migration only ever saw its own worktrees
+
+Reported three times: a session announces it is returning to its worktree, `EnterWorktree`
+asks the founder to authorise it, and the tree in question has been sitting beside the
+repository for months.
+
+The repair that moves old trees into `.claude/worktrees/` — where entering never asks —
+walked this plugin's own records and nothing else:
+
+```python
+if not body.get("provisioned_by_plugin") or not current.is_dir():
+    continue
+```
+
+A tree the founder made by hand, or one the CLI's `--worktree` flag made, has no record
+here. So the repair could not see it, never would, and every entry asked again — forever.
+The cause was looked for twice in the CLI's changelog and once in repository trust before
+it was looked for in this function.
+
+Git is the register that knows about all of them. The repair now walks `git worktree list`
+and **names** every tree still outside the no-prompt zone, with the command that moves it.
+
+It does not move the ones it did not make. That was the first draft, and the test suite
+caught it: a tree this plugin never provisioned may have an editor or a shell sitting in
+it, and `git worktree move` under a running process breaks it. Our own trees are different
+— the registry says who is in them — and those are still moved, as before.
+
+The permanent fix for the prompt is one line the founder adds once: `EnterWorktree` and
+`ExitWorktree` in `permissions.allow`. The prompt is the tool's own safety check and
+overrides any hook's approval, so nothing here can close it — only name it.
+
+Three trees are left alone even among ours: the one this session is standing in, any a
+live session records as its own, and the main checkout. If the live sessions cannot be
+read at all, nothing moves — unknown is not "nobody is working", and collapsing the two
+relocates a directory out from under someone.
+
+### A repository could tell us it was clean when it was not
+
+`status.showUntrackedFiles=no` is a real and reasonable setting in a large repository, and
+it makes a bare `git status --porcelain` answer "clean" over a tree full of untracked
+files. Four checks here asked that question and believed the answer — including the one
+that decides whether a green run's tree stamp is valid, which would then have claimed to
+cover a tree that was never tested.
+
+All four now force `--untracked-files=normal`. The setting stays honoured everywhere a
+human reads status; it is overridden only where this plugin asks "is this tree clean" and
+must not be lied to. Claude Code closed the same blind spot in its own auto-mode check in
+2.1.236.
+
+### Found and deliberately not fixed
+
+`~/.claude.json` holds **4,551 project entries here, 4,505 of them naming test sandboxes**
+— the same debris that filled `settings.json`, from before the sandbox-HOME fix in v1.21.
+Measured, and it is **not growing**: a doctor run plus the worktree-heavy suite left the
+count unchanged.
+
+No pruner shipped for it, on purpose. That file belongs to the harness, not to this
+plugin; the entries were not written by us in any way we can identify after the fact, and
+its shape is not ours to depend on. Deleting from a config we do not own, to tidy debris
+that stopped accumulating five releases ago, is not worth the class of accident that cost
+this session a working repository. `settings.json` is different and is pruned: those
+blocks carry our own marker.
+
+If the size bothers you, the entries whose directory no longer exists are safe to drop by
+hand — but nothing here will do it unasked.
+
 ## v1.32.0
 
 The gate that guards a push stops attacking the repository it guards.
