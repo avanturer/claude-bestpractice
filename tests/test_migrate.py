@@ -290,6 +290,66 @@ class TestOldTreesMoveWhereEnteringNeverAsks(RepoCase):
         self.assertTrue(made.is_dir())
         self.assertEqual([], [line for line in changed if "no-prompt-zone" in line])
 
+    def unrecorded(self, name: str = "by-hand"):
+        """A worktree git knows about and this plugin does not — made by hand, or by the
+        CLI's own `--worktree` flag."""
+        sibling = self.repo.parent / f"{self.repo.name}-{name}"
+        git(["worktree", "add", "-q", str(sibling), "-b", f"feat/{name}"], self.repo)
+        return sibling
+
+    def test_a_tree_the_plugin_never_recorded_is_named(self):
+        """Going by our own records alone was the defect: a tree the founder made by hand
+        has no record here, so nothing here could see it, and entering it asked for
+        authorisation on every session — reported three times before the cause was looked
+        for in this function rather than in the CLI's changelog."""
+        sibling = self.unrecorded()
+        said = " ".join(migrate.repair(self.ctx()))
+        self.assertIn(str(sibling), said)
+        self.assertIn("asks for approval every time", said)
+
+    def test_a_tree_the_plugin_never_recorded_is_not_moved(self):
+        """Seeing it is not licence to move it. An editor or a shell may be sitting in a
+        tree this plugin did not make, and `git worktree move` under a running process
+        breaks it. Our own trees are different: the registry says who is in them."""
+        sibling = self.unrecorded()
+        (sibling / "wip.py").write_text("unfinished = True\n", encoding="utf-8")
+        migrate.repair(self.ctx())
+        self.assertTrue(sibling.is_dir(), "moved a tree that was not ours to move")
+        self.assertEqual("unfinished = True\n", (sibling / "wip.py").read_text(encoding="utf-8"))
+
+    def test_our_own_trees_are_still_moved_rather_than_named(self):
+        """The narrowing must not turn the repair into a report."""
+        sibling = self.legacy()
+        said = " ".join(migrate.repair(self.ctx()))
+        self.assertFalse(sibling.exists())
+        self.assertIn("moved under .claude/worktrees/", said)
+
+    def test_when_the_live_sessions_cannot_be_read_nothing_moves(self):
+        """Unknown is not "none are live", and collapsing the two moves a directory out
+        from under a session that is working in it. A repair that does that is worse than
+        the prompt it came to remove."""
+        from unittest import mock
+
+        from claude_bestpractice import sessions
+
+        sibling = self.legacy()
+        with mock.patch.object(sessions, "live_sessions", side_effect=OSError("unreadable")):
+            migrate.repair(self.ctx())
+        self.assertTrue(sibling.is_dir(), "moved trees while blind to who was using them")
+
+    def test_a_tree_a_live_session_is_working_in_is_left_alone(self):
+        """Moving a directory out from under a running session breaks it. Our own trees
+        were only ever moved when nobody was in them; the same has to hold for theirs."""
+        from claude_bestpractice import sessions
+
+        sibling = self.legacy()
+        record = self.session_record("live-one")
+        record.worktree = str(sibling)
+        sessions.register(self.ctx(), record)
+
+        migrate.repair(self.ctx())
+        self.assertTrue(sibling.is_dir(), "a tree someone is standing in was moved")
+
 
 class TestTheCeilingIsTakenBackOutOnUpgrade(RepoCase):
     """`max_tool_calls` defaulted to 2000 and `config.save` writes every key, so the number

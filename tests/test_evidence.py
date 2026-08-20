@@ -264,6 +264,25 @@ class TestAGreenRunIsStampedWithItsTree(RepoCase):
         self.commit("add the app module")
         self.assertFalse(evidence.green_covers_tree(self.ctx()))
 
+    def test_a_repository_cannot_declare_itself_clean(self):
+        """`status.showUntrackedFiles=no` is a real setting in a large repository, and it
+        makes a bare `git status --porcelain` answer "clean" over a tree full of untracked
+        files. The stamp would then claim to cover a tree that is not the one that was
+        tested. Claude Code closed the same blind spot in its own auto-mode check in
+        2.1.236; ours was open until it was looked for.
+        """
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        git(["config", "--local", "status.showUntrackedFiles", "no"], self.repo)
+        self.assertEqual("", git(["status", "--porcelain"], self.repo).strip(),
+                         "precondition: git itself must be reporting the tree as clean")
+
+        evidence.record_green(self.ctx(), ["pytest"])
+        (self.repo / "not-committed.py").write_text("y = 2\n", encoding="utf-8")
+
+        self.assertEqual("", evidence.tree_hash(self.ctx()))
+        self.assertFalse(evidence.green_covers_tree(self.ctx()))
+
 if __name__ == "__main__":
     unittest.main()
 

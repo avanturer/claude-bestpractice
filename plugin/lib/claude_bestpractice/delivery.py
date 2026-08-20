@@ -268,7 +268,8 @@ _NOT_THE_FOUNDERS = (".claude/",)
 def dirty(ctx: GitContext) -> bool:
     """Uncommitted work that would not reach the remote, ignoring the gates' own state."""
     listed = subprocess.run(
-        ["git", "status", "--porcelain"],
+        # Forced: see evidence.py — a repository can otherwise declare itself clean.
+        ["git", "status", "--porcelain", "--untracked-files=normal"],
         cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=30,
     ).stdout
     for line in listed.splitlines():
