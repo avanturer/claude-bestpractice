@@ -148,6 +148,31 @@ def _give_up(ctx, rec: sessions.SessionRecord, reason: str, changed: list) -> No
     )
 
 
+def _work_the_siblings_cannot_see(ctx) -> bool:
+    """Is there anything left for the board to warn the other sessions about?
+
+    The demand counted files against `baseline_commit`, which is where this session
+    STARTED — so a session whose work is finished, merged and pushed was told "46 file(s)
+    changed and no task in the ledger is claimed by it" over a tree identical to the trunk.
+    Claiming something then is worse than not: it puts work on the board that is not
+    happening, and the board's whole value is that it does not lie (#149).
+
+    Measured against the base branch instead, which is the question the demand is actually
+    asking: commits this branch adds, or edits not yet committed. Either means a sibling
+    could collide with something invisible to it; neither means there is nothing to see.
+
+    Fails LOUD, not quiet: if the base cannot be determined the demand stands, because a
+    gate that stands down whenever it is unsure is one that stands down in every unusual
+    repository.
+    """
+    from claude_bestpractice import delivery, gitpolicy
+
+    base = gitpolicy.default_branch(ctx)
+    if not base:
+        return True
+    return bool(delivery.commits_since(ctx, base)) or delivery.dirty(ctx)
+
+
 def main() -> None:
     event = hookio.read_event()
     ctx = hookio.repo(event.cwd or os.getcwd())
@@ -317,7 +342,7 @@ def main() -> None:
         from claude_bestpractice import plan
 
         mine = [t for t in plan.load_all(ctx, plan.DOING) if t.owner == rec.session_id]
-        if not mine:
+        if not mine and _work_the_siblings_cannot_see(ctx):
             problems.append(
                 f"Nothing on the board says this session is working: {len(changed)} file(s) "
                 "changed and no task in the ledger is claimed by it.\n"

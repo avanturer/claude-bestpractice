@@ -15,7 +15,7 @@ import time
 import unittest
 from pathlib import Path
 
-from helpers import BIN, RepoCase, sid
+from helpers import BIN, RepoCase, git, sid
 
 from claude_bestpractice import plan
 
@@ -983,6 +983,59 @@ class TestEvidenceGate(GateCase):
         self.assertEqual(2, proc.returncode)
         self.assertIn("Nothing on the board", proc.stderr)
         self.assertIn("claude-bp-plan add", proc.stderr, "a refusal must name the way through")
+
+    def test_finished_work_already_in_the_trunk_is_not_demanded(self):
+        """The demand counted files against `baseline_commit` — where the session STARTED
+        — so a session whose work was merged, deployed and pushed was told "46 file(s)
+        changed and no task in the ledger is claimed by it" over a tree identical to the
+        trunk. Claiming something then is worse than not: it puts work on the board that
+        is not happening (#149)."""
+        self.start()
+        self.write("feature.py", "x = 1\n")
+        self.write("junit.xml", JUNIT_PASS)
+        self.commit("the work, finished and on the trunk")
+
+        proc = self.stop()
+        self.assertNotIn("Nothing on the board", proc.stderr)
+
+    def test_uncommitted_work_is_still_demanded(self):
+        """The narrowing must not let a session edit files invisibly — which is the whole
+        reason the demand exists."""
+        self.start()
+        self.write("feature.py", "x = 1\n")
+        self.write("junit.xml", JUNIT_PASS)
+        self.commit("committed")
+        self.write("feature.py", "x = 2  # not committed\n")
+
+        self.assertIn("Nothing on the board", self.stop().stderr)
+
+    def test_commits_the_trunk_does_not_have_are_still_demanded(self):
+        """A branch mid-flight is exactly what a sibling needs warning about."""
+        self.start()
+        self.write("base.py", "x = 0\n")
+        self.commit("shared history")
+        git(["switch", "-qc", "feat/in-flight"], self.repo)
+        self.write("feature.py", "x = 1\n")
+        self.write("junit.xml", JUNIT_PASS)
+        self.commit("work only this branch has")
+
+        self.assertIn("Nothing on the board", self.stop().stderr)
+
+    def test_a_repository_with_no_discoverable_trunk_is_still_demanded(self):
+        """Fails loud, not quiet. There is no origin/HEAD and no branch by a trunk name,
+        so the base cannot be determined — and a gate that stands down whenever it is
+        unsure stands down in every unusual repository."""
+        self.start()
+        self.write("feature.py", "x = 1\n")
+        self.write("junit.xml", JUNIT_PASS)
+        self.commit("committed, and nothing to compare it against")
+        git(["branch", "-m", "wip/no-trunk-here"], self.repo)
+
+        from claude_bestpractice import gitpolicy
+
+        self.assertEqual("", gitpolicy.default_branch(self.ctx()),
+                         "precondition: the trunk has to be genuinely undiscoverable")
+        self.assertIn("Nothing on the board", self.stop().stderr)
 
     def test_the_command_the_refusal_names_actually_satisfies_it(self):
         """`claim` stamped `cli-<branch>` as the owner, so the task belonged to somebody
