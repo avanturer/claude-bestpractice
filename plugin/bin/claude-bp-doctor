@@ -1240,14 +1240,20 @@ def check_worktree_provisioning(repo: Path) -> Result:
         capture_output=True, text=True, timeout=60,
     ).stdout
     hidden = ".claude/worktrees" not in listed
-    ok = trusted and placed and hidden
+    # The harness rejects a path that is not a directory — "the hook must create the
+    # directory before echoing its path" — and this hook used to make only the parent, so
+    # `isolation: "worktree"` could not start an agent at all. Checking the path was
+    # PRINTED never caught it; checking that it EXISTS does (#148).
+    made = Path(path).is_dir()
+    ok = trusted and placed and hidden and made
     return Result(
         "worktree provisioning",
         ok,
-        "entered without a prompt, invisible to git, trust seeded at birth"
+        "created, entered without a prompt, invisible to git, trust seeded at birth"
         if ok
-        else f"in .claude/worktrees={placed} hidden={hidden} trusted={trusted} — "
-             "a tree elsewhere is one the founder is asked about, and an untrusted one runs no hooks",
+        else f"created={made} in .claude/worktrees={placed} hidden={hidden} trusted={trusted} — "
+             "a path that is not a directory fails every isolated agent, a tree elsewhere is "
+             "one the founder is asked about, and an untrusted one runs no hooks",
     )
 
 

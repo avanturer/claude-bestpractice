@@ -40,16 +40,28 @@ def main() -> None:
     ctx = hookio.repo(event.cwd or os.getcwd())
 
     requested = str(event.raw.get("path") or event.raw.get("worktreePath") or "")
-    branch = str(event.raw.get("branch") or event.raw.get("ref") or "").strip() or "work"
+    asked = str(event.raw.get("branch") or event.raw.get("ref") or "").strip()
+    # `or "work"` was here, and it is the bug `session_slug` was written to fix arriving
+    # through the other door: every caller that names no branch — which is every
+    # `isolation: "worktree"` agent — got the literal `.claude/worktrees/work`, so two
+    # agents in one message asked for the same path (#148).
+    branch = asked or f"agent/{worktree.session_slug('', event.session_id)}"
     slug = worktree.slugify(branch)
 
     target = Path(requested) if requested else worktree.target_for(ctx, slug)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    # The harness creates the tree here, so the exclude has to be in place before it does
-    # — otherwise the founder's next status reports it as untracked work, which is the
-    # whole reason these used to live outside the repository.
+    # Before the tree exists, so it is never visible as untracked work even for the moment
+    # between `git worktree add` and the next status.
     worktree.hide(ctx)
+    target.parent.mkdir(parents=True, exist_ok=True)
     absolute = str(target)
+
+    # CREATED, not just named. The harness rejects a path that is not a directory —
+    # "the hook must create the directory before echoing its path" — and this used to make
+    # only the parent, so `isolation: "worktree"` could not start an agent at all. Failing
+    # open here means letting the harness make its own default tree, which is the
+    # behaviour without this plugin rather than a broken one.
+    if not target.is_dir() and not worktree.add_tree(ctx, absolute, branch):
+        raise SystemExit(0)
 
     # Same provisioning the gate uses when it refuses a write in the main checkout, so the
     # two paths cannot drift into disagreeing about naming, trust or ports.

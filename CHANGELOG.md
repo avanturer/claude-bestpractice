@@ -1,5 +1,34 @@
 # Changelog
 
+## v1.35.0
+
+`isolation: "worktree"` could not start an agent, because the hook named a tree it never
+made.
+
+### The hook echoed a path it had not created (#148)
+
+> WorktreeCreate hook returned a path that is not a directory:
+> `…/.claude/worktrees/work`. The hook must create the directory before echoing its path.
+
+Two faults, both in one line each.
+
+The hook made the path's **parent** and printed the path itself, on the belief that the
+harness would create the tree. It does not — it checks. So every isolated agent failed
+immediately, and the workaround was to launch without isolation, which is the unsafe path
+this project's own rules forbid.
+
+And the name was the literal `work`: `or "work"` sat where a unique slug belongs, so two
+agents launched in one message asked for the **same** directory. That is exactly the
+failure `session_slug` was written to fix — *"two sessions with no recorded prompt both
+slugged to `work`"* — arriving through the other door, eleven releases later.
+
+The tree is created now, as a real worktree rather than a bare directory, through the same
+`git worktree add` the provisioning path uses. An unnamed branch gets the per-session slug;
+a named one is still honoured.
+
+The doctor asserted that a path was **printed**, which is why this never showed there. It
+asserts the path **exists** now.
+
 ## v1.34.0
 
 A pull request that could not be merged, over a suite that passed, with no command that

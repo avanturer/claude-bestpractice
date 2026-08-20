@@ -415,28 +415,36 @@ def provision(ctx: GitContext, task: str = "", session_id: str = "") -> Path | N
     # between `git worktree add` and the next status.
     hide(ctx)
 
-    if target.is_dir():
-        record(ctx, slug, absolute, branch, trust(absolute), session_id)
-        return target
+    if not target.is_dir() and not add_tree(ctx, absolute, branch):
+        return None
 
+    record(ctx, slug, absolute, branch, trust(absolute), session_id)
+    return target
+
+
+def add_tree(ctx: GitContext, absolute: str, branch: str) -> bool:
+    """`git worktree add`, with the one recoverable failure handled. False if git refused.
+
+    Shared with the `WorktreeCreate` hook rather than written twice: that hook echoed a
+    path it had never created — only the path's PARENT was made — so the harness refused
+    the agent with "the hook must create the directory before echoing its path", and
+    `isolation: "worktree"` could not start at all (#148).
+    """
     proc = subprocess.run(
         ["git", "worktree", "add", "-b", branch, absolute],
         cwd=str(ctx.worktree_root), capture_output=True,
         encoding="utf-8", errors="surrogateescape", timeout=120,
     )
-    if proc.returncode != 0:
-        # A branch of that name already exists is the common one, and it is recoverable:
-        # attach a worktree to the branch instead of creating it again.
-        attach = subprocess.run(
-            ["git", "worktree", "add", absolute, branch],
-            cwd=str(ctx.worktree_root), capture_output=True,
-            encoding="utf-8", errors="surrogateescape", timeout=120,
-        )
-        if attach.returncode != 0:
-            return None
-
-    record(ctx, slug, absolute, branch, trust(absolute), session_id)
-    return target
+    if proc.returncode == 0:
+        return True
+    # A branch of that name already exists is the common one, and it is recoverable:
+    # attach a worktree to the branch instead of creating it again.
+    attach = subprocess.run(
+        ["git", "worktree", "add", absolute, branch],
+        cwd=str(ctx.worktree_root), capture_output=True,
+        encoding="utf-8", errors="surrogateescape", timeout=120,
+    )
+    return attach.returncode == 0
 
 
 # The founder settings file the permission layer reads. Project settings cannot grant this:
