@@ -12,6 +12,7 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from claude_bestpractice.gitctx import worktree_paths
 from helpers import BIN, RepoCase, git, sid
 
 
@@ -1268,3 +1269,44 @@ class TestTheStandingInstructionNamesTheTree(RepoCase):
         )
         body = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
         self.assertNotIn("never in this main checkout", body)
+
+
+class TestWorktreeCreateMakesTheTreeItNames(RepoCase):
+    """The hook echoed a path it had never created — only the path's PARENT was made — so
+    the harness refused every isolated agent with *"the hook must create the directory
+    before echoing its path"*, and `isolation: "worktree"` could not start at all.
+
+    And the name was the literal `work`: `or "work"` sat where a unique slug belongs, so
+    two agents launched in one message asked for the same directory. That is the failure
+    `session_slug` was written to fix, arriving through the other door (#148).
+    """
+
+    def create(self, session: str = "a1", branch: str = "") -> str:
+        event = {"session_id": session, "hook_event_name": "WorktreeCreate", "cwd": str(self.repo)}
+        if branch:
+            event["branch"] = branch
+        return self.run_hook("worktree-create", event).stdout.strip()
+
+    def test_the_path_it_prints_is_a_directory(self):
+        """The harness's own precondition, and the whole of the bug."""
+        said = self.create()
+        self.assertTrue(said, "the hook printed no path at all")
+        self.assertTrue(Path(said).is_dir(), f"echoed a path it never created: {said}")
+
+    def test_the_directory_is_a_real_worktree(self):
+        """A plain mkdir would satisfy the harness and give the agent no isolation."""
+        said = self.create()
+        registered = [str(p) for p in worktree_paths(self.ctx())]
+        self.assertIn(str(Path(said).resolve()), registered)
+
+    def test_two_agents_with_no_branch_do_not_collide(self):
+        """Both used to be `.claude/worktrees/work`, which is one tree for two agents —
+        the silent overwrite this plugin exists to prevent, committed by it."""
+        first = self.create("a1")
+        second = self.create("a2")
+        self.assertNotEqual(first, second)
+        self.assertNotIn("/worktrees/work", first)
+
+    def test_a_named_branch_is_still_honoured(self):
+        """The unique slug must not replace a name the caller gave."""
+        self.assertIn("doctor-feature", self.create(branch="doctor-feature"))
