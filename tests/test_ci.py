@@ -9,6 +9,7 @@ hosted workflow costs nothing until it is switched on. So most of this drives re
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import unittest
@@ -988,3 +989,70 @@ class TestAHookFromBeforeTheRenameIsOurs(CICase):
         ci.ensure(self.ctx())
 
         self.assertIn("CURRENT-CHECK-RAN", current.read_text())
+
+
+class TestTheHookDoesNotAimTheChecksAtThisRepository(CICase):
+    """Git exports GIT_DIR and friends to every hook, and the checks inherit them.
+
+    A test suite that shells out to git then stops talking to its own sandboxes and starts
+    talking to the repository being pushed. Measured, not feared: one push through this
+    hook set `core.bare=true` on the live repository, replaced user.name/user.email with a
+    fixture's identity, deleted the `origin` remote and overwrote `main` with fixture
+    commits — and 1,062 tests "failed" because every one of them was operating on the
+    wrong repository (#151).
+    """
+
+    def check_that_records_its_repository(self) -> Path:
+        """A `make check` whose only job is to say which repository it was pointed at."""
+        witness = self.repo / "witness.txt"
+        # Both, because they answer to DIFFERENT variables: --absolute-git-dir follows
+        # GIT_DIR, --show-toplevel follows GIT_WORK_TREE. A witness that reads only the
+        # first cannot tell a leaked work tree from a clean one.
+        (self.repo / "Makefile").write_text(
+            "check:\n\t@git rev-parse --absolute-git-dir --show-toplevel > %s\n" % witness
+        )
+        git(["add", "-A"], self.repo)
+        git(["commit", "-qm", "makefile"], self.repo)
+        return witness
+
+    def elsewhere(self) -> Path:
+        other = self.tmp / "somewhere-else"
+        subprocess.run(["git", "init", "-q", str(other)], check=True, timeout=60)
+        return other / ".git"
+
+    def test_the_checks_see_the_repository_they_are_pushing(self):
+        from claude_bestpractice import ci
+
+        witness = self.check_that_records_its_repository()
+        ci.install(self.ctx())
+        injected = self.elsewhere()
+
+        subprocess.run(
+            ["sh", str(ci.hook_path(self.ctx()))],
+            cwd=str(self.repo), capture_output=True, text=True, timeout=180,
+            env={**os.environ, "GIT_DIR": str(injected)},
+        )
+
+        saw = witness.read_text(encoding="utf-8").split()
+        self.assertNotIn(str(injected), saw, "the checks were aimed at another repository")
+        self.assertEqual(str(self.ctx().common_dir.resolve()), str(Path(saw[0]).resolve()))
+
+    def test_an_injected_index_and_work_tree_are_dropped_too(self):
+        """GIT_DIR is the loudest, not the only one: a stray GIT_INDEX_FILE makes every
+        `git add` in the checks write somebody else's index."""
+        from claude_bestpractice import ci
+
+        witness = self.check_that_records_its_repository()
+        ci.install(self.ctx())
+        injected = self.elsewhere()
+
+        proc = subprocess.run(
+            ["sh", str(ci.hook_path(self.ctx()))],
+            cwd=str(self.repo), capture_output=True, text=True, timeout=180,
+            env={**os.environ, "GIT_INDEX_FILE": str(injected / "index"),
+                 "GIT_WORK_TREE": str(injected.parent)},
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        saw = witness.read_text(encoding="utf-8").split()
+        self.assertEqual(str(self.repo.resolve()), str(Path(saw[1]).resolve()),
+                         "the checks were pointed at another work tree")

@@ -1,5 +1,43 @@
 # Changelog
 
+## v1.32.0
+
+The gate that guards a push stops attacking the repository it guards.
+
+### The pre-push hook aimed the project's checks at the wrong repository (#151)
+
+Git exports `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE` and friends to every hook, and
+everything the hook runs inherits them. So a test suite that shells out to git — this one
+does, on nearly every test — stops talking to its own sandboxes and starts talking to the
+repository being pushed.
+
+Measured, not feared. One push through this hook, on this repository:
+
+```
+core.bare = true                      ← the live repository marked bare
+user.name = test                      ← a test fixture's identity
+user.email = test@claude-bestpractice
+remote origin                         ← deleted
+main = 146b3ce                        ← overwritten with fixture commits
+```
+
+1,062 tests "failed" in that run because every one of them was operating on the wrong
+repository. Nothing was lost — every commit survived as an object and the remote was
+untouched — but the local repository could not push until it was repaired by hand.
+
+The hook now clears the variables that RETARGET git before running anything.
+`GIT_EXEC_PATH` is deliberately left alone: it tells git where its own helpers live, and
+clearing it breaks git rather than protecting it.
+
+Proven by a check whose only job is to say which repository it was pointed at: the hook is
+run with a foreign `GIT_DIR` and `GIT_WORK_TREE` injected, and the recorded answer must be
+the repository being pushed. The first draft of that test read only `--absolute-git-dir`,
+which answers to `GIT_DIR` alone — so "clear only `GIT_DIR`" survived mutation until the
+witness also recorded `--show-toplevel`.
+
+This affects any project whose checks touch git, which is most of them. Upgrading rewrites
+the installed hook.
+
 ## v1.31.0
 
 The plugin stops asking the founder to clean up after it, and the step that arms this
