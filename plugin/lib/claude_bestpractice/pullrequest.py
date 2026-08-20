@@ -328,9 +328,9 @@ def _about_the_pull_request(ctx: GitContext, base: str, head: str) -> list[str]:
     problems: list[str] = []
     if not delivery.commits_since(ctx, base, head):
         problems.append(f"no commits on {head} over {base}")
-    entry = evidence.red(ctx)
-    if entry and entry.get("branch") == head:
-        problems.append("the test suite is red")
+    said = evidence.red_problem(ctx, head)
+    if said:
+        problems.append(said)
     if not evidence.last_green(ctx, head):
         problems.append(f"no test run has ever been observed on {head}")
     if delivery.unverified_on(ctx, head):

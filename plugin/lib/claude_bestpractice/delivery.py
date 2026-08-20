@@ -245,8 +245,9 @@ def ready(ctx: GitContext, base: str) -> list[str]:
         problems.append(f"a {state.kind} is unfinished")
     if not commits_since(ctx, base):
         problems.append(f"no commits on top of {base}")
-    if evidence.red(ctx):
-        problems.append("the test suite is red")
+    said = evidence.red_problem(ctx)
+    if said:
+        problems.append(said)
     if not evidence.last_green(ctx):
         problems.append("no test run has ever been observed on this branch")
     if _unverified_here(ctx):
