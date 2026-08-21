@@ -1,5 +1,53 @@
 # Changelog
 
+## v1.38.0
+
+The timeout setting shipped one release ago is gone, because it could not do what it said.
+
+### A knob that could not grant the time it offered
+
+v1.37.0 made the witness ceiling configurable and told the founder to raise it to 1800
+seconds. That advice was wrong, and the reason is one line of this plugin's own manifest:
+
+```
+Stop   timeout=900   evidence-gate
+```
+
+The fixed 300 seconds sat **inside** a 900-second budget the harness gives the hook.
+Raising it past 900 would only have moved the death of the run from our timeout to the
+harness's — where the process is killed outright and the founder is told nothing at all.
+A setting that cannot deliver what it promises is worse than no setting.
+
+Same shape as `max_tool_calls`, and taken out the same way: the ceiling is **derived** from
+the Stop hook's declared budget, less what the gate needs afterwards to parse and judge.
+A repository upgrading with the key on disk has it removed, with a line saying so.
+
+### A suite too long for the hook now falls back instead of refusing
+
+This is the correction that matters. A suite of 1,422 seconds cannot be witnessed inside a
+hook that lives for 900 — not by any setting, in any repository. v1.37.0 turned that into
+a hard refusal, which left the repository as blocked as the bug it was fixing.
+
+It now falls through to the artifact the project's own run wrote, which the gate has always
+been able to read, and says why:
+
+> This gate's own run was stopped at 765s — longer than the Stop hook lives, so it cannot
+> be witnessed here whatever the settings say. Falling back to the artifact your run wrote.
+
+Weaker evidence, and the verdict is marked unverified so it stays weaker. It is also the
+only thing that can be true.
+
+### `witness_exclude` defeated itself, and the tests did not notice
+
+The guard against a NARROWED run compares tests executed against tests the tree declares —
+so excluding a suite made every finish come back *"something narrowed the run — not a
+witnessed pass"*. The feature worked only in the weakest sense, and the v1.37.0 test missed
+it by asserting the verdict was `ok` without asserting it was witnessed.
+
+The count now subtracts what the founder excluded. That is safe for exactly the reason the
+list is safe at all: `config.json` is refused to the session by `pre-tool`, so the
+narrowing is the founder's. An `--ignore` in `pytest.ini` still counts for nothing.
+
 ## v1.37.0
 
 A repository whose suite is slower than five minutes could not finish a single turn.

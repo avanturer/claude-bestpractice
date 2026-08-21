@@ -50,12 +50,15 @@ from pathlib import Path
 
 from .gitctx import GitContext
 
-# The ceiling on a run this gate drives itself. Configurable since a repository whose
-# suite takes 1,422 seconds — 2,872 tests, some against a live Postgres holding a snapshot
-# of production — was blocked FOREVER: the run was killed at 300s, no report was written,
-# and the gate then reported a missing artifact and advised running the suite, which is
-# the one thing that could not help (#158).
-TIMEOUT = 300
+# Floor and margin, not a ceiling. The ceiling is DERIVED from what the harness gives the
+# Stop hook, because that is the only limit that was ever real: a fixed 300 sat inside a
+# 900-second hook budget, and raising it — which v1.37.0 made configurable — would only
+# have moved the death of the run from our timeout to the harness's, where there is no
+# message at all. The setting could not deliver what it promised, so it is gone with the
+# number that made it necessary (#158).
+FLOOR = 30.0
+# What the gate needs after the run to parse the report, judge it and write its state.
+MARGIN = 0.15
 
 
 class RanOutOfTime(Exception):
@@ -71,14 +74,34 @@ class RanOutOfTime(Exception):
         self.seconds = seconds
 
 
-def timeout_for(ctx: GitContext) -> float:
-    """The ceiling this repository asks for, or the default."""
-    from . import config
+def timeout_for() -> float:
+    """How long the run may take: what the Stop hook is given, less what judging costs.
 
+    Read from this plugin's own `hooks.json`, so the number can never promise more than
+    the harness will wait for. A repository does not get to raise this — not because its
+    suite does not deserve the time, but because the time is not ours to grant: past the
+    hook's budget the harness kills the process and the founder is told nothing at all.
+    When a suite genuinely does not fit, the answer is the artifact its own run wrote,
+    which this gate reads.
+    """
+    declared = _stop_hook_budget()
+    return max(FLOOR, declared * (1.0 - MARGIN))
+
+
+def _stop_hook_budget() -> float:
+    """Seconds the harness gives the Stop gate, from the manifest that declares it."""
+    manifest = Path(__file__).resolve().parent.parent.parent / "hooks" / "hooks.json"
     try:
-        return float(config.load(ctx).witness_timeout_seconds) or TIMEOUT
-    except (AttributeError, TypeError, ValueError):
-        return TIMEOUT
+        import json
+
+        declared = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return FLOOR
+    for entry in (declared.get("hooks") or {}).get("Stop") or []:
+        for hook in entry.get("hooks") or []:
+            if "evidence-gate" in str(hook.get("command") or ""):
+                return float(hook.get("timeout") or FLOOR)
+    return FLOOR
 
 
 @dataclass
@@ -145,12 +168,12 @@ def _spawn(ctx: GitContext, argv: list[str], env: dict[str, str] | None) -> subp
             capture_output=True,
             encoding="utf-8",
             errors="replace",
-            timeout=timeout_for(ctx),
+            timeout=timeout_for(),
             env={**os.environ, **(env or {})},
             start_new_session=True,
         )
     except subprocess.TimeoutExpired as killed:
-        raise RanOutOfTime(killed.timeout or timeout_for(ctx)) from None
+        raise RanOutOfTime(killed.timeout or timeout_for()) from None
     except OSError:
         return None
 

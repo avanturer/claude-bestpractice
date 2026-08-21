@@ -147,7 +147,7 @@ class TestTheGateDrivesTheRunnerItself(RepoCase):
         from claude_bestpractice import evidence
 
         self.project(regression=True, recipe="@echo '11 passed in 0.01s'")
-        verdict = evidence._verify_by_running(self.ctx(), [], ["make", "test"])
+        verdict = evidence._verify_by_running(self.ctx(), [], ["make", "test"], [])
         self.assertIsNotNone(verdict)
         self.assertFalse(verdict.ok, "a forged recipe still bought a green")
         self.assertIn("run by the gate itself", verdict.reason)
@@ -159,7 +159,7 @@ class TestTheGateDrivesTheRunnerItself(RepoCase):
         from claude_bestpractice import evidence
 
         self.project(regression=False, recipe="@echo 'lol nothing here'")
-        verdict = evidence._verify_by_running(self.ctx(), [], ["make", "test"])
+        verdict = evidence._verify_by_running(self.ctx(), [], ["make", "test"], [])
         self.assertIsNotNone(verdict)
         self.assertTrue(verdict.ok, verdict.reason)
         self.assertIsNotNone(evidence.last_green(self.ctx()))

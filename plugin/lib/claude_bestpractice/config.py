@@ -59,9 +59,6 @@ AUTONOMY = ("vibecode", "pair")
 class Config:
     test_command: list[str] = field(default_factory=list)
     artifact_globs: list[str] = field(default_factory=lambda: list(DEFAULT_ARTIFACT_GLOBS))
-    # Seconds the gate gives a run it drives itself. A repository whose suite takes 1,422
-    # seconds was blocked forever at the old fixed 300 (#158).
-    witness_timeout_seconds: float = 300.0
     # Paths the gate's own run skips. Lives HERE, not in pytest.ini: this file is refused
     # to the session by `pre-tool`, so the list is the founder's, while `addopts` in a
     # runner config is one line the gated party can write (#158).
@@ -123,7 +120,6 @@ class Config:
         return {
             "test_command": self.test_command,
             "artifact_globs": self.artifact_globs,
-            "witness_timeout_seconds": self.witness_timeout_seconds,
             "witness_exclude": self.witness_exclude,
             "clean_rerun": self.clean_rerun,
             "scope_drift_block": self.scope_drift_block,
@@ -212,7 +208,6 @@ def _make_has_test(root: Path) -> bool:
 _EXPECTED: dict[str, type] = {
     "test_command": list,
     "artifact_globs": list,
-    "witness_timeout_seconds": float,
     "witness_exclude": list,
     "clean_rerun": bool,
     "scope_drift_block": bool,

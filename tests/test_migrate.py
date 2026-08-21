@@ -854,3 +854,35 @@ class TestAnUpgradeRepairsTheRepositoryItLandsIn(RepoCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheWitnessTimeoutIsTakenBackOut(RepoCase):
+    """The second ceiling this plugin invented, removed the way the first one was.
+
+    v1.37.0 made it configurable, which read as a fix and was not: the 300 seconds it
+    lifted sat inside a 900-second Stop hook budget, so raising it only moved the death of
+    the run from our timeout to the harness's, where there is no message at all (#158).
+    """
+
+    def config_holding(self, **values) -> Path:
+        from claude_bestpractice import config, store
+
+        path = store.tier_a(self.ctx(), config.CONFIG_NAME)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(values), encoding="utf-8")
+        return path
+
+    def test_a_config_carrying_it_is_repaired(self):
+        path = self.config_holding(witness_timeout_seconds=1800, test_command=["make", "test"])
+        changed = migrate.repair(self.ctx())
+
+        self.assertNotIn("witness_timeout_seconds", json.loads(path.read_text(encoding="utf-8")))
+        self.assertTrue([line for line in changed if "witness_timeout_seconds" in line],
+                        "a repair that writes to the founder's tree must say so")
+
+    def test_everything_else_in_the_config_is_left_alone(self):
+        path = self.config_holding(witness_timeout_seconds=1800, test_command=["make", "test"])
+        migrate.repair(self.ctx())
+        self.assertEqual(["make", "test"],
+                         json.loads(path.read_text(encoding="utf-8"))["test_command"])
+

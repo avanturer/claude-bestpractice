@@ -337,11 +337,29 @@ def verify(ctx: GitContext, globs: list[str], changed: list[str], command: list[
         return Verdict(True, "no changes to verify")
 
     if command:
-        bound = _verify_by_running(ctx, globs, command)
+        bound = _verify_by_running(ctx, globs, command, changed)
         if bound is not None:
             return bound
 
     return _verify_by_reading(ctx, globs, changed)
+
+
+def _too_long_to_witness(
+    ctx: GitContext, globs: list[str], changed: list[str], seconds: float
+) -> Verdict:
+    """The suite outran the hook. Read what the project's own run left, and name why."""
+    verdict = _verify_by_reading(ctx, globs, changed)
+    return Verdict(
+        verdict.ok,
+        f"This gate's own run was stopped at {int(seconds)}s — longer than the Stop hook "
+        "lives, so it cannot be witnessed here whatever the settings say. Falling back to "
+        "the artifact your run wrote.\n"
+        f"  {verdict.reason}\n"
+        "  `witness_exclude` in .claude/claude-bestpractice/config.json names paths this "
+        "gate should skip, if part of the suite is what makes it long.",
+        verdict.artifact,
+        unverified=True,
+    )
 
 
 def _verify_by_reading(ctx: GitContext, globs: list[str], changed: list[str]) -> Verdict:
@@ -395,7 +413,19 @@ def _verify_by_reading(ctx: GitContext, globs: list[str], changed: list[str]) ->
     )
 
 
-def _verify_by_running(ctx: GitContext, globs: list[str], command: list[str]) -> Verdict | None:
+def _skipped(ctx: GitContext) -> list[str]:
+    """Paths the founder told the gate not to run, so the count expects their absence."""
+    from . import config
+
+    try:
+        return list(config.load(ctx).witness_exclude)
+    except (AttributeError, TypeError, ValueError):
+        return []
+
+
+def _verify_by_running(
+    ctx: GitContext, globs: list[str], command: list[str], changed: list[str]
+) -> Verdict | None:
     """Witness the suite. Returns None to fall back to reading an artifact.
 
     The suite is run every time there is something material to verify. An earlier version
@@ -424,18 +454,12 @@ def _verify_by_running(ctx: GitContext, globs: list[str], command: list[str]) ->
     try:
         seen = witness.run(ctx)
     except witness.RanOutOfTime as killed:
-        # Said plainly, because the alternative was measured and it is worse: a killed run
-        # writes no report, the gate then reported a MISSING ARTIFACT and advised running
-        # the suite — the one thing that could not help — and the repository was blocked
-        # on every turn with no way through (#158).
-        return Verdict(
-            False,
-            f"The test run this gate drove was stopped at {int(killed.seconds)}s before it "
-            "finished, so there is no result to read. This is a time limit, not a missing "
-            "artifact: running the suite again will not change it.\n"
-            f"  Raise it: claude-bp set witness_timeout_seconds {int(killed.seconds) * 4}\n"
-            "  Or narrow what the gate runs, so the part that guards this change fits.",
-        )
+        # FALLS THROUGH, and this is the whole correction. A suite longer than the hook
+        # lives cannot be witnessed here by anyone — the harness kills the process, and no
+        # setting can grant time it does not have. Refusing outright left the repository
+        # blocked on every turn; reading the artifact its own run wrote is weaker evidence,
+        # says so in the verdict, and is the only thing that can be true (#158).
+        return _too_long_to_witness(ctx, globs, changed, killed.seconds)
     if seen is not None:
         return _judge_witnessed(ctx, seen)
 
@@ -518,7 +542,7 @@ def _judge_witnessed(ctx: GitContext, seen: witness.Witnessed) -> Verdict:
     # fewest questions: it checked that a run passed and never that the run was this
     # tree's suite. One line of `addopts = -k "not price"` therefore walked straight
     # through the path built to stop exactly that.
-    declared = testcount.count_tree(ctx.worktree_root)
+    declared = testcount.count_tree(ctx.worktree_root, _skipped(ctx))
     if declared and not testcount.plausible(declared, seen.executed):
         return Verdict(
             True,
@@ -635,7 +659,7 @@ def _judge_by_counts(
     # calling that a witnessed green is how a red suite goes quiet. The threshold is
     # deliberately loose: runners expand parametrised cases, so `executed` routinely
     # exceeds `declared`, and only a large shortfall means anything.
-    declared = testcount.count_tree(ctx.worktree_root)
+    declared = testcount.count_tree(ctx.worktree_root, _skipped(ctx))
     if declared and not testcount.plausible(declared, executed):
         # BOTH sides, because the two numbers have different authors. `declared` is read
         # off the test files by this gate; `executed` is a regex over the gated party's
@@ -1153,7 +1177,7 @@ def record_red(ctx: GitContext, command: list[str], tail: str) -> None:
     # the failing test outright — but it cannot make a narrower run look like it executed
     # more tests than the wider one did.
     executed = max(_executed_from_output(tail), 0)
-    declared = testcount.count_tree(ctx.worktree_root)
+    declared = testcount.count_tree(ctx.worktree_root, _skipped(ctx))
     store.write_json(
         path,
         {
