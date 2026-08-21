@@ -104,6 +104,29 @@ def _stop_hook_budget() -> float:
     return FLOOR
 
 
+class RanOutOfTime(Exception):
+    """The run was killed at the ceiling. Distinct from "no runner" and from "it failed".
+
+    Collapsing this into None is what made the advice wrong: a killed run and an absent
+    one are the same emptiness from outside, and only one of them is fixed by running the
+    suite again.
+    """
+
+    def __init__(self, seconds: float) -> None:
+        super().__init__(f"the run did not finish within {int(seconds)}s")
+        self.seconds = seconds
+
+
+def timeout_for(ctx: GitContext) -> float:
+    """The ceiling this repository asks for, or the default."""
+    from . import config
+
+    try:
+        return float(config.load(ctx).witness_timeout_seconds) or TIMEOUT
+    except (AttributeError, TypeError, ValueError):
+        return TIMEOUT
+
+
 @dataclass
 class Witnessed:
     """A run this gate performed itself, counted from its own report."""
