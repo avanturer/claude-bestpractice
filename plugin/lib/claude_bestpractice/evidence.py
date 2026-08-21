@@ -421,7 +421,21 @@ def _verify_by_running(ctx: GitContext, globs: list[str], command: list[str]) ->
     # verification since round four has forged one. Cutting the wrapper out of the trust
     # path is the only move that ends that, because the count then comes from a report
     # file at a path the recipe has no name for.
-    seen = witness.run(ctx)
+    try:
+        seen = witness.run(ctx)
+    except witness.RanOutOfTime as killed:
+        # Said plainly, because the alternative was measured and it is worse: a killed run
+        # writes no report, the gate then reported a MISSING ARTIFACT and advised running
+        # the suite — the one thing that could not help — and the repository was blocked
+        # on every turn with no way through (#158).
+        return Verdict(
+            False,
+            f"The test run this gate drove was stopped at {int(killed.seconds)}s before it "
+            "finished, so there is no result to read. This is a time limit, not a missing "
+            "artifact: running the suite again will not change it.\n"
+            f"  Raise it: claude-bp set witness_timeout_seconds {int(killed.seconds) * 4}\n"
+            "  Or narrow what the gate runs, so the part that guards this change fits.",
+        )
     if seen is not None:
         return _judge_witnessed(ctx, seen)
 

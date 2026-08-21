@@ -50,7 +50,35 @@ from pathlib import Path
 
 from .gitctx import GitContext
 
+# The ceiling on a run this gate drives itself. Configurable since a repository whose
+# suite takes 1,422 seconds — 2,872 tests, some against a live Postgres holding a snapshot
+# of production — was blocked FOREVER: the run was killed at 300s, no report was written,
+# and the gate then reported a missing artifact and advised running the suite, which is
+# the one thing that could not help (#158).
 TIMEOUT = 300
+
+
+class RanOutOfTime(Exception):
+    """The run was killed at the ceiling. Distinct from "no runner" and from "it failed".
+
+    Collapsing this into None is what made the advice wrong: a killed run and an absent
+    one are the same emptiness from outside, and only one of them is fixed by running the
+    suite again.
+    """
+
+    def __init__(self, seconds: float) -> None:
+        super().__init__(f"the run did not finish within {int(seconds)}s")
+        self.seconds = seconds
+
+
+def timeout_for(ctx: GitContext) -> float:
+    """The ceiling this repository asks for, or the default."""
+    from . import config
+
+    try:
+        return float(config.load(ctx).witness_timeout_seconds) or TIMEOUT
+    except (AttributeError, TypeError, ValueError):
+        return TIMEOUT
 
 
 @dataclass
@@ -117,11 +145,13 @@ def _spawn(ctx: GitContext, argv: list[str], env: dict[str, str] | None) -> subp
             capture_output=True,
             encoding="utf-8",
             errors="replace",
-            timeout=TIMEOUT,
+            timeout=timeout_for(ctx),
             env={**os.environ, **(env or {})},
             start_new_session=True,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except subprocess.TimeoutExpired as killed:
+        raise RanOutOfTime(killed.timeout or timeout_for(ctx)) from None
+    except OSError:
         return None
 
 
@@ -145,6 +175,24 @@ def _pytest_config(root: Path, scratch: Path) -> Path:
     return empty
 
 
+def _excluded(ctx: GitContext) -> list[str]:
+    """Paths this repository has told the gate to skip, as `--ignore` arguments.
+
+    The exclusions the runner's own config declares are neutralised on purpose — one line
+    of `addopts` narrowed the run to whatever still passed — and that left a repository
+    with fifteen-minute snapshot tests no way to say so at all. The difference is who
+    holds the pen: `config.json` is refused to the session by `pre-tool`, so this list is
+    the founder's, which `pytest.ini` is not (#158).
+    """
+    from . import config
+
+    try:
+        wanted = list(config.load(ctx).witness_exclude)
+    except (AttributeError, TypeError, ValueError):
+        return []
+    return [f"--ignore={name}" for name in wanted if isinstance(name, str) and name.strip()]
+
+
 def _run_pytest(ctx: GitContext, report: Path, env: dict[str, str] | None) -> Witnessed | None:
     # `-o addopts=` and an empty PYTEST_ADDOPTS neutralise the one-line attack: a single
     # `addopts = -k "not price"` or `--ignore=tests/test_total.py` in a config file the
@@ -158,6 +206,7 @@ def _run_pytest(ctx: GitContext, report: Path, env: dict[str, str] | None) -> Wi
             "-c", str(_pytest_config(ctx.worktree_root, report.parent)),
             "-o", "addopts=",
             f"--junitxml={report}",
+            *_excluded(ctx),
         ],
         {**(env or {}), "PYTEST_ADDOPTS": ""},
     )

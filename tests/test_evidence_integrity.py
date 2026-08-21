@@ -496,3 +496,76 @@ class TestAGreenRunReportedByTheHookClearsTheRed(RepoCase):
         self.red(["make", "test"])
         evidence.record_green(self.ctx(), ["pytest", "-q"])
         self.assertIsNotNone(evidence.last_green(self.ctx()))
+
+
+class TestASuiteSlowerThanTheCeiling(RepoCase):
+    """A repository whose suite takes 1,422 seconds was blocked FOREVER: the run this gate
+    drives was killed at a fixed 300s, no report was written, and the gate then reported a
+    *missing artifact* and advised running the suite — the one thing that could not help.
+
+    Neither half was survivable on its own. The limit could not be raised, and the message
+    sent the founder to run the tests by hand, again, where the gate does not look (#158).
+    """
+
+    def slow_suite(self, seconds: float) -> None:
+        (self.repo / "tests").mkdir(exist_ok=True)
+        (self.repo / "tests" / "test_slow.py").write_text(
+            f"import time\n\n\ndef test_slow():\n    time.sleep({seconds})\n    assert True\n",
+            encoding="utf-8",
+        )
+        self.commit("a suite that takes its time")
+
+    def verdict(self):
+        from claude_bestpractice import evidence
+
+        return evidence.verify(self.ctx(), ["junit.xml"], ["python3", "-m", "pytest", "-q"], ["tests/test_slow.py"])
+
+    def test_the_ceiling_is_the_repositorys_to_set(self):
+        from claude_bestpractice import witness
+
+        self.configure(witness_timeout_seconds=1800)
+        self.assertEqual(1800, witness.timeout_for(self.ctx()))
+
+    def test_a_run_that_ran_out_of_time_says_so(self):
+        """Not "no artifact". The distinction is the whole report."""
+        self.configure(witness_timeout_seconds=1)
+        self.slow_suite(30)
+
+        said = self.verdict().reason
+        self.assertIn("stopped at 1s", said)
+        self.assertNotIn("No machine-readable test artifact", said)
+
+    def test_it_names_the_setting_that_lifts_it(self):
+        self.configure(witness_timeout_seconds=1)
+        self.slow_suite(30)
+        self.assertIn("claude-bp set witness_timeout_seconds", self.verdict().reason)
+
+    def test_the_repository_can_exclude_a_suite_the_gate_drives(self):
+        """The runner's own exclusions are neutralised on purpose — one `addopts` line
+        narrowed the run to whatever still passed — which left a repository with
+        fifteen-minute snapshot tests no way to say so. `config.json` is refused to the
+        session by `pre-tool`, so this list is the founder's; `pytest.ini` is not."""
+        self.configure(witness_timeout_seconds=1, witness_exclude=["tests/test_slow.py"])
+        self.slow_suite(30)
+        (self.repo / "tests" / "test_quick.py").write_text(
+            "def test_quick():\n    assert True\n", encoding="utf-8")
+        self.commit("a fast test beside the slow one")
+
+        verdict = self.verdict()
+        self.assertTrue(verdict.ok, verdict.reason)
+
+    def test_an_exclusion_pytest_ini_declares_is_still_ignored(self):
+        """The hole this list must not reopen: the gated party writes `pytest.ini`."""
+        (self.repo / "pytest.ini").write_text(
+            "[pytest]\naddopts = --ignore=tests/test_slow.py\n", encoding="utf-8")
+        self.configure(witness_timeout_seconds=1)
+        self.slow_suite(30)
+
+        self.assertIn("stopped at 1s", self.verdict().reason,
+                      "an addopts line narrowed the run the gate drives")
+
+    def test_the_same_suite_passes_once_the_ceiling_is_raised(self):
+        """The fix, end to end: the run that could not finish now does."""
+        self.configure(witness_timeout_seconds=120)
+        self.slow_suite(2)
+        self.assertTrue(self.verdict().ok, self.verdict().reason)

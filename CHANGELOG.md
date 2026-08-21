@@ -1,5 +1,41 @@
 # Changelog
 
+## v1.37.0
+
+A repository whose suite is slower than five minutes could not finish a single turn.
+
+### The gate drove a run it would not wait for (#158)
+
+`witness.TIMEOUT` was 300 seconds and not configurable. A suite taking **1,422 seconds** —
+2,872 tests, some against a live Postgres holding a snapshot of production, one set of
+snapshot tests fifteen minutes on its own — was killed every time, wrote no report, and
+the gate then said:
+
+> No machine-readable test artifact found. Run the suite so it writes one.
+
+Both halves were wrong, and neither was survivable alone. The limit could not be raised.
+And the advice sent the founder to run the tests by hand — where this gate deliberately
+does not look — so every turn ended in `[N/4] not done yet` with nothing that could
+change it. The repository was blocked permanently.
+
+A killed run and an absent one were the same emptiness from outside, because the timeout
+was caught alongside `OSError` and both became `None`. They are distinct now:
+
+> The test run this gate drove was stopped at 300s before it finished, so there is no
+> result to read. This is a time limit, not a missing artifact: running the suite again
+> will not change it.
+>   Raise it: `claude-bp set witness_timeout_seconds 1200`
+
+### The repository can now say which tests the gate should skip
+
+`witness_exclude` is a list of paths the driven run passes as `--ignore`.
+
+This does not reopen the hole `-o addopts=` closed. That neutralisation exists because one
+line of `addopts` in a runner config — a file the gated party writes freely — narrowed the
+run to whatever still passed. `config.json` is different: `pre-tool` refuses it to the
+session, so the list is the founder's. The difference is who holds the pen, and it is a
+test: an `--ignore` declared in `pytest.ini` is still ignored.
+
 ## v1.36.0
 
 The board demand stops asking about work that is already on the trunk.
