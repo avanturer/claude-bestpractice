@@ -511,6 +511,16 @@ class TestThisRepositoryRunsUnderItsOwnPlugin(unittest.TestCase):
         self.assertIn("claude plugin marketplace update", body)
         self.assertIn("claude plugin update", body)
 
+    def test_the_release_checklist_says_to_recheck_after_a_merge(self):
+        """A green check before a conflict resolution says nothing about the tree after
+        it. Resolving to "ours" is right only when our side is a superset, and it is not
+        whenever this branch REPLACED something the trunk also changed — the merge keeps
+        both copies. That shipped a broken `main`: two definitions of one function, Python
+        taking the older, `NameError` in the path the Stop gate runs suites with."""
+        body = (REPO_ROOT / "RELEASING.md").read_text(encoding="utf-8")
+        self.assertIn("run `make check` again", body)
+        self.assertIn("the check that counts is the one after", body.lower())
+
     def test_the_release_checklist_names_the_scope_the_update_needs(self):
         """`update` defaults to user scope and the enablement is committed, so the install
         is project-scoped: without the flag it fails with "not installed at scope user".
