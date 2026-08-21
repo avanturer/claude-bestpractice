@@ -1,5 +1,30 @@
 # Changelog
 
+## v1.39.0
+
+The check that counts is the one after the last change to the tree.
+
+### A merge resolution shipped a broken trunk
+
+`main` carried two definitions of `RanOutOfTime` and two of `timeout_for` for eighteen
+minutes. Python takes the last, which was the v1.37.0 version — reading a config key
+v1.38.0 had removed and a `TIMEOUT` constant that no longer existed. `witness.timeout_for()`
+raised `NameError`, in the path the Stop gate uses to run a suite.
+
+The cause was not the resolution being careless. It was running `make check` **before** the
+merge and not again after it. Resolving to "our" side is correct only when our side is a
+superset — and it is not, whenever the branch *replaced* something the trunk also changed,
+because the merge then keeps both copies and the file still parses.
+
+Contained by the release workflow, which failed on the slop gate (`duplicate_blocks 2 > 0`)
+and cut no tag, so the marketplace never served it. CI was the only place the check still
+ran: `--no-verify` had been bypassing the pre-push hook while this repository's git config
+was damaged.
+
+`RELEASING.md` now carries the step, with a test that refuses a checklist which has lost
+it — the same shape as the `--scope project` step, and for the same reason: a step that is
+not written down is not done.
+
 ## v1.38.0
 
 The timeout setting shipped one release ago is gone, because it could not do what it said.

@@ -55,9 +55,22 @@ never reached, the other asserted tolerance that a lower layer was already provi
 2. Write the CHANGELOG entry: what broke, how it was found, what changed. Not a list of
    commits — the reader is someone deciding whether this affects them.
 3. `make check` green.
-4. Open the pull request, merge it. The release workflow cuts the tag and publishes the
+4. **If the branch had to merge the trunk, run `make check` again.** A green check before
+   a conflict resolution says nothing about the tree after it. Resolving to "our" side is
+   right only when our side is a superset — and it is not, whenever this branch *replaced*
+   something the trunk also changed, because the merge then keeps both copies.
+
+   That shipped a broken `main`: two definitions of the same function, Python taking the
+   older one, `NameError` in the path the Stop gate runs suites with. The release workflow
+   caught it on the slop gate and cut no tag, so nothing reached the marketplace — but CI
+   was the only place the check still ran, because `--no-verify` had been bypassing the
+   pre-push hook.
+
+   The rule is not "resolve carefully". It is: **the check that counts is the one after
+   the last change to the tree.**
+5. Open the pull request, merge it. The release workflow cuts the tag and publishes the
    notes from the CHANGELOG. A session cannot push a tag; that is why this is a workflow.
-5. Re-arm this repository under what just shipped:
+6. Re-arm this repository under what just shipped:
 
    ```
    claude plugin marketplace update claude-bestpractice
