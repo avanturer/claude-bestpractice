@@ -416,7 +416,7 @@ class TestAMissingRunnerIsNotACodeFailure(RepoCase):
 
         self.write("Makefile", "test:\n\t@definitely-not-a-real-runner\n")
         self.commit("makefile")
-        verdict = evidence._verify_by_running(self.ctx(), [], ["make", "test"])
+        verdict = evidence._verify_by_running(self.ctx(), [], ["make", "test"], [])
         self.assertIsNotNone(verdict)
         self.assertFalse(verdict.ok)
         self.assertIn("environment problem", verdict.reason)
@@ -503,8 +503,11 @@ class TestASuiteSlowerThanTheCeiling(RepoCase):
     drives was killed at a fixed 300s, no report was written, and the gate then reported a
     *missing artifact* and advised running the suite — the one thing that could not help.
 
-    Neither half was survivable on its own. The limit could not be raised, and the message
-    sent the founder to run the tests by hand, again, where the gate does not look (#158).
+    Making the ceiling configurable was the first fix and it was wrong: the 300 sat inside
+    a 900-second Stop hook budget, so raising it only moved the death of the run from our
+    timeout to the harness's, where there is no message at all. The ceiling is derived from
+    the hook budget now, and a suite that outruns it falls back to the artifact the
+    project's own run wrote (#158).
     """
 
     def slow_suite(self, seconds: float) -> None:
@@ -515,57 +518,73 @@ class TestASuiteSlowerThanTheCeiling(RepoCase):
         )
         self.commit("a suite that takes its time")
 
-    def verdict(self):
-        from claude_bestpractice import evidence
+    def verdict(self, ceiling: float | None = None):
+        """`ceiling` patches what the gate allows, because there is no setting to turn."""
+        from unittest import mock
 
-        return evidence.verify(self.ctx(), ["junit.xml"], ["python3", "-m", "pytest", "-q"], ["tests/test_slow.py"])
+        from claude_bestpractice import evidence, witness
 
-    def test_the_ceiling_is_the_repositorys_to_set(self):
+        run = lambda: evidence.verify(  # noqa: E731 - one call, named by the caller
+            self.ctx(), ["junit.xml"], ["python3", "-m", "pytest", "-q"], ["tests/test_slow.py"]
+        )
+        if ceiling is None:
+            return run()
+        with mock.patch.object(witness, "timeout_for", return_value=ceiling):
+            return run()
+
+    def test_the_ceiling_comes_from_the_hook_budget(self):
+        """Derived, not invented, and never larger than what the harness will wait for."""
         from claude_bestpractice import witness
 
-        self.configure(witness_timeout_seconds=1800)
-        self.assertEqual(1800, witness.timeout_for(self.ctx()))
+        budget = witness._stop_hook_budget()
+        self.assertGreater(budget, 0, "the manifest must declare a Stop timeout")
+        self.assertLess(witness.timeout_for(), budget)
 
-    def test_a_run_that_ran_out_of_time_says_so(self):
-        """Not "no artifact". The distinction is the whole report."""
-        self.configure(witness_timeout_seconds=1)
+    def test_there_is_no_setting_that_pretends_to_lift_it(self):
+        """The time is not this plugin's to grant, so offering a knob for it was a lie."""
+        from claude_bestpractice import config
+
+        self.assertNotIn("witness_timeout_seconds", config.Config().to_dict())
+
+    def test_a_suite_longer_than_the_hook_falls_back_to_your_own_artifact(self):
+        """Refusing outright is what left the repository blocked on every turn."""
         self.slow_suite(30)
+        (self.repo / "junit.xml").write_text(
+            '<?xml version="1.0"?><testsuite name="s" tests="4" failures="0" errors="0"></testsuite>',
+            encoding="utf-8")
 
-        said = self.verdict().reason
+        verdict = self.verdict(ceiling=1)
+        self.assertTrue(verdict.ok, verdict.reason)
+        self.assertIn("longer than the Stop hook lives", verdict.reason)
+        self.assertTrue(verdict.unverified, "read, not witnessed — the verdict must say so")
+
+    def test_it_does_not_call_a_time_limit_a_missing_artifact(self):
+        """The message that sent the founder to run the tests by hand, again."""
+        self.slow_suite(30)
+        said = self.verdict(ceiling=1).reason
         self.assertIn("stopped at 1s", said)
-        self.assertNotIn("No machine-readable test artifact", said)
-
-    def test_it_names_the_setting_that_lifts_it(self):
-        self.configure(witness_timeout_seconds=1)
-        self.slow_suite(30)
-        self.assertIn("claude-bp set witness_timeout_seconds", self.verdict().reason)
+        self.assertIn("witness_exclude", said, "the one lever that is real must be named")
 
     def test_the_repository_can_exclude_a_suite_the_gate_drives(self):
         """The runner's own exclusions are neutralised on purpose — one `addopts` line
         narrowed the run to whatever still passed — which left a repository with
         fifteen-minute snapshot tests no way to say so. `config.json` is refused to the
         session by `pre-tool`, so this list is the founder's; `pytest.ini` is not."""
-        self.configure(witness_timeout_seconds=1, witness_exclude=["tests/test_slow.py"])
+        self.configure(witness_exclude=["tests/test_slow.py"])
         self.slow_suite(30)
         (self.repo / "tests" / "test_quick.py").write_text(
             "def test_quick():\n    assert True\n", encoding="utf-8")
         self.commit("a fast test beside the slow one")
 
-        verdict = self.verdict()
+        verdict = self.verdict(ceiling=20)
         self.assertTrue(verdict.ok, verdict.reason)
+        self.assertFalse(verdict.unverified, "the excluded run was witnessed, not read")
 
     def test_an_exclusion_pytest_ini_declares_is_still_ignored(self):
         """The hole this list must not reopen: the gated party writes `pytest.ini`."""
         (self.repo / "pytest.ini").write_text(
             "[pytest]\naddopts = --ignore=tests/test_slow.py\n", encoding="utf-8")
-        self.configure(witness_timeout_seconds=1)
         self.slow_suite(30)
 
-        self.assertIn("stopped at 1s", self.verdict().reason,
+        self.assertIn("stopped at 1s", self.verdict(ceiling=1).reason,
                       "an addopts line narrowed the run the gate drives")
-
-    def test_the_same_suite_passes_once_the_ceiling_is_raised(self):
-        """The fix, end to end: the run that could not finish now does."""
-        self.configure(witness_timeout_seconds=120)
-        self.slow_suite(2)
-        self.assertTrue(self.verdict().ok, self.verdict().reason)

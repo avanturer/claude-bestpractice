@@ -390,6 +390,34 @@ def _lift_the_tool_call_ceiling(ctx: GitContext) -> str:
     return "the 2000-call ceiling this plugin set is off; set it yourself to bring it back"
 
 
+def _drop_the_witness_timeout(ctx: GitContext) -> str:
+    """The second ceiling this plugin invented, taken back out the same way.
+
+    v1.37.0 made the witness timeout configurable, which read as a fix and was not: the
+    300 seconds it lifted sat inside a 900-second Stop hook budget, so a repository that
+    raised it only moved the death of its run from our timeout to the harness's, where
+    there is no message at all. The setting could not deliver what it promised.
+
+    `config.save` writes every key, so the number is on disk in every repository that
+    saved a config while it existed — and leaving it there leaves a knob that does
+    nothing, which is worse than no knob. The ceiling comes from the hook budget now.
+    """
+    from . import config
+
+    path = store.tier_a(ctx, config.CONFIG_NAME)
+    raw = store.read_json(path, default=None)
+    # The key check is belt over braces and said so rather than dressed up as a rule:
+    # `repair` swallows what a step raises, so without it a config lacking the key would
+    # fail on `pop` and change nothing either way. No mutation can tell this line from its
+    # absence, which is why the test asserting it was deleted rather than kept.
+    if not isinstance(raw, dict) or "witness_timeout_seconds" not in raw:
+        return ""
+    raw.pop("witness_timeout_seconds")
+    store.write_json(path, raw, mode=0o644)
+    return ("`witness_timeout_seconds` is gone — it could not grant time the Stop hook "
+            "does not have; the ceiling now comes from the hook's own budget")
+
+
 # name -> (revision, step). Raise the revision when the step's behaviour changes; every
 # clone that ran an older revision reconciles again on its next session start.
 _REPAIRS = {
@@ -398,6 +426,7 @@ _REPAIRS = {
     "0003-absorb-scratch-todos": (1, _absorb_scratch_todos),
     "0004-lift-the-tool-call-ceiling": (1, _lift_the_tool_call_ceiling),
     "0005-trees-into-the-no-prompt-zone": (2, _move_trees_into_the_no_prompt_zone),
+    "0006-drop-the-witness-timeout": (1, _drop_the_witness_timeout),
 }
 
 

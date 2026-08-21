@@ -88,26 +88,58 @@ def count_in_text(text: str, suffix: str) -> int:
     return 0
 
 
-def count_tree(root: Path) -> int:
+def _clean(skip: list[str] | None) -> tuple[str, ...]:
+    """The exclusion list, normalised. Empty for anything that is not a usable path."""
+    return tuple(
+        name.strip("/") for name in (skip or [])
+        if isinstance(name, str) and name.strip()
+    )
+
+
+def _is_skipped(rel: str, skipped: tuple[str, ...]) -> bool:
+    """A path the founder excluded, or a file underneath one."""
+    return any(rel == name or rel.startswith(f"{name}/") for name in skipped)
+
+
+def _counted(path: Path, root: Path, skipped: tuple[str, ...]) -> str:
+    """The path relative to `root` when this file's declarations count, "" when they do not.
+
+    One decision rather than five guards in the loop: a test file, of a language we can
+    count, not in a vendored directory, and not one the founder excluded.
+    """
+    if not path.is_file() or path.suffix not in _ALL_SUFFIXES:
+        return ""
+    if _SKIP_DIRS & set(path.parts):
+        return ""
+    try:
+        rel = path.relative_to(root).as_posix()
+    except ValueError:
+        return ""
+    if not is_test_file(rel) and path.suffix not in _INLINE_TEST_SUFFIXES:
+        return ""
+    return "" if _is_skipped(rel, skipped) else rel
+
+
+def count_tree(root: Path, skip: list[str] | None = None) -> int:
     """Test declarations under `root`. Zero when there are none, never an exception.
 
     Bounded on both file count and file size: this runs inside a Stop gate, and a gate
     that takes ten seconds on a large repository is a gate the founder switches off.
+
+    `skip` is what the founder told the gate not to run. Without it, `witness_exclude`
+    defeated itself: the run really did execute fewer tests than the tree declares, so the
+    guard against a NARROWED run fired and every finish came back "something narrowed the
+    run — not a witnessed pass". The guard is right in general and wrong here, because the
+    narrowing was authored in a file the session cannot write (#158).
     """
+    skipped = _clean(skip)
     total = 0
     seen = 0
     for path in sorted(root.rglob("*")):
         if seen >= MAX_FILES:
             break
-        if not path.is_file() or path.suffix not in _ALL_SUFFIXES:
-            continue
-        if _SKIP_DIRS & set(path.parts):
-            continue
-        try:
-            rel = path.relative_to(root).as_posix()
-        except ValueError:
-            continue
-        if not is_test_file(rel) and path.suffix not in _INLINE_TEST_SUFFIXES:
+        rel = _counted(path, root, skipped)
+        if not rel:
             continue
         seen += 1
         try:
