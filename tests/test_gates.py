@@ -1037,6 +1037,78 @@ class TestEvidenceGate(GateCase):
                          "precondition: the trunk has to be genuinely undiscoverable")
         self.assertIn("Nothing on the board", self.stop().stderr)
 
+    def test_an_unanswered_question_holds_the_turn(self):
+        """The same shape as an open pull request and an unlisted change: something a
+        sibling is waiting on that the session can otherwise walk straight past."""
+        from claude_bestpractice import inbox
+
+        self.start()
+        self.claim_a_task("s1", "feature.py")
+        self.write("feature.py", "x = 1\n")
+        self.write("junit.xml", JUNIT_PASS)
+        inbox.ask(self.ctx(), sid(self.repo, "s1"),
+                  "are you still in schemas.py?", sender="them")
+
+        proc = self.stop()
+        self.assertEqual(2, proc.returncode)
+        self.assertIn("unanswered", proc.stderr)
+        self.assertIn("claude-bp answer", proc.stderr, "a refusal must name the way through")
+
+    def test_answering_it_lets_the_turn_end(self):
+        from claude_bestpractice import inbox
+
+        self.start()
+        self.claim_a_task("s1", "feature.py")
+        self.write("feature.py", "x = 1\n")
+        self.write("junit.xml", JUNIT_PASS)
+        me = sid(self.repo, "s1")
+        got = inbox.ask(self.ctx(), me, "are you still in schemas.py?", sender="them")
+        inbox.answer(self.ctx(), me, got, "committed, take it")
+
+        self.assertNotIn("unanswered", self.stop().stderr)
+
+    def test_being_blocked_on_a_file_asks_the_holder_and_holds_their_turn(self):
+        """The whole path, end to end, and the reason this exists.
+
+        Telling the holder left them free to say nothing and keep the file: the blocked
+        session waited out the full thirty-minute TTL while the holder had committed
+        twenty minutes earlier and moved on. Now the holder cannot end a turn on it.
+        """
+        self.start("holder")
+        self.claim_a_task("holder", "schemas.py")
+        self.write("schemas.py", "x = 1\n")
+        self.write("junit.xml", JUNIT_PASS)
+        # The holder takes the lease by writing, exactly as a session does.
+        self.gate("pre-tool", {
+            "session_id": "holder", "hook_event_name": "PreToolUse", "tool_name": "Write",
+            "tool_input": {"file_path": str(self.repo / "schemas.py"), "content": "x = 1\n"},
+        })
+        # A sibling is refused on it, which is what puts the question.
+        blocked = self.gate("pre-tool", {
+            "session_id": "other", "hook_event_name": "PreToolUse", "tool_name": "Write",
+            "tool_input": {"file_path": str(self.repo / "schemas.py"), "content": "x = 2\n"},
+        })
+        self.assertIn("editing", json.loads(blocked.stdout)["hookSpecificOutput"]
+                      ["permissionDecisionReason"], "precondition: the sibling must be refused")
+
+        held = self.stop("holder")
+        self.assertEqual(2, held.returncode)
+        self.assertIn("unanswered", held.stderr)
+        self.assertIn("schemas.py", held.stderr)
+
+    def test_a_plain_fact_does_not_hold_the_turn(self):
+        """Most of what this channel carries needs no reply, and a channel that stops a
+        turn for every one of them is a channel the founder switches off."""
+        from claude_bestpractice import inbox
+
+        self.start()
+        self.claim_a_task("s1", "feature.py")
+        self.write("feature.py", "x = 1\n")
+        self.write("junit.xml", JUNIT_PASS)
+        inbox.post(self.ctx(), sid(self.repo, "s1"), "the suite is RED", sender="them")
+
+        self.assertNotIn("unanswered", self.stop().stderr)
+
     def test_the_command_the_refusal_names_actually_satisfies_it(self):
         """`claim` stamped `cli-<branch>` as the owner, so the task belonged to somebody
         the registry had never heard of and the demand could not be cleared by its own

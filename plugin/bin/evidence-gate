@@ -330,6 +330,21 @@ def main() -> None:
                 + config.switch_advice("scope_drift_block", False)
             )
 
+    # A question a sibling put to this session, unanswered. The same shape as an open pull
+    # request and an unlisted change: something somebody is waiting on that the session
+    # can otherwise walk straight past, so it is refused at the finish rather than
+    # mentioned. The escalation ceiling bounds it — four turns, not forever.
+    asked = inbox.open_asks(ctx, rec.session_id)
+    if asked:
+        first = asked[0]
+        problems.append(
+            f"{len(asked)} question(s) from another session are unanswered. "
+            f"{str(first.get('from') or 'a sibling')[:8]} asks: {first.get('text')}\n"
+            f"  Answer it: claude-bp answer {str(first.get('key') or '')[:12]} \"<your answer>\"\n"
+            "  They are blocked on the reply, and a session that never answers is one "
+            "the others learn to work around."
+        )
+
     if cfg.require_task and gates["ledger"]:
         # Work that changed files while the board says nothing is in flight. The ledger was
         # advisory in a product whose premise is that the board tells the truth about what

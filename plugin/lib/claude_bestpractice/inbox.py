@@ -126,7 +126,7 @@ def broadcast(ctx: GitContext, sender: str, text: str) -> int:
     return told
 
 
-def _queue(ctx: GitContext, recipient: str, text: str, sender: str) -> bool:
+def _queue(ctx: GitContext, recipient: str, text: str, sender: str, asks: bool = False) -> bool:
     from . import board
 
     text = " ".join(str(text).split())[:MAX_CHARS]
@@ -148,8 +148,63 @@ def _queue(ctx: GitContext, recipient: str, text: str, sender: str) -> bool:
             "from": sender,
             "created_at": now,
             "delivered_at": None,
+            "asks": asks,
+            "answered_at": None,
         })
         box[0] = _pruned(notes, now)
+    return True
+
+
+def ask(ctx: GitContext, recipient: str, question: str, sender: str) -> str:
+    """Put a QUESTION to another session. Returns its id, or "" when it was not queued.
+
+    A fact tells; an ask expects an answer, and the difference has to be structural or it
+    is a fact with a question mark. The recipient's Stop gate refuses to end a turn while
+    one is unanswered — the same shape as an open pull request and an unlisted change,
+    because it is the same problem: a thing somebody is waiting on that the session can
+    otherwise walk past.
+
+    Cheap to hold and bounded by the escalation ceiling every gate here shares, so a
+    sibling that never answers stops that session for four turns rather than forever.
+    """
+    if not _queue(ctx, recipient, question, sender, asks=True):
+        return ""
+    for note in _notes(store.read_json(_path(ctx, recipient), default=[])):
+        if note.get("asks") and note.get("from") == sender and not note.get("answered_at"):
+            return str(note.get("key") or "")[:12]
+    return ""
+
+
+def open_asks(ctx: GitContext, session_id: str) -> list[dict]:
+    """Questions put to this session that it has not answered."""
+    notes = _notes(store.read_json(_path(ctx, session_id), default=[]))
+    return [n for n in notes if n.get("asks") and not n.get("answered_at")]
+
+
+def answer(ctx: GitContext, session_id: str, ask_id: str, text: str) -> bool:
+    """Answer a question, and send the answer back. False when no such question is open.
+
+    Answering is what closes it. Two backstops keep that from wedging anybody and both
+    are deliberate: the escalation ceiling every gate here shares releases the turn after
+    four refusals, and retention drops the note after a day. Neither is a way to win by
+    waiting — four blocked turns is expensive enough to answer instead.
+    """
+    said = " ".join(str(text).split())[:MAX_CHARS]
+    if not said:
+        return False
+    asker = ""
+    with store.guarded_json(_path(ctx, session_id), default=[]) as box:
+        notes = _notes(box[0])
+        for note in notes:
+            if str(note.get("key") or "")[:12] != ask_id or note.get("answered_at"):
+                continue
+            note["answered_at"] = time.time()
+            asker = str(note.get("from") or "")
+            break
+        box[0] = notes
+    if not asker:
+        return False
+    post(ctx, asker, f"answer from {session_id[:8]}: {said}", sender=session_id)
     return True
 
 

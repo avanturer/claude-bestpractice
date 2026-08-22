@@ -930,10 +930,14 @@ def main() -> None:
                 # The refused session learns from the denial below. The HOLDER learns
                 # nothing at all unless it is told, and it is the only one that can end
                 # the wait — by finishing with the file or letting it go.
-                inbox.post(
+                # An ASK, not a notice. Telling the holder left them free to say nothing
+                # and keep the file: the blocked session waited out the full TTL while the
+                # holder had committed twenty minutes earlier and moved on. A question
+                # their Stop gate will not let them end a turn on gets an answer.
+                inbox.ask(
                     ctx, owner,
-                    f"another session is blocked on {touched[0]} — you hold the lease. "
-                    "Finish with it or move off it.",
+                    f"another session is blocked on {touched[0]}, which you hold. "
+                    "Are you still in it, or can they take it?",
                     sender=event.session_id,
                 )
                 hookio.deny_tool(

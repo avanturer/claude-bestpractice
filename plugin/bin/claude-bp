@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -393,6 +394,29 @@ def cmd_policy(ctx, write: bool, prune: bool) -> int:
     return 0
 
 
+def cmd_answer(ctx, ask_id: str, text: str) -> int:
+    """Answer a question a sibling put to this session, and send the answer back.
+
+    A command rather than a hook, because answering is a judgement: only the session that
+    holds the file knows whether it is done with it. The gate makes the answer
+    unavoidable; it cannot make it true.
+    """
+    from claude_bestpractice import hookio, inbox
+
+    me = hookio.compose_session_id(os.environ.get("CLAUDE_CODE_SESSION_ID", ""), str(ctx.worktree_root))
+    heading("ANSWER")
+    if inbox.answer(ctx, me, ask_id, text):
+        print(f"  answered {ask_id} — it no longer holds this turn")
+        return 0
+    open_now = inbox.open_asks(ctx, me)
+    print(f"  no open question here with id {ask_id}")
+    for note in open_now:
+        print(f"  open: {str(note.get('key') or '')[:12]}  {note.get('text')}")
+    if not open_now:
+        print("  nothing is waiting on this session")
+    return 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="claude-bp", description="claude-bestpractice control plane")
     sub = parser.add_subparsers(dest="command")
@@ -415,6 +439,10 @@ def main() -> int:
     bar = sub.add_parser(
         "statusline", help="the bridge that lets a session see the account's own limits")
     bar.add_argument("--install", action="store_true", help="wire it in if nothing else is there")
+    reply = sub.add_parser(
+        "answer", help="answer a question another session put to this one")
+    reply.add_argument("id", help="the id in the refusal, e.g. 3f2a9c1b")
+    reply.add_argument("text", help="the answer, in your own words")
     switch = sub.add_parser(
         "set", help="change a gate switch the founder has asked for in their own words")
     switch.add_argument("key", help="a config key, e.g. scope_drift_block")
@@ -431,6 +459,8 @@ def main() -> int:
         return cmd_dismiss(ctx, args.detector, args.path)
     if args.command == "adopt":
         return cmd_adopt(ctx, args.dry_run, args.restore)
+    if args.command == "answer":
+        return cmd_answer(ctx, args.id, args.text)
     if args.command == "set":
         return cmd_set(ctx, args.key, args.value)
     if args.command == "statusline":

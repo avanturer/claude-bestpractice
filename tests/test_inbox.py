@@ -285,3 +285,65 @@ class TestTheGateDelivers(RepoCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAQuestionIsAnObligation(RepoCase):
+    """A fact tells; a question expects an answer, and the difference has to be structural
+    or it is a fact with a question mark.
+
+    Telling the lease holder left them free to say nothing and keep the file: the blocked
+    session waited out the full thirty-minute TTL while the holder had committed twenty
+    minutes earlier and moved on. Reported from a live repository (#166).
+    """
+
+    def ask(self, to: str = "them", frm: str = "me", text: str = "are you still in schemas.py?"):
+        from claude_bestpractice import inbox
+
+        return inbox.ask(self.ctx(), to, text, sender=frm)
+
+    def open_for(self, who: str = "them"):
+        from claude_bestpractice import inbox
+
+        return inbox.open_asks(self.ctx(), who)
+
+    def test_an_ask_stays_open_until_it_is_answered(self):
+        self.ask()
+        self.assertEqual(1, len(self.open_for()))
+
+    def test_answering_closes_it(self):
+        from claude_bestpractice import inbox
+
+        got = self.ask()
+        self.assertTrue(got, "the ask was not queued at all")
+        self.assertTrue(inbox.answer(self.ctx(), "them", got, "committed, take it"))
+        self.assertEqual([], self.open_for())
+
+    def test_the_answer_reaches_the_one_who_asked(self):
+        from claude_bestpractice import inbox
+
+        got = self.ask()
+        inbox.answer(self.ctx(), "them", got, "committed, take it")
+        said = [n["text"] for n in inbox.pending(self.ctx(), "me")]
+        self.assertTrue(any("committed, take it" in t for t in said), said)
+
+    def test_answering_something_nobody_asked_changes_nothing(self):
+        from claude_bestpractice import inbox
+
+        self.ask()
+        self.assertFalse(inbox.answer(self.ctx(), "them", "deadbeef", "sure"))
+        self.assertEqual(1, len(self.open_for()))
+
+    def test_an_empty_answer_is_not_an_answer(self):
+        from claude_bestpractice import inbox
+
+        got = self.ask()
+        self.assertFalse(inbox.answer(self.ctx(), "them", got, "   "))
+        self.assertEqual(1, len(self.open_for()))
+
+    def test_a_fact_is_not_an_ask(self):
+        """`post` must not start holding turns — most of what this channel carries is a
+        fact nobody has to reply to."""
+        from claude_bestpractice import inbox
+
+        inbox.post(self.ctx(), "them", "the suite is RED on main", sender="me")
+        self.assertEqual([], self.open_for())
