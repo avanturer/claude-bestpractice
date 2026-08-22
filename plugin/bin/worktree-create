@@ -65,7 +65,21 @@ def main() -> None:
 
     # Same provisioning the gate uses when it refuses a write in the main checkout, so the
     # two paths cannot drift into disagreeing about naming, trust or ports.
-    worktree.record(ctx, slug, absolute, branch, worktree.trust(absolute))
+    body = worktree.record(ctx, slug, absolute, branch, worktree.trust(absolute))
+
+    # The port and database name were derived here since v1.14.0 and read by NOTHING —
+    # a promise this hook's own docstring made and the code never kept. They reach the
+    # tree now, because isolation that is only computed is not isolation (#164).
+    from claude_bestpractice import config
+
+    cfg = config.load(ctx)
+    if cfg.isolate_databases:
+        worktree.isolate_database(
+            target,
+            worktree.dsn_for(ctx, str(body.get("database") or "")),
+            seed_from=worktree.main_checkout(ctx),
+        )
+        worktree.run_setup(target, cfg.worktree_setup)
 
     # The harness takes the path from stdout. Everything else is a side effect.
     sys.stdout.write(absolute)

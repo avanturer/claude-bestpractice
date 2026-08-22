@@ -1,5 +1,56 @@
 # Changelog
 
+## v1.40.0
+
+Worktrees isolate files and nothing else. Now they isolate the database too.
+
+### The promise this hook made and never kept (#164)
+
+`worktree-create` has advertised, since v1.14.0, as one of three things nothing else can
+do:
+
+> **PER-WORKTREE DATABASE AND PORT.** Worktrees isolate files but share the database
+> daemon, ports and caches. Two sessions running the same dev server on the same port is a
+> confusing failure that looks like a code bug.
+
+It computed both. `derive_port`, `derive_db_name`, written into the worktree record — and
+**read by nothing**. Zero consumers in the whole plugin. The isolation existed as a number
+in a file.
+
+Measured on a live repository: four worktrees, one Postgres, one session holding
+`idle in transaction` for nearly a day. A suite that runs in seventy seconds took twenty
+minutes, waiting on locks nobody could see, and the founder's own long-running scores were
+doing the same to everyone else.
+
+### What it does now
+
+**At birth.** The derived database reaches the tree as `DATABASE_URL` in its `.env`. The
+file is seeded from the main checkout's, because a fresh `git worktree add` checks out no
+gitignored file — so a tree would otherwise be born with a database name and nothing else:
+no host, no keys, and the isolation would be the thing that broke the session. Only the
+database NAME is replaced; host, port and credentials are kept, because inventing a
+connection string means guessing credentials this plugin has never seen.
+
+**At the first write.** A session whose tree points at a database a live sibling already
+holds is refused, and told which session holds it.
+
+**Creating the database is the project's.** `worktree_setup` in `config.json` is the
+command that brings it into existence, run at worktree birth. It cannot be guessed —
+`createdb` is Postgres, and hardcoding it breaks the first repository that is not. It lives
+in the one file `pre-tool` refuses to the session, so it is the founder's line rather than
+one an agent rewrites when it is in the way.
+
+Off with `{"isolate_databases": false}`. Silent in a repository that names no database:
+the comparison requires a non-empty match, so two trees with nothing configured are not
+each other's collision — a gate that fires where there is nothing to collide over is one
+that gets switched off for every project.
+
+### What can still defeat it
+
+An application that hardcodes its DSN instead of reading the environment. Nothing written
+to `.env` reaches it, and this plugin cannot tell from outside. Said here rather than
+discovered later.
+
 ## v1.39.0
 
 The check that counts is the one after the last change to the tree.

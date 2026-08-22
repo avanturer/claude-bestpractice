@@ -42,6 +42,124 @@ def derive_db_name(repo_name: str, branch: str) -> str:
     return safe[:60] or "claude_bestpractice_dev"
 
 
+ENV_FILE = ".env"
+ENV_EXAMPLE = (".env.example", ".env.sample", ".env.template")
+_DSN_KEY = re.compile(r"^\s*(?:export\s+)?DATABASE_URL\s*=", re.M)
+
+
+def database_url_in(text: str) -> str:
+    """The DATABASE_URL a dotenv file declares, or "" when it declares none."""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") or not _DSN_KEY.match(line):
+            continue
+        return stripped.split("=", 1)[1].strip().strip("'\"")
+    return ""
+
+
+def _with_database(text: str, url: str) -> str:
+    """Set DATABASE_URL, replacing the line if there is one. Everything else untouched.
+
+    Merged rather than overwritten because the file is usually the founder's: it carries
+    keys, hosts and secrets that a worktree needs as much as the main checkout does, and
+    rewriting it would be this plugin destroying configuration to fix a database name.
+    """
+    out, replaced = [], False
+    for line in text.splitlines():
+        if _DSN_KEY.match(line) and not line.strip().startswith("#"):
+            out.append(f"DATABASE_URL={url}")
+            replaced = True
+        else:
+            out.append(line)
+    if not replaced:
+        out.append(f"DATABASE_URL={url}")
+    return "\n".join(out).strip() + "\n"
+
+
+def _seed_for(tree: Path, seed_from: Path | None) -> str:
+    """The dotenv body a new tree should start from.
+
+    Its own file first. Then the MAIN CHECKOUT's, because a fresh `git worktree add`
+    checks out no gitignored file and `.env` is gitignored in every project that has one
+    — so without this the tree is born with a database name and nothing else: no host, no
+    keys, no credentials, and the isolation is the thing that broke the session.
+
+    `.env.example` last, for a repository whose main checkout has no `.env` either.
+    """
+    for candidate in (tree / ENV_FILE, (seed_from / ENV_FILE) if seed_from else None):
+        if candidate is not None and candidate.is_file():
+            return candidate.read_text(encoding="utf-8", errors="surrogateescape")
+    for name in ENV_EXAMPLE:
+        if (tree / name).is_file():
+            return (tree / name).read_text(encoding="utf-8", errors="surrogateescape")
+    return ""
+
+
+def isolate_database(tree: Path, url: str, seed_from: Path | None = None) -> bool:
+    """Give this worktree its own DATABASE_URL. False when nothing could be written.
+
+    Worktrees isolate files and nothing else: every one of them points at the same
+    database daemon, so one session's `idle in transaction` blocks every sibling's tests
+    on its locks. Measured on a real repository: seventy seconds became twenty minutes,
+    and the transaction holding it had been open for nearly a day (#164).
+
+    Only the database NAME changes; see `_seed_for` for where the rest comes from.
+    """
+    try:
+        body = _seed_for(tree, seed_from)
+        (tree / ENV_FILE).write_text(_with_database(body, url), encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
+def dsn_for(ctx: GitContext, database: str) -> str:
+    """This tree's DSN, keeping whatever the main checkout already points at.
+
+    Host, port, user and password come from the founder's own `.env`; only the database
+    NAME is replaced. Inventing a connection string would be this plugin guessing
+    credentials it has never seen, and the guess would be wrong everywhere.
+    """
+    existing = database_of(main_checkout(ctx))
+    if not existing or "/" not in existing:
+        return f"postgresql://localhost:5432/{database}"
+    return existing.rsplit("/", 1)[0] + "/" + database
+
+
+def run_setup(tree: Path, command: list[str]) -> bool:
+    """Let the project bring its own database into existence. False when it could not.
+
+    The command is the project's, because creating a database is the one part of this a
+    plugin cannot know: `createdb` is Postgres, and hardcoding it breaks the first
+    repository that is not. It lives in `config.json`, which `pre-tool` refuses to the
+    session — so it is the founder's line, not one an agent rewrites when it is in the way.
+
+    Fails open. A worktree that exists without its database is recoverable by hand; a
+    worktree that failed to be created is a session that cannot start.
+    """
+    if not command:
+        return True
+    try:
+        done = subprocess.run(
+            list(command), cwd=str(tree), capture_output=True,
+            encoding="utf-8", errors="surrogateescape", timeout=300,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0
+
+
+def database_of(tree: Path) -> str:
+    """What this tree is configured to use, or "" when it cannot be told."""
+    try:
+        target = tree / ENV_FILE
+        if not target.is_file():
+            return ""
+        return database_url_in(target.read_text(encoding="utf-8", errors="surrogateescape"))
+    except OSError:
+        return ""
+
+
 # `str.isalnum()` is true for Cyrillic, so a Russian prompt produced a Cyrillic directory
 # AND a Cyrillic branch. Git accepts both and then: the branch goes to the remote on the
 # first push, `git worktree list` prints it octal-escaped (\320\277\320\276…), and macOS

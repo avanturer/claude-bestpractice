@@ -63,6 +63,13 @@ class Config:
     # to the session by `pre-tool`, so the list is the founder's, while `addopts` in a
     # runner config is one line the gated party can write (#158).
     witness_exclude: list[str] = field(default_factory=list)
+    # No two live sessions on one database. Worktrees isolate files and nothing else, so
+    # one session's open transaction blocks every sibling's tests on its locks (#164).
+    isolate_databases: bool = True
+    # How THIS project brings a database into existence. Empty for the many stacks whose
+    # migrations create it on first use. Cannot be guessed: `createdb` is Postgres, and a
+    # plugin that hardcodes it breaks on the first repository that is not.
+    worktree_setup: list[str] = field(default_factory=list)
     clean_rerun: bool | None = None
     scope_drift_block: bool = True
     loop_detect: bool = True
@@ -121,6 +128,8 @@ class Config:
             "test_command": self.test_command,
             "artifact_globs": self.artifact_globs,
             "witness_exclude": self.witness_exclude,
+            "isolate_databases": self.isolate_databases,
+            "worktree_setup": self.worktree_setup,
             "clean_rerun": self.clean_rerun,
             "scope_drift_block": self.scope_drift_block,
             "loop_detect": self.loop_detect,
@@ -209,6 +218,8 @@ _EXPECTED: dict[str, type] = {
     "test_command": list,
     "artifact_globs": list,
     "witness_exclude": list,
+    "isolate_databases": bool,
+    "worktree_setup": list,
     "clean_rerun": bool,
     "scope_drift_block": bool,
     "loop_detect": bool,
