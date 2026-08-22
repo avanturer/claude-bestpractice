@@ -1,5 +1,44 @@
 # Changelog
 
+## v1.41.0
+
+The board learns what a session is doing when the founder says it, not when a gate refuses.
+
+### A card filed at the first write is a description, not a claim
+
+The demand fired on the first WRITE. So between "the founder gave a task" and "the session
+touched a file" the board said nothing — and every sibling deciding what was safe to touch
+read an empty board while somebody was already working. On a session that reads and plans
+for twenty minutes first, that is twenty minutes of silence.
+
+Worse in practice: the card got filed **because a gate refused**, which makes it a
+description of work already done rather than a claim on work about to happen. Every card
+in this repository's own ledger was filed that way.
+
+The founder's instruction now reaches the board the moment `prompt-capture` recognises it
+as a statement of work — the same moment the session's task statement is set.
+
+### Filed into NEXT, deliberately not claimed
+
+Claiming requires `done_when` and the paths, and neither is knowable before the session has
+looked at anything — which is why `claim` refuses an unplanned task (v1.27.0). A card
+guessed at that moment is worse than a late one.
+
+So the board learns **who and what** immediately, and the plan is filled in with
+`claude-bp-plan update` once it is real. One card per session: a founder who sends three
+messages about one task gets one card, because the ledger is only worth reading while it
+does not drift.
+
+The card carries `source: the founder's message`, so `list` never presents their words as a
+plan somebody wrote.
+
+### Two lines removed for being unkillable
+
+A paste guard at the new call site: `is_statement_of_work` already refuses every paste and
+every harness block, so the statement can never *be* one and a second check was a line no
+mutation could kill. The property is still tested — a mutation one layer up kills that test,
+which is where it belongs.
+
 ## v1.40.0
 
 Worktrees isolate files and nothing else. Now they isolate the database too.
