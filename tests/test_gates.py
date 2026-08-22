@@ -590,9 +590,11 @@ class TestTheCompactionIsBlockedOnceForTheNotes(GateCase):
     `PreCompact` is the one event that can block, and this is the one thing worth blocking
     for: it replaces the founder saying "prepare for the compaction" by hand."""
 
-    def compact(self, session: str = "s1"):
+    def compact(self, session: str = "s1", trigger: str = "manual"):
+        """`manual` by default: that is the compaction a session CHOSE, and the only one
+        this gate may stop. An automatic one means the window is already full."""
         return self.gate("checkpoint", {"session_id": session, "hook_event_name": "PreCompact",
-                                        "trigger": "auto", "cwd": str(self.repo)})
+                                        "trigger": trigger, "cwd": str(self.repo)})
 
     def test_a_session_that_did_work_is_stopped_once(self):
         self.start()
@@ -620,6 +622,31 @@ class TestTheCompactionIsBlockedOnceForTheNotes(GateCase):
         self.compact()
         found = list((self.repo / ".claude" / "claude-bestpractice" / "checkpoints").iterdir())
         self.assertTrue(found)
+
+    def test_an_automatic_compaction_is_never_blocked(self):
+        """`auto` means the harness is compacting because the window is FULL. The session
+        is already at the wall, and blocking there costs it a turn it has no room for: it
+        cannot compact, because this refused, and it cannot proceed, because the context
+        is spent. A gate that wedges a session at its worst moment is worse than the notes
+        it was protecting."""
+        self.start()
+        self.write("pipeline.py", "run = True\n")
+        self.assertEqual(0, self.compact(trigger="auto").returncode)
+
+    def test_the_checkpoint_is_still_written_on_an_automatic_one(self):
+        """Not blocking is not the same as doing nothing: the snapshot is the half that
+        survives, and it is the half that matters when the window is about to close."""
+        self.start()
+        self.write("pipeline.py", "run = True\n")
+        self.compact(trigger="auto")
+        found = list((self.repo / ".claude" / "claude-bestpractice" / "checkpoints").iterdir())
+        self.assertTrue(found)
+
+    def test_a_manual_compaction_is_still_stopped_once(self):
+        """The case the founder is present for, and where the notes are cheap to write."""
+        self.start()
+        self.write("pipeline.py", "run = True\n")
+        self.assertEqual(2, self.compact(trigger="manual").returncode)
 
 
 class TestAutoModeDenialsAreVisible(GateCase):

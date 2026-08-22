@@ -1,5 +1,32 @@
 # Changelog
 
+## v1.43.0
+
+Never block a compaction the session did not choose.
+
+### The gate could wedge a session at its worst moment
+
+`PreCompact` is the one event that can block, and this plugin blocks it once per session
+to force what only the window knows onto disk. That is right when the founder types
+`/compact`: they are present, the material is still there, and the cost is one round trip.
+
+It is wrong when `trigger` is **auto**. That means the harness is compacting because the
+window is full — the session is already at the wall. Blocking there costs it a turn it has
+no room for: it cannot compact, because this refused, and it cannot proceed, because the
+context is spent. A gate that wedges a session at the moment it is most stuck is worse
+than the notes it was protecting.
+
+The trigger was already being recorded in every checkpoint file and was never read for the
+decision.
+
+Automatic compactions now pass through untouched. **The snapshot is still written** — not
+blocking is not the same as doing nothing, and the flush is the half that survives, which
+is exactly the half that matters when the window is about to close.
+
+Written as "block unless auto" rather than "block only when manual": if the field is ever
+absent the behaviour is today's, and the change costs nothing where it is not needed. Both
+directions are tests.
+
 ## v1.42.0
 
 A question from another session is an obligation, not a notice.
