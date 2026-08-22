@@ -470,6 +470,25 @@ def _leases_path(ctx: GitContext) -> Path:
     return store.tier_b(ctx, LEASES_FILE)
 
 
+# A lease is a claim on a FILE, and two worktrees hold two files. The key carries the
+# tree as well as the path because the refusal's own reasoning — "whoever writes second
+# wins silently" — is true only of two sessions in ONE tree, which is the arrangement
+# `require_worktree` exists to forbid. Across trees the second writer produces a merge,
+# and git resolves merges; refusing there was a second mechanism guarding a risk the
+# first one had already removed (#163).
+KEY_SEPARATOR = "\x00"
+
+
+def lease_key(ctx: GitContext, relpath: str) -> str:
+    return f"{ctx.worktree_root}{KEY_SEPARATOR}{relpath}"
+
+
+def split_lease_key(key: str) -> tuple[str, str]:
+    """(the tree that holds it, the path). ("", key) for a key written before v1.47.0."""
+    tree, separator, relpath = key.partition(KEY_SEPARATOR)
+    return (tree, relpath) if separator else ("", key)
+
+
 def _lease_table(box_value: object) -> dict[str, dict]:
     """The lease table with every unusable row dropped, never a crash.
 
@@ -488,7 +507,10 @@ def _lease_table(box_value: object) -> dict[str, dict]:
     return {
         path: holder
         for path, holder in box_value.items()
-        if isinstance(path, str) and isinstance(holder, dict)
+        # A row written before the key carried a tree says "somebody, somewhere, holds
+        # this filename", which is not a question this code can answer any more. They
+        # expire inside the TTL regardless, so they are dropped rather than migrated.
+        if isinstance(path, str) and isinstance(holder, dict) and KEY_SEPARATOR in path
     }
 
 
@@ -546,13 +568,14 @@ def acquire_lease(ctx: GitContext, session_id: str, relpath: str, ttl: float = 1
     """
     now = time.time()
     pid, trust = resolve_owner()
+    key = lease_key(ctx, relpath)
     with store.guarded_json(_leases_path(ctx), default={}) as box:
         table = _lease_table(box[0])
-        holder = table.get(relpath)
+        holder = table.get(key)
         if (holder and holder.get("session_id") != session_id
                 and _holder_stands(ctx, holder, now)):
             return str(holder.get("session_id"))
-        table[relpath] = {
+        table[key] = {
             "session_id": session_id,
             "pid": pid,
             "pid_trust": trust,
@@ -580,4 +603,26 @@ def _release_many(ctx: GitContext, session_ids: set[str]) -> int:
 
 def leases_held_by(ctx: GitContext, session_id: str) -> list[str]:
     table = _lease_table(store.read_json(_leases_path(ctx), default={}))
-    return sorted(p for p, h in table.items() if h.get("session_id") == session_id)
+    return sorted(split_lease_key(k)[1] for k, h in table.items()
+                  if h.get("session_id") == session_id)
+
+
+def elsewhere_on(ctx: GitContext, relpath: str, session_id: str) -> list[str]:
+    """Live sessions in OTHER trees that have claimed this same path.
+
+    Not a refusal and never one: they are editing a different file with the same name, on
+    a different branch, and what comes of that is a merge. It is worth knowing before the
+    merge rather than after it, which is a fact, and facts travel by the inbox (#163).
+    """
+    table = _lease_table(store.read_json(_leases_path(ctx), default={}))
+    now = time.time()
+    mine = str(ctx.worktree_root)
+    out = []
+    for key, holder in table.items():
+        tree, path = split_lease_key(key)
+        if path != relpath or tree == mine:
+            continue
+        if holder.get("session_id") == session_id or not _holder_stands(ctx, holder, now):
+            continue
+        out.append(str(holder.get("session_id")))
+    return sorted(set(out))

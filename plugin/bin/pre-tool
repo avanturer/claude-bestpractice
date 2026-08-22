@@ -917,13 +917,32 @@ def main() -> None:
                     + config.switch_advice("isolate_databases", False)
                 )
 
-        # Claim the path. Two sessions editing one file is not a merge conflict — it is
-        # a silent overwrite where neither side knows it happened, which is the defining
-        # risk of the several-sessions-at-once operating mode.
+        # Claim the path. Two sessions editing one file IN ONE TREE is not a merge
+        # conflict — it is a silent overwrite where neither side knows it happened.
+        #
+        # In one tree, and only there. Under `require_worktree`, which this plugin
+        # enforces by default, two sessions editing the same path are editing two
+        # different files on two branches: nothing is overwritten, and what comes of it
+        # is a merge, which git resolves. Refusing there was a second mechanism standing
+        # guard over a risk the first one had already removed — and it cost a real
+        # session twenty minutes of waiting on a path whose holder had committed and
+        # moved on (#163). The overlap is still worth knowing about; it is a fact, and
+        # facts go to the inbox rather than into a refusal.
         if cfg.leases_enabled and touched:
             owner = sessions.acquire_lease(
                 ctx, event.session_id, touched[0], ttl=cfg.lease_ttl_seconds
             )
+            for neighbour in sessions.elsewhere_on(ctx, touched[0], event.session_id):
+                other = sessions.get(ctx, neighbour)
+                where = f" on {other.branch}" if other else " in another tree"
+                inbox.post(ctx, neighbour,
+                           f"another session is editing {touched[0]} too, on {rec.branch}. "
+                           "Separate trees, so this is a merge rather than an overwrite — "
+                           "worth knowing before the merge.", sender=event.session_id)
+                inbox.post(ctx, event.session_id,
+                           f"session {neighbour[:8]}{where} is editing {touched[0]} too. "
+                           "Separate trees, so this is a merge rather than an overwrite — "
+                           "worth knowing before the merge.", sender=neighbour)
             if owner:
                 other = sessions.get(ctx, owner)
                 where = f" on branch {other.branch}" if other else ""
@@ -941,10 +960,20 @@ def main() -> None:
                     sender=event.session_id,
                 )
                 hookio.deny_tool(
-                    f"claude-bestpractice: session {owner[:8]}{where} is editing {touched[0]} right now. "
-                    "Work on something else, or coordinate before touching this file — "
-                    "whoever writes second wins silently and neither of you would notice."
+                    f"claude-bestpractice: session {owner[:8]}{where} is editing {touched[0]} "
+                    "right now, in this same worktree. Work on something else, or coordinate "
+                    "before touching this file — whoever writes second wins silently and "
+                    "neither of you would notice."
                 )
+
+    # A commit ends this session's claims. A committed file is not being edited, and
+    # holding it is a false statement about the world that costs a sibling up to the whole
+    # TTL — measured at twenty minutes on a live repository, against a holder who had
+    # committed and moved on (#163). Anything it is still working on it re-claims on its
+    # next write, which is free and idempotent.
+    if cfg.leases_enabled and event.tool_name == "Bash" and \
+            gitpolicy.commits(str(ti.get("command", ""))):
+        sessions.release_all(ctx, event.session_id)
 
     # Reached only when every gate allowed the call, so this records what was actually
     # written rather than what was attempted — and, for the same reason, what was actually

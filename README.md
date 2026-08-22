@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-1.46.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-1.47.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-1316%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-33%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -160,9 +160,10 @@ enforcing, so death now requires the process to be gone or its pid recycled.
 The board above is injected **once**, at session start — injecting it every turn costs
 O(T²) against O(T). So four facts that cannot wait for a restart are **delivered** instead,
 into the inbox socket Claude Code binds for each session: the holder of a contended lease
-hears that somebody is blocked on it, a merge tells everyone their baseline moved, a red
-suite tells everyone before they build on the break, and whoever was waiting on a card
-hears when it lands.
+hears that somebody is blocked on it, two sessions heading into the same file from
+different worktrees each hear about the other, a merge tells everyone their baseline
+moved, a red suite tells everyone before they build on the break, and whoever was waiting
+on a card hears when it lands.
 
 A hook does the delivering, so nothing here needs the model's cooperation or your
 confirmation. Notes are deduplicated on the claim, capped at two per drain, and retired
