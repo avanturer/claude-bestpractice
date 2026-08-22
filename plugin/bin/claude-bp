@@ -299,7 +299,7 @@ def cmd_set(ctx, key: str, value: str) -> int:
 
     asked = config.asked_for(ctx, key)
     if asked is None or config.coerce(key, asked)[0] != coerced:
-        spelled = "off" if coerced is False else "on" if coerced is True else str(coerced)
+        spelled = config.spell(coerced)
         print(f"the founder has not asked for {key} {spelled}.", file=sys.stderr)
         print(f"  Ask them, and one line back is enough: `{key} {spelled}`.", file=sys.stderr)
         print("  This is a gate switch. A session that has just been blocked is exactly "

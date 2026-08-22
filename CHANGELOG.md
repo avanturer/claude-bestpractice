@@ -1,5 +1,59 @@
 # Changelog
 
+## v1.45.0
+
+The founder's word is readable for every switch it opens, and our own refusal is not it.
+
+### A door whose key it could not read
+
+`claude-bp set worktree_setup …` refused, and named the line to ask for:
+
+> the founder has not asked for worktree_setup ['bash', 'infra/scripts/worktree_db_init.sh'].
+>   Ask them, and one line back is enough: `worktree_setup ['bash', 'infra/scripts/worktree_db_init.sh']`.
+
+The founder wrote that line. Verbatim. It refused again. They restarted the window in case
+a hook was stale, wrote it a second time, and it refused a third time with the same words —
+then hand-edited `config.json`, which is the one file the session is forbidden to write and
+the whole reason this door exists (#166).
+
+Two halves of one reader had never met. Values were spelled with `str()`, so a list came
+out as a Python repr; the reader understood `on`, `off`, `true`, `false` and numbers, and
+nothing else. **Six settable keys** — `worktree_setup`, `witness_exclude`, `exempt_paths`,
+`autonomy`, `report_defects`, `stage_override` — could therefore never be switched by the
+founder at all, and every refusal on them printed a line nothing could hear.
+
+Both halves now agree. A list is spelled as words (`worktree_setup bash infra/db.sh`), the
+`claude-bp set` line it prints is shell-quoted, and the reader takes a whole line for keys
+whose value is neither a word nor a number. The repr spelling is read too — it is in the
+founder's scrollback, and answering a line they have already written twice by asking for a
+third variant of it is not a fix. The test takes both the line and the CLI argument out of
+the refusal itself, so the two halves cannot drift apart again.
+
+### The message saying the word is missing was the word
+
+Found while testing the above, present since the reader existed. Every sentence in a
+refusal carries the literal it is asking for, so read naively:
+
+    the founder has not asked for scope_drift_block off   →  grants scope_drift_block off
+
+The most quotable thing on their screen — the thing this mechanism explicitly asks them to
+copy from — was the one text that must not count as them saying it. A gate that prints its
+own key is not switched by the founder (decision 0006). This plugin's own sentences are now
+struck out of a message before either reader looks at it, line by line, so a paste of the
+refusal plus a line of their own still has their line read.
+
+### And it was being eaten by the board
+
+`worktree_setup ['bash', 'infra/scripts/worktree_db_init.sh']` is long, and it names a
+path, which is what settles a statement of work first. So it also became the session's
+task: the title of a board card, the branch name, and the sentence every scope-drift
+refusal quoted back. A key and a value is not a statement of work in any project. Both
+readers still see the line; only one keeps it.
+
+**Repair.** `0007-forget-a-switch-taken-as-a-task` clears a task statement that is only a
+switch line from sessions that already carry one — a statement is otherwise replaced only
+when the founder says something new.
+
 ## v1.44.0
 
 The board follows the founder while nobody has claimed the card.

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -269,9 +270,79 @@ _SWITCH = re.compile(
 )
 
 
+# The half for keys whose value is neither a word nor a number: a list of paths, or one
+# name out of an enumerated set. Six settable keys are of those types, and for every one
+# of them the refusal printed a line this reader could not read back. The founder wrote
+# `worktree_setup ['bash', 'infra/scripts/worktree_db_init.sh']` verbatim, restarted the
+# window, wrote it again — and the gate asked a third time, with the same line (#166).
+#
+# Anchored to a whole line, because there is no closed set of values to recognise here:
+# the value is whatever the founder was asked to repeat, so it is the LINE that has to be
+# theirs. That looseness costs nothing, because recording a request is not the switch —
+# `claude-bp set` still refuses unless the value it is being asked to write is the value
+# on that line. A stray sentence therefore authorises a change nobody would attempt.
+#
+# The key has to START the line, after nothing but the marks a chat wraps a line in. Our
+# own refusal quotes the line mid-sentence ("Ask them, and one line back is enough: …"),
+# and a founder pasting that refusal back is showing it, not saying it.
+_SWITCH_LINE = re.compile(
+    r"(?im)^[\s`>*\-]*(?P<key>[a-z][a-z_]{3,31})[ \t]*(?::|=|[ \t])[ \t]*(?P<value>\S[^\n]*)$"
+)
+
+# What a value is wrapped in when it travels through a chat and a shell: backticks from
+# our own message, quotes from the `claude-bp set` line the founder copied.
+_WRAPPERS = "`\"' \t"
+
+_SPOKEN_TYPES = (list, str)
+
+
+def _spoken_value(key: str, value: str) -> str:
+    """The founder's typing, reduced to what `coerce` will be handed."""
+    text = value.strip().rstrip(".!").strip(_WRAPPERS)
+    if _EXPECTED.get(key) is not list:
+        return text
+    if text.startswith("[") and text.endswith("]"):
+        # The spelling that shipped before this reader existed, and the one still sitting
+        # in the founder's scrollback. Read too, so an upgrade does not answer a line
+        # they have already written twice by asking for a third variant of it.
+        text = text[1:-1].replace(",", " ")
+    return " ".join(word.strip(_WRAPPERS) for word in text.split())
+
+
+# Sentences this plugin prints AROUND a switch. The founder pastes our refusal back —
+# it is the most quotable thing on their screen, and this whole mechanism asks them to
+# copy a line out of it — and every one of those sentences CARRIES the literal it is
+# asking for. Read naively, `the founder has not asked for scope_drift_block off` grants
+# scope_drift_block off: the message saying the word is missing becomes the word, and a
+# gate that prints its own key is not switched by the founder at all (decision 0006).
+#
+# Struck line by line, not message by message, so a founder who pastes the refusal and
+# adds a line of their own still has their line read.
+_OUR_VOICE = (
+    "has not asked for",
+    "one line back is enough",
+    "gate is switched by the founder",
+    "session that has just been blocked",
+    "claude-bp set ",
+)
+
+
+def _their_own_words(text: str) -> str:
+    """The message with this plugin's own sentences taken back out of it."""
+    return "\n".join(
+        "" if any(ours in line.lower() for ours in _OUR_VOICE) else line
+        for line in (text or "").splitlines()
+    )
+
+
 def switches_in(text: str) -> dict[str, str]:
     """Config switches the founder asked for, in their own message. Usually empty."""
     out: dict[str, str] = {}
+    text = _their_own_words(text)
+    for found in _SWITCH_LINE.finditer(text or ""):
+        key = found["key"].lower()
+        if _EXPECTED.get(key) in _SPOKEN_TYPES and key not in EVIDENCE_KEYS:
+            out[key] = _spoken_value(key, found["value"])
     for found in _SWITCH.finditer(text or ""):
         key = found["key"].lower()
         if key in _EXPECTED and key not in EVIDENCE_KEYS:
@@ -361,6 +432,50 @@ def clear_switch(ctx: GitContext, key: str) -> None:
         store.write_json(path, record)
 
 
+def spell(value: Any) -> str:
+    """A value written the way the founder is asked to say it back.
+
+    A list used to be spelled with `str()`, so the line the refusal printed was a Python
+    repr — `['bash', 'infra/scripts/worktree_db_init.sh']` — which nothing here could read
+    back and no shell would carry unquoted (#166).
+    """
+    if value is True:
+        return "on"
+    if value is False:
+        return "off"
+    if isinstance(value, (list, tuple)):
+        # An empty list still has to be written as something. The key alone on a line is a
+        # sentence about the key, not a value, and neither reader would take it as one.
+        return " ".join(str(item) for item in value) or '""'
+    return str(value)
+
+
+def is_only_a_switch(text: str) -> bool:
+    """Is this message nothing but the founder's word on a gate?
+
+    `worktree_setup bash infra/scripts/worktree_db_init.sh` is a key and a value. It is
+    not a statement of work in any project — but it is long enough and it names a path,
+    so it became the session's task, the title of a board card, and the sentence every
+    scope-drift refusal quoted back (#166). Both readers see the line; only one keeps it.
+
+    Only recognised keys are struck out. Every English instruction begins with a word and
+    continues with others — "update the parser first" has the shape exactly — so a rule
+    that blanked any key-shaped line would swallow the statements it exists to protect.
+    """
+    body = text or ""
+    if not body.strip():
+        return False
+    for pattern in (_SWITCH_LINE, _SWITCH):
+        body = pattern.sub(_blank_if_ours, body)
+    return not body.strip()
+
+
+def _blank_if_ours(found: "re.Match[str]") -> str:
+    key = found["key"].lower()
+    settable = key in _EXPECTED and key not in EVIDENCE_KEYS
+    return " " if settable else found.group(0)
+
+
 def switch_advice(key: str, value: Any) -> str:
     """The one line every gate says instead of naming a file the session cannot write.
 
@@ -372,11 +487,11 @@ def switch_advice(key: str, value: Any) -> str:
 
     So the door exists, and the key is the founder's word.
     """
-    spelled = "off" if value is False else "on" if value is True else str(value)
+    spelled = spell(value)
     return (
         f"This gate is switched by the founder, not by the session it is enforcing. If they "
         f"want it off, one line from them — `{key} {spelled}` — is the whole of it, and then: "
-        f"claude-bp set {key} {spelled}"
+        f"claude-bp set {key} {shlex.quote(spelled)}"
     )
 
 
@@ -427,7 +542,12 @@ def _as_list(value: Any) -> list[str] | None:
         return [str(v) for v in value]
     # A bare string iterates as characters, so `"exempt_paths": "docs/"` silently became
     # five single-letter path prefixes that matched most of the tree.
-    return value.split() if isinstance(value, str) else None
+    if not isinstance(value, str):
+        return None
+    # Wrappers come off here for the same reason they come off in the reader: this is the
+    # end of a line that travelled through a chat and a shell. `""` is how an empty list
+    # is written, and it has to arrive as one from both directions.
+    return [word for word in (w.strip(_WRAPPERS) for w in value.split()) if word]
 
 
 def _as_text(value: Any) -> str | None:

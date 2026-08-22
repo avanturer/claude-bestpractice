@@ -141,6 +141,12 @@ def is_statement_of_work(prompt: str, paths: list[str]) -> bool:
     text = " ".join(prompt.split())
     if is_pasted_output(prompt) or is_harness_block(prompt):
         return False
+    # A switch line is the founder's word on a gate, and the reader that wants it has
+    # already taken it a few lines above. Struck out here rather than merely ranked below
+    # a real statement: `worktree_setup bash infra/scripts/worktree_db_init.sh` names a
+    # path, and naming a path is what settles this question first (#166).
+    if config.is_only_a_switch(prompt):
+        return False
     if paths:
         return True
     if _CONTINUATION.match(text.strip(" .!?,…").lower()):
@@ -278,6 +284,7 @@ def main() -> None:
             and safe
             and not is_pasted_output(safe)
             and not is_harness_block(safe)
+            and not config.is_only_a_switch(safe)
         ):
             # Marked when cut, because the drift refusal quotes this back as "Task was:"
             # and a fragment presented as the whole instruction is a claim the founder
