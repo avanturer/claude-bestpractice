@@ -309,8 +309,41 @@ def handoff_problems(paths: list[str], note: str) -> list[str]:
 ALLOC_LOCK = "plan-alloc.lock"
 
 
+FROM_THE_FOUNDER = "the founder's message"
+
+
+def open_for(ctx: GitContext, statement: str, session_id: str) -> Task | None:
+    """Put the founder's instruction on the board the moment it arrives. None if one is.
+
+    The demand fired at the first WRITE, so between "the founder gave a task" and "the
+    session touched a file" the board said nothing — and every sibling deciding what was
+    safe to touch read an empty board while somebody was already working. In practice the
+    card got filed because a gate refused, which makes it a description of work already
+    done rather than a claim on work about to happen.
+
+    Filed into NEXT and deliberately NOT claimed. Claiming requires `done_when` and the
+    paths, and neither is knowable before the session has looked at anything — a card
+    guessed at that moment is worse than a late one, which is why `claim` refuses an
+    unplanned task. So the board learns WHO and WHAT immediately, and the plan is filled
+    in with `update` once it is real.
+
+    One per session. A founder who sends three messages about one task gets one card, not
+    three, because the ledger is only worth reading while it does not drift.
+    """
+    if not statement.strip():
+        return None
+    for task in load_all(ctx, DOING):
+        if task.owner == session_id:
+            return None
+    for task in load_all(ctx, NEXT):
+        if task.source == FROM_THE_FOUNDER and task.branch == ctx.branch:
+            return None
+    return add(ctx, statement.strip().splitlines()[0][:120], branch=ctx.branch,
+               source=FROM_THE_FOUNDER)
+
+
 def add(ctx: GitContext, title: str, body: str = "", branch: str = "",
-        paths: list[str] | None = None, done_when: str = "",
+        paths: list[str] | None = None, done_when: str = "", source: str = "",
         after: list[str] | None = None, together: list[str] | None = None) -> Task:
     """Allocate an id and create the task under one lock.
 
@@ -321,7 +354,7 @@ def add(ctx: GitContext, title: str, body: str = "", branch: str = "",
     that `claim 0007` and `done 0007` silently act on whichever one `find` reaches
     first. The lock is held across both steps or it buys nothing.
     """
-    return park(ctx, title, body=body, branch=branch, paths=paths or [],
+    return park(ctx, title, body=body, branch=branch, paths=paths or [], source=source,
                 done_when=done_when, after=after, together=together)
 
 

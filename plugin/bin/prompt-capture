@@ -286,6 +286,19 @@ def main() -> None:
             if len(safe) > MAX_TASK_CHARS:
                 statement += " […truncated; this is not the whole instruction]"
             updates["task_statement"] = statement
+            # And onto the board, now rather than at the first write. Between those two
+            # moments every sibling deciding what is safe to touch read an empty board
+            # while somebody was already working — and the card, when it came, described
+            # work already done instead of claiming work about to happen.
+            # No paste guard here, though the first draft had one: `is_statement_of_work`
+            # already refuses every paste and every harness block, and the fallback branch
+            # excludes them too — so the statement can never BE a paste, and a second
+            # check for it is a line no mutation can kill. The property still matters and
+            # is still tested; it is guarded one layer up, where it belongs.
+            if config.load(ctx).require_task:
+                from claude_bestpractice import plan
+
+                plan.open_for(ctx, statement, event.session_id)
         # Paths from the ORIGINAL: redaction rewrites credential-shaped tokens, and a
         # filename is not a credential. Scrubbing first would lose real paths.
         sessions.touch(ctx, event.session_id, **updates)

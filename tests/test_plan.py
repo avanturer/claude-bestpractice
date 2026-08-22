@@ -8,7 +8,7 @@ import sys
 import time
 import unittest
 
-from helpers import BIN, RepoCase, git
+from helpers import BIN, RepoCase, git, sid
 
 from claude_bestpractice import plan, sessions, store
 
@@ -656,3 +656,70 @@ class TestWorkThatStoppedMoving(PlanCase):
 
         self.assertEqual([], plan.sweep_idle(self.ctx(), 24.0))
         self.assertEqual([task.id], [t.id for t in plan.sweep_idle(self.ctx(), 2.0)])
+
+
+class TestTheBoardLearnsTheTaskWhenItArrives(RepoCase):
+    """The demand fired at the first WRITE, so between "the founder gave a task" and "the
+    session touched a file" the board said nothing — and every sibling deciding what was
+    safe to touch read an empty board while somebody was already working.
+
+    In practice the card got filed because a gate refused, which makes it a description of
+    work already done rather than a claim on work about to happen (#165).
+    """
+
+    def say(self, prompt: str, session: str = "s1"):
+        return self.run_hook("prompt-capture", {
+            "session_id": session, "hook_event_name": "UserPromptSubmit", "prompt": prompt,
+        })
+
+    def board(self, state):
+        from claude_bestpractice import plan
+
+        return plan.load_all(self.ctx(), state)
+
+    def test_a_task_reaches_the_board_before_any_file_is_touched(self):
+        self.say("перепиши импортер так, чтобы он не падал на пустом CSV")
+        titles = [t.title for t in self.board("next")]
+        self.assertEqual(1, len(titles), titles)
+        self.assertIn("импортер", titles[0])
+
+    def test_it_is_not_claimed_because_the_plan_is_not_known_yet(self):
+        """Claiming needs `done_when` and the paths, and neither is knowable before the
+        session has looked at anything. A card guessed then is worse than a late one."""
+        self.say("перепиши импортер")
+        self.assertEqual([], self.board("doing"))
+
+    def test_three_messages_about_one_task_leave_one_card(self):
+        """The ledger is only worth reading while it does not drift."""
+        for said in ("почини импортер", "и заодно посмотри логи", "начни с тестов"):
+            self.say(said)
+        self.assertEqual(1, len(self.board("next")))
+
+    def test_a_session_already_working_gets_no_second_card(self):
+        from claude_bestpractice import plan
+
+        task = plan.add(self.ctx(), "what this session is already doing",
+                        paths=["a.py"], done_when="stated")
+        plan.claim(self.ctx(), task.id, sid(self.repo, "s1"), self.ctx().branch)
+        self.say("а теперь ещё вот это")
+        self.assertEqual([], self.board("next"))
+
+    def test_a_paste_does_not_become_a_task(self):
+        """A card is read by other sessions as a claim, so the bar is higher than the task
+        statement's: a pasted deploy tail on the board is exactly the drift the ledger
+        exists not to have.
+
+        Two prompt lines, because one traceback line is deliberately NOT a paste here —
+        "this failed, look: <traceback>" is an instruction with evidence attached, and
+        `is_pasted_output` says so.
+        """
+        self.say("hedge@AVANTURER-PC:~/dev$ make deploy\n  building…\n"
+                 "hedge@AVANTURER-PC:~/dev$ echo done")
+        self.assertEqual([], self.board("next"))
+
+    def test_the_card_says_where_it_came_from(self):
+        """So `list` does not present the founder's own words as a plan somebody wrote."""
+        from claude_bestpractice import plan
+
+        self.say("почини импортер")
+        self.assertEqual(plan.FROM_THE_FOUNDER, self.board("next")[0].source)
