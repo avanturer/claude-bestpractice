@@ -1,5 +1,40 @@
 # Changelog
 
+## v1.42.0
+
+A question from another session is an obligation, not a notice.
+
+### Telling the holder left them free to say nothing
+
+The lease refusal already messaged the session holding the file. It was a **fact**, and a
+fact can be ignored: the blocked session waited out the full thirty-minute TTL while the
+holder had committed twenty minutes earlier and moved on. Reported from a live repository
+with four parallel worktrees.
+
+A fact tells; a question expects an answer, and the difference has to be structural or it
+is a fact with a question mark.
+
+Contention now puts a **question** — *"another session is blocked on schemas.py, which you
+hold. Are you still in it, or can they take it?"* — and the holder's Stop gate refuses to
+end a turn while it is unanswered. The same shape as an open pull request and an unlisted
+change, because it is the same problem: something somebody is waiting on that the session
+can otherwise walk straight past.
+
+`claude-bp answer <id> "<your answer>"` closes it and sends the answer back to whoever
+asked. A command rather than a hook, because only the session holding the file knows
+whether it is done with it: the gate makes the answer unavoidable, it cannot make it true.
+
+### What still does not hold a turn
+
+Most of what this channel carries — a red suite, a stale baseline, an unblocked card —
+stays a fact and stops nobody. A channel that halted a turn for every one of them is a
+channel the founder switches off, and then none of it arrives.
+
+Two backstops keep an unanswered question from wedging anybody, both deliberate: the
+escalation ceiling every gate here shares releases the turn after four refusals, and the
+note expires after a day. Neither is a way to win by waiting — four blocked turns is
+expensive enough to answer instead.
+
 ## v1.41.0
 
 The board learns what a session is doing when the founder says it, not when a gate refuses.
