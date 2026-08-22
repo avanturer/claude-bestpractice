@@ -356,10 +356,12 @@ class TestMemoryStaysHonest(Scenario):
         proc = self.hook(
             "checkpoint", session_id="s1", hook_event_name="PreCompact", trigger="auto"
         )
-        # Exit 2: a session that changed files is stopped once, so what only this window
-        # knows gets written down before it collapses. The flush happens either way, which
-        # is what the rest of this test is about — the block is on top of it, never instead.
-        self.assertEqual(proc.returncode, 2, proc.stdout)
+        # Exit 0, and that is the point: `auto` means the harness is compacting because the
+        # window is FULL, and a gate that stops a session there costs it a turn it has no
+        # room for — it cannot compact, because this refused, and it cannot proceed,
+        # because the context is spent. The FLUSH is what this test is named for, and the
+        # flush happens either way.
+        self.assertEqual(proc.returncode, 0, proc.stdout)
         saved = list((self.repo / ".claude" / "claude-bestpractice" / "checkpoints").glob("*.md"))
         self.assertEqual(len(saved), 1)
         text = saved[0].read_text()

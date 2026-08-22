@@ -99,6 +99,16 @@ def _demand_the_notes_once(ctx, event, rec, changed) -> None:
     """
     if not changed:
         return
+    # NEVER on a compaction the session did not choose. `trigger` is "auto" when the
+    # harness compacts because the window is full — the session is already at the wall,
+    # and blocking there costs it a turn it has no room for: it cannot compact, because
+    # we refused, and it cannot proceed, because the context is spent. A gate that wedges
+    # a session at its worst moment is worse than the notes it was protecting.
+    #
+    # "Block unless auto" rather than "block only when manual": if the field is ever
+    # absent the behaviour is today's, and the change costs nothing where it is not needed.
+    if str(event.raw.get("trigger", "")).strip().lower() == "auto":
+        return
     path = store.tier_b(ctx, DEMANDED)
     seen = store.read_json(path, default=[])
     if not isinstance(seen, list):
