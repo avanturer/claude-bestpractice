@@ -418,6 +418,31 @@ def _drop_the_witness_timeout(ctx: GitContext) -> str:
             "does not have; the ceiling now comes from the hook's own budget")
 
 
+def _forget_a_statement_that_was_only_a_switch(ctx: GitContext) -> str:
+    """The founder's word, taken by the wrong reader and kept as what the session is for.
+
+    A line like `worktree_setup ['bash', 'infra/scripts/worktree_db_init.sh']` is a key
+    and a value. Until this release it also cleared every test for a statement of work —
+    it is long, and it names a path — so it became the session's task, and stayed there:
+    on the board, in the branch name, and quoted back by every scope-drift refusal (#166).
+
+    The fix stops it happening. This takes it out of the sessions it already happened to,
+    because the founder upgrades on top of what was working and a statement is only
+    replaced when they say something new.
+    """
+    from . import config, sessions
+
+    cleared = 0
+    for rec in sessions.load_all(ctx):
+        if rec.task_statement and config.is_only_a_switch(rec.task_statement):
+            sessions.touch(ctx, rec.session_id, task_statement="")
+            cleared += 1
+    if not cleared:
+        return ""
+    return (f"{cleared} session(s) had a config line as their task statement; cleared, and "
+            "the next thing the founder says will fill it")
+
+
 # name -> (revision, step). Raise the revision when the step's behaviour changes; every
 # clone that ran an older revision reconciles again on its next session start.
 _REPAIRS = {
@@ -427,6 +452,7 @@ _REPAIRS = {
     "0004-lift-the-tool-call-ceiling": (1, _lift_the_tool_call_ceiling),
     "0005-trees-into-the-no-prompt-zone": (2, _move_trees_into_the_no_prompt_zone),
     "0006-drop-the-witness-timeout": (1, _drop_the_witness_timeout),
+    "0007-forget-a-switch-taken-as-a-task": (1, _forget_a_statement_that_was_only_a_switch),
 }
 
 

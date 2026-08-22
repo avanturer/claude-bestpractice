@@ -1464,6 +1464,72 @@ class TestTheGateNamesADoorThatOpens(GateCase):
         self.assertIn("claude-bp set scope_drift_block off", advice)
         self.assertNotIn("config.json", advice)
 
+    def test_the_line_the_refusal_prints_is_a_line_the_reader_can_read(self):
+        """The refusal quotes a line for the founder to repeat. Nothing read it back.
+
+        `worktree_setup` is a list, and a list was spelled with `str()` — so the line was
+        a Python repr, and the reader had no shape for a list at all. The founder wrote
+        that line verbatim, restarted the window in case the hook was stale, wrote it a
+        second time, and the gate asked a third time with the same words (#166).
+
+        The line is taken from the refusal rather than written out here, so this cannot
+        pass while the two halves say different things.
+        """
+        self.start()
+        refused = self.cli("set", "worktree_setup", "bash infra/db.sh")
+        self.assertEqual(1, refused.returncode)
+        line = refused.stderr.split("one line back is enough: `")[1].split("`")[0]
+        self.founder_says(line)
+        # And the CLI is handed the value as PRINTED, because that is the round trip the
+        # founder actually walks: they copy it out of the message rather than retyping it.
+        key, _, value = line.partition(" ")
+        accepted = self.cli("set", key, value)
+        self.assertEqual(0, accepted.returncode, accepted.stderr)
+        from claude_bestpractice import config
+
+        self.assertEqual(["bash", "infra/db.sh"], config.load(self.ctx()).worktree_setup)
+
+    def test_the_spelling_that_shipped_before_the_reader_did_is_still_read(self):
+        """It is in the founder's scrollback, and an upgrade that answered a line they
+        have written twice by asking for a third variant of it is not a fix."""
+        self.start()
+        self.founder_says("worktree_setup ['bash', 'infra/db.sh']")
+        self.assertEqual(0, self.cli("set", "worktree_setup", "bash infra/db.sh").returncode)
+
+    def test_a_key_whose_value_is_a_name_opens_the_same_door(self):
+        """Three keys hold text rather than a word or a number. Every one of them was
+        unreachable for the same reason, and none of them is about lists."""
+        self.start()
+        self.founder_says("report_defects auto")
+        self.assertEqual(0, self.cli("set", "report_defects", "auto").returncode)
+
+    def test_our_own_refusal_quoted_back_authorises_nothing(self):
+        """Every sentence in it carries the literal it is asking for, so a refusal read
+        naively is a gate printing its own key: `the founder has not asked for
+        scope_drift_block off` granted scope_drift_block off. The most quotable thing on
+        their screen was the one thing that must not count as them saying it."""
+        self.start()
+        refused = self.cli("set", "scope_drift_block", "off")
+        self.founder_says(refused.stderr)
+        self.assertEqual(1, self.cli("set", "scope_drift_block", "off").returncode)
+
+    def test_the_line_they_were_asked_to_copy_still_counts_when_it_is_theirs(self):
+        """The strike-out is per line. The literal alone is what they were asked for."""
+        self.start()
+        refused = self.cli("set", "scope_drift_block", "off")
+        self.founder_says(refused.stderr.split("one line back is enough: `")[1].split("`")[0])
+        self.assertEqual(0, self.cli("set", "scope_drift_block", "off").returncode)
+
+    def test_a_sentence_about_a_key_is_not_a_value_for_it(self):
+        """A list value has no closed set of words to recognise — it is whatever the
+        founder was asked to repeat — so the LINE has to be theirs. Mid-sentence, a key
+        would otherwise claim the rest of the line: `I set exempt_paths and it broke
+        everything` is a complaint, not four path prefixes."""
+        from claude_bestpractice import config
+
+        self.assertEqual({}, config.switches_in("I set exempt_paths and it broke everything"))
+        self.assertEqual({}, config.switches_in("по-моему worktree_setup сейчас пустой"))
+
     def test_no_gate_advertises_the_file_the_write_hook_refuses(self):
         """The defect was a pattern, not one message: seven places named `config.json`."""
         from claude_bestpractice import evidence, gitpolicy, options  # noqa: F401
@@ -1584,6 +1650,20 @@ class TestANodIsNotATaskStatement(GateCase):
     def test_the_first_thing_the_founder_says_is_always_kept(self):
         """With nothing recorded yet, «Делай» beats a blank board — and only then."""
         self.assertEqual("Делай", self.statement_after("Делай"))
+
+    def test_a_line_that_is_only_a_switch_is_not_the_task(self):
+        """`worktree_setup bash infra/db.sh` is a key and a value. The reader that wants
+        it has already taken it; this one took it too, so the board card, the branch name
+        and every drift refusal ended up quoting a config line back at the founder (#166).
+        """
+        self.write("merge.py", "x = 1\n")
+        self.assertEqual(self.REAL, self.statement_after(self.REAL, "worktree_setup bash infra/db.sh"))
+
+    def test_an_instruction_carrying_a_switch_is_still_an_instruction(self):
+        """Struck out only when it is the whole message. Every English sentence begins
+        with a word and continues with others, which is the shape of a switch line."""
+        both = "turn scope_drift_block off while we rewrite the merge resolver"
+        self.assertEqual(both, self.statement_after(self.REAL, both))
 
     def test_the_branch_is_no_longer_named_after_a_nod(self):
         """«Делай» transliterates to `delay`, an English word meaning the opposite."""

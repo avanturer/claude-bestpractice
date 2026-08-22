@@ -886,3 +886,39 @@ class TestTheWitnessTimeoutIsTakenBackOut(RepoCase):
         self.assertEqual(["make", "test"],
                          json.loads(path.read_text(encoding="utf-8"))["test_command"])
 
+
+
+class TestAStatementThatWasOnlyASwitchIsForgotten(RepoCase):
+    """The founder's word, taken by the wrong reader and kept as what the session is for.
+
+    `worktree_setup ['bash', 'infra/scripts/worktree_db_init.sh']` cleared every test for
+    a statement of work — it is long, and it names a path — so it became the task, and a
+    statement is only replaced when the founder says something new. It sat on the board,
+    in the branch name, and in every scope-drift refusal (#166).
+    """
+
+    def session_saying(self, statement: str) -> str:
+        from claude_bestpractice import sessions
+
+        rec = sessions.adopt(self.ctx(), "s1")
+        sessions.touch(self.ctx(), "s1", task_statement=statement)
+        return rec.session_id
+
+    def statement_now(self) -> str:
+        from claude_bestpractice import sessions
+
+        return sessions.get(self.ctx(), "s1").task_statement
+
+    def test_a_session_carrying_one_is_repaired(self):
+        self.session_saying("worktree_setup ['bash', 'infra/scripts/worktree_db_init.sh']")
+        changed = migrate.repair(self.ctx())
+
+        self.assertEqual("", self.statement_now())
+        self.assertTrue([line for line in changed if "task statement" in line],
+                        "a repair that rewrites session state must say so")
+
+    def test_a_real_instruction_is_left_alone(self):
+        real = "почини экспорт CSV, он падает на пустом наборе"
+        self.session_saying(real)
+        migrate.repair(self.ctx())
+        self.assertEqual(real, self.statement_now())
