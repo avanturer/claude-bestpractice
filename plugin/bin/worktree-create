@@ -74,12 +74,13 @@ def main() -> None:
 
     cfg = config.load(ctx)
     if cfg.isolate_databases:
-        worktree.isolate_database(
-            target,
-            worktree.dsn_for(ctx, str(body.get("database") or "")),
-            seed_from=worktree.main_checkout(ctx),
-        )
+        url = worktree.dsn_for(ctx, str(body.get("database") or ""))
+        worktree.isolate_database(target, url, seed_from=worktree.main_checkout(ctx))
         worktree.run_setup(target, cfg.worktree_setup)
+        # AFTER the project has had its turn, because `worktree_setup` is where a project
+        # creates the database and the answer before it ran would be about nothing. What
+        # this learns reaches the session on its first board, and is not asked again.
+        worktree.note_database(ctx, target, url)
 
     # The harness takes the path from stdout. Everything else is a side effect.
     sys.stdout.write(absolute)

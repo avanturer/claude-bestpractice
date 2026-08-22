@@ -113,6 +113,18 @@ def isolate_database(tree: Path, url: str, seed_from: Path | None = None) -> boo
     return True
 
 
+def split_dsn(url: str) -> tuple[str, str, str]:
+    """(everything before the database, the database name, the query string).
+
+    The query is carried separately because it is not decoration: `?sslmode=require` is
+    how every managed Postgres is reached, and rebuilding the URL without it produces a
+    tree that cannot connect at all — a worse failure than the one isolation prevents.
+    """
+    head, _, tail = url.rpartition("/")
+    name, mark, query = tail.partition("?")
+    return head, name, mark + query
+
+
 def dsn_for(ctx: GitContext, database: str) -> str:
     """This tree's DSN, keeping whatever the main checkout already points at.
 
@@ -123,7 +135,88 @@ def dsn_for(ctx: GitContext, database: str) -> str:
     existing = database_of(main_checkout(ctx))
     if not existing or "/" not in existing:
         return f"postgresql://localhost:5432/{database}"
-    return existing.rsplit("/", 1)[0] + "/" + database
+    head, _name, query = split_dsn(existing)
+    return f"{head}/{database}{query}"
+
+
+# The scheme this plugin knows how to ask about. Everything else is `worktree_setup`'s,
+# exactly as before: the point is not to guess at databases in general, it is that a DSN
+# saying `postgresql://` has already told us what it is.
+_POSTGRES = ("postgres://", "postgresql://")
+
+# Every Postgres server has it, and asking the SERVER is the only way to get an answer
+# that means what it says: connecting to a database that is not there fails, and so does
+# a server that is down, an address that is wrong, and a password that has changed.
+_MAINTENANCE = "postgres"
+
+# Long enough for a managed server across the Atlantic, short enough that an unreachable
+# one does not hold up a worktree the founder is waiting for.
+_PSQL_TIMEOUT = 5.0
+
+
+def is_postgres(url: str) -> bool:
+    return url.strip().lower().startswith(_POSTGRES)
+
+
+def _literal(text: str) -> str:
+    return "'" + text.replace("'", "''") + "'"
+
+
+def _identifier(text: str) -> str:
+    return '"' + text.replace('"', '""') + '"'
+
+
+def _psql(dsn: str, sql: str) -> tuple[bool, str]:
+    """Run one statement. (reached the server, what it printed)."""
+    try:
+        done = subprocess.run(
+            ["psql", dsn, "-Atqc", sql], capture_output=True,
+            encoding="utf-8", errors="surrogateescape", timeout=_PSQL_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False, ""
+    return done.returncode == 0, done.stdout.strip()
+
+
+def database_present(url: str) -> bool | None:
+    """Does the database this URL names exist? None when it cannot be told.
+
+    None is not a synonym for False anywhere it is read. No `psql`, a scheme we do not
+    know, a server that is asleep — every one of those means this plugin has learned
+    nothing, and saying "missing" on the strength of it would put a false alarm on the
+    board of every repository that does not use Postgres.
+    """
+    if not is_postgres(url):
+        return None
+    head, name, query = split_dsn(url)
+    if not name:
+        return None
+    reached, answer = _psql(f"{head}/{_MAINTENANCE}{query}",
+                            f"select 1 from pg_database where datname = {_literal(name)}")
+    return (answer == "1") if reached else None
+
+
+def create_database(url: str) -> tuple[bool, str]:
+    """Create the database this URL names. (done, what to say about it).
+
+    This is the one thing in the whole isolation path that touches a server rather than a
+    file, and it never happens on its own: `worktree_setup` is the founder's line, and
+    this runs only when they have put it there. A plugin that issues DDL because it
+    inferred that it should is a plugin that will one day infer it about production.
+    """
+    if not is_postgres(url):
+        return False, "not a Postgres URL; `worktree_setup` is where this project says how"
+    head, name, query = split_dsn(url)
+    if not name:
+        return False, "no database name in DATABASE_URL"
+    present = database_present(url)
+    if present is None:
+        return False, f"could not reach the server that holds {name} (is `psql` installed?)"
+    if present:
+        return True, f"{name} is already there"
+    reached, _out = _psql(f"{head}/{_MAINTENANCE}{query}",
+                          f"create database {_identifier(name)}")
+    return (True, f"created {name}") if reached else (False, f"the server refused to create {name}")
 
 
 def run_setup(tree: Path, command: list[str]) -> bool:
@@ -236,6 +329,60 @@ def record(ctx: GitContext, slug: str, absolute: str, branch: str, trusted: bool
     }
     store.write_json(store.tier_b(ctx, "worktrees", f"{slug}.json"), body)
     return body
+
+
+def record_for(ctx: GitContext, tree: Path) -> tuple[Path, dict]:
+    """The record this plugin wrote for a tree, found by the path in it. ("", {}) if none."""
+    try:
+        records = sorted(store.tier_b(ctx, "worktrees").glob("*.json"))
+    except OSError:
+        return Path(""), {}
+    wanted = str(tree)
+    for path in records:
+        body = store.read_json(path, default={}) or {}
+        if isinstance(body, dict) and str(body.get("path") or "") == wanted:
+            return path, body
+    return Path(""), {}
+
+
+DATABASE_MISSING = "database_missing"
+
+
+def note_database(ctx: GitContext, tree: Path, url: str) -> bool | None:
+    """Ask the server whether this tree's database is there, and write down the answer.
+
+    Asked ONCE, when the tree is made, because that is the moment this plugin has written
+    a name nothing has created — and because a probe on every session start is a database
+    connection it has no business opening on a schedule.
+
+    Returns what was learned, `None` when nothing was.
+    """
+    present = database_present(url)
+    path, body = record_for(ctx, tree)
+    if not str(path) or not isinstance(body, dict):
+        return present
+    if present is False:
+        body[DATABASE_MISSING] = True
+    else:
+        body.pop(DATABASE_MISSING, None)
+    store.write_json(path, body)
+    return present
+
+
+def missing_database_line(ctx: GitContext) -> str:
+    """The one alert a tree born without its database gets, and only that tree.
+
+    Without it the tree is simply broken: every command in it fails with `database "..."
+    does not exist`, which reads as a broken project rather than a setup step nobody ran,
+    and the founder is the one who has to work out which switch is the cure (#167).
+    """
+    _path, body = record_for(ctx, ctx.worktree_root)
+    if not body.get(DATABASE_MISSING):
+        return ""
+    name = str(body.get("database") or "this tree's database")
+    return (f"DATABASE: the server has no `{name}`, which is what this tree points at. "
+            f"Run `claude-bp database` to create it, and set `worktree_setup claude-bp "
+            f"database` so every later tree is born with one.")
 
 
 # Conventional Commits types, keyed by what the founder actually types. Russian included

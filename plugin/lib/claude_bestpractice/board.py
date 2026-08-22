@@ -221,12 +221,17 @@ def _alerts(ctx: GitContext) -> list[str]:
     unfinished merge leaves a tree that reads as normal while half of it is conflict
     markers — a session that is not told will commit them.
     """
-    from . import delivery, pullrequest, upgrade
+    from . import delivery, pullrequest, upgrade, worktree
 
     return [
         line for line in (
             red_suite_line(ctx).strip(),
             delivery.merge_state(ctx).render(),
+            # A tree whose DATABASE_URL names a database nothing created. Every command in
+            # it fails the same way, and the failure reads as a broken project rather than
+            # a setup step (#167). Empty in every tree whose database is there, and in
+            # every repository this plugin could not ask about.
+            worktree.missing_database_line(ctx),
             # A pull request nobody comes back to is the one piece of state that looks
             # finished from inside the session that made it. It follows the repository,
             # not the session, so every later session is told until it is merged or closed.
