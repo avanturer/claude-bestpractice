@@ -837,7 +837,8 @@ class TestPreTool(GateCase):
         }
 
     def test_denies_a_file_another_live_session_is_editing(self):
-        """A silent overwrite is worse than a merge conflict: neither side finds out."""
+        """In ONE worktree, where the second write really does land on the first one's
+        file. A silent overwrite is worse than a merge conflict: neither side finds out."""
         self.start("alpha")
         self.start("beta")
         self.gate("pre-tool", self.edit_event("alpha", "src/shared.py"))
@@ -870,6 +871,50 @@ class TestPreTool(GateCase):
         self.assertEqual(sessions.leases_held_by(self.ctx(), sid(self.repo, "alpha")), ["src/shared.py"])
         self.stop("alpha")  # nothing changed, so the gate allows and releases
         self.assertEqual(sessions.leases_held_by(self.ctx(), sid(self.repo, "alpha")), [])
+        self.assertNotRefused(self.gate("pre-tool", self.edit_event("beta", "src/shared.py")))
+
+    def test_a_sibling_in_its_own_tree_is_told_rather_than_refused(self):
+        """Two trees are two files. The second writer produces a merge, and git resolves
+        merges — refusing there guarded a risk the worktree rule had already removed, and
+        it cost a real session twenty minutes on a path whose holder had committed and
+        moved on (#163). The overlap is still worth knowing, so both sides are told."""
+        from claude_bestpractice import inbox
+
+        tree = self.add_worktree("sibling")
+        self.start("alpha")
+        self.gate("pre-tool", self.edit_event("alpha", "src/shared.py"))
+
+        theirs = dict(self.edit_event("beta", "src/shared.py"), cwd=str(tree))
+        theirs["tool_input"] = {"file_path": str(tree / "src/shared.py"), "new_string": "y = 2"}
+        self.gate("session-start", {"session_id": "beta", "hook_event_name": "SessionStart",
+                                    "source": "startup", "cwd": str(tree)})
+        self.assertNotRefused(self.gate("pre-tool", theirs))
+
+        ctx = self.ctx()
+        held = inbox.pending(ctx, sid(self.repo, "alpha"))
+        got = inbox.pending(ctx, sid(tree, "beta"))
+        self.assertTrue([n for n in held if "src/shared.py" in n.get("text", "")],
+                        "the holder was never told a sibling was in the same file")
+        self.assertTrue([n for n in got if "src/shared.py" in n.get("text", "")],
+                        "the second session was never told either")
+
+    def test_a_commit_ends_this_sessions_claims(self):
+        """A committed file is not being edited, and holding it is a false statement about
+        the world that costs a sibling the rest of the TTL."""
+        from claude_bestpractice import sessions
+
+        self.start("alpha")
+        self.start("beta")
+        self.gate("pre-tool", self.edit_event("alpha", "src/shared.py"))
+        self.assertEqual(["src/shared.py"],
+                         sessions.leases_held_by(self.ctx(), sid(self.repo, "alpha")))
+
+        self.gate("pre-tool", {
+            "session_id": "alpha", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+            "tool_input": {"command": 'git commit -m "fix(auth): stop dropping the refresh token"'},
+        })
+
+        self.assertEqual([], sessions.leases_held_by(self.ctx(), sid(self.repo, "alpha")))
         self.assertNotRefused(self.gate("pre-tool", self.edit_event("beta", "src/shared.py")))
 
     def test_dead_session_lease_does_not_block_forever(self):

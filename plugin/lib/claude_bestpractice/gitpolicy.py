@@ -453,6 +453,18 @@ COMMIT_MESSAGE = re.compile(
 CONFLICT_MARKERS = re.compile(r"(?m)^<{7}(?:\s|$).*?^={7}(?:\s|$)", re.S)
 
 
+# `git commit`, in every spelling that reaches a shell: with global options before the
+# subcommand (`git -C x commit`), with any flags after it, with or without a message on
+# the line. `commit_message` cannot answer this — `git commit --amend --no-edit` carries
+# no message and is still a commit.
+COMMITS = re.compile(r"\bgit\s+(?:(?:-[cC]\s+\S+|--[a-z-]+(?:=\S+)?|-\w+\s+\S+)\s+)*commit\b")
+
+
+def commits(command: str) -> bool:
+    """Is this command line a `git commit`?"""
+    return bool(COMMITS.search(command or ""))
+
+
 def commit_message(command: str) -> str:
     """The message out of a `git commit -m` command line, or empty if there is none."""
     match = COMMIT_MESSAGE.search(command)

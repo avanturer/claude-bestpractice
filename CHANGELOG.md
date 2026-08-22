@@ -1,5 +1,47 @@
 # Changelog
 
+## v1.47.0
+
+A lease claims a file, and two worktrees hold two files.
+
+### A guard on a risk the other rule had already removed
+
+The refusal said it plainly: *two sessions editing one file is not a merge conflict — it
+is a silent overwrite where neither side knows it happened*. That is true when the two
+sessions share **one working tree**. Under `require_worktree`, which this plugin enforces
+by default, they do not: two sessions editing the same path are editing two different
+files on two branches. Nothing is overwritten. What comes of it is a merge, and git
+resolves merges.
+
+So a second mechanism was standing guard over a risk the first one had already removed,
+which is the thing decision 0005 exists to prevent. It cost a live session twenty minutes
+of waiting on `schemas.py` — different, physically non-overlapping parts of it — while
+the holder had committed and moved on (#163).
+
+- **In one tree, the refusal stays.** There the second write really does land on the first
+  one's file, and that is what leases were built for.
+- **Across trees, both sides are told instead.** Knowing before the merge rather than
+  after it is worth something; a refusal is not what it is worth. It is a fact, so it goes
+  by the inbox, deduplicated on the claim like every other one.
+- **A commit ends this session's claims.** A committed file is not being edited, and
+  holding it is a false statement about the world that costs a sibling the rest of the
+  TTL. Anything the session is still working on it re-claims on its next write, which is
+  free and idempotent.
+
+### Per-region locking, rejected on purpose
+
+It is a new mechanism that would have to understand the structure of every language,
+it would be wrong constantly, and the case that prompted this — two sessions in different
+parts of one file — is answered by the absence of a lock where git already copes, not by a
+more precise one.
+
+### On disk
+
+Lease keys now carry the worktree as well as the path. A row written by an older version
+says "somebody, somewhere, holds this filename", which this code cannot answer any more;
+those rows are dropped when the table is read. They expire inside the 30-minute TTL in any
+case, so nothing outlives the upgrade and no repair step is needed.
+
 ## v1.46.0
 
 A worktree is never left pointing at a database nothing created.

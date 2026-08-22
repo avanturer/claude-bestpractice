@@ -186,7 +186,7 @@ class TestLeases(RepoCase):
         ctx = self.ctx()
         with store.guarded_json(store.tier_b(ctx, sessions.LEASES_FILE), default={}) as box:
             box[0] = {
-                "src/x.py": {
+                sessions.lease_key(ctx, "src/x.py"): {
                     "session_id": "ghost",
                     "pid": 999_999_999,
                     # Without this the lease says nothing about whose process that pid
@@ -220,15 +220,18 @@ class TestLeases(RepoCase):
         ctx = self.ctx()
         self.assertIsNone(sessions.acquire_lease(ctx, "new", "src/shared.py"))
         self.assertEqual(sessions.leases_held_by(ctx, "new"), ["src/shared.py"])
+        self.assertEqual([], sessions.elsewhere_on(ctx, "src/shared.py", "new"),
+                         "a tree git no longer lists was reported as working on the file")
 
-    def test_a_lease_from_a_live_worktree_still_stands(self):
-        """The other half of the same rule, so the fix cannot be "leases never refuse"."""
+    def test_a_lease_from_a_live_worktree_is_reported(self):
+        """The other half of the same rule, so the fix cannot be "nobody is ever named"."""
         from claude_bestpractice.gitctx import resolve
 
         wt_ctx = resolve(self.add_worktree("busy"))
         sessions.register(wt_ctx, record(wt_ctx, "sibling"))
         self.assertIsNone(sessions.acquire_lease(wt_ctx, "sibling", "src/shared.py"))
-        self.assertEqual(sessions.acquire_lease(self.ctx(), "me", "src/shared.py"), "sibling")
+        self.assertEqual(["sibling"],
+                         sessions.elsewhere_on(self.ctx(), "src/shared.py", "me"))
 
     def test_release_all_clears_only_that_session(self):
         ctx = self.ctx()
@@ -242,8 +245,8 @@ class TestLeases(RepoCase):
         """One unreadable row beside a good one, the shape a torn write leaves behind."""
         with store.guarded_json(store.tier_b(self.ctx(), sessions.LEASES_FILE), default={}) as box:
             box[0] = {
-                "src/broken.py": "not a lease at all",
-                "src/fine.py": {
+                sessions.lease_key(self.ctx(), "src/broken.py"): "not a lease at all",
+                sessions.lease_key(self.ctx(), "src/fine.py"): {
                     "session_id": "a",
                     "pid": 999_999_999,
                     "acquired_at": time.time(),
@@ -294,14 +297,28 @@ class TestCrossWorktree(RepoCase):
         self.assertEqual(from_main, {"on-main", "on-feature"})
         self.assertEqual(from_wt, from_main)
 
-    def test_leases_are_shared_across_worktrees(self):
+    def test_a_lease_claims_a_file_and_two_trees_hold_two_files(self):
+        """The refusal's own reasoning — "whoever writes second wins silently" — is true
+        of two sessions in ONE tree, which `require_worktree` forbids. Across trees the
+        second writer produces a merge, and git resolves merges (#163).
+
+        The table is still shared: that is what lets each side be TOLD about the other.
+        """
         from claude_bestpractice.gitctx import resolve
 
         main_ctx = self.ctx()
         wt_ctx = resolve(self.add_worktree("feature"))
 
         self.assertIsNone(sessions.acquire_lease(main_ctx, "main-sess", "src/shared.py"))
-        self.assertEqual(sessions.acquire_lease(wt_ctx, "wt-sess", "src/shared.py"), "main-sess")
+        self.assertIsNone(sessions.acquire_lease(wt_ctx, "wt-sess", "src/shared.py"))
+        self.assertEqual(["main-sess"],
+                         sessions.elsewhere_on(wt_ctx, "src/shared.py", "wt-sess"))
+        self.assertEqual([], sessions.elsewhere_on(wt_ctx, "src/other.py", "wt-sess"))
+
+    def test_two_sessions_in_one_tree_are_still_refused(self):
+        """There the second write really does land on the first one's file."""
+        self.assertIsNone(sessions.acquire_lease(self.ctx(), "a", "src/shared.py"))
+        self.assertEqual("a", sessions.acquire_lease(self.ctx(), "b", "src/shared.py"))
 
 
 if __name__ == "__main__":
@@ -534,7 +551,7 @@ class TestALeaseSurvivesItsHooksExiting(RepoCase):
         ctx = self.ctx()
         with store.guarded_json(store.tier_b(ctx, sessions.LEASES_FILE), default={}) as box:
             box[0] = {
-                "src/x.py": {
+                sessions.lease_key(ctx, "src/x.py"): {
                     "session_id": "sibling",
                     "pid": 999_999_999,
                     "pid_trust": sessions.PID_TRUST_PARENT,
