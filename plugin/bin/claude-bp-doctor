@@ -1196,6 +1196,10 @@ def check_worktree_provisioning(repo: Path) -> Result:
     import tempfile as _tempfile
 
     home = Path(_tempfile.mkdtemp(prefix="claude-bestpractice-home-"))
+    # Something to isolate FROM. Without it the tree is born with no database either, and
+    # the check would pass over a plugin that does nothing. No credentials in it: this
+    # project's own secret scanner refuses a DSN carrying them, correctly.
+    (repo / ".env").write_text("DATABASE_URL=postgres://localhost:5432/doctor\n", encoding="utf-8")
     proc = subprocess.run(
         [sys.executable, str(BIN / "worktree-create")],
         input=json.dumps(
@@ -1245,13 +1249,23 @@ def check_worktree_provisioning(repo: Path) -> Result:
     # `isolation: "worktree"` could not start an agent at all. Checking the path was
     # PRINTED never caught it; checking that it EXISTS does (#148).
     made = Path(path).is_dir()
-    ok = trusted and placed and hidden and made
+    # Worktrees isolate files and NOTHING ELSE. The database name was derived here since
+    # v1.14.0 and read by nothing, so every tree pointed at one daemon and one session's
+    # open transaction stopped every sibling's tests (#164). That a name is COMPUTED
+    # proves nothing; that the tree carries its own does.
+    from claude_bestpractice import worktree as _wt
+
+    ours = _wt.database_of(Path(path))
+    apart = bool(ours) and ours != _wt.database_of(repo)
+    ok = trusted and placed and hidden and made and apart
     return Result(
         "worktree provisioning",
         ok,
-        "created, entered without a prompt, invisible to git, trust seeded at birth"
+        "created with its own database, entered without a prompt, invisible to git, "
+        "trust seeded at birth"
         if ok
-        else f"created={made} in .claude/worktrees={placed} hidden={hidden} trusted={trusted} — "
+        else f"created={made} own_database={apart} in .claude/worktrees={placed} "
+             f"hidden={hidden} trusted={trusted} — "
              "a path that is not a directory fails every isolated agent, a tree elsewhere is "
              "one the founder is asked about, and an untrusted one runs no hooks",
     )

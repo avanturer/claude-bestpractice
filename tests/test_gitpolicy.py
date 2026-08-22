@@ -1310,3 +1310,94 @@ class TestWorktreeCreateMakesTheTreeItNames(RepoCase):
     def test_a_named_branch_is_still_honoured(self):
         """The unique slug must not replace a name the caller gave."""
         self.assertIn("doctor-feature", self.create(branch="doctor-feature"))
+
+
+class TestOneDatabasePerSession(RepoCase):
+    """Worktrees isolate files and nothing else. Every tree points at the same daemon, so
+    one session's `idle in transaction` blocks every sibling's tests on its locks —
+    seventy seconds became twenty minutes on a real repository, and the transaction
+    holding it had been open for nearly a day.
+
+    The plugin derived a database name per tree since v1.14.0 and NOTHING read it: a
+    promise `worktree-create` made in its own docstring and the code never kept (#164).
+    """
+
+    def env(self, tree: Path, url: str) -> None:
+        (tree / ".env").write_text(f"DATABASE_URL={url}\n", encoding="utf-8")
+
+    def write_in(self, tree: Path, session: str):
+        return self.run_hook("pre-tool", {
+            "session_id": session, "hook_event_name": "PreToolUse", "tool_name": "Write",
+            "tool_input": {"file_path": str(tree / "app.py"), "content": "x = 1\n"},
+        }, cwd=tree)
+
+    def decision(self, proc):
+        try:
+            return json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"]
+        except (json.JSONDecodeError, KeyError, TypeError):
+            return None
+
+    def live_sibling(self, tree: Path, session: str) -> None:
+        from claude_bestpractice import sessions
+
+        record = self.session_record(session)
+        record.worktree = str(tree)
+        sessions.register(self.ctx(), record)
+
+    def test_a_second_session_on_the_same_database_is_refused(self):
+        other = self.add_worktree("sibling")
+        self.env(self.repo, "postgres://localhost/shared")
+        self.env(other, "postgres://localhost/shared")
+        self.live_sibling(other, "them")
+
+        proc = self.write_in(self.repo, "me")
+        self.assertEqual("deny", self.decision(proc))
+        self.assertIn("shared", json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecisionReason"])
+
+    def test_its_own_database_is_allowed(self):
+        other = self.add_worktree("sibling")
+        self.env(self.repo, "postgres://localhost/mine")
+        self.env(other, "postgres://localhost/theirs")
+        self.live_sibling(other, "them")
+
+        self.assertNotEqual("deny", self.decision(self.write_in(self.repo, "me")))
+
+    def test_a_repository_with_no_database_is_never_asked_about_one(self):
+        """A gate that fires where there is nothing to collide over is a gate the founder
+        switches off for every project."""
+        other = self.add_worktree("sibling")
+        self.live_sibling(other, "them")
+        self.assertNotEqual("deny", self.decision(self.write_in(self.repo, "me")))
+
+    def test_a_worktree_is_born_with_its_own_database(self):
+        """The derived name reaches the tree. Computed isolation is not isolation."""
+        from claude_bestpractice import worktree
+
+        self.env(self.repo, "postgres://user:pw@localhost:5432/fuddy")
+        made = self.run_hook("worktree-create", {
+            "session_id": "a1", "hook_event_name": "WorktreeCreate",
+            "cwd": str(self.repo), "branch": "feat/scoring",
+        }).stdout.strip()
+
+        theirs = worktree.database_of(Path(made))
+        self.assertTrue(theirs, "the new tree was born with no DATABASE_URL")
+        self.assertNotEqual(worktree.database_of(self.repo), theirs)
+        self.assertIn("user:pw@localhost:5432", theirs, "credentials were invented rather than kept")
+
+    def test_the_founders_other_keys_survive(self):
+        """The file is theirs: it carries hosts and secrets a worktree needs as much as
+        the main checkout does."""
+        from claude_bestpractice import worktree
+
+        (self.repo / ".env").write_text(
+            "STRIPE_KEY=sk_test_abc\nDATABASE_URL=postgres://localhost/fuddy\nSENTRY=on\n",
+            encoding="utf-8")
+        made = self.run_hook("worktree-create", {
+            "session_id": "a1", "hook_event_name": "WorktreeCreate",
+            "cwd": str(self.repo), "branch": "feat/scoring",
+        }).stdout.strip()
+
+        body = (Path(made) / ".env").read_text(encoding="utf-8")
+        self.assertIn("STRIPE_KEY=sk_test_abc", body)
+        self.assertIn("SENTRY=on", body)
+        self.assertEqual(1, body.count("DATABASE_URL="))
