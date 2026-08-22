@@ -8,7 +8,10 @@ with neither session told. So the rule is checked before the write, not after.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -1383,6 +1386,126 @@ class TestOneDatabasePerSession(RepoCase):
         self.assertTrue(theirs, "the new tree was born with no DATABASE_URL")
         self.assertNotEqual(worktree.database_of(self.repo), theirs)
         self.assertIn("user:pw@localhost:5432", theirs, "credentials were invented rather than kept")
+
+    def psql_that_answers(self, answer: str = "", code: int = 0) -> Path:
+        """A `psql` on PATH that records what it was asked and says what the test says.
+
+        A stub rather than a server, and the stub records the SQL: what has to be right
+        here is the question this plugin asks and the URL it asks it at. A live Postgres
+        proves the same statements once, by hand, and cannot run on a machine that has
+        none — which is most of the machines this suite runs on.
+        """
+        import os
+
+        home = Path(tempfile.mkdtemp(prefix="claude-bestpractice-psql-"))
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        log = home / "asked.txt"
+        script = home / "psql"
+        script.write_text(
+            "#!/bin/sh\n"
+            f'for a in "$@"; do printf "%s\\n" "$a" >> {log}; done\n'
+            # A database it has been told to create is one it then has: the plugin asks
+            # again after creating, and a stub that answered "still missing" would be
+            # testing a server that had refused rather than the path being exercised.
+            f'if grep -qi "create database" {log}; then printf "1"; exit 0; fi\n'
+            f'printf "%s" "{answer}"\n'
+            f"exit {code}\n",
+            encoding="utf-8",
+        )
+        script.chmod(0o755)
+        was = os.environ["PATH"]
+        os.environ["PATH"] = f"{home}{os.pathsep}{was}"
+        self.addCleanup(os.environ.__setitem__, "PATH", was)
+        return log
+
+    def test_the_server_is_asked_about_the_database_not_the_database_itself(self):
+        """Connecting to a database that is not there fails — and so does a server that is
+        down, an address that is wrong and a password that has changed. `pg_database`
+        answers the question that was actually asked."""
+        from claude_bestpractice import worktree
+
+        log = self.psql_that_answers("1")
+        self.assertIs(True, worktree.database_present(
+            "postgres://localhost:5432/fuddy_scoring?sslmode=require"))
+
+        asked = log.read_text(encoding="utf-8")
+        self.assertIn("postgres://localhost:5432/postgres?sslmode=require", asked,
+                      "asked at the tree's own database, or dropped the query string")
+        self.assertIn("pg_database", asked)
+        self.assertIn("'fuddy_scoring'", asked)
+
+    def test_a_server_that_cannot_be_reached_is_not_a_missing_database(self):
+        """None is not a synonym for False: no `psql`, a scheme we do not know, a server
+        asleep — every one means nothing was learned, and calling it "missing" would put a
+        false alarm on the board of every repository that does not use Postgres."""
+        from claude_bestpractice import worktree
+
+        self.psql_that_answers("", 1)
+        self.assertIsNone(worktree.database_present("postgres://localhost:5432/fuddy"))
+        self.assertIsNone(worktree.database_present("mysql://localhost:3306/fuddy"))
+
+    def test_a_tree_born_without_its_database_says_so_on_its_first_board(self):
+        """Otherwise every command in it fails with `database "..." does not exist`, which
+        reads as a broken project rather than a setup step nobody ran (#167)."""
+        from claude_bestpractice import board, worktree
+
+        self.env(self.repo, "postgres://localhost:5432/fuddy")
+        self.psql_that_answers("")
+        made = Path(self.run_hook("worktree-create", {
+            "session_id": "a1", "hook_event_name": "WorktreeCreate",
+            "cwd": str(self.repo), "branch": "feat/scoring",
+        }).stdout.strip())
+
+        from claude_bestpractice.gitctx import resolve
+
+        line = worktree.missing_database_line(resolve(made))
+        self.assertIn("claude-bp database", line)
+        self.assertEqual("", worktree.missing_database_line(self.ctx()),
+                         "the main checkout was told about a tree's database")
+        self.assertIn(line, board._alerts(resolve(made)))
+
+    def test_a_tree_whose_database_is_there_says_nothing(self):
+        from claude_bestpractice import worktree
+        from claude_bestpractice.gitctx import resolve
+
+        self.env(self.repo, "postgres://localhost:5432/fuddy")
+        self.psql_that_answers("1")
+        made = Path(self.run_hook("worktree-create", {
+            "session_id": "a1", "hook_event_name": "WorktreeCreate",
+            "cwd": str(self.repo), "branch": "feat/scoring",
+        }).stdout.strip())
+
+        self.assertEqual("", worktree.missing_database_line(resolve(made)))
+
+    def test_the_command_creates_it_and_the_board_goes_quiet(self):
+        """The one place this plugin issues DDL, and it happens because the founder ran
+        it or put it in `worktree_setup` — never because a hook inferred that it should."""
+        from claude_bestpractice import worktree
+        from claude_bestpractice.gitctx import resolve
+
+        self.env(self.repo, "postgres://localhost:5432/fuddy")
+        log = self.psql_that_answers("")
+        made = Path(self.run_hook("worktree-create", {
+            "session_id": "a1", "hook_event_name": "WorktreeCreate",
+            "cwd": str(self.repo), "branch": "feat/scoring",
+        }).stdout.strip())
+        self.assertNotEqual("", worktree.missing_database_line(resolve(made)))
+
+        done = subprocess.run([sys.executable, str(BIN / "claude-bp"), "database"],
+                              capture_output=True, text=True, cwd=str(made), timeout=300)
+        self.assertEqual(0, done.returncode, done.stderr)
+        self.assertIn("create database", log.read_text(encoding="utf-8").lower())
+        self.assertEqual("", worktree.missing_database_line(resolve(made)),
+                         "the alert outlived the thing it was about")
+
+    def test_nothing_is_created_for_a_scheme_this_plugin_does_not_know(self):
+        """Deferring to `worktree_setup` on an unrecognised scheme is the whole reason it
+        exists. Acting on `postgresql://` is not a hardcode; guessing at the rest is."""
+        from claude_bestpractice import worktree
+
+        done, said = worktree.create_database("mysql://localhost:3306/fuddy")
+        self.assertFalse(done)
+        self.assertIn("worktree_setup", said)
 
     def test_the_founders_other_keys_survive(self):
         """The file is theirs: it carries hosts and secrets a worktree needs as much as

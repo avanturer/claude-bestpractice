@@ -4,7 +4,7 @@
 
 **Память, координация и принуждение для разработки продукта в нескольких параллельных сессиях Claude Code.**
 
-[![version](https://img.shields.io/badge/version-1.45.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-1.46.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-1316%20passing-2ea44f)](#проверено)
 [![doctor](https://img.shields.io/badge/doctor-33%20checks-2ea44f)](#проверено)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#требования)
@@ -289,6 +289,7 @@ claude-bp-ci off        # снять pre-push хук
 | `claude-bp status` | Сессии, план, знание, здоровье памяти, конфликты, следующее действие |
 | `claude-bp init` | Вывести слой знания из вашего кода |
 | `claude-bp adopt` | Забрать события, которые оспаривает другой инструмент |
+| `claude-bp database` | Создать собственную базу этого worktree, если её нет на сервере |
 | `claude-bp set` | Изменить переключатель гейта, о котором вы попросили своими словами |
 | `claude-bp policy` | Рассказать auto mode, что это за репозиторий; назвать правила, которые уже не срабатывают |
 | `claude-bp statusline` | Мост, через который сессия видит лимиты аккаунта |

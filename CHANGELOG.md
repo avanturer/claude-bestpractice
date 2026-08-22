@@ -1,5 +1,61 @@
 # Changelog
 
+## v1.46.0
+
+A worktree is never left pointing at a database nothing created.
+
+### Half an isolation
+
+v1.41.0 made per-worktree databases real: the derived name reaches the tree as
+`DATABASE_URL`, seeded from the main checkout's. It fixed a measured problem — thirteen
+worktrees on one Postgres, a seventy-second suite crawling on invisible locks, four of
+eleven failures in a run that were pure cross-session interference.
+
+What it left to every project was creating the database the URL names. So a tree is born
+pointing at something that does not exist, and every command in it fails with
+`database "…" does not exist` — which reads as a broken project rather than a setup step
+nobody ran, with the founder left to work out that `worktree_setup` is the cure (#167).
+
+Four steps were being written per project, and only the last of them is the project's:
+
+1. read `DATABASE_URL`, 2. derive a per-tree name, 3. create it, 4. run the schema into it.
+
+The plugin already performs 1 and 2 — that is how it rewrites the DSN — so the part it
+declined to do was the one line between two things it was already doing.
+
+### `claude-bp database`
+
+Creates this tree's database if the server has not got it. Idempotent: run it on a tree
+that already has one and it says so and exits 0. It is a **command**, not something the
+worktree hook does on its own — creating a database is the only thing in this path that
+touches a server rather than a file, and a plugin that does that because it inferred it
+should is one that will one day infer it about production. Put it in `worktree_setup` and
+every later tree is born with a database; that line is the founder's, which is the whole
+difference.
+
+Only `postgres://` and `postgresql://`. Every other scheme defers to `worktree_setup`
+exactly as before — acting on a scheme the DSN itself declares is not a hardcode, and
+guessing at the rest would be.
+
+### The board says it before the tree wastes a turn
+
+A tree whose database the server has not got now says so on its first board, and names
+the command. Asked **once**, when the tree is made and after `worktree_setup` has had its
+turn — a probe on every session start is a database connection this plugin has no business
+opening on a schedule. The answer is written down; creating the database clears it.
+
+Asked of the SERVER (`pg_database`), not of the database itself: connecting to a database
+that is not there fails, and so does a server that is down, an address that is wrong and a
+password that has changed. Where nothing can be learned — no `psql`, an unknown scheme, an
+unreachable host — nothing is claimed, so no repository without Postgres ever sees this
+line.
+
+### Also fixed
+
+`?sslmode=require` was being dropped when the DSN was rewritten, which is how every
+managed Postgres is reached — the tree was born unable to connect at all, a worse failure
+than the one isolation prevents.
+
 ## v1.45.0
 
 The founder's word is readable for every switch it opens, and our own refusal is not it.

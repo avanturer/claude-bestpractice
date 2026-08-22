@@ -4,7 +4,7 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-1.45.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-1.46.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-1316%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-33%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
@@ -262,6 +262,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 | `claude-bp status` | 会话、计划、知识、记忆健康度、冲突、下一步动作 |
 | `claude-bp init` | 从你的代码推导出知识层 |
 | `claude-bp adopt` | 接管被其他工具争抢的事件 |
+| `claude-bp database` | 为这个 worktree 创建它自己的数据库（如果服务器上还没有） |
 | `claude-bp set` | 修改你用自己的话要求过的 gate 开关 |
 | `claude-bp policy` | 告诉 auto mode 这个仓库是什么；指出已经不再生效的规则 |
 | `claude-bp statusline` | 让会话看到账号自身用量上限的桥梁 |

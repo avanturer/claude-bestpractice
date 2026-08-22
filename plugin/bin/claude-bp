@@ -417,6 +417,40 @@ def cmd_answer(ctx, ask_id: str, text: str) -> int:
     return 1
 
 
+def cmd_database(ctx) -> int:
+    """Make sure this tree's database exists. The one place this plugin issues DDL.
+
+    Isolation was only half real: the derived name reached the tree as `DATABASE_URL`,
+    and creating the database it named was left to every project to write for itself —
+    the same four steps each time, three of which are the same in every Postgres
+    repository and two of which this plugin already performs to rewrite the DSN (#167).
+
+    It is a COMMAND rather than something the worktree hook does on its own. Creating a
+    database is the only thing in this path that touches a server rather than a file, and
+    a plugin that does that because it inferred that it should is one that will one day
+    infer it about production. `worktree_setup claude-bp database` makes it automatic —
+    and that line is the founder's, which is the whole difference.
+    """
+    from claude_bestpractice import config, worktree
+
+    if not config.load(ctx).isolate_databases:
+        print("isolate_databases is off, so this tree shares the main checkout's database.",
+              file=sys.stderr)
+        return 1
+
+    url = worktree.database_of(ctx.worktree_root)
+    if not url:
+        print(f"no DATABASE_URL in {ctx.worktree_root / worktree.ENV_FILE}, so there is "
+              "nothing to create.", file=sys.stderr)
+        return 1
+
+    done, said = worktree.create_database(url)
+    print(said if done else f"could not: {said}", file=sys.stdout if done else sys.stderr)
+    if done:
+        worktree.note_database(ctx, ctx.worktree_root, url)
+    return 0 if done else 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="claude-bp", description="claude-bestpractice control plane")
     sub = parser.add_subparsers(dest="command")
@@ -443,6 +477,8 @@ def main() -> int:
         "answer", help="answer a question another session put to this one")
     reply.add_argument("id", help="the id in the refusal, e.g. 3f2a9c1b")
     reply.add_argument("text", help="the answer, in your own words")
+    sub.add_parser(
+        "database", help="create this worktree's own database if the server has not got it")
     switch = sub.add_parser(
         "set", help="change a gate switch the founder has asked for in their own words")
     switch.add_argument("key", help="a config key, e.g. scope_drift_block")
@@ -461,6 +497,8 @@ def main() -> int:
         return cmd_adopt(ctx, args.dry_run, args.restore)
     if args.command == "answer":
         return cmd_answer(ctx, args.id, args.text)
+    if args.command == "database":
+        return cmd_database(ctx)
     if args.command == "set":
         return cmd_set(ctx, args.key, args.value)
     if args.command == "statusline":

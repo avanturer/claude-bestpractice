@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-1.45.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-1.46.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-1316%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-33%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -340,6 +340,7 @@ configuration silently.
 | `claude-bp status` | Sessions, plan, knowledge, memory health, conflicts, next action |
 | `claude-bp init` | Derive the knowledge layer from your code |
 | `claude-bp adopt` | Take over events another tool is contesting |
+| `claude-bp database` | Create this worktree's own database, if the server has not got it |
 | `claude-bp set` | Change a gate switch you asked for in your own words |
 | `claude-bp policy` | Tell auto mode what this repository is; name rules that no longer fire |
 | `claude-bp statusline` | The bridge that lets a session see the account's own limits |
