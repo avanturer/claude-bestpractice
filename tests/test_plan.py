@@ -695,6 +695,32 @@ class TestTheBoardLearnsTheTaskWhenItArrives(RepoCase):
             self.say(said)
         self.assertEqual(1, len(self.board("next")))
 
+    def test_a_later_instruction_retitles_the_card(self):
+        """The first message is often a remark rather than the work. «потом как все задачи
+        на доске доделаю» cleared the bar and sat on the board as a task — the drift the
+        ledger exists not to have. The statement already follows the founder; the card had
+        no reason not to."""
+        self.say("потом как все задачи на доске доделаю")
+        self.say("чини 0126 — make migrate в worktree зовёт CLI из главного checkout")
+        titles = [t.title for t in self.board("next")]
+        self.assertEqual(1, len(titles), titles)
+        self.assertIn("0126", titles[0])
+
+    def test_a_claimed_card_is_never_retitled(self):
+        """Claiming means a session wrote a plan. Overwriting its title with whatever was
+        said next is clobbering work with conversation."""
+        from claude_bestpractice import plan
+
+        self.say("почини импортер")
+        card = self.board("next")[0]
+        plan.amend(self.ctx(), card.id, paths=["importer.py"], done_when="stated")
+        plan.claim(self.ctx(), card.id, sid(self.repo, "s1"), self.ctx().branch)
+
+        self.say("а теперь совсем другое: посмотри логи деплоя")
+        doing = self.board("doing")
+        self.assertEqual(1, len(doing))
+        self.assertIn("импортер", doing[0].title)
+
     def test_a_session_already_working_gets_no_second_card(self):
         from claude_bestpractice import plan
 

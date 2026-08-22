@@ -335,11 +335,22 @@ def open_for(ctx: GitContext, statement: str, session_id: str) -> Task | None:
     for task in load_all(ctx, DOING):
         if task.owner == session_id:
             return None
+    said = statement.strip().splitlines()[0][:120]
     for task in load_all(ctx, NEXT):
         if task.source == FROM_THE_FOUNDER and task.branch == ctx.branch:
+            # FOLLOWS the founder while nobody has claimed it. Their first message is
+            # often a remark rather than the work — «потом как все задачи на доске
+            # доделаю» cleared the bar and sat on the board as a task, which is the drift
+            # the ledger exists not to have. The statement itself already follows them;
+            # the card had no reason not to (#170).
+            #
+            # Only while UNCLAIMED. Once a session has claimed it, that session wrote a
+            # plan — a `done_when` and the paths — and overwriting its title with whatever
+            # was said next would clobber work with conversation.
+            if task.title != said:
+                amend(ctx, task.id, title=said)
             return None
-    return add(ctx, statement.strip().splitlines()[0][:120], branch=ctx.branch,
-               source=FROM_THE_FOUNDER)
+    return add(ctx, said, branch=ctx.branch, source=FROM_THE_FOUNDER)
 
 
 def add(ctx: GitContext, title: str, body: str = "", branch: str = "",
@@ -655,7 +666,7 @@ def resume(ctx: GitContext, task_id: str) -> tuple[Task | None, str]:
 
 
 def amend(ctx: GitContext, task_id: str, note: str = "", paths: list[str] | None = None,
-          done_when: str = "") -> tuple[Task | None, str]:
+          done_when: str = "", title: str = "") -> tuple[Task | None, str]:
     """Update what a task knows without changing which task it is.
 
     A task learns things while it waits — a file turns out to be the wrong one, a
@@ -668,7 +679,7 @@ def amend(ctx: GitContext, task_id: str, note: str = "", paths: list[str] | None
         return None, f"no task {task_id}"
     meta, body = _frontmatter(task.path.read_text(encoding="utf-8"))
     updated = _render(
-        task.id, meta.get("title", task.title), task.state, task.owner, task.branch,
+        task.id, title.strip() or meta.get("title", task.title), task.state, task.owner, task.branch,
         note.strip() or body,
         paths if paths is not None else task.paths,
         meta.get("source", ""),
