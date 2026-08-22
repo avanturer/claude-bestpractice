@@ -1,5 +1,31 @@
 # Changelog
 
+## v1.44.0
+
+The board follows the founder while nobody has claimed the card.
+
+### A remark became a task, and then sat there
+
+v1.41.0 put the founder's instruction on the board the moment it arrives. Their first
+message is often a remark rather than the work — «потом как все задачи на доске доделаю»
+clears the statement bar, so it became the session's task AND a card titled with it, which
+is exactly the drift the ledger exists not to have.
+
+Seen in the wild in the checkpoint block, which quotes the statement back:
+*"This session was asked: потом как все задачи на доске доделаю"* — while the session was
+actually deep in a migration wave.
+
+The statement itself already follows the founder: every later statement of work replaces
+it. The card had no reason not to, and now does.
+
+**Only while unclaimed.** Once a session claims a card it has written a plan — a
+`done_when` and the paths — and overwriting its title with whatever was said next is
+clobbering work with conversation. Two independent guards keep that so, and the test for
+it is killed only by a mutation that removes both.
+
+`plan.amend` can retitle now, which is the mechanism `claude-bp-plan update` already
+needed and did not have.
+
 ## v1.43.0
 
 Never block a compaction the session did not choose.
