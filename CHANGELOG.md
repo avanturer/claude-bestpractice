@@ -1,5 +1,53 @@
 # Changelog
 
+## v1.48.0
+
+Two stores filled with repeats, and the next action nobody could take.
+
+### Sixty drafts, four sentences
+
+`claude-bp status` ends with a NEXT ACTION, and for weeks it read *"Review drafted
+decisions"*. The inbox behind it held **60 rows carrying 3 distinct sentences** — 89KB of
+`decision-inbox.jsonl` — because the extractor re-reads the same recent turns every time
+it runs and `record` appended unconditionally. Nobody reviews a list that is fifteen
+copies deep, so the one thing the plugin asked the founder to do was the one thing that
+could not be done.
+
+The board already solved this for re-derived review findings: **the repeat count replaces
+the repeats**, and it is the more useful signal anyway — a correction the founder has made
+four times is one they mean. The inbox now does the same, on write and on read, and the
+listing shows `×4`.
+
+### Ninety-four crashes from something that is not a gate
+
+`hookio.guard` is reached by *importing* the library, so anything that imports it and
+raises landed in the crash reporter — a test suite, a REPL, any `python3 -m …`. The store
+held 94 rows of this plugin's own test fixture:
+
+```
+__main__.py crashed: RuntimeError: kaboom  ×50
+python3 -m unittest crashed: RuntimeError: kaboom  ×44
+```
+
+behind a command whose whole job is to file them at GitHub. A crash is captured now only
+when the program that crashed is one of this plugin's own executables — asked of the path
+(`bin/` beside our `lib/`), which stays true wherever the plugin is installed.
+
+The test fixture that covered this set `sys.argv[0]` to a bare name, so it was passing a
+test the real gates would have failed. It passes the real path now, which is what the
+harness passes.
+
+### Repairs
+
+- `0008-collapse-the-decision-inbox` rewrites the log to one row per draft, keeping every
+  resolution — those are recorded by quote in the same file, and dropping them would bring
+  back every draft the founder had discarded.
+- `0009-drop-defects-that-are-not-ours` removes captured crashes whose gate is not a file
+  this plugin ships.
+
+`store.rewrite_jsonl` is new and is for repairs only: appending never needs a lock,
+replacing does, and the docstring says why that trade is acceptable here and nowhere else.
+
 ## v1.47.0
 
 A lease claims a file, and two worktrees hold two files.

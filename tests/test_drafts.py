@@ -472,3 +472,35 @@ class TestTheQuoteIsNotSilentlyCut(unittest.TestCase):
         quote = drafts.extract([turn], "main", "s1", [])[0].quote
         self.assertIn(drafts.TRUNCATED, quote)
         self.assertTrue(quote.startswith("запомни: правило"))
+
+
+class TestTheSameCorrectionIsCountedNotRefiled(RepoCase):
+    """The extractor re-reads the same recent turns every time it runs, and `record`
+    appended unconditionally — so the inbox reached sixty rows carrying four distinct
+    sentences, 89KB of them, while `claude-bp status` pointed at it as the next action.
+    Nobody reviews a list that is fifteen copies deep.
+
+    Same shape the board already uses for a re-derived finding: the repeat count replaces
+    the repeats, and it is the more useful signal — a correction made four times is one
+    the founder means.
+    """
+
+    def draft(self, quote: str = "никогда не мерджи без моего слова", at: float = 1.0):
+        return drafts.Draft("constraint", quote, "main", "s1", at, [])
+
+    def test_filing_it_twice_leaves_one_draft(self):
+        ctx = self.ctx()
+        self.assertEqual(1, drafts.record(ctx, [self.draft()]))
+        self.assertEqual(0, drafts.record(ctx, [self.draft(at=2.0)]),
+                         "the same sentence was filed as a second draft")
+
+        waiting = drafts.pending(ctx)
+        self.assertEqual(1, len(waiting))
+        self.assertEqual(2, waiting[0]["seen"])
+        self.assertEqual(1.0, waiting[0]["created_at"], "the first sighting's time was lost")
+
+    def test_a_different_correction_is_still_its_own_draft(self):
+        ctx = self.ctx()
+        drafts.record(ctx, [self.draft()])
+        self.assertEqual(1, drafts.record(ctx, [self.draft("никогда не трогай прод")]))
+        self.assertEqual(2, len(drafts.pending(ctx)))

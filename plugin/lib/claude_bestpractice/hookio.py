@@ -287,12 +287,32 @@ def repo(cwd: Any) -> Any:
         raise NotApplicable(str(exc)) from exc
 
 
+def _one_of_our_gates() -> bool:
+    """Is the program that crashed one of this plugin's executables?
+
+    `guard` is reached by importing this module, so anything that imports the library and
+    raises lands in the same handler — a test suite, a REPL, any `python3 -m …`. The store
+    filled with `__main__.py crashed: RuntimeError: kaboom`, ninety-four rows of this
+    plugin's own test fixture, sitting in a real repository behind a command whose whole
+    job is to file them at GitHub.
+
+    Asked of the PATH rather than of the name: `bin/` beside our `lib/` is what makes a
+    program ours, and it stays true wherever the plugin is installed.
+    """
+    try:
+        return Path(sys.argv[0]).resolve().parent == Path(__file__).resolve().parents[2] / "bin"
+    except (OSError, IndexError, ValueError):
+        return False
+
+
 def _capture(exc: BaseException) -> None:
     """Record a crashed gate, if this repository has capture switched on."""
     try:
         from . import config, defects
         from .gitctx import resolve
 
+        if not _one_of_our_gates():
+            return
         ctx = resolve(os.getcwd())
         if config.load(ctx).report_defects != defects.OFF:
             defects.record(ctx, Path(sys.argv[0]).name or "gate", exc)

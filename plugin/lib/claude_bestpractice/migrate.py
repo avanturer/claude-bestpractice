@@ -443,6 +443,59 @@ def _forget_a_statement_that_was_only_a_switch(ctx: GitContext) -> str:
             "the next thing the founder says will fill it")
 
 
+def _collapse_the_decision_inbox(ctx: GitContext) -> str:
+    """One row per draft, in a store that had fifteen copies of some of them.
+
+    `record` appended unconditionally while the extractor re-read the same recent turns
+    every time it ran, so the inbox reached sixty rows carrying four distinct sentences —
+    and `claude-bp status` pointed at it as the next action. Nobody reviews a list that
+    deep, and a list nobody can act on drifts without limit.
+
+    Rewritten rather than left to `pending`, which collapses on read: the file itself was
+    89KB and still growing on every run.
+    """
+    from . import drafts
+
+    path = store.tier_b(ctx, drafts.INBOX_FILE)
+    rows = [row for row in store.read_jsonl(path) if isinstance(row, dict)]
+    if not rows:
+        return ""
+    keep = drafts.pending(ctx)
+    resolved = [row for row in rows if row.get("resolved")]
+    if len(keep) + len(resolved) >= len(rows):
+        return ""
+    dropped = len(rows) - len(keep) - len(resolved)
+    store.rewrite_jsonl(path, resolved + keep)
+    return (f"{dropped} duplicate decision draft(s) collapsed; the inbox now holds "
+            f"{len(keep)} waiting to be reviewed")
+
+
+def _drop_defects_from_things_that_are_not_gates(ctx: GitContext) -> str:
+    """Crashes captured from programs this plugin does not ship.
+
+    `guard` is reached by importing the library, so anything that imports it and raises
+    was recorded — ninety-four rows of this plugin's own test fixture, `RuntimeError:
+    kaboom`, sitting behind a command whose whole job is to file them at GitHub.
+    """
+    from . import defects
+
+    path = store.tier_b(ctx, defects.DEFECTS_FILE)
+    rows = [row for row in store.read_jsonl(path) if isinstance(row, dict)]
+    if not rows:
+        return ""
+    try:
+        ours = {entry.name for entry in (Path(__file__).resolve().parents[2] / "bin").iterdir()}
+    except OSError:
+        return ""
+    keep = [row for row in rows if str(row.get("gate", "")) in ours]
+    if len(keep) == len(rows):
+        return ""
+    dropped = len(rows) - len(keep)
+    store.rewrite_jsonl(path, keep)
+    return (f"{dropped} captured crash(es) came from something this plugin does not ship; "
+            "dropped, because `claude-bp-report send` would have filed them")
+
+
 # name -> (revision, step). Raise the revision when the step's behaviour changes; every
 # clone that ran an older revision reconciles again on its next session start.
 _REPAIRS = {
@@ -453,6 +506,8 @@ _REPAIRS = {
     "0005-trees-into-the-no-prompt-zone": (2, _move_trees_into_the_no_prompt_zone),
     "0006-drop-the-witness-timeout": (1, _drop_the_witness_timeout),
     "0007-forget-a-switch-taken-as-a-task": (1, _forget_a_statement_that_was_only_a_switch),
+    "0008-collapse-the-decision-inbox": (1, _collapse_the_decision_inbox),
+    "0009-drop-defects-that-are-not-ours": (1, _drop_defects_from_things_that_are_not_gates),
 }
 
 
