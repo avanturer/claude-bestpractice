@@ -749,6 +749,26 @@ def main() -> None:
             if owner is not None and not gitpolicy.provisioned_for(ctx, event.session_id, owner):
                 hookio.deny_tool(gitpolicy.foreign_refusal(path, owner, ctx))
 
+    # Before the shell takes a step it cannot take back. Claude Code refuses every Bash
+    # call whose working directory is inside the protected checkout — judged before the
+    # command runs, so `cd` back into the worktree is refused too, and the persistent
+    # shell is unusable for the rest of the session (#174). Nothing in this plugin can
+    # undo that; what it can do is not let the session walk into it, and the step it
+    # refuses was already against this plugin's own rule.
+    if cfg.require_worktree and event.tool_name == "Bash":
+        stranded = gitpolicy.strands_the_shell(str(ti.get("command", "")), session_cwd, ctx)
+        if stranded is not None:
+            hookio.deny_tool(
+                f"claude-bestpractice: this would leave the shell in {stranded}, which is the "
+                f"shared checkout, and this session is isolated in {ctx.worktree_root}.\n"
+                "  Claude Code then refuses EVERY later Bash call from there — including the "
+                "`cd` back — and the shell stays unusable until the session restarts. It is "
+                "refused here because that is recoverable and the deadlock is not.\n"
+                f"  Run it from this worktree, or in a subshell that returns: "
+                f"`(cd {stranded} && ...)` leaves this shell where it is.\n"
+                + config.switch_advice("require_worktree", False)
+            )
+
     # Kept out of `absolute` on purpose, so these never reach the worktree and trunk rules
     # below. `git switch -c` is the command that RESOLVES a trunk violation, and a gate
     # that refuses the fix for the thing it is complaining about is a trap the agent learns

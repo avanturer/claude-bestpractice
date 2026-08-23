@@ -24,11 +24,12 @@ no teaches the agent to route around it; a rule that says "do this instead" gets
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
 
-from . import config
+from . import config, shellcmd
 from .gitctx import GitContext
 
 # Names git itself treats as the trunk. Checked against the actual default when the
@@ -141,6 +142,69 @@ def violations(ctx: GitContext, task: str = "", session_id: str = "") -> list[st
             + config.switch_advice("protect_trunk", False)
         )
     return out
+
+
+def _final_directory(command: str, cwd: Path) -> Path | None:
+    """Where the shell would be standing after this line. None when it cannot be told.
+
+    Only top-level `cd`s count. A subshell — `(cd /repo && git log)` — leaves the parent
+    exactly where it was, and `cd -` goes somewhere only the shell knows; both return
+    without a verdict rather than with a guess, because the caller REFUSES on this answer.
+    """
+    here = cwd
+    for argv in shellcmd.commands(command):
+        # A subshell arrives as `['(', 'cd', '/repo']`, so the opening bracket is what
+        # argv[0] holds and the test below skips it — which is the wanted answer, because
+        # `(cd /repo && …)` leaves the parent shell exactly where it was. Written down
+        # because a guard for it was tried here and no mutation could kill it: the check
+        # that follows was already doing the work.
+        if not argv or argv[0] != "cd":
+            continue
+        # `-` and every other flag drop out here, which also disposes of `cd -`: the
+        # shell knows where it was last and this does not, so an empty target is the
+        # honest answer and the caller refuses nothing on it.
+        target = [token for token in argv[1:] if not token.startswith("-")]
+        if not target:
+            return None
+        here = Path(target[0]) if os.path.isabs(target[0]) else here / target[0]
+    return here
+
+
+def strands_the_shell(command: str, cwd: Path, ctx: GitContext) -> Path | None:
+    """The directory this command would leave the shell in, when that is a trap.
+
+    Claude Code isolates a session to its worktree by refusing any Bash call whose
+    WORKING DIRECTORY is inside the protected checkout — judged before the command runs,
+    so it refuses `cd back` as readily as anything else, and the persistent shell is then
+    unusable for the rest of the session. Read out of the CLI binary rather than inferred:
+
+        `${noun} is isolated in the worktree ${t}, but this command's working directory
+         resolved to the shared checkout (${e}). Refusing to run it there …`
+
+    with no setting that turns it off for an isolated session (the `worktree.bgIsolation`
+    escape hatch covers only background subagents). The founder reported the dead end
+    against four commands, `env -C <worktree>` among them, which is what proves the guard
+    reads the shell's cwd rather than the command's target (#174).
+
+    So this refuses the STEP INTO it. One turn's friction against a shell that cannot be
+    recovered without restarting the session — and the step was already against this
+    plugin's own rule, which is why it costs nothing to refuse.
+    """
+    from . import worktree
+
+    if not ctx.is_worktree:
+        return None
+    landing = _final_directory(command, cwd)
+    if landing is None:
+        return None
+    try:
+        here = landing.resolve()
+        if here == ctx.worktree_root.resolve() or ctx.worktree_root.resolve() in here.parents:
+            return None
+        guarded = worktree.main_checkout(ctx).resolve()
+    except OSError:
+        return None
+    return landing if here == guarded or guarded in here.parents else None
 
 
 def working_trees(ctx: GitContext) -> list[Path]:

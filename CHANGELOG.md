@@ -1,5 +1,54 @@
 # Changelog
 
+## v1.49.0
+
+The shell is never left where nothing can be run again.
+
+### Not our gate, and still our problem
+
+A session isolated in a worktree ran something that left the shell's working directory in
+the main checkout. Every Bash call after that was refused — `pwd`, `cd <worktree>`,
+`cd <worktree> && pwd`, and `env -C <worktree> pwd`. The shell was unusable for the rest
+of the session, and the refusal's own instruction ("re-run the command from the worktree")
+named the one command that was also refused (#174).
+
+**The refusal is Claude Code's, not this plugin's.** Read out of the CLI binary rather
+than inferred:
+
+```js
+function zFf(e, t) { let r = RLi(e, t); if (r.escaped) { … return
+  `${noun} is isolated in the worktree ${t}, but this command's working directory
+   resolved to the shared checkout (${e}). Refusing to run it there …` } return null }
+```
+
+`e` is the directory the command would run IN, so the guard is answered by where the shell
+already stands — which is why `env -C` pointing at the worktree is refused too, and that
+is the detail that proves it. `RLi` treats a directory as escaped only when it is inside
+the protected checkout, so `cd /tmp` is not affected. The `worktree.bgIsolation` escape
+hatch in `.claude/settings.json` covers background subagents only; for an isolated session
+there is no setting.
+
+Nothing here can undo that. What this plugin can do is refuse the step INTO it:
+
+- a Bash command that would leave the shell in the shared checkout is refused **before it
+  runs**, and the refusal names the form that works — `(cd <there> && …)` reads there and
+  leaves this shell where it is;
+- what is judged is where the shell ENDS UP, so `cd <main> && cd <worktree> && …` is fine
+  and a subshell never counts;
+- `cd` with nothing named — bare, or `cd -` — is a move this gate cannot judge, so it
+  judges nothing rather than guessing.
+
+One turn's friction against a shell that cannot be recovered without restarting the
+session, and the step it refuses was already against this plugin's own worktree rule.
+
+### On the tests
+
+Two guards written here were deleted when no mutation could kill them: the subshell check
+(the `(` token already fails the `cd` test that follows) and a `cd -` check (the flag
+filter already removes it). And a test asserting "allow" turned out to be unable to see a
+crash at all — `_verdict` reads an exit-2 block as "allow" — so it asserts the return code
+now as well.
+
 ## v1.48.0
 
 Two stores filled with repeats, and the next action nobody could take.
