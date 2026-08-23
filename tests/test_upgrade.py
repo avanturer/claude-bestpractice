@@ -9,6 +9,7 @@ between "up to date" and "permanently stranded".
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import shutil
 import sys
@@ -16,7 +17,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from helpers import REPO_ROOT
+from helpers import BIN, REPO_ROOT, RepoCase, sid
 
 from claude_bestpractice import upgrade
 
@@ -308,3 +309,55 @@ class TestACopyOutsideTheCacheIsStillTold(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAnUpdateMidSessionReachesTheSession(RepoCase):
+    """The board says "you are running X, Y is on disk" at session start, and could never
+    say it afterwards — which is the one moment it is needed. The founder updates while
+    sessions are running, the running hooks stay behind, and the next thing they see is
+    the old behaviour they just paid for a fix to (#166).
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        # A HOME per test: the sandbox one is shared for the whole process, so a version
+        # unpacked by one test would still be there for the test asserting silence.
+        self.home = Path(tempfile.mkdtemp(prefix="claude-bestpractice-home-"))
+        self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
+
+    def prompt(self, text: str = "почини экспорт CSV, он падает на пустом наборе"):
+        return subprocess.run(
+            [sys.executable, str(BIN / "prompt-capture")],
+            input=json.dumps({"session_id": "s1", "hook_event_name": "UserPromptSubmit",
+                              "prompt": text, "cwd": str(self.repo)}),
+            capture_output=True, text=True, cwd=str(self.repo), timeout=120,
+            env={**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home)},
+        )
+
+    def unpack(self, version: str) -> None:
+        (self.home / upgrade.CACHE / "someone" / "claude-bestpractice"
+         / version).mkdir(parents=True, exist_ok=True)
+
+    def notes(self) -> list[str]:
+        from claude_bestpractice import inbox
+
+        return [n.get("text", "") for n in inbox.pending(self.ctx(), sid(self.repo, "s1"))]
+
+    def test_the_running_session_is_told_it_is_behind(self):
+        self.unpack("99.0.0")
+        self.prompt()
+        said = " ".join(self.notes())
+        self.assertIn("99.0.0", said)
+        self.assertIn("Restart", said)
+
+    def test_nothing_is_said_when_nothing_is_newer(self):
+        self.prompt()
+        self.assertEqual([], self.notes())
+
+    def test_it_is_said_once_and_not_on_every_turn(self):
+        """Deduplicated on the claim like every other fact: a founder who writes ten
+        messages before restarting is told once, not ten times."""
+        self.unpack("99.0.0")
+        for _ in range(3):
+            self.prompt()
+        self.assertEqual(1, len([n for n in self.notes() if "99.0.0" in n]))

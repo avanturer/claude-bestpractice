@@ -1,5 +1,45 @@
 # Changelog
 
+## v1.51.0
+
+An update that lands mid-session reaches the session it lands on.
+
+### The one moment the notice could not appear
+
+The board already says it: *"this session is running claude-bestpractice X, but Y is
+installed on disk. Restart Claude Code to pick it up; nothing here is enforcing the newer
+version's rules until you do."* It is rendered at session start — and a session start is
+the one moment it cannot be true, because the newer version is not there yet.
+
+The founder updates while sessions are running. That is the normal shape of this
+repository's work, and every release note in this file was read by somebody who then typed
+`claude plugin update` into a machine with three sessions open on it. Those sessions keep
+the hooks they loaded, and nothing says so.
+
+What it cost, in full: v1.45.0 fixed both halves of the switch reader. In a session that
+started before it, the CLI half was new — `claude-bp set` printed the readable line — while
+the capture half was still the old one, which ate that line as a task statement. The
+founder wrote the line, watched it disappear into `task_statement`, and reasonably reported
+that the fix had not worked. It had; the session was two releases behind and had no way to
+know (#166).
+
+### Delivered as a fact, because there is a channel for that now
+
+Checked once per founder message and queued for the session's own inbox — deduplicated on
+the claim, so a founder who writes ten messages before restarting is told once, and
+delivered on the next tool call (decision 0009). No new hook entry and no new store.
+
+Once per message rather than per tool call: this changes when somebody runs an installer,
+not while a turn is in flight.
+
+### On the tests
+
+A guard in front of the post was deleted when no mutation could kill it — `inbox.post`
+refuses an empty claim already, so the `if` only looked like care. And one mutation that
+appeared to survive turned out to be the mutation's fault rather than the code's: it varied
+the note by a value that was identical on every call, so the deduplication it was meant to
+defeat still applied.
+
 ## v1.50.0
 
 The server was fine. The client was never installed.
