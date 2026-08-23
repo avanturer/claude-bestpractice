@@ -8,3 +8,5 @@
 - [0006] A gate is switched by the founder's word, never by the session it enforces — `decisions/0006-a-gate-is-switched-by-the-founders-word.md`
 - [0007] Read what is in the repository before reporting that it is not there — `decisions/0007-read-the-layer-before-declaring-it-absent.md`
 - [0008] The plugin holds the pen on facts about this repository, never on grants — `decisions/0008-the-plugin-writes-facts-never-grants.md`
+- [0009] Sessions talk through the inbox a hook writes — `decisions/0009-sessions-talk-through-the-inbox.md`
+- [0010] The founder accepts the work, the session does the rest — `decisions/0010-the-founder-accepts-the-work.md`
