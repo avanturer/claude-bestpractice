@@ -254,6 +254,21 @@ def main() -> None:
         # Acceptance travels the same road as a switch, and for the same reason: it is
         # the founder's own word, recorded where the session being gated cannot write it.
         config.record_switches(ctx, config.approvals_in(safe))
+        # An update that landed AFTER this session started. The board says this at session
+        # start and could never say it afterwards — which is the one moment it is needed,
+        # because the founder updates mid-session and the running hooks stay behind. They
+        # then write the line a refusal asked for, watch the old capture eat it, and
+        # reasonably conclude the fix does not work (#166).
+        #
+        # A fact about this clone, so it travels the way every other fact does: queued for
+        # this session's own inbox, deduplicated on the claim, delivered on the next tool
+        # call (decision 0009). Checked here rather than per tool call — once per founder
+        # message is enough for something that changes when they run an installer.
+        from claude_bestpractice import inbox, upgrade
+
+        # No `if` in front of it: `inbox.post` refuses an empty claim already, and a
+        # guard no mutation can kill is a line that only looks like care.
+        inbox.post(ctx, event.session_id, upgrade.stale_line())
         # Paths ACCUMULATE where the statement replaces. A later instruction naming more
         # files genuinely widens what is in scope, and dropping the earlier ones would make
         # the files the founder first asked for into drift. Bounded, because unbounded
