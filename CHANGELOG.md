@@ -1,5 +1,81 @@
 # Changelog
 
+## v1.53.0
+
+One shared database, two gates reading it backwards.
+
+### The main checkout could not be updated by anybody
+
+`isolate_databases` refuses a write when a live session already holds this tree's
+database, and the whole content of that refusal is *"give this tree its own: set
+DATABASE_URL in .env to a database name nobody else holds."*
+
+The main checkout is the one tree that cannot take that advice. It holds the project's
+database by definition, and it is the file every worktree is seeded FROM — re-pointing it
+hands every later tree a name that is not the project's.
+
+So it was a deadlock rather than a rule. From inside the main checkout the gate refused
+every write, `rm` and `git pull --ff-only` included. From a worktree, `git -C <main> …` is
+refused by Claude Code's own worktree isolation. Nothing could update it, it sat 52 commits
+behind, `make test` failed there for every session that walked in, and the Stop gate kept
+demanding a passing suite and re-running it in exactly that tree (#181).
+
+The tree that can move is the one that gets told to. The refusal now fires in worktrees
+only, and it names `claude-bp database` as the second half of moving.
+
+Two sessions standing in ONE tree stopped being a collision at the same time. They read one
+`.env`, so they matched every time, and "change this file" changes it for both of them.
+
+### A red suite that reached ten sessions and was not red
+
+The banner is deliberately loud — *"RED SUITE on main — failing for 1d. `make test` does
+not pass. Fix it before new work"* — and it is carried into every session in the
+repository, with a matching message delivered to the ones already running.
+
+`main` was green. The run behind it happened in a worktree made with plain `git worktree
+add`, which never reaches the hook that derives a database name and so was born reading the
+main checkout's `.env`. Three failures, then one on a rerun, all in the file that talks to
+the database. Same commit, run again with a database nobody else held: 3293 passed, 4
+skipped, 23 s (#182).
+
+The verdict on that turn is unchanged — the run failed, and the session that made it is
+still refused. What waits is the claim about everybody else's branch:
+
+- The record now carries the tree it was seen in and the neighbour it shared a database
+  with, and the board says *"SUITE RED in hand-made — `make test` failed there 1d ago, but
+  that tree shares its database with fuddy (database `fuddy`), so the failure may be the
+  neighbours rather than the code. A run where the database is nobody else's decides it."*
+- The broadcast to sibling sessions is held until a run nobody could perturb confirms it.
+- The merge gate still refuses. A merge waved through on "it might have been the
+  neighbours" is an assertion accepted in place of a run, which is decision 0002 inverted.
+  It names the sharing instead, so the reader knows where to re-run it.
+
+**Once confirmed, always confirmed — on this branch.** A record already written from an
+isolated run is never softened by a later shared one; otherwise running a red suite next to
+a neighbour would be a way to quiet it. Scoped to the branch because a confirmation is about
+the code that was run: there is one record per repository and its `branch` is overwritten,
+so without that test a failure confirmed on one branch would harden the first shared run on
+the next one into a repository-wide stop — this same defect, re-entered through the side
+door. A record from a version before the field reads as confirmed and behaves exactly as it
+did.
+
+### And the tree says so before the suite does
+
+A worktree pointing at a database another tree of this clone also names now gets one line
+on its own board, beside the one a tree born without its database already gets. That is the
+whole of #182 upstream of the verdict: nothing failed loudly there, so the flakiness read
+as a broken branch.
+
+Asked of the TREES rather than of the session registry, because that is where the answer is
+written down. Every live session in the reported case was properly isolated; the sharing was
+with the main checkout, which is not a session.
+
+### On the tests
+
+Eleven mutations, each breaking one of the new behaviours on purpose, each caught. Two of
+them are the halves that matter most in opposite directions: withholding the broadcast from
+every red suite, and refusing the main checkout again.
+
 ## v1.52.0
 
 The plugin's own fact was becoming the recipient's task.

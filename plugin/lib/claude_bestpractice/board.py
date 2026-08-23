@@ -232,6 +232,12 @@ def _alerts(ctx: GitContext) -> list[str]:
             # a setup step (#167). Empty in every tree whose database is there, and in
             # every repository this plugin could not ask about.
             worktree.missing_database_line(ctx),
+            # A worktree pointing at a database another tree of this clone also names.
+            # Nothing fails loudly there: the suite fails intermittently, for whatever the
+            # neighbours are doing, and the verdict reads as a broken branch (#182). Empty
+            # in the main checkout, which is where the shared database belongs, and in
+            # every tree whose database is its own.
+            worktree.unisolated_database_line(ctx),
             # A pull request nobody comes back to is the one piece of state that looks
             # finished from inside the session that made it. It follows the repository,
             # not the session, so every later session is told until it is merged or closed.
