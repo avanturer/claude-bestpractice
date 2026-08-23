@@ -399,7 +399,16 @@ def main() -> None:
             # A red suite is everyone's problem: the board tells them "fix it before new
             # work", but the board is injected once at session start, so a session already
             # running builds on top of the break for hours without ever being told.
-            if evidence.red(ctx):
+            #
+            # Unless the run that failed shared its database with a neighbouring tree, in
+            # which case it is not yet everyone's problem — it is not yet known to be a
+            # problem at all. This message reaches every live session at once and reads as
+            # a hard stop, and one run in a hand-made worktree on the shared database sent
+            # it to ten of them over a suite that passed on the same commit in an isolated
+            # tree (#182). The record is still written and this session is still refused;
+            # what waits is the broadcast, until a run nobody could perturb confirms it.
+            entry = evidence.red(ctx)
+            if entry and not entry.get("shared_with"):
                 inbox.broadcast(
                     ctx, rec.session_id,
                     f"the suite is RED on {rec.branch} — someone else's turn just failed "

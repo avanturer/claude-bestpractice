@@ -1165,6 +1165,9 @@ def record_red(ctx: GitContext, command: list[str], tail: str) -> None:
 
     `first_seen` is preserved across re-observations so the board can say how long it has
     been broken, which is the number that makes it embarrassing enough to fix.
+
+    `shared_with` is what stops this being broadcast as a repository-wide stop on the
+    strength of a run nobody can reproduce. See `_shared_environment`.
     """
     path = store.tier_a(ctx, RED_SUITE_FILE)
     previous = store.read_json(path, default={}) or {}
@@ -1190,10 +1193,48 @@ def record_red(ctx: GitContext, command: list[str], tail: str) -> None:
             "first_seen": previous.get("first_seen", time.time()),
             "last_seen": time.time(),
             "branch": ctx.branch,
+            # WHERE it was seen, and whether that tree's database was its own. Both are
+            # read by the board rather than by any gate: the verdict on this turn is
+            # unchanged, and what they decide is whether every OTHER session in the
+            # repository is told to stop.
+            "tree": str(ctx.worktree_root),
+            "shared_with": _shared_environment(ctx, previous),
             "tail": tail[-1_200:],
         },
         mode=0o644,
     )
+
+
+def _shared_environment(ctx: GitContext, previous: dict) -> str:
+    """The neighbour tree this run could have been failing for, or "" when there is none.
+
+    A suite run in a tree that shares its database with another tree of the same clone
+    fails for whatever the neighbours are doing to that database. Measured, same commit
+    every time: three failures, then one on a rerun, then 3293 passed in 23s once the tree
+    had a database nobody else held (#182). The record still stands — the run did fail —
+    but it stops being a "fix it before new work" banner on every other session's board.
+
+    ONCE CONFIRMED, ALWAYS CONFIRMED — on this branch. A record already written from an
+    isolated run carries `shared_with: ""`, and a later noisy run must not downgrade it:
+    the failure is known real, and the next run happening somewhere shared says nothing
+    about that. A record from a version that predates the field has no key at all, reads
+    as confirmed, and so keeps behaving exactly as it did — the conservative direction,
+    because the alternative is silencing a red suite nobody has shown to be environmental.
+
+    On THIS branch, because a confirmation is about the code that was run. There is one
+    record per repository and `record_red` overwrites its `branch`, so without the test a
+    failure confirmed on one branch would harden the first shared run on the next one into
+    a repository-wide stop — the symptom of #182, re-entered through the side door.
+    """
+    from . import worktree
+
+    if previous.get("branch") == ctx.branch and not previous.get("shared_with", ""):
+        return ""
+    try:
+        shared = worktree.shared_database(ctx)
+    except Exception:  # noqa: BLE001 - a tree that cannot be read is not a shared one
+        return ""
+    return f"{shared[0].name} (database `{shared[1]}`)" if shared else ""
 
 
 GREEN_FILE = "last-green.json"
@@ -1391,7 +1432,13 @@ def red_problem(ctx: GitContext, branch: str = "") -> str:
     if not entry or (branch and entry.get("branch") != branch):
         return ""
     ran = " ".join(entry.get("command") or ["?"])
-    return (f"the test suite is red — recorded for `{ran}`{_ago(entry)}; "
+    # Named, never dropped. A red run in a shared tree is still a failure somebody has to
+    # resolve, and a merge gate that waved it through on "it might have been the
+    # neighbours" would be accepting an assertion in place of a run (decision 0002). What
+    # changes is that the reader is told where to re-run it to find out.
+    shared = str(entry.get("shared_with") or "")
+    where = f", in a tree sharing its database with {shared}" if shared else ""
+    return (f"the test suite is red — recorded for `{ran}`{_ago(entry)}{where}; "
             "that same command passing clears it")
 
 
@@ -1427,7 +1474,22 @@ def red_line(ctx: GitContext) -> str:
     age = max(time.time() - float(entry.get("first_seen") or time.time()), 0)
     days, hours = int(age // 86_400), int((age % 86_400) // 3600)
     lasted = f"{days}d" if days else f"{hours}h" if hours else "just now"
+    ran = " ".join(entry.get("command") or [])
+    shared = str(entry.get("shared_with") or "")
+    if shared:
+        # NOT "fix it before new work". This line reaches every session in the repository
+        # at once, and on a run that shared its database with a neighbour it idled ten
+        # chats over a suite that passed on the same commit in an isolated tree, and sent
+        # one of them hunting a schema mismatch that did not exist (#182). It still says
+        # what happened and who saw it; what it no longer does is stop everybody else on
+        # a result nobody has reproduced.
+        seen_in = Path(str(entry.get("tree") or "")).name or "another tree"
+        return (
+            f"SUITE RED in {seen_in} — `{ran}` failed there {lasted} ago, but that tree "
+            f"shares its database with {shared}, so the failure may be the neighbours "
+            "rather than the code. A run where the database is nobody else's decides it."
+        )
     return (
         f"RED SUITE on {entry.get('branch', '?')} — failing for {lasted}. "
-        f"`{' '.join(entry.get('command') or [])}` does not pass. Fix it before new work."
+        f"`{ran}` does not pass. Fix it before new work."
     )

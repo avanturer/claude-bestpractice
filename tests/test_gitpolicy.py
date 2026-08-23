@@ -1400,26 +1400,82 @@ class TestOneDatabasePerSession(RepoCase):
         other = self.add_worktree("sibling")
         self.env(self.repo, "postgres://localhost/shared")
         self.env(other, "postgres://localhost/shared")
-        self.live_sibling(other, "them")
+        self.live_sibling(self.repo, "them")
 
-        proc = self.write_in(self.repo, "me")
+        proc = self.write_in(other, "me")
         self.assertEqual("deny", self.decision(proc))
         self.assertIn("shared", json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecisionReason"])
+
+    def test_the_main_checkout_is_never_the_tree_told_to_move(self):
+        """The refusal says "give this tree its own database", and the main checkout is
+        the one tree that cannot: it holds the project's database, and it is the file
+        every worktree is seeded from.
+
+        Refused there it was a deadlock, not a rule. No session could write in the main
+        checkout at all — `git pull` and `rm` included — so it sat 52 commits behind,
+        `make test` failed there for everyone who entered it, and the gate demanding a
+        passing suite kept re-running it in exactly that tree (#181).
+        """
+        other = self.add_worktree("sibling")
+        self.env(self.repo, "postgres://localhost/shared")
+        self.env(other, "postgres://localhost/shared")
+        self.live_sibling(other, "them")
+
+        self.assertNotEqual("deny", self.decision(self.write_in(self.repo, "me")))
+
+    def test_two_sessions_in_one_tree_are_not_asked_to_split_one_env(self):
+        """They read one `.env`, so they collide every time, and the only advice a
+        same-tree collision can be given changes the file for both of them."""
+        other = self.add_worktree("sibling")
+        self.env(self.repo, "postgres://localhost/mine")
+        self.env(other, "postgres://localhost/shared")
+        self.live_sibling(other, "them")
+
+        self.assertNotEqual("deny", self.decision(self.write_in(other, "me")))
 
     def test_its_own_database_is_allowed(self):
         other = self.add_worktree("sibling")
         self.env(self.repo, "postgres://localhost/mine")
         self.env(other, "postgres://localhost/theirs")
-        self.live_sibling(other, "them")
+        self.live_sibling(self.repo, "them")
 
-        self.assertNotEqual("deny", self.decision(self.write_in(self.repo, "me")))
+        self.assertNotEqual("deny", self.decision(self.write_in(other, "me")))
 
     def test_a_repository_with_no_database_is_never_asked_about_one(self):
         """A gate that fires where there is nothing to collide over is a gate the founder
         switches off for every project."""
         other = self.add_worktree("sibling")
-        self.live_sibling(other, "them")
-        self.assertNotEqual("deny", self.decision(self.write_in(self.repo, "me")))
+        self.live_sibling(self.repo, "them")
+        self.assertNotEqual("deny", self.decision(self.write_in(other, "me")))
+
+    def test_a_worktree_on_the_shared_database_is_told_so_on_its_board(self):
+        """The tree that produced #182: made with plain `git worktree add`, so it never
+        reached the hook that derives a name and was born reading the main checkout's
+        `.env`. Nothing failed loudly — the suite there failed for the neighbours."""
+        from claude_bestpractice import board, worktree
+        from claude_bestpractice.gitctx import resolve
+
+        other = self.add_worktree("sibling")
+        self.env(self.repo, "postgres://localhost/fuddy")
+        self.env(other, "postgres://localhost/fuddy")
+
+        said = worktree.unisolated_database_line(resolve(other))
+        self.assertIn("fuddy", said)
+        self.assertIn("claude-bp database", said)
+        self.assertIn(said, board._alerts(resolve(other)),
+                      "the line exists and no board carries it")
+        self.assertEqual("", worktree.unisolated_database_line(self.ctx()),
+                         "the main checkout was told to move off its own database")
+
+    def test_a_tree_whose_database_is_its_own_says_nothing(self):
+        other = self.add_worktree("sibling")
+        self.env(self.repo, "postgres://localhost/fuddy")
+        self.env(other, "postgres://localhost/fuddy_sibling")
+
+        from claude_bestpractice import worktree
+        from claude_bestpractice.gitctx import resolve
+
+        self.assertEqual("", worktree.unisolated_database_line(resolve(other)))
 
     def test_a_worktree_is_born_with_its_own_database(self):
         """The derived name reaches the tree. Computed isolation is not isolation."""

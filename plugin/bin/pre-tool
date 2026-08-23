@@ -388,29 +388,6 @@ def bash_write_targets(command: str, cwd: Path) -> list[Path]:
     return out
 
 
-def _sibling_on_the_same_database(ctx, session_id: str):
-    """A live session already using this tree's database, as (session_id, name).
-
-    A tree that names no database collides with nothing: the comparison below requires a
-    NON-EMPTY match, so two repositories with no database configured are not each other's
-    collision. That truthiness is load-bearing, not defensive — without it every pair of
-    sessions in a repository that has no database at all refuses the other, and a gate
-    that fires where there is nothing to collide over is one the founder switches off for
-    every project.
-    """
-    from claude_bestpractice import worktree
-
-    here = worktree.database_of(ctx.worktree_root)
-    for other in sessions.live_sessions(ctx, exclude=session_id):
-        try:
-            theirs = worktree.database_of(Path(other.worktree))
-        except (OSError, TypeError):
-            continue
-        if theirs and theirs == here:
-            return other.session_id, here.rsplit("/", 1)[-1]
-    return None
-
-
 def main() -> None:
     event = hookio.read_event()
     ctx = hookio.repo(event.cwd or os.getcwd())
@@ -924,8 +901,18 @@ def main() -> None:
         # every tree points at the same daemon, so one session's open transaction blocks
         # every sibling's tests on its locks — seventy seconds became twenty minutes on a
         # real repository, and the transaction had been open for nearly a day (#164).
-        if cfg.isolate_databases and touched:
-            clash = _sibling_on_the_same_database(ctx, event.session_id)
+        #
+        # A WORKTREE only. The refusal's whole content is "give this tree its own
+        # database", and the main checkout is the one tree that cannot take that advice:
+        # it holds the project's database by definition, and it is the file every worktree
+        # is seeded FROM, so re-pointing it hands every later tree a name that is not the
+        # project's. Refusing it there was a deadlock rather than a rule — no session could
+        # write in the main checkout at all, `git pull` and `rm` included, so it sat 52
+        # commits behind, `make test` failed there for everyone who entered it, and the
+        # gate demanding a passing suite kept re-running it in exactly that tree (#181).
+        # The tree that can move is the one that gets told to, and it still is.
+        if cfg.isolate_databases and touched and ctx.is_worktree:
+            clash = worktree.session_on_this_database(ctx, event.session_id)
             if clash:
                 hookio.deny_tool(
                     f"claude-bestpractice: session {clash[0][:8]} is already using the database "
@@ -933,7 +920,7 @@ def main() -> None:
                     "  Worktrees isolate files and nothing else — one open transaction "
                     "there stops the tests here, and neither side can see why.\n"
                     f"  Give this tree its own: set DATABASE_URL in {worktree.ENV_FILE} to "
-                    "a database name nobody else holds.\n"
+                    "a database name nobody else holds, then `claude-bp database`.\n"
                     + config.switch_advice("isolate_databases", False)
                 )
 

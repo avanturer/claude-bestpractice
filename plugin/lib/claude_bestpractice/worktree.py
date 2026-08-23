@@ -273,6 +273,69 @@ def database_of(tree: Path) -> str:
         return ""
 
 
+def session_on_this_database(ctx: GitContext, session_id: str = "") -> tuple[str, str] | None:
+    """A live session in ANOTHER tree already on this tree's database, as (id, name).
+
+    A tree that names no database collides with nothing: the comparison below requires a
+    NON-EMPTY match, so two repositories with no database configured are not each other's
+    collision. That truthiness is load-bearing, not defensive — without it every pair of
+    sessions in a repository that has no database at all refuses the other, and a gate
+    that fires where there is nothing to collide over is one the founder switches off for
+    every project.
+
+    ANOTHER tree, and that half was missing. Two sessions standing in one tree read one
+    `.env`, so they match every time, and the only advice a same-tree collision can be
+    given is "change this file" — which changes it for both of them. The refusal was
+    unanswerable rather than strict.
+
+    The registry and no `git worktree list`: this runs on every write, and the trees worth
+    asking about are the ones a session is standing in, which the registry already knows.
+    Trees nobody is in are `shared_database`'s question, and it is asked where the cost of
+    a git call is paid once rather than per tool call.
+    """
+    from . import sessions
+
+    here = database_of(ctx.worktree_root)
+    if not here:
+        return None
+    mine = ctx.worktree_root.resolve()
+    for other in sessions.live_sessions(ctx, exclude=session_id):
+        try:
+            tree = Path(other.worktree).resolve()
+        except (OSError, TypeError, ValueError):
+            continue
+        if tree == mine:
+            continue
+        if database_of(tree) == here:
+            return other.session_id, split_dsn(here)[1] or here
+    return None
+
+
+def shared_database(ctx: GitContext) -> tuple[Path, str] | None:
+    """Another working tree of this clone naming this tree's database, as (tree, name).
+
+    Not a liveness question, and deliberately not. A database is shared with whatever
+    points at it: the main checkout, a tree made by hand, the dev server the founder runs
+    out of the main checkout. None of those is a session in the registry, and asking the
+    registry answered "nothing is sharing this" in the case that produced #182 — one
+    worktree made with plain `git worktree add` inherited the main checkout's `.env`,
+    every live session was properly isolated, and the run in that tree was still being
+    perturbed by neighbours the registry could not see.
+
+    So the question is asked of the TREES, which is where the answer is written down.
+    """
+    from . import gitpolicy
+
+    here = database_of(ctx.worktree_root)
+    if not here:
+        return None
+    mine = ctx.worktree_root.resolve()
+    for tree in gitpolicy.working_trees(ctx):
+        if tree != mine and database_of(tree) == here:
+            return tree, split_dsn(here)[1] or here
+    return None
+
+
 # `str.isalnum()` is true for Cyrillic, so a Russian prompt produced a Cyrillic directory
 # AND a Cyrillic branch. Git accepts both and then: the branch goes to the remote on the
 # first push, `git worktree list` prints it octal-escaped (\320\277\320\276…), and macOS
@@ -403,6 +466,33 @@ def missing_database_line(ctx: GitContext) -> str:
     return (f"DATABASE: the server has no `{name}`, which is what this tree points at. "
             f"Run `claude-bp database` to create it, and set `worktree_setup claude-bp "
             f"database` so every later tree is born with one.")
+
+
+def unisolated_database_line(ctx: GitContext) -> str:
+    """The one alert a worktree gets when the database it points at is not its own.
+
+    A tree made with plain `git worktree add` never reaches the hook that derives a
+    database name, and `.env` is gitignored in every project that has one — so it is born
+    reading the main checkout's file and pointing at the shared database. Nothing fails
+    loudly: the suite in that tree fails intermittently, in whichever file talks to the
+    database, for whatever the neighbours are doing to it. Three failures, then one on a
+    rerun, then 3293 passed in 23s once the tree had a database nobody else held — same
+    commit every time (#182).
+
+    A worktree only. The main checkout is where the shared database legitimately lives —
+    it is the file every tree is seeded FROM — so telling it to move would break every
+    tree seeded after it, which is the deadlock #181 reports from the other direction.
+    """
+    if not ctx.is_worktree:
+        return ""
+    shared = shared_database(ctx)
+    if shared is None:
+        return ""
+    tree, name = shared
+    return (f"DATABASE: this tree points at `{name}`, which is also {tree.name}'s. "
+            "Worktrees isolate files and nothing else, so a suite run here can fail for "
+            "the neighbours rather than for the code. `claude-bp database` after giving "
+            f"DATABASE_URL in {ENV_FILE} a name nobody else holds.")
 
 
 # Conventional Commits types, keyed by what the founder actually types. Russian included

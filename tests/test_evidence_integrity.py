@@ -12,6 +12,7 @@ import time
 import subprocess
 import sys
 import unittest
+from pathlib import Path
 
 from helpers import RepoCase, git
 
@@ -588,3 +589,189 @@ class TestASuiteSlowerThanTheCeiling(RepoCase):
 
         self.assertIn("stopped at 1s", self.verdict(ceiling=1).reason,
                       "an addopts line narrowed the run the gate drives")
+
+
+class TestARedRunInASharedTreeIsNotEverybodysProblemYet(RepoCase):
+    """A red verdict reaches every session in the repository at once. It must not rest on
+    a run whose environment other live sessions were free to perturb.
+
+    As met: a worktree made with plain `git worktree add` inherited the main checkout's
+    `.env`, so its DATABASE_URL named the shared database rather than one of its own. The
+    suite there gave three failures, then one on a rerun, then — with a database nobody
+    else held — 3293 passed and 4 skipped in 23s. Same commit every time. The banner said
+    "RED SUITE on main ... Fix it before new work", `main` was green, ten sessions idled on
+    it, and one of them went hunting a schema mismatch that did not exist (#182).
+
+    The run is still refused where it happened. What waits is the claim about everybody
+    else's branch.
+    """
+
+    def env(self, tree: Path, name: str) -> None:
+        (tree / ".env").write_text(f"DATABASE_URL=postgres://localhost/{name}\n", encoding="utf-8")
+
+    def a_failing_suite_in_a_worktree(self, database: str) -> Path:
+        """A tree whose suite fails, pointed at whichever database the test names."""
+        self.write("tests/test_x.py", "def test_broken():\n    assert False\n")
+        self.commit("suite")
+
+        tree = self.add_worktree("hand-made")
+        self.env(self.repo, "fuddy")
+        self.env(tree, database)
+        (tree / "src.py").write_text("x = 1\n", encoding="utf-8")
+        return tree
+
+    def sibling(self, session_id: str) -> str:
+        from claude_bestpractice import sessions
+        from helpers import session_record_for, sid
+
+        ctx = self.ctx()
+        identity = sid(self.repo, session_id)
+        sessions.register(ctx, session_record_for(ctx, identity))
+        return identity
+
+    def stop_in(self, tree: Path):
+        import json as _json
+        import subprocess as _subprocess
+        import sys as _sys
+
+        from helpers import BIN
+
+        return _subprocess.run(
+            [_sys.executable, str(BIN / "evidence-gate")],
+            input=_json.dumps({
+                "session_id": "runner", "hook_event_name": "Stop", "cwd": str(tree),
+            }),
+            capture_output=True, text=True, cwd=str(tree), timeout=180,
+        )
+
+    def test_the_broadcast_waits_for_a_run_nobody_could_perturb(self):
+        from claude_bestpractice import evidence, inbox
+
+        tree = self.a_failing_suite_in_a_worktree("fuddy")
+        watcher = self.sibling("watching")
+
+        proc = self.stop_in(tree)
+        self.assertEqual(2, proc.returncode, f"the failing suite finished green: {proc.stderr}")
+        from claude_bestpractice.gitctx import resolve
+
+        self.assertIsNotNone(evidence.red(resolve(tree)),
+                             "precondition: the run has to have been recorded red")
+        self.assertEqual(
+            [], inbox.pending(self.ctx(), watcher),
+            "a run in a tree sharing its database told every other session to stop",
+        )
+
+    def test_a_run_in_an_isolated_tree_still_reaches_everybody(self):
+        """The other half. Withholding the broadcast from every red suite would be the
+        defect this gate exists to prevent, wearing a fix's clothes."""
+        from claude_bestpractice import inbox
+
+        tree = self.a_failing_suite_in_a_worktree("fuddy_hand_made")
+        watcher = self.sibling("watching")
+
+        proc = self.stop_in(tree)
+        self.assertEqual(2, proc.returncode, f"the failing suite finished green: {proc.stderr}")
+        waiting = inbox.pending(self.ctx(), watcher)
+        self.assertEqual(1, len(waiting), "nobody was told about a red suite nothing explains")
+        self.assertIn("RED", str(waiting[0].get("text") or ""))
+
+
+class TestTheBannerForAPerturbableRun(RepoCase):
+    """What every session reads at start. "Fix it before new work" over a suite that
+    passes in an isolated tree is what idled ten chats (#182)."""
+
+    def red_in(self, tree: Path, database: str, main_database: str = "fuddy") -> None:
+        from claude_bestpractice import evidence
+        from claude_bestpractice.gitctx import resolve
+
+        (self.repo / ".env").write_text(
+            f"DATABASE_URL=postgres://localhost/{main_database}\n", encoding="utf-8")
+        (tree / ".env").write_text(
+            f"DATABASE_URL=postgres://localhost/{database}\n", encoding="utf-8")
+        evidence.record_red(resolve(tree), ["make", "test"], "1 failed")
+
+    def line_in(self, tree: Path) -> str:
+        from claude_bestpractice import evidence
+        from claude_bestpractice.gitctx import resolve
+
+        return evidence.red_line(resolve(tree))
+
+    def test_it_names_the_tree_and_the_neighbour_instead_of_stopping_everybody(self):
+        tree = self.add_worktree("hand-made")
+        self.red_in(tree, "fuddy")
+
+        said = self.line_in(tree)
+        self.assertNotIn("Fix it before new work", said)
+        self.assertIn("hand-made", said)
+        self.assertIn("fuddy", said)
+
+    def test_an_isolated_run_is_still_a_hard_stop(self):
+        tree = self.add_worktree("hand-made")
+        self.red_in(tree, "fuddy_hand_made")
+
+        self.assertIn("Fix it before new work", self.line_in(tree))
+
+    def test_a_failure_already_seen_alone_is_not_downgraded_by_a_noisy_rerun(self):
+        """The failure is known real. A later run happening somewhere shared says nothing
+        about that, and letting it soften the record would hand the agent a way to quiet a
+        red suite by running it next to a neighbour."""
+        from claude_bestpractice import evidence
+        from claude_bestpractice.gitctx import resolve
+
+        tree = self.add_worktree("hand-made")
+        self.red_in(tree, "fuddy_hand_made")
+        (tree / ".env").write_text(
+            "DATABASE_URL=postgres://localhost/fuddy\n", encoding="utf-8")
+        evidence.record_red(resolve(tree), ["make", "test"], "1 failed")
+
+        self.assertIn("Fix it before new work", self.line_in(tree))
+
+    def test_a_confirmation_on_another_branch_does_not_harden_this_one(self):
+        """There is one record per repository and `record_red` overwrites its branch, so
+        without the branch test a failure confirmed on one branch would turn the first
+        shared run on the next one into a repository-wide stop."""
+        from claude_bestpractice import evidence
+        from claude_bestpractice.gitctx import resolve
+
+        tree = self.add_worktree("hand-made")
+        self.red_in(tree, "fuddy_hand_made")
+        self.assertIn("Fix it before new work", self.line_in(tree),
+                      "precondition: the first run has to have been confirmed")
+
+        git(["switch", "-q", "-c", "second"], tree)
+        (tree / ".env").write_text(
+            "DATABASE_URL=postgres://localhost/fuddy\n", encoding="utf-8")
+        evidence.record_red(resolve(tree), ["make", "test"], "1 failed")
+
+        self.assertNotIn("Fix it before new work", self.line_in(tree))
+
+    def test_a_record_written_before_the_field_existed_reads_as_confirmed(self):
+        """The conservative direction. The alternative is silencing a red suite that
+        nobody has shown to be environmental."""
+        import json
+
+        from claude_bestpractice import evidence, store
+        from claude_bestpractice.gitctx import resolve
+
+        tree = self.add_worktree("hand-made")
+        self.red_in(tree, "fuddy")
+        path = store.tier_a(resolve(tree), evidence.RED_SUITE_FILE)
+        entry = json.loads(path.read_text(encoding="utf-8"))
+        entry.pop("shared_with", None)
+        entry.pop("tree", None)
+        path.write_text(json.dumps(entry), encoding="utf-8")
+
+        self.assertIn("Fix it before new work", self.line_in(tree))
+
+    def test_the_merge_gate_still_refuses_and_says_where_to_re_run(self):
+        """Named, never dropped. A merge waved through on "it might have been the
+        neighbours" is an assertion accepted in place of a run."""
+        from claude_bestpractice import evidence
+        from claude_bestpractice.gitctx import resolve
+
+        tree = self.add_worktree("hand-made")
+        self.red_in(tree, "fuddy")
+
+        said = evidence.red_problem(resolve(tree), "hand-made")
+        self.assertIn("the test suite is red", said)
+        self.assertIn("sharing its database", said)
