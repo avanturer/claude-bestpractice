@@ -22,6 +22,7 @@ import contextlib
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -166,6 +167,18 @@ def _identifier(text: str) -> str:
     return '"' + text.replace('"', '""') + '"'
 
 
+def has_client() -> bool:
+    """Is there a `psql` on this machine at all?
+
+    Asked separately from whether the server answered, because the two produce opposite
+    advice and were coming out as one sentence: a developer machine talking to Postgres
+    through `psycopg` from a virtualenv has no command-line client and never needed one,
+    and telling that machine "could not reach the server" is both wrong and a dead end
+    (#175). The server was fine. The client was never installed.
+    """
+    return shutil.which("psql") is not None
+
+
 def _psql(dsn: str, sql: str) -> tuple[bool, str]:
     """Run one statement. (reached the server, what it printed)."""
     try:
@@ -209,9 +222,16 @@ def create_database(url: str) -> tuple[bool, str]:
     head, name, query = split_dsn(url)
     if not name:
         return False, "no database name in DATABASE_URL"
+    if not has_client():
+        return False, (
+            f"there is no `psql` on this machine, so nothing here can create {name}. "
+            "Either install one (`postgresql-client`), or let the project do it, which is "
+            "what `worktree_setup` is for — a repository whose DATABASE_URL works at all "
+            "already has a driver behind it"
+        )
     present = database_present(url)
     if present is None:
-        return False, f"could not reach the server that holds {name} (is `psql` installed?)"
+        return False, f"could not reach the server that holds {name}"
     if present:
         return True, f"{name} is already there"
     reached, _out = _psql(f"{head}/{_MAINTENANCE}{query}",
