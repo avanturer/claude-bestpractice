@@ -16,12 +16,14 @@ from __future__ import annotations
 import json
 import os
 import socket
+import subprocess
+import sys
 import tempfile
 import threading
 import time
 import unittest
 
-from helpers import RepoCase, session_record_for, sid
+from helpers import BIN, RepoCase, session_record_for, sid
 
 from claude_bestpractice import inbox, sessions
 
@@ -347,3 +349,69 @@ class TestAQuestionIsAnObligation(RepoCase):
 
         inbox.post(self.ctx(), "them", "the suite is RED on main", sender="me")
         self.assertEqual([], self.open_for())
+
+
+class TestOurOwnFactIsNotTheRecipientsTask(RepoCase):
+    """A fact arrives as a user turn, and the prompt reader reads user turns.
+
+    `[claude-bestpractice] another session is blocked on store.py…` is long and it names a
+    path, so it cleared every test for a statement of work: the note became the recipient's
+    task, was quoted back by every drift refusal, named their branch, and added ITS paths to
+    their allowed scope. The same defect as #106, #118 and #166 — through the one door this
+    plugin built for itself, because its two voice markers had drifted apart by one
+    character: `[claude-bestpractice]` against `claude-bestpractice:`.
+    """
+
+    def deliver(self, text: str):
+        return subprocess.run(
+            [sys.executable, str(BIN / "prompt-capture")],
+            input=json.dumps({"session_id": "s1", "hook_event_name": "UserPromptSubmit",
+                              "prompt": text, "cwd": str(self.repo)}),
+            capture_output=True, text=True, cwd=str(self.repo), timeout=120,
+        )
+
+    def record(self):
+        from claude_bestpractice import sessions
+
+        return sessions.get(self.ctx(), sid(self.repo, "s1"))
+
+    def test_a_delivered_fact_never_becomes_the_task(self):
+        from claude_bestpractice import inbox
+
+        self.write("store.py", "x = 1\n")
+        self.deliver("перепиши store.py так, чтобы запись была атомарной")
+        self.deliver(f"{inbox.PREFIX} another session is blocked on store.py, which you "
+                     "hold. Are you still in it, or can they take it?")
+
+        self.assertEqual("перепиши store.py так, чтобы запись была атомарной",
+                         self.record().task_statement)
+
+    def test_it_is_not_the_task_of_a_session_that_has_none_either(self):
+        """The blank-board fallback keeps «Делай» over nothing. It must not keep ours."""
+        from claude_bestpractice import inbox
+
+        self.deliver(f"{inbox.PREFIX} the suite is RED on main, and you are branched off it")
+        self.assertEqual("", self.record().task_statement)
+
+    def test_the_channel_says_what_it_carried(self):
+        from claude_bestpractice import inbox
+
+        ctx = self.ctx()
+        inbox.post(ctx, "them", "the suite is RED on main", sender="me")
+        inbox.ask(ctx, "them", "are you still in store.py?", sender="me")
+        moved = inbox.carried(ctx)
+
+        self.assertEqual(2, moved["queued"])
+        self.assertEqual(0, moved["delivered"])
+        self.assertEqual(1, moved["asks"])
+        self.assertEqual(0, moved["answered"])
+
+        inbox.answer(ctx, "them", inbox.open_asks(ctx, "them")[0]["key"][:12], "yes, still in it")
+        self.assertEqual(1, inbox.carried(ctx)["answered"])
+
+        # Delivered, over a real socket, because "queued" and "arrived" are the two
+        # numbers the keep-or-cut question actually turns on.
+        listener = Listener()
+        self.addCleanup(listener.close)
+        inbox.drain(ctx, "them", env=listener.env())
+        self.assertEqual(2, inbox.carried(ctx)["delivered"])
