@@ -408,11 +408,60 @@ class TestGitItselfReachesIntoOtherTrees(PolicyCase):
         """
         mine = self.worktree("feat/mine")
         for command in (
-            f"cd {self.repo} && git worktree list",
             f"git -C {self.repo} worktree list --porcelain",
+            # A subshell reads there and leaves this shell where it is, which is the form
+            # the stranding refusal names — so the question stays askable from anywhere.
+            f"(cd {self.repo} && git worktree list)",
         ):
             decision, reason = self.bash(mine, command)
             self.assertEqual(decision, "allow", f"{command} -> {reason}")
+
+    def test_a_cd_into_the_shared_checkout_is_refused_before_the_shell_is_stuck(self):
+        """The step the founder took, and the one that cannot be taken back."""
+        mine = self.worktree("feat/mine")
+        decision, reason = self.bash(mine, f"cd {self.repo}")
+        self.assertEqual(decision, "deny", reason)
+        self.assertIn(str(self.repo), reason)
+
+    def test_a_cd_that_comes_back_is_not_stranding(self):
+        """What is judged is where the shell ENDS UP, not that a `cd` appeared."""
+        mine = self.worktree("feat/mine")
+        decision, reason = self.bash(mine, f"cd {self.repo} && cd {mine} && git status")
+        self.assertEqual(decision, "allow", reason)
+
+    def test_leaving_the_repository_altogether_is_not_this_gate_s_business(self):
+        """Claude Code's guard fires on the protected CHECKOUT, not on everywhere else —
+        read out of the binary: a directory inside no protected root is not escaped. A
+        refusal here would be this plugin inventing a rule the harness does not have."""
+        mine = self.worktree("feat/mine")
+        decision, reason = self.bash(mine, "cd /tmp && ls")
+        self.assertEqual(decision, "allow", reason)
+
+    def test_a_cd_with_nowhere_named_is_not_a_move_this_gate_can_judge(self):
+        """`cd` on its own goes to $HOME and `cd -` to wherever the shell was last. Both
+        arrive here as a `cd` with no target, and this gate runs inside a fail-closed
+        hook — so the answer has to be "nothing learned", not an index error that refuses
+        every command in the session."""
+        mine = self.worktree("feat/mine")
+        for command in ("cd && ls", "cd - && ls"):
+            proc = self.run_hook("pre-tool", {
+                "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+                "tool_input": {"command": command}, "cwd": str(mine),
+            }, cwd=mine)
+            # The return code, not only the verdict: `_verdict` reads a crash as "allow",
+            # so a test that asked only for the decision could not tell this gate working
+            # from this gate raising inside a fail-closed hook.
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            self.assertEqual("allow", _verdict(proc)[0], command)
+
+    def test_a_read_that_would_strand_the_shell_is_refused_and_says_how(self):
+        """`cd {main} && git worktree list` reads nothing it should not — and leaves the
+        shell in the shared checkout, where Claude Code refuses every later Bash call
+        including the `cd` back (#174). The read is not the problem; the step is."""
+        mine = self.worktree("feat/mine")
+        decision, reason = self.bash(mine, f"cd {self.repo} && git worktree list")
+        self.assertEqual(decision, "deny", reason)
+        self.assertIn("(cd", reason, "the refusal did not name a form that works")
 
     def test_a_read_in_front_of_a_write_does_not_carry_it(self):
         """The exemption is for the segment it matched, never for the line."""
