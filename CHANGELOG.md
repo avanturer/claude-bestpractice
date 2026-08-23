@@ -1,5 +1,40 @@
 # Changelog
 
+## v1.50.0
+
+The server was fine. The client was never installed.
+
+`claude-bp database` on a machine with no `psql` said:
+
+```
+could not: could not reach the server that holds fuddy_agent_work_70e44134 (is `psql` installed?)
+```
+
+The server was reachable the whole time — the project talks to it over TCP with `psycopg`
+from its own virtualenv, which is the normal state of a developer machine that has never
+run `apt install postgresql-client`. One sentence was carrying two opposite diagnoses, and
+the parenthesis was the only hint at the right one (#175).
+
+Asked separately now, because the two produce opposite advice:
+
+```
+there is no `psql` on this machine, so nothing here can create fuddy_agent_work_70e44134.
+Either install one (`postgresql-client`), or let the project do it, which is what
+`worktree_setup` is for — a repository whose DATABASE_URL works at all already has a
+driver behind it
+```
+
+**Running `CREATE DATABASE` through the project's own interpreter was considered and not
+taken.** `worktree_setup` already executes a command the founder configured; a plugin
+choosing on its own to execute a snippet inside somebody else's virtualenv is a different
+act, and it would have to guess the driver (`psycopg`, `psycopg2`, `asyncpg`) to do it. A
+Postgres wire client in the plugin was also rejected: it is the only stdlib-only route,
+and it is a protocol implementation plus SCRAM authentication for one DDL statement.
+
+So the reach of `claude-bp database` is machines with a client, `worktree_setup` covers
+the rest, and the README says which is which rather than leaving the next person to file
+this twice.
+
 ## v1.49.0
 
 The shell is never left where nothing can be run again.

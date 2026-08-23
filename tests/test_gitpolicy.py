@@ -1547,6 +1547,28 @@ class TestOneDatabasePerSession(RepoCase):
         self.assertEqual("", worktree.missing_database_line(resolve(made)),
                          "the alert outlived the thing it was about")
 
+    def test_a_machine_with_no_client_is_told_that_and_both_ways_out(self):
+        """A developer machine talking to Postgres through `psycopg` from a virtualenv has
+        no command-line client and never needed one. Telling it "could not reach the
+        server that holds X" is wrong — the server was fine — and it is a dead end (#175).
+        """
+        import os
+
+        from claude_bestpractice import worktree
+
+        empty = Path(tempfile.mkdtemp(prefix="claude-bestpractice-nopsql-"))
+        self.addCleanup(shutil.rmtree, empty, ignore_errors=True)
+        was = os.environ["PATH"]
+        os.environ["PATH"] = str(empty)
+        self.addCleanup(os.environ.__setitem__, "PATH", was)
+
+        done, said = worktree.create_database("postgres://localhost:5432/fuddy")
+        self.assertFalse(done)
+        self.assertIn("no `psql`", said)
+        self.assertIn("postgresql-client", said)
+        self.assertIn("worktree_setup", said, "the route that already works was not named")
+        self.assertNotIn("could not reach", said, "the server was blamed for a missing client")
+
     def test_nothing_is_created_for_a_scheme_this_plugin_does_not_know(self):
         """Deferring to `worktree_setup` on an unrecognised scheme is the whole reason it
         exists. Acting on `postgresql://` is not a hardcode; guessing at the rest is."""
