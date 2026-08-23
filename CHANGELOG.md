@@ -1,5 +1,48 @@
 # Changelog
 
+## v1.52.0
+
+The plugin's own fact was becoming the recipient's task.
+
+### One character apart
+
+A fact delivered into a running session arrives as a user turn, and the prompt reader
+reads user turns. This one:
+
+```
+[claude-bestpractice] another session is blocked on store.py, which you hold.
+Are you still in it, or can they take it?
+```
+
+is long and names a path, so it cleared every test for a statement of work. The note became
+the recipient's **task**: quoted back by every scope-drift refusal, used to name their
+branch, and adding ITS paths to their allowed scope.
+
+`prompt-capture` has always excluded this plugin's own voice — and knew only one spelling of
+it. Refusals begin `claude-bestpractice:`; the inbox prefixes `[claude-bestpractice]`. Two
+markers for one voice, drifted apart by one character, and nothing compared them. The
+prefix is imported now rather than spelled a second time.
+
+The same defect as #106, #118 and #166, arriving through the one door this plugin built
+itself. Verified by executing the classifier on the real notes: all three shapes it
+delivers were statements of work before this, and none is now.
+
+Claude Code's own `SendMessage` was never affected: it wraps an incoming message in
+`<cross-session-message>`, and the shape rule written for #118 already recognises a whole
+message that is one element. Read out of the CLI binary, not assumed.
+
+### And a number against the channel
+
+Every other mechanism here is justified by a measured failure — twenty minutes waiting on a
+lease, a seventy-second suite becoming twenty minutes, thirteen worktrees on one database.
+This channel has never had a number against it, and "is it worth an undocumented socket
+frame" is not a question to answer by taste.
+
+`claude-bp status` now says what it actually carried: facts delivered against facts queued,
+questions answered against questions asked. Counted from what the notes already record, so
+nothing new is written to make it possible, and the line is absent when the channel has
+carried nothing — which is the honest state of a repository running one session.
+
 ## v1.51.0
 
 An update that lands mid-session reaches the session it lands on.

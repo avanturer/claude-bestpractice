@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import config, hookio, redact, sessions  # noqa: E402
+from claude_bestpractice import config, hookio, inbox, redact, sessions  # noqa: E402
 from claude_bestpractice.gitctx import resolve  # noqa: E402
 
 MAX_TASK_CHARS = 600
@@ -103,10 +103,23 @@ _CONTINUATION = re.compile(
 _ONE_BLOCK = re.compile(r"\A<([a-z][\w-]*)\b[^>]*>.*</\1\s*>\Z", re.S | re.I)
 
 
-# This plugin's own voice. Every message it emits begins with it, and a gate's refusal
-# arriving back as the session's task statement is the gate quoting itself as the thing to
-# be measured against — reported from a session where the drift block did exactly that.
+# This plugin's own voice, in both spellings it actually speaks in. Every message it emits
+# begins with one of them, and a gate's refusal arriving back as the session's task
+# statement is the gate quoting itself as the thing to be measured against — reported from
+# a session where the drift block did exactly that.
+#
+# The second one is the inbox prefix, and it was missing. A fact this plugin delivers into
+# a running session arrives as a user turn — `[claude-bestpractice] another session is
+# blocked on store.py…` — which is long, names a path, and is therefore a statement of
+# work by every test this file applies. So the plugin's own note could become the
+# recipient's task: quoted back by every drift refusal, used to name a branch, and adding
+# ITS paths to the session's allowed scope. Exactly the defect of #106, #118 and #166,
+# arriving through the one door this plugin built itself.
+#
+# Imported rather than spelled again: the two markers drifting apart by one character is
+# how this happened — `[claude-bestpractice]` against `claude-bestpractice:`.
 _OUR_OWN_VOICE = "claude-bestpractice:"
+_OUR_VOICES = (_OUR_OWN_VOICE, inbox.PREFIX)
 
 
 def is_harness_block(text: str) -> bool:
@@ -124,7 +137,7 @@ def is_harness_block(text: str) -> bool:
     stripped = text.strip()
     if not stripped:
         return False
-    return stripped.startswith(_OUR_OWN_VOICE) or bool(_ONE_BLOCK.match(stripped))
+    return stripped.startswith(_OUR_VOICES) or bool(_ONE_BLOCK.match(stripped))
 
 
 def is_statement_of_work(prompt: str, paths: list[str]) -> bool:

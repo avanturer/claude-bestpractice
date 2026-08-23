@@ -214,6 +214,29 @@ def pending(ctx: GitContext, session_id: str) -> list[dict]:
     return [n for n in notes if n.get("delivered_at") is None]
 
 
+def carried(ctx: GitContext) -> dict[str, int]:
+    """What this channel has actually moved, across every session on this clone.
+
+    Every other mechanism in this plugin is justified by a measured failure — twenty
+    minutes waiting on a lease, seventy seconds of suite becoming twenty, thirteen trees on
+    one database. This one has never had a number against it, and "is it worth keeping"
+    cannot be answered by taste. Counted from what the notes already record; nothing new is
+    written to make this possible.
+    """
+    out = {"queued": 0, "delivered": 0, "asks": 0, "answered": 0}
+    try:
+        boxes = sorted(store.tier_b(ctx, DIRNAME).glob("*.json"))
+    except OSError:
+        return out
+    for box in boxes:
+        for note in _notes(store.read_json(box, default=[])):
+            out["queued"] += 1
+            out["delivered"] += note.get("delivered_at") is not None
+            out["asks"] += bool(note.get("asks"))
+            out["answered"] += bool(note.get("answered_at"))
+    return out
+
+
 def frames(token: str, text: str) -> bytes:
     """The wire: newline-delimited JSON, auth first when there is a token.
 

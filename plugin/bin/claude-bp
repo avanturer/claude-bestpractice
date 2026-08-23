@@ -19,7 +19,7 @@ BIN = Path(__file__).resolve().parent
 sys.path.insert(0, str(BIN.parent / "lib"))
 
 from claude_bestpractice import __version__, board, ci, conflicts, defects, delivery, drafts, hookio, knowledge, onboard, pullrequest  # noqa: E402
-from claude_bestpractice import config, plan, policy, provenance, sessions, stage, upgrade, vouch  # noqa: E402
+from claude_bestpractice import config, inbox, plan, policy, provenance, sessions, stage, upgrade, vouch  # noqa: E402
 from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
 
 BOLD = "\033[1m" if sys.stdout.isatty() else ""
@@ -139,6 +139,13 @@ def cmd_status(ctx) -> int:
     stale = prov.get(provenance.SUSPECT, 0) + prov.get(provenance.GONE, 0)
     print(f"  {prov.get(provenance.FRESH, 0)} live claim(s), {stale} stale and suppressed")
     print(f"  {DIM}{board.health_line(ctx, len(live), 0)}{OFF}")
+    # What the cross-session channel has actually carried on this clone. Printed only
+    # when it has carried something, and printed at all because the question "is this
+    # worth its undocumented socket frame" deserves a number rather than an opinion.
+    moved = inbox.carried(ctx)
+    if moved["queued"]:
+        print(f"  channel: {moved['delivered']}/{moved['queued']} fact(s) delivered, "
+              f"{moved['answered']}/{moved['asks']} question(s) answered")
 
     found = conflicts.detect(ctx)
     if found:
