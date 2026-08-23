@@ -922,3 +922,66 @@ class TestAStatementThatWasOnlyASwitchIsForgotten(RepoCase):
         self.session_saying(real)
         migrate.repair(self.ctx())
         self.assertEqual(real, self.statement_now())
+
+
+class TestTwoStoresThatFilledWithRepeats(RepoCase):
+    """Both were append-only logs nobody could act on: the decision inbox had sixty rows
+    carrying four sentences while `claude-bp status` pointed at it as the next action, and
+    the defect store had ninety-four rows of this plugin's own test fixture behind a
+    command whose job is to file them at GitHub."""
+
+    def inbox_holding(self, *quotes: str) -> Path:
+        from claude_bestpractice import drafts, store
+
+        path = store.tier_b(self.ctx(), drafts.INBOX_FILE)
+        for quote in quotes:
+            store.append_jsonl(path, {"marker": "constraint", "quote": quote,
+                                      "branch": "main", "session_id": "s1",
+                                      "created_at": 1.0, "subject_paths": []})
+        return path
+
+    def defects_holding(self, *gates: str) -> Path:
+        from claude_bestpractice import defects, store
+
+        path = store.tier_b(self.ctx(), defects.DEFECTS_FILE)
+        for number, gate in enumerate(gates):
+            store.append_jsonl(path, {"signature": f"sig{number}", "gate": gate,
+                                      "error": "RuntimeError: kaboom", "where": "x.py:1",
+                                      "seen": 1, "sent_at": 0.0})
+        return path
+
+    def test_the_inbox_keeps_one_row_per_draft(self):
+        from claude_bestpractice import store
+
+        path = self.inbox_holding("keep the gate on", "keep the gate on", "never touch prod")
+        changed = migrate.repair(self.ctx())
+
+        quotes = [row.get("quote") for row in store.read_jsonl(path)]
+        self.assertEqual({"keep the gate on", "never touch prod"}, set(quotes))
+        self.assertEqual(2, len(quotes), "the duplicate survived the collapse")
+        self.assertTrue([line for line in changed if "decision draft" in line])
+
+    def test_a_draft_the_founder_already_handled_stays_handled(self):
+        """Resolution is recorded BY QUOTE, in the same log. A collapse that keeps only
+        the pending rows throws it away — and the extractor re-reads the same turns every
+        run, so every draft the founder discarded would be back within the hour."""
+        from claude_bestpractice import drafts
+
+        self.inbox_holding("keep the gate on", "keep the gate on")
+        drafts.resolve(self.ctx(), "keep the gate on")
+        migrate.repair(self.ctx())
+
+        # The founder says it again, which is what the extractor does on every run.
+        drafts.record(self.ctx(), [drafts.Draft("constraint", "keep the gate on", "main",
+                                                "s1", 2.0, [])])
+        self.assertEqual([], drafts.pending(self.ctx()),
+                         "a draft the founder discarded came back after the collapse")
+
+    def test_crashes_from_things_the_plugin_does_not_ship_are_dropped(self):
+        from claude_bestpractice import store
+
+        path = self.defects_holding("__main__.py", "python3 -m unittest", "evidence-gate")
+        changed = migrate.repair(self.ctx())
+
+        self.assertEqual(["evidence-gate"], [row.get("gate") for row in store.read_jsonl(path)])
+        self.assertTrue([line for line in changed if "does not ship" in line])

@@ -7,7 +7,7 @@ import subprocess
 import sys
 import unittest
 
-from helpers import BIN, RepoCase
+from helpers import BIN, LIB, RepoCase
 
 from claude_bestpractice import defects
 
@@ -58,7 +58,11 @@ class TestACrashIsCapturedNotNarrated(RepoCase):
         from helpers import LIB
 
         script = (
-            f"import sys, os; sys.path.insert(0, {str(LIB)!r}); sys.argv[0] = 'evidence-gate';\n"
+            # The real path, because that is what the harness passes and what decides
+            # whether a crash is one of ours at all. The bare name this used to set made
+            # the fixture pass a test the gates themselves would fail.
+            f"import sys, os; sys.path.insert(0, {str(LIB)!r});\n"
+            f"sys.argv[0] = {str(BIN / 'evidence-gate')!r}\n"
             f"os.chdir({str(self.repo)!r})\n"
             "from claude_bestpractice import hookio\n"
             f"def boom(): raise {exception}({message!r})\n"
@@ -75,6 +79,22 @@ class TestACrashIsCapturedNotNarrated(RepoCase):
         self.assertEqual(1, len(captured))
         self.assertEqual("evidence-gate", captured[0]["gate"])
         self.assertIn("KeyError", captured[0]["error"])
+
+    def test_a_crash_in_something_that_is_not_ours_is_not_captured(self):
+        """`guard` is reached by importing the library, so a test suite, a REPL or any
+        `python3 -m …` that raises lands in the same handler. Ninety-four rows of this
+        plugin's own `RuntimeError: kaboom` were sitting in a real repository, behind a
+        command whose whole job is to file them at GitHub."""
+        script = (
+            f"import sys, os; sys.path.insert(0, {str(LIB)!r})\n"
+            f"os.chdir({str(self.repo)!r})\n"
+            "from claude_bestpractice import hookio\n"
+            "def boom(): raise RuntimeError('kaboom')\n"
+            "hookio.guard(boom, fail_closed=False)\n"
+        )
+        subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
+                       cwd=str(self.repo), timeout=60)
+        self.assertEqual([], defects.unsent(self.ctx()))
 
     def test_nothing_is_written_to_the_session(self):
         """stdout is the hook's response to the harness; a report there would be context."""

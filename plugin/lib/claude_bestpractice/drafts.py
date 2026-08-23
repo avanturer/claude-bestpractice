@@ -270,25 +270,66 @@ def extract(turns: list[str], branch: str, session_id: str, subject_paths: list[
     return drafts
 
 
+def draft_key(quote: str) -> str:
+    """What makes two drafts the same one: the opening of the founder's own sentence.
+
+    Spelled once because three readers used to spell it separately, and a dedup rule that
+    lives in three places is a dedup rule that will disagree with itself.
+    """
+    return " ".join(str(quote).split())[:80].lower()
+
+
 def record(ctx: GitContext, drafts: list[Draft]) -> int:
+    """File each draft, or count it again if it is already waiting.
+
+    The extractor re-reads the same recent turns every time it runs, and `record` appended
+    unconditionally — so the inbox reached SIXTY rows carrying four distinct sentences,
+    89KB of them, while `claude-bp status` pointed at it as the next action. Nobody reviews
+    a list that is fifteen copies deep, and a list nobody can act on drifts without limit.
+
+    Same shape the board already uses for a re-derived finding: the repeat count replaces
+    the repeats, and it is the more useful signal anyway — a correction the founder has
+    made four times is one they mean.
+    """
     path = store.tier_b(ctx, INBOX_FILE)
+    waiting = {draft_key(str(item.get("quote", ""))): item for item in pending(ctx)}
+    filed = 0
     for draft in drafts:
-        store.append_jsonl(path, draft.to_dict())
-    return len(drafts)
+        body = draft.to_dict()
+        prior = waiting.get(draft_key(draft.quote))
+        if prior is None:
+            store.append_jsonl(path, {**body, "seen": 1})
+            filed += 1
+            continue
+        # Superseding row rather than an edit: this file is append-only, and `pending`
+        # keeps the newest row for a key. The first sighting's time is kept, because that
+        # is when the founder said it.
+        store.append_jsonl(path, {
+            **body,
+            "created_at": float(prior.get("created_at", draft.created_at)),
+            "seen": int(prior.get("seen", 1)) + 1,
+            "last_seen_at": draft.created_at,
+        })
+    return filed
 
 
 def pending(ctx: GitContext) -> list[dict]:
-    """Drafts not yet accepted or discarded, newest first."""
+    """Drafts not yet accepted or discarded, newest first, one row per draft.
+
+    Collapsed on read as well as on write, because the rows already on disk were written
+    by a version that did neither.
+    """
     resolved: set[str] = set()
-    items: list[dict] = []
+    newest: dict[str, dict] = {}
     for entry in store.read_jsonl(store.tier_b(ctx, INBOX_FILE)):
         if not isinstance(entry, dict):
             continue
+        key = draft_key(str(entry.get("quote", "")))
         if entry.get("resolved"):
-            resolved.add(str(entry.get("quote", ""))[:80].lower())
+            resolved.add(key)
             continue
-        items.append(entry)
-    out = [i for i in items if str(i.get("quote", ""))[:80].lower() not in resolved]
+        newest[key] = entry
+    out = [item for key, item in newest.items() if key not in resolved]
     out.sort(key=lambda i: float(i.get("created_at", 0)), reverse=True)
     return out
 

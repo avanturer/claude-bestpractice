@@ -214,6 +214,18 @@ def append_jsonl(path: Path, obj: Any, mode: int = 0o600) -> None:
         os.close(fd)
 
 
+def rewrite_jsonl(path: Path, rows: list[Any], mode: int = 0o600) -> None:
+    """Replace an append-only log with a shorter one. For repairs, and nothing else.
+
+    Appending never needs a lock; replacing does, and cannot have one that is worth
+    anything here — a concurrent `append_jsonl` between the read and the rename is lost.
+    That is acceptable for a step that runs once per clone at session start, over a log
+    whose duplicate rows are the thing being removed, and it is not acceptable anywhere
+    else. Written atomically, so a reader never sees half a file.
+    """
+    atomic_write(path, "".join(dumps(row, sort_keys=True) + "\n" for row in rows), mode)
+
+
 def read_jsonl(path: Path) -> list[Any]:
     """Read an append-only log, skipping records damaged by a partial write."""
     out: list[Any] = []
