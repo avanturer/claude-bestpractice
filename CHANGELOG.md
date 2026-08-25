@@ -1,5 +1,83 @@
 # Changelog
 
+## v1.53.2
+
+One `cd`, and the gate refused every tool for the rest of the session.
+
+### What it looked like
+
+After a single Bash call beginning `cd backend/src/fuddy/merge && …` — and the harness
+shell keeps that `cd` — every PreToolUse-gated call was refused:
+
+```
+claude-bestpractice: gate failed (PermissionError: [Errno 13] Permission denied: '/home/.git').
+Failing closed.
+```
+
+Bash, Write, EnterWorktree, subagents' Bash. Read tools still worked, so the session could
+look but not act — and the Stop gate resolves the repository through the same call, so it
+crashed identically and the turn could not be ended either. Unable to act and unable to
+stop, with no way back: the `cd` that would restore the working directory is itself a Bash
+call, which the gate refused. Only a restart got out (#187).
+
+### Two answers from git, measured from different places
+
+`resolve()` asks git three questions. `--show-toplevel` answers with an absolute path.
+`--git-common-dir` answers **relative to the directory it ran in**. The code joined the
+second to the first:
+
+```python
+common = Path(_run(["rev-parse", "--git-common-dir"], cwd))
+if not common.is_absolute():
+    common = (worktree_root / common).resolve()   # <- the wrong anchor
+```
+
+Those two agree only while the current directory *is* the top level, which is why this
+stood for fifty releases. From four directories down, git answers `../../../../.git`, and
+joining that to the repository root walks four levels ABOVE it. For a repository at
+`/home/<user>/dev/fuddy` that is exactly `/home/.git` — the path in the report, and the
+depth in the report.
+
+Joined to the directory git was asked from, now.
+
+### The quiet half is the worse half
+
+`/home` is not writable, so the failure was loud and total. Where the wrong path happens to
+be writable — a repository one level below a directory you own — nothing fails at all:
+
+- **Tier B moves.** The board, the leases and the observed test runs are written to a
+  directory no sibling session reads. Each session sees a store that looks exactly like an
+  empty repository, and the coordination layer silently stops coordinating.
+- **`is_worktree` flips.** It is defined as "the git dir differs from the common dir", so a
+  common dir resolved elsewhere makes a main checkout report itself as a worktree — and
+  gates key on that, including the database rule shipped in v1.53.0.
+
+The bug is exclusive to the **main checkout below its root**: inside a worktree
+`--git-common-dir` always answers absolutely, so the join never runs there. Checked against
+git rather than reasoned about, which is also why the `--git-dir` join is corrected without
+a test defending it — that one answers relatively only when the current directory is the
+top level, where both anchors are the same directory. It is fixed anyway rather than left
+for the next person to work out which of the two joins was the safe one.
+
+### On the tests
+
+Six mutations. Three survived the first run, and all three were worth the time:
+
+- The end-to-end test asserted *"the gate did not crash"*, and could not fail: the crash
+  needs the wrong path to be unwritable, which is true of `/home` and false of a temporary
+  directory. Under a fixture the same bug is silent. It now asserts the invariant that
+  breaks everywhere — a call made from a subdirectory registers in the store the siblings
+  read.
+- `here = cwd.resolve()` was inert; every use of it normalises anyway. Deleted rather than
+  shipped as a line no mutation can defend.
+- The `--git-dir` mutation is equivalent, for the reason above, and was retired from the
+  sweep with that reason written down rather than left as noise.
+
+Six remain, each breaking the join on purpose, each caught. One of them plants a plain
+file exactly where the wrong join lands and asserts that neither gate crashes — the
+founder's symptom reproduced rather than approximated, and it covers both halves of it:
+PreToolUse refusing every action, and the Stop gate refusing every finish.
+
 ## v1.53.1
 
 A demand nobody could satisfy, for a dependency nobody added.
