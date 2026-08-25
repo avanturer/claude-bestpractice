@@ -7,7 +7,7 @@ import subprocess
 import sys
 import unittest
 
-from helpers import BIN, RepoCase
+from helpers import BIN, RepoCase, git, sid
 
 
 class OptionCase(RepoCase):
@@ -164,6 +164,124 @@ class TestTheGateDemandsIt(RepoCase):
         self.start_with_manifest({"express": "^4.18"})
         self.write("package.json", json.dumps({"name": "app", "dependencies": {"express": "^4.18", "redis": "^4.0"}}))
         self.assertNotIn("no comparison on record", self.stop().stderr)
+
+
+class TestOnlyWhatTheBranchAdded(RepoCase):
+    """The demand is about dependencies THIS branch introduced, and it was reading them
+    off a ref that can stop resolving.
+
+    `_show` returns an empty string both when the manifest did not exist at a ref and
+    when the ref itself could not be read, and `new_dependencies` could not tell those
+    apart — so a baseline git had lost made every dependency in a touched manifest look
+    newly added. The founder's session edited `mobile/package.json` to add one package
+    and was asked to justify `react-native-view-shot`, which had been in the trunk since
+    long before the branch and appeared nowhere in its diff. Recording the comparison it
+    actually owed did not clear the demand, because the demand was about somebody else's
+    dependency (#185).
+
+    The baseline is a `git stash create` commit: no ref points at it, any `git gc` may
+    prune it, and a restored record carries it across sessions — so it can outlive both
+    its session and the object.
+    """
+
+    def repo_with_trunk_dependency(self) -> str:
+        """A trunk carrying `react-native-view-shot`, and a branch that adds one package."""
+        self.write("mobile/package.json", json.dumps(
+            {"name": "app", "dependencies": {"react-native-view-shot": "4.0.3", "expo": "51.0.0"}}))
+        baseline = self.commit()
+        git(["switch", "-qc", "feat/thumbnails"], self.repo)
+        self.write("mobile/package.json", json.dumps(
+            {"name": "app", "dependencies": {
+                "react-native-view-shot": "4.0.3", "expo": "51.0.0",
+                "babel-preset-expo": "11.0.0"}}))
+        return baseline
+
+    def added(self, baseline: str) -> list[str]:
+        from claude_bestpractice import options
+
+        return options.new_dependencies(self.ctx(), ["mobile/package.json"], baseline)
+
+    def test_a_baseline_that_still_resolves_reports_only_the_new_one(self):
+        baseline = self.repo_with_trunk_dependency()
+        self.assertEqual(["babel-preset-expo"], self.added(baseline))
+
+    def test_a_baseline_git_can_no_longer_read_is_not_an_empty_manifest(self):
+        """The reported case. An unreadable ref is not evidence that nothing was there."""
+        self.repo_with_trunk_dependency()
+        self.assertEqual(["babel-preset-expo"], self.added("3281711"))
+
+    def test_a_session_with_no_baseline_at_all_is_the_same_question(self):
+        self.repo_with_trunk_dependency()
+        self.assertEqual(["babel-preset-expo"], self.added(""))
+
+    def test_what_the_branch_already_carried_before_this_session_is_not_asked_about(self):
+        """Why the baseline stays in the union rather than the branch point replacing it.
+
+        A long-lived branch can already carry a dependency an earlier turn added — and
+        this session did not add it. Measuring from the trunk alone would demand a
+        comparison for it on every Stop, which is #185's complaint again in a different
+        costume: being asked about somebody else's dependency.
+        """
+        self.repo_with_trunk_dependency()
+        self.commit("an earlier turn adds a package and does not compare it")
+        started_here = self.ctx().head
+
+        self.write("mobile/package.json", json.dumps(
+            {"name": "app", "dependencies": {
+                "react-native-view-shot": "4.0.3", "expo": "51.0.0",
+                "babel-preset-expo": "11.0.0", "zod": "3.0.0"}}))
+
+        self.assertEqual(["zod"], self.added(started_here),
+                         "asked about a package that was on the branch before this session")
+
+    def test_a_manifest_this_branch_introduces_is_new_in_full(self):
+        """The other direction: suppressing everything would be the gate switched off.
+        A manifest with no before-state anywhere is one being written for the first time,
+        and every dependency in it is a decision nobody has made yet."""
+        from claude_bestpractice import options
+
+        self.repo_with_trunk_dependency()
+        self.write("api/package.json", json.dumps({"name": "api", "dependencies": {"fastify": "4.0.0"}}))
+        self.assertEqual(
+            ["fastify"],
+            options.new_dependencies(self.ctx(), ["api/package.json"], "3281711"),
+        )
+
+    def test_committing_the_addition_does_not_buy_silence(self):
+        """HEAD is deliberately not one of the refs consulted. A dependency this session
+        added and then committed is in HEAD, and reading it there would make committing
+        the way out — the gate going quiet exactly as the decision became permanent."""
+        baseline = self.repo_with_trunk_dependency()
+        self.commit("add the dependency")
+        self.assertEqual(["babel-preset-expo"], self.added(baseline))
+
+    def test_the_gate_stops_naming_a_dependency_from_the_trunk(self):
+        """End to end, through the Stop gate the founder actually met."""
+        self.write("mobile/package.json", json.dumps(
+            {"name": "app", "dependencies": {"react-native-view-shot": "4.0.3"}}))
+        self.write("app.js", "module.exports = 1;\n")
+        self.commit()
+        git(["switch", "-qc", "feat/thumbnails"], self.repo)
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
+        self.write("mobile/package.json", json.dumps(
+            {"name": "app", "dependencies": {
+                "react-native-view-shot": "4.0.3", "babel-preset-expo": "11.0.0"}}))
+
+        # The baseline the session recorded, replaced with one git cannot resolve — which
+        # is what a pruned `git stash create` commit leaves behind.
+        from claude_bestpractice import sessions
+
+        record = sessions.get(self.ctx(), sid(self.repo, "s1"))
+        record.baseline_commit = "3281711"
+        sessions.register(self.ctx(), record)
+
+        said = self.run_hook(
+            "evidence-gate",
+            {"session_id": "s1", "hook_event_name": "Stop", "stop_hook_active": False},
+        ).stderr
+        self.assertIn("babel-preset-expo", said, "the dependency it really added went unasked")
+        self.assertNotIn("react-native-view-shot", said,
+                         "still demanding a comparison for a dependency from the trunk")
 
 
 class TestCLI(OptionCase):
