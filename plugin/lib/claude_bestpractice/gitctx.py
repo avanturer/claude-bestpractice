@@ -93,19 +93,41 @@ def resolve(cwd: Path | str | None = None) -> GitContext:
     cwd = Path(cwd or os.getcwd())
     if not cwd.exists():
         raise GitError(f"cwd does not exist: {cwd}")
-
     try:
         worktree_root = Path(_run(["rev-parse", "--show-toplevel"], cwd))
     except GitError as exc:
         raise GitError(f"not inside a git repository: {cwd}") from exc
 
+    # Joined to the directory git was ASKED FROM, never to the top level. `--git-common-dir`
+    # answers relative to the current directory, and `--show-toplevel` answers absolutely,
+    # so joining one to the other only agrees while the two are the same directory. From
+    # the repository root they are, which is why this stood for fifty releases; one `cd`
+    # into a subdirectory and the answer walked out of the repository by exactly the depth
+    # of that subdirectory. `cd backend/src/fuddy/merge` in a repository at
+    # `/home/<user>/dev/fuddy` resolved the common dir to `/home/.git` — four levels up —
+    # and the shell `cd` persists, so every later call resolved it there too (#187).
+    #
+    # Both harms come from this one line, and the quiet one is worse. Where that path is
+    # unwritable the gate raised PermissionError and, being fail-closed, refused every
+    # tool call for the rest of the session — with no way back, because the `cd` that
+    # would fix it is itself a refused Bash call. Where it happens to be writable nothing
+    # fails at all: Tier B moves to a directory no sibling session reads, so the board,
+    # the leases and the observed test runs are written to a second store that looks
+    # exactly like an empty repository. `is_worktree` flips too — it compares these two
+    # paths — so a main checkout starts reporting itself as a worktree.
     common = Path(_run(["rev-parse", "--git-common-dir"], cwd))
     if not common.is_absolute():
-        common = (worktree_root / common).resolve()
+        common = (cwd / common).resolve()
 
+    # The same anchor, though nothing can reach the difference today: `--git-dir` answers
+    # relatively only when the current directory IS the top level, and there the two
+    # anchors are the same directory. Verified against git rather than assumed — from any
+    # subdirectory, and from a worktree at any depth, it answers absolutely. Corrected
+    # anyway, because leaving one join measured from the wrong place is leaving the next
+    # person to rediscover which of the two was the safe one.
     git_dir = Path(_run(["rev-parse", "--git-dir"], cwd))
     if not git_dir.is_absolute():
-        git_dir = (worktree_root / git_dir).resolve()
+        git_dir = (cwd / git_dir).resolve()
 
     # An unborn branch has no HEAD commit. That is normal for a fresh repo.
     # `--verify` is what makes an unborn branch return nothing instead of echoing back

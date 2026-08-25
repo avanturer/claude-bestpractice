@@ -53,6 +53,119 @@ class TestTiers(RepoCase):
         self.assertEqual(git(["status", "--porcelain"], self.repo), "")
 
 
+class TestTheRepositoryResolvesTheSameFromAnySubdirectory(RepoCase):
+    """`git rev-parse --git-common-dir` answers relative to the directory it ran in;
+    `--show-toplevel` answers absolutely. Joining the first to the second agreed only
+    while the two were the same directory — that is, only from the repository root.
+
+    One `cd` into a subdirectory and the common dir walked out of the repository by
+    exactly the depth of that subdirectory. In a repository at `/home/<user>/dev/fuddy`,
+    `cd backend/src/fuddy/merge` resolved it to `/home/.git`, four levels up. The
+    harness shell keeps the `cd`, so every later call resolved it there too (#187).
+
+    Both harms come from that one join, and the quiet one is worse:
+
+    - `/home` is not writable, so the gate raised PermissionError and — being
+      fail-closed — refused every tool call for the rest of the session, with no way
+      back, because the `cd` that would fix it is itself a refused Bash call.
+    - Where the wrong path IS writable nothing fails at all. Tier B moves to a directory
+      no sibling reads, so the board, the leases and the observed test runs go to a
+      second store that looks exactly like an empty repository.
+    """
+
+    DEEP = "backend/src/fuddy/merge"
+
+    def deep_dir(self, root: Path) -> Path:
+        target = root / self.DEEP
+        target.mkdir(parents=True, exist_ok=True)
+        return target
+
+    def resolved(self, where: Path):
+        from claude_bestpractice.gitctx import resolve
+
+        return resolve(where)
+
+    def test_the_common_dir_is_the_same_from_the_root_and_from_a_subdirectory(self):
+        at_root = self.resolved(self.repo)
+        deep = self.resolved(self.deep_dir(self.repo))
+        self.assertEqual(at_root.common_dir, deep.common_dir)
+
+    def test_the_common_dir_never_leaves_the_repository(self):
+        """The shape of the report: four levels deep put it four levels above the repo."""
+        deep = self.resolved(self.deep_dir(self.repo))
+        self.assertTrue(
+            str(deep.common_dir).startswith(str(self.repo.resolve())),
+            f"the common dir resolved outside the repository: {deep.common_dir}",
+        )
+
+    def test_state_is_the_same_store_from_a_subdirectory(self):
+        """Tier B is what every sibling session reads. A second one is invisible, not loud."""
+        at_root = self.resolved(self.repo)
+        deep = self.resolved(self.deep_dir(self.repo))
+        self.assertEqual(store.tier_b(at_root), store.tier_b(deep))
+
+    def test_a_main_checkout_does_not_report_itself_as_a_worktree(self):
+        """`is_worktree` compares the git dir against the common dir, so a common dir
+        resolved somewhere else flips it — and gates key on it."""
+        self.assertFalse(self.resolved(self.deep_dir(self.repo)).is_worktree)
+
+    def test_a_worktree_still_reports_itself_as_one_from_a_subdirectory(self):
+        """The other direction. Anchoring both answers to the same directory must not
+        cost the distinction the coordination layer is built on."""
+        wt = self.add_worktree("feature")
+        deep = self.resolved(self.deep_dir(wt))
+        self.assertTrue(deep.is_worktree)
+        self.assertEqual(self.resolved(self.repo).common_dir, deep.common_dir)
+
+    def test_neither_gate_crashes_when_the_wrong_path_cannot_be_used(self):
+        """The founder's session was unable to act AND unable to stop.
+
+        PreToolUse refused Bash, Write and EnterWorktree; the Stop gate refused the turn
+        with the same PermissionError, so it could not even finish. Only a restart got
+        out. Both gates resolve the repository through the same call, so both inherited
+        the same wrong path.
+
+        Reproduced rather than approximated: `/home` cannot be written to, so a plain
+        FILE is planted exactly where the wrong join lands. One directory down is enough —
+        the join walks up by the depth of the subdirectory, so depth one keeps the planted
+        file inside the fixture instead of somewhere real.
+        """
+        (self.repo / "sub").mkdir()
+        (self.tmp / ".git").write_text("not a directory\n", encoding="utf-8")
+
+        gates = (
+            ("pre-tool", {"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                          "tool_input": {"command": "pwd"}}),
+            ("evidence-gate", {"hook_event_name": "Stop", "stop_hook_active": False}),
+        )
+        for gate, event in gates:
+            proc = self.run_hook(gate, {"session_id": "s1", **event}, cwd=self.repo / "sub")
+            self.assertNotIn("gate failed", proc.stdout + proc.stderr,
+                             f"{gate} crashed and failed closed from a subdirectory")
+
+    def test_the_gate_writes_its_state_where_the_siblings_read_it(self):
+        """End to end, through the hook the founder actually met.
+
+        Asserting "it did not crash" would prove nothing here: the crash needs the wrong
+        path to be UNWRITABLE, which is true of `/home` on their machine and false of a
+        temporary directory. Under a fixture the same bug is silent — it just writes the
+        session registry somewhere no sibling looks. That is the invariant, so that is
+        what is asserted, and it fails wherever the join is wrong.
+        """
+        from claude_bestpractice import sessions
+        from helpers import sid
+
+        deep = self.deep_dir(self.repo)
+        self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+            "tool_input": {"command": "pwd"},
+        }, cwd=deep)
+
+        seen = sessions.get(self.resolved(self.repo), sid(self.repo, "s1"))
+        self.assertIsNotNone(
+            seen, "a call made from a subdirectory registered in a store nobody else reads")
+
+
 class TestAtomicWrite(RepoCase):
     def test_write_and_read_roundtrip(self):
         ctx = self.ctx()
