@@ -1,5 +1,76 @@
 # Changelog
 
+## v1.53.1
+
+A demand nobody could satisfy, for a dependency nobody added.
+
+### What it looked like
+
+`evidence-gate` asked, on every Stop, for a comparison justifying
+`react-native-view-shot`. The session had edited `mobile/package.json` for a different
+reason — it added `babel-preset-expo` — and `react-native-view-shot` had been in the trunk
+since long before the branch existed:
+
+```
+git diff origin/main...HEAD -- mobile/package.json | grep -i view-shot   # nothing
+git show origin/main:mobile/package.json | grep -i view-shot            # there
+```
+
+Recording the comparison the session actually owed did not clear it. The demand was about
+somebody else's dependency, so nothing the session could do would answer it (#185).
+
+### One empty string meaning two different things
+
+`new_dependencies` reads the manifest at the baseline, reads it in the working tree, and
+reports the difference. The baseline side goes through `_show`, which returns an empty
+string when `git show <ref>:<path>` fails — and it fails for two unrelated reasons:
+
+- the manifest did not exist at that ref, so every dependency in it really is new;
+- the ref could not be read at all, in which case nothing whatsoever is known.
+
+The second was being read as the first. An unreadable baseline therefore turned every
+dependency of a touched manifest into a newly added one — the entire dependency tree of the
+project, demanded one comparison at a time, on every turn.
+
+**The baseline is exactly the ref that goes missing.** It is a `git stash create` commit:
+no ref points at it, any `git gc` may prune it, and a restored session record carries it
+across restarts — so it routinely outlives both its session and the object itself. A
+restored record can also hand over a baseline taken on a *different branch*, where the
+manifest legitimately looked different.
+
+### Two refs, and a name has to be absent from both
+
+The before-state is now read from the baseline **and** from the branch point — the
+merge-base with the trunk — and a dependency counts as new only when neither carries it.
+A ref that cannot be read contributes nothing instead of zeroing the answer, and the other
+one carries the result.
+
+They answer different halves, which is why both stay:
+
+- **The branch point** answers the question the gate is actually asking. "New" means added
+  by this branch, so anything the trunk already had is not new, whoever added it and
+  whenever.
+- **The baseline** stops the demand reaching back into the branch's own history. A
+  long-lived branch can already carry a dependency an earlier turn added, and asking this
+  session about it is the same complaint in a different costume.
+
+**Never HEAD.** A dependency this session added and then committed is in HEAD, and reading
+the before-state there would make committing the way out — the gate going quiet at exactly
+the moment the decision became permanent. That one is asserted by a test, because it is the
+mistake the fix invites.
+
+A manifest with no before-state at any readable ref is still new in full. Suppressing
+everything on an unreadable baseline would be this gate switched off by accident, which is
+the same defect pointing the other way.
+
+### On the tests
+
+Seven mutations, each breaking one of the new behaviours on purpose. Six were caught on the
+first run; the seventh survived — dropping the baseline from the pair changed nothing any
+test could see. It was a real gap rather than a nuisance: the behaviour it covers is that a
+dependency already on the branch when the session started is not this session's to justify.
+The test that now proves it is the one that catches it.
+
 ## v1.53.0
 
 One shared database, two gates reading it backwards.

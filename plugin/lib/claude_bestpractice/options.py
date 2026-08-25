@@ -165,14 +165,77 @@ def new_dependencies(ctx: GitContext, changed: list[str], baseline: str) -> list
     gate that fires on `npm audit fix` is one the founder switches off within a day.
     """
     added: list[str] = []
+    floor = _branch_point(ctx)
     for rel in changed:
         if Path(rel).name not in MANIFESTS:
             continue
-        before = _dependency_names(_show(ctx, baseline, rel))
+        before = _already_there(ctx, rel, baseline, floor)
         after = _dependency_names((ctx.worktree_root / rel).read_text(encoding="utf-8", errors="replace")
                                   if (ctx.worktree_root / rel).is_file() else "")
         added.extend(sorted(after - before))
     return added
+
+
+def _already_there(ctx: GitContext, rel: str, baseline: str, floor: str) -> set[str]:
+    """Names this manifest carried BEFORE the turn, from every ref that can still be read.
+
+    Two refs, unioned, because one of them can silently stop resolving and the failure
+    mode is severe. `_show` cannot tell "the manifest did not exist at this ref" from "I
+    could not read this ref" — both come back as an empty string — so a baseline git can
+    no longer resolve made every dependency in a touched manifest look newly added. The
+    founder's session was asked to justify `react-native-view-shot`, which had been in the
+    trunk since long before the branch and appeared nowhere in its diff; the demand
+    repeated on every Stop, and recording the comparison it actually owed did not clear it
+    because it was being asked about somebody else's dependency (#185).
+
+    The baseline is the ref that goes missing. It is a `git stash create` commit — an
+    object no ref points at, prunable by any `git gc`, and carried across restarts from a
+    remembered record, so it can outlive both its session and the object itself. It is
+    also not guaranteed to sit on this branch at all: a restored record can hand over a
+    baseline taken on a different one, where the manifest legitimately looked different.
+
+    The branch point is the ref that answers the question the gate is actually asking.
+    "New" means added by this branch, so anything the trunk already carried is not new,
+    whoever added it and whenever. A name has to be absent from BOTH to count.
+
+    Never HEAD. A dependency this session added and then committed is in HEAD, and
+    including it here would make committing the way to be let off the comparison — the
+    gate would go quiet at exactly the moment the decision became permanent.
+    """
+    before: set[str] = set()
+    for ref in (baseline, floor):
+        if ref:
+            before |= _dependency_names(_show(ctx, ref, rel))
+    return before
+
+
+def _branch_point(ctx: GitContext) -> str:
+    """Where this branch left the trunk, or "" when there is no trunk to leave.
+
+    Empty is a real answer and is treated as one: in a repository with no trunk and no
+    readable baseline there is no before-state, so every dependency in the manifest is
+    genuinely new — which is the right verdict for a manifest being written for the first
+    time, and the only honest one anywhere else.
+    """
+    import subprocess
+
+    from .gitpolicy import default_branch
+
+    try:
+        trunk = default_branch(ctx)
+    except Exception:  # noqa: BLE001 - an unaskable repository has no trunk, which is an answer
+        return ""
+    if not trunk:
+        return ""
+    for ref in (f"origin/{trunk}", trunk):
+        found = subprocess.run(
+            ["git", "merge-base", "HEAD", ref],
+            cwd=str(ctx.worktree_root), capture_output=True,
+            encoding="utf-8", errors="surrogateescape", timeout=30,
+        )
+        if found.returncode == 0 and found.stdout.strip():
+            return found.stdout.strip()
+    return ""
 
 
 # Two shapes cover every manifest that matters: `"name": "^1.2"` (JSON, Gemfile, gradle)
