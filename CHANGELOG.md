@@ -2,8 +2,13 @@
 
 ## v1.55.0
 
-The second pass over 2.1.241–2.1.247 — the one that read our own code against the
-changelog instead of only the changelog against our docs. It found two defects.
+Everything Claude Code 2.1.241–2.1.247 changed for this plugin, in two passes: the first
+read the changelog against our documentation, the second read it against our code. The
+second one found defects.
+
+Shipped as one version because it ships as one commit — a `## v1.54.0` heading with no tag
+behind it would put half of this outside the release notes, which are what anybody reads
+first.
 
 ### A line the shell will not run was being vouched for
 
@@ -70,10 +75,6 @@ it, so the next upgrade has something to re-run rather than something to believe
 Also `feedbackDrafts: false` in the silence block — 2.1.247's `SendFeedback` tool lets
 Claude draft a feedback report when something goes wrong in a session, and for a founder
 running 3–8 sessions a gate refusing a turn is a normal event, not an incident to file.
-
-## v1.54.0
-
-Four assumptions about the harness that Claude Code 2.1.241–2.1.247 either broke or paid off.
 
 ### A line budget bounded nothing
 
