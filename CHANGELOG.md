@@ -1,5 +1,92 @@
 # Changelog
 
+## v1.54.0
+
+Four assumptions about the harness that Claude Code 2.1.241–2.1.247 either broke or paid off.
+
+### A line budget bounded nothing
+
+A gate that refuses a turn hands the agent the end of whatever the runner printed. That end
+was bounded at **25 lines and nothing else** — so one base64 blob, one wide assert diff, one
+minified bundle on a single line put megabytes into the next turn. `docs/ECONOMICS.md` has
+budgeted a gate failure at ≤ 500 tokens since it was written; the budget was being held by an
+assumption about how long a line of test output is.
+
+Claude Code 2.1.247 fixed the harness side — *"a hook or background agent that printed
+megabytes of error output being able to overflow the conversation and wedge the session on
+Prompt is too long"*. That removes the crash, not the cost: the tokens are still bought, on
+every failing turn, out of the window the founder pays for. A gate bounds its own output.
+
+`hookio.tail_of` now caps lines, each line, and the total, keeping the END in all three —
+where a runner puts its summary — and marking a line it cut so the agent does not read the
+fragment as the whole assertion. It lives in `hookio` beside the two other "what may reach
+the model, and how much" budgets, because the evidence gate and the witness run both built
+one and the two drifting apart is how one keeps an unbounded path after the other is fixed.
+
+### The same overrun, written to disk permanently
+
+`unverified.jsonl` is append-only and clone-wide, and every pull-request readiness check
+parses all of it. The failure marker carried the gate's reason **verbatim** — so a run that
+failed with one enormous line wrote that line there, forever. Capped at write, and repair
+`0010-shrink-unverified-reasons` trims what earlier versions already left behind. The field
+shrinks and the row stays: which branch finished unverified is the only thing any reader
+looks at, and dropping the row would forgive a finish nobody proved.
+
+### The founder now reads one line, and 22 columns of it were ours
+
+2.1.247: *"Changed cross-session peer messages to collapse by default to a one-line
+`Message from @<sender>: <first line>` preview; Ctrl+O expands the full body"*. The harness
+names the sender itself in that line. `[claude-bestpractice]` was duplicating it in front of
+the one line that actually gets read — on a fact whose whole value is being read *before* the
+session acts on what it does not know. Now `[claude-bp]`, the spelling the founder already
+types.
+
+The marker itself stays, because the reason for it never went away: an unrecognised note
+becomes the recipient's task statement (#106, #118, #166) — and a rename is exactly how that
+would be re-entered, since an upgrade does not reach the sessions already running. A sibling
+still on 1.53.x delivers with the old marker, so `prompt-capture` matches both. The writer
+moved; the reader keeps every spelling it has ever emitted.
+
+### Cache TTL stopped being a verdict
+
+`docs/ECONOMICS.md` said usage credits "silently drop" the prompt cache to five minutes and
+advised stopping background subagents. 2.1.243 added `promptCacheTtl` and
+`subagentPromptCacheTtl` — the main conversation holds an hour while subagents stay at five
+minutes, which is the right split rather than a compromise: a subagent is a short spawn that
+never gets a second cache read, so an hour of write cost for it buys nothing.
+
+That retires half the old advice. Suppressing optional injection still pays; "stop background
+subagents" no longer follows *from the TTL*. The reason that survives is the one already in
+the budget table — at 3–8 parallel sessions the per-spawn injection is the dominant recurring
+cost, whatever the TTL is. `policy/managed-settings.example.json` carries both keys, plus
+`modelPricing` and `modelPicker` from the same release.
+
+### Two version floors, both of which fail quiet
+
+Written down because neither announces itself:
+
+- **2.1.243 for the live board.** The inbox socket has existed since 2.1.224, but 2.1.232's
+  socket-directory hardening switched cross-session messaging off *inside user namespaces and
+  rootless containers* until 2.1.243 fixed it. The plugin looks installed and says nothing.
+- **2.1.246 for worktrees.** Before it, the background retention sweep could remove a worktree
+  under `.claude/worktrees/` that the founder created, whenever a stale background-session
+  record pointed at it. This plugin provisions trees in exactly that directory, because it is
+  the one place entering never prompts.
+
+`claude plugin validate --strict` re-run against 2.1.247, on both manifests. The README said
+2.1.220, from before 2.1.246 fixed `/reload-plugins` reporting 0 skills for the
+`skills/*/SKILL.md` layout this plugin uses.
+
+### Checked and left alone
+
+- `inbox._send` connects and writes one complete newline-terminated payload, so 2.1.243
+  closing connections that send no complete line within 30 seconds needs nothing.
+- The version-less-plugin cache bug in 2.1.247 cannot reach this plugin: a version is
+  declared in both `plugin.json` and `marketplace.json`.
+- `if: Bash(git commit:*)` was firing on unrelated Bash calls carrying `$()` before 2.1.243
+  fixed it — spending a 300s timeout and an async rewake on nothing. Fixed upstream; the
+  floor is the fix.
+
 ## v1.53.2
 
 One `cd`, and the gate refused every tool for the rest of the session.

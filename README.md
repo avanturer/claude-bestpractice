@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-1.53.2-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-1.54.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-1316%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-33%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -168,8 +168,10 @@ on a card hears when it lands.
 A hook does the delivering, so nothing here needs the model's cooperation or your
 confirmation. Notes are deduplicated on the claim, capped at two per drain, and retired
 rather than delivered once thirty minutes old — a stale note reads as current, which is
-worse than silence. Requires Claude Code 2.1.224+ on macOS or Linux; where messaging is
-unavailable the plugin is simply silent.
+worse than silence. Requires Claude Code 2.1.224+ on macOS or Linux — and 2.1.243+ if you
+run sessions inside a user namespace or a rootless container, where the channel was
+silently off from 2.1.232 until that release. Where messaging is unavailable the plugin is
+simply silent.
 
 ### A work ledger that merges
 
@@ -440,7 +442,15 @@ tool call, so a dependency tree is latency, an extra failure mode and a supply-c
 surface for the component whose whole job is to be trustworthy. Enforced in CI.
 
 Tested on Python 3.9, 3.11 and 3.13. `claude plugin validate --strict` passes against
-Claude Code 2.1.220.
+Claude Code 2.1.247.
+
+Everything works on any recent Claude Code; two features need a floor, and both fail
+quiet rather than loud, which is why they are written down:
+
+| Wants | Why that version |
+|---|---|
+| **2.1.243** for the live board | The inbox socket needs 2.1.224 to exist at all, but 2.1.232's socket-directory hardening silently switched cross-session messaging **off inside user namespaces and rootless containers** until 2.1.243 fixed it. Silently is the problem: the plugin looks installed and says nothing. |
+| **2.1.246** for worktrees | Before it, the background-session retention sweep could remove a worktree under `.claude/worktrees/` that you created yourself, whenever a stale background-session record pointed at it. This plugin provisions trees in exactly that directory, because it is the one place entering never prompts. |
 
 ### What appears in your repository, and what to do with it
 

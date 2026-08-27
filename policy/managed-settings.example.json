@@ -84,6 +84,22 @@
     "$comment": "Set explicitly. The default flipped back to branching from the remote default, which silently drops unpushed commits from new worktrees."
   },
 
+  "$7b_cache_ttl_is_a_setting_now": {
+    "$comment": "Requires 2.1.243. Before it, the TTL followed funding mode with no way to say otherwise: subscription auth got an hour, usage credits got five minutes, and the drop was invisible until you read `ephemeral_5m` in the transcript. See docs/ECONOMICS.md.",
+    "promptCacheTtl": "1h",
+    "subagentPromptCacheTtl": "5m",
+    "$comment_split": "Not a compromise — the right split. The main conversation carries a long prefix re-read every turn, so an hour pays. A subagent is a short spawn that never gets a second cache read, so an hour of write cost for it buys nothing.",
+    "$comment_scope": "Applies to API-key and cloud-provider auth. On a subscription the main conversation is already at an hour."
+  },
+
+  "$7c_what_the_cost_figures_mean": {
+    "$comment": "Both 2.1.243. Nothing here changes spend; they change whether the numbers on screen are true.",
+    "modelPricing": {},
+    "$comment_pricing": "MANAGED scope only. Fill with the organisation's contracted per-model rates and discount multiplier, or leave it out entirely — an empty object is not a rate card. Without it /cost, the status line and telemetry all report list price, which reads high for anyone on a contract.",
+    "modelPicker": [],
+    "$comment_picker": "An ordered, labeled list that curates /model. Worth setting for the cache reason, not the tidiness one: a mid-session model switch invalidates the whole prefix, and the cheapest way to never pay for one is to not offer it."
+  },
+
   "$8_the_enforcement_spine": {
     "$comment": "Managed-scope hooks are the copy that survives lower-scope configuration. The plugin ships behaviour; policy ships the guarantee. Point these at root-owned scripts OUTSIDE the plugin root, which is user-writable and changes path on every update.",
     "hooks": {}

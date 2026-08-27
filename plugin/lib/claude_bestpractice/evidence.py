@@ -41,7 +41,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from . import provenance, store, testcount, witness
+from . import hookio, provenance, store, testcount, witness
 from .gitctx import GitContext, changed_files
 
 # Consecutive Stop blocks before we stop blocking and leave a durable marker instead.
@@ -316,7 +316,7 @@ def run_suite(ctx: GitContext, command: list[str]) -> tuple[int, str]:
     finally:
         _retire_nonce(ctx)
 
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-25:])
+    tail = hookio.tail_of(proc.stdout + proc.stderr)
     if proc.returncode == NOT_EXECUTABLE:
         # The shell's "command not found". `npm test` exists and exits 127 because
         # vitest is not installed — the suite did not fail, it never ran, and calling
@@ -917,7 +917,7 @@ def clean_rerun(ctx: GitContext, command: list[str]) -> Verdict:
             env=env,
         )
         if proc.returncode != 0:
-            tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-25:])
+            tail = hookio.tail_of(proc.stdout + proc.stderr)
             return _judge_clean_failure(ctx, command, tail)
         return Verdict(True, "clean-checkout re-run passed")
     except subprocess.TimeoutExpired:

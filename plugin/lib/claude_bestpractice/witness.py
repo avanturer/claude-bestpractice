@@ -48,6 +48,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import hookio
 from .gitctx import GitContext
 
 # Floor and margin, not a ceiling. The ceiling is DERIVED from what the harness gives the
@@ -179,7 +180,7 @@ def _spawn(ctx: GitContext, argv: list[str], env: dict[str, str] | None) -> subp
 
 
 def _tail(proc: subprocess.CompletedProcess) -> str:
-    return "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-25:])
+    return hookio.tail_of(proc.stdout + proc.stderr)
 
 
 def _pytest_config(root: Path, scratch: Path) -> Path:

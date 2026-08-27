@@ -393,6 +393,35 @@ class TestOurOwnFactIsNotTheRecipientsTask(RepoCase):
         self.deliver(f"{inbox.PREFIX} the suite is RED on main, and you are branched off it")
         self.assertEqual("", self.record().task_statement)
 
+    def test_every_spelling_this_plugin_has_emitted_is_recognised(self):
+        """An upgrade does not reach the sessions already running.
+
+        1.54.0 shortened the marker because Claude Code 2.1.247 collapses a cross-session
+        message to one line and names the sender itself. While the upgrade lands, a sibling
+        still on the old release delivers with the marker it knows — and an unrecognised
+        note is exactly the defect this class exists to prevent, re-entered through a
+        rename. Every marker, not just the current one, or the next rename repeats this.
+        """
+        from claude_bestpractice import inbox
+
+        self.write("store.py", "x = 1\n")
+        for marker in inbox.MARKERS:
+            self.deliver(f"{marker} another session is blocked on store.py, which you "
+                         "hold. Are you still in it, or can they take it?")
+            self.assertEqual("", self.record().task_statement,
+                             f"a note marked {marker} became the recipient's task")
+
+    def test_the_marker_stays_short_enough_to_read_in_a_collapsed_preview(self):
+        """The harness shows `Message from @<sender>: <first line>` and nothing more.
+
+        The sender is already named there, so every column this marker takes is a column
+        of the fact the founder does not see without expanding.
+        """
+        from claude_bestpractice import inbox
+
+        self.assertLessEqual(len(inbox.PREFIX), 12)
+        self.assertEqual(inbox.PREFIX, inbox.MARKERS[0], "the writer emits the newest marker")
+
     def test_the_channel_says_what_it_carried(self):
         from claude_bestpractice import inbox
 

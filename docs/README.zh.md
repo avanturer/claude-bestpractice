@@ -4,7 +4,7 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-1.53.2-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-1.54.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-1316%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-33%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
@@ -353,7 +353,15 @@ Python 3.9+ 和 git。**没有任何其他依赖，这是硬约束**——这些
 全部职责恰恰就是可信。此约束在 CI 中强制执行。
 
 已在 Python 3.9、3.11 和 3.13 上测试。`claude plugin validate --strict` 在
-Claude Code 2.1.220 上通过。
+Claude Code 2.1.247 上通过。
+
+在任何较新的 Claude Code 上都能工作；有两项功能需要版本下限，而且两者都是**静默**失效的，
+所以在此写明：
+
+| 需要 | 为什么是这个版本 |
+|---|---|
+| **2.1.243** — 实时看板 | 收件箱套接字自 2.1.224 起才存在，但 2.1.232 对套接字目录的加固**在 user namespace 和 rootless 容器内**静默关闭了跨会话消息，直到 2.1.243 修复。问题正在于「静默」：插件看起来装好了，却什么都不说。 |
+| **2.1.246** — worktree | 在此之前，后台会话的保留清理可能删除你自己在 `.claude/worktrees/` 下创建的 worktree——只要有一条过期的后台会话记录指向它。本插件恰好把工作树放在该目录，因为那是进入时唯一不需要确认的位置。 |
 
 ### 它会在你的仓库里留下什么，以及该怎么处理
 
