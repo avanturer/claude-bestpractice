@@ -1,5 +1,45 @@
 # Changelog
 
+## v1.55.1
+
+Card 0059, the divergence 1.55.0 wrote down instead of guessing at. Looked at properly, it
+was worse than the note said.
+
+### A compound statement was being handed to gates as argv
+
+`;;` only means anything inside a `case`, and `shlex` returns it as one ordinary token. Both
+readings that produced were wrong, in opposite directions:
+
+```
+a ;; b                       bash REJECTS the line; this read `a` with two arguments
+case x in a) echo 1;; esac   bash ACCEPTS it;        this read ONE command named `case`
+```
+
+The second is the worse half, and it is the one the 1.55.0 note missed. A compound statement
+is not a simple command, so every gate asking "which program is this, with which subcommand"
+was being handed nonsense and answering confidently — a vouch, a merge check, a deploy
+refusal, all reading `case` as the program.
+
+Both now decline the line whole, which is this module's documented failure direction:
+an unparseable line returns nothing and every caller falls back to the substring match.
+Knowing whether a `;;` is inside a `case` needs a parser this module does not have and
+should not grow.
+
+**Cost, stated rather than buried:** a real `case` statement is no longer vouched for, and
+refusal gates substring-match one instead of parsing it. That is the direction that refuses
+rather than allows.
+
+Asserted against bash on 26 lines in both directions, `case` statements included — bash
+accepts those two and this declines them on purpose, which the test says out loud.
+
+### And the empty guard stopped costing more than it bought
+
+`if not line or not line.strip()` was two checks for one question: a whitespace-only line
+tokenises to nothing and falls out of the filter at the end anyway. Narrowed to `not line`,
+which still answers for a `None` the annotation forbids but a caller may pass — a gate that
+raises there refuses the founder's tool call. That is where the complexity budget for the
+`case` check came from; `segments` stays at 10 rather than the budget moving.
+
 ## v1.55.0
 
 Everything Claude Code 2.1.241–2.1.247 changed for this plugin, in two passes: the first
