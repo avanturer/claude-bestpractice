@@ -24,6 +24,24 @@ import shlex
 # leaves them inside a token when they are quoted, so `echo 'a && b'` stays one command.
 _SEPARATORS = {"&&", "||", ";", "|", "|&", "&", "\n"}
 
+# The subset that bash requires a command on BOTH sides of. A line ending on one of these —
+# or starting on one — is a SYNTAX ERROR, not a shorter line, and the difference is the
+# whole point: dropping the dangling operator made `make test &&` parse identically to
+# `make test`, so `vouch` approved it and `allow_tool` ended the permission pipeline before
+# Claude Code 2.1.246's own rule ("always require approval for malformed commands with a
+# dangling && or ||") could be applied. A parse this module and the shell disagree about is
+# precisely what must never become a vouch.
+#
+# `;`, `&` and a newline are deliberately NOT here: `ruff check src/ ;` and `sleep 1 &` are
+# valid shell, and refusing them would cost real work to fix nothing.
+#
+# KNOWN BOUNDARY, measured rather than assumed: `;;`, `;&` and `;;&` are `case` terminators
+# that `shlex` hands back as one ordinary token, so `a ;; b` reads here as `a` with two
+# arguments while bash rejects the line outright. That divergence predates this set and is
+# not what 2.1.246 named — its rule is the dangling `&&` or `||`, which is matched exactly.
+# Left alone rather than widened on a guess; carried as card 0059.
+_NEEDS_A_FOLLOWER = {"&&", "||", "|", "|&"}
+
 # Programs that run their argument as the real command, so the thing being gated is one
 # position further along. The same list Claude Code itself strips, plus `env`, which takes
 # assignments before the program name.
@@ -61,16 +79,25 @@ def segments(line: str) -> list[list[str]]:
 
     out: list[list[str]] = []
     current: list[str] = []
+    # Whether the separator just seen still owes us a command. Tracked rather than checked
+    # at the end, so `a && && b` and `&& a` are caught for the same reason `a &&` is.
+    owed = False
     for token in tokens:
         if token in _SEPARATORS:
-            if current:
-                out.append(current)
+            if token in _NEEDS_A_FOLLOWER and not current:
+                return []
+            out.append(current)
             current = []
+            owed = token in _NEEDS_A_FOLLOWER
             continue
         current.append(token)
-    if current:
-        out.append(current)
-    return out
+        owed = False
+    if owed:
+        return []
+    out.append(current)
+    # Emptied in one place rather than guarded in two: `a ;; b` and a trailing `;` both
+    # leave a gap, and neither is a command to hand a gate.
+    return [argv for argv in out if argv]
 
 
 def _unwrap(argv: list[str]) -> list[str]:

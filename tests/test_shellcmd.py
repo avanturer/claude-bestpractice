@@ -88,3 +88,46 @@ class TestTheSameShapeOneGateOver(RepoCase):
 
     def test_actually_deploying_is_still_refused(self):
         self.assertEqual("deny", self.bash("railway up"))
+
+
+class TestALineTheShellWillNotParse(unittest.TestCase):
+    """A dangling `&&` used to make a line parse SHORTER, not fail.
+
+    `make test &&` became `make test`, which `vouch` approves — and `allow_tool` ends the
+    permission pipeline, so the approval landed ahead of Claude Code 2.1.246's own rule
+    that a malformed command always requires approval. The bar is bash: what it rejects,
+    this rejects.
+    """
+
+    MALFORMED = ("make test &&", "make test ||", "make test |", "make test |&",
+                 "&& make test", "|| make test", "make test && && ls",
+                 "cd x && ruff check &&")
+    WELL_FORMED = ("make test", "ruff check src/ ;", "sleep 1 &", "a && b", "a | b",
+                   "a; b", "echo 'a && b'", 'echo "x || y"', "cd x && ruff check")
+
+    def test_bash_agrees_these_are_malformed(self):
+        """The list above is checked against the shell, not against our opinion of it."""
+        for line in self.MALFORMED:
+            proc = subprocess.run(["bash", "-nc", line], capture_output=True)
+            self.assertNotEqual(0, proc.returncode, f"bash accepts {line!r}")
+
+    def test_bash_agrees_these_are_fine(self):
+        for line in self.WELL_FORMED:
+            proc = subprocess.run(["bash", "-nc", line], capture_output=True)
+            self.assertEqual(0, proc.returncode, f"bash rejects {line!r}")
+
+    def test_a_malformed_line_yields_nothing_to_judge(self):
+        for line in self.MALFORMED:
+            self.assertEqual([], shellcmd.segments(line), f"{line!r} parsed anyway")
+            self.assertEqual([], shellcmd.commands(line), f"{line!r} parsed anyway")
+
+    def test_a_valid_terminator_is_not_a_malformation(self):
+        """`;` and `&` legally end a line. Refusing them would cost real work to fix nothing."""
+        for line in self.WELL_FORMED:
+            self.assertTrue(shellcmd.segments(line), f"{line!r} was refused")
+
+    def test_a_quoted_operator_is_still_text(self):
+        """The whole reason this module exists — `echo 'a && b'` runs one command."""
+        self.assertEqual([["echo", "a && b"]], shellcmd.segments("echo 'a && b'"))
+
+

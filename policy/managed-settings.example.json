@@ -47,7 +47,9 @@
         "Bash(git push *)",
         "Bash(gh pr merge *)"
       ],
-      "$comment": "permissions.ask is the ONLY mechanism that forces a human prompt in every mode. Everything else runs silent. Keep this list short — it is the whole nag budget. Never use a bare Bash ask rule; it is substituted away when sandboxing is on and your gate silently stops prompting."
+      "$comment": "permissions.ask is the ONLY mechanism that forces a human prompt in every mode. Everything else runs silent. Keep this list short — it is the whole nag budget. Never use a bare Bash ask rule; it is substituted away when sandboxing is on and your gate silently stops prompting.",
+      "$comment_measured": "Auto mode included, MEASURED on 2.1.247 rather than assumed: with `Bash(echo:*)` in this list and `--permission-mode auto`, the call was refused; with the list empty and nothing else changed, the same call ran. Re-run that pair after an upgrade — this is the one line the whole interruption budget rests on.",
+      "$comment_why_now": "Worth re-checking because reaching auto mode got much easier: 2.1.246 added an auto mode tab to /permissions for classifier rules, and 2.1.247 added a one-keystroke 'Yes, and switch to auto mode' to Bash permission prompts. The classifier has already refused one of this plugin's own commands (#116), which is why policy.refresh runs in a hook where no classifier stands."
     }
   },
 
@@ -55,6 +57,8 @@
     "preferredNotifChannel": "notifications_disabled",
     "spinnerTipsEnabled": false,
     "feedbackSurveyRate": 0,
+    "feedbackDrafts": false,
+    "$comment_drafts": "2.1.247 added a SendFeedback tool that lets Claude draft a feedback report when something goes wrong in a session. Off here for the same reason as the survey: this founder runs 3–8 sessions and a gate refusing a turn is a normal event, not an incident to file.",
     "$comment": "Keep the away-summary and recap enabled — they are the built-in zero-nag re-entry affordance and a competing digest would be redundant."
   },
 

@@ -1,5 +1,76 @@
 # Changelog
 
+## v1.55.0
+
+The second pass over 2.1.241–2.1.247 — the one that read our own code against the
+changelog instead of only the changelog against our docs. It found two defects.
+
+### A line the shell will not run was being vouched for
+
+`shellcmd.segments` dropped a dangling `&&`, `||` or `|` silently, so `make test &&`
+parsed **identically to** `make test` — this project's own check, and therefore vouched.
+`allow_tool` ends the permission pipeline, so that approval landed ahead of Claude Code
+2.1.246's own rule: *"always require approval for malformed commands with a dangling `&&`
+or `||`"*. We were overriding it.
+
+It also broke `vouch`'s own stated rule — *"The line, whole. Anything this cannot account
+for ends the vouch for the entire line."* A line bash refuses to parse is the plainest
+case there is.
+
+Measured before the fix: `bash -n` rejects `make test &&`, `make test ||`, `make test |`;
+`vouch.for_bash` approved all three. The bar is now bash itself, asserted on 18 lines in
+both directions — a trailing `;` and a trailing `&` are valid shell and still vouch, and
+`echo 'a && b'` is still one command. `commands()` shares the parser, so refusal gates
+inherit the same reading, where an unparseable line already means "fall back to the
+substring match" — the conservative direction.
+
+One divergence is left standing and written down rather than guessed at: `;;`, `;&` and
+`;;&` are `case` terminators that `shlex` returns as one ordinary token, so `a ;; b` reads
+here as `a` with two arguments while bash rejects the line. It predates this fix, bash
+runs nothing either way, and it is not what 2.1.246 named. Card 0059, with the reason it
+is not a one-liner: the obvious fix is one more branch in a function already at the
+complexity budget.
+
+### A write was eating the founder's symlink
+
+`store.atomic_write` does `os.replace` onto the path, which replaces a **symlink** with a
+regular file. `~/.claude/settings.json` is written by `policy.apply` from a hook on every
+session, and a dotfile manager (nix/home-manager, stow, chezmoi) keeps exactly that path
+as a link into its own repository. So the link did not survive the first session, and the
+founder's next `switch` either conflicted or silently reverted everything this plugin had
+written there.
+
+Measured on a simulated dotfiles layout: `is_symlink` True before, False after, the
+dotfiles copy still holding the old content. The write now follows the link to its target,
+which also keeps the rename atomic — the temp file lands beside the real file rather than
+beside the link, possibly on another filesystem. A dangling link is repaired rather than
+crashed on; an ordinary path is untouched.
+
+Claude Code fixed the same shape in its own sandbox cleanup in 2.1.247. The plugin does
+not get to be the one that breaks it instead.
+
+### The interruption budget is measured now, not assumed
+
+`policy/managed-settings.example.json` §3 asserts that `permissions.ask` is the only
+mechanism forcing a human prompt **in every mode** — the one line the whole nag budget
+rests on, and an assumption the file's own header says must be verified against the
+installed binary.
+
+Worth re-checking because reaching auto mode got much easier: 2.1.246 added an auto mode
+tab to `/permissions` for classifier rules, and 2.1.247 added a one-keystroke *"Yes, and
+switch to auto mode"* to Bash permission prompts. The classifier has already refused one
+of this plugin's own commands (#116).
+
+Measured on 2.1.247, controlled both ways: with `Bash(echo:*)` in `permissions.ask` under
+`--permission-mode auto`, the call was refused — *"permission to use Bash was not
+granted"*; with the list empty and nothing else changed, the same call ran. **The claim
+holds.** It now carries the version it was measured on and the pair of runs that measured
+it, so the next upgrade has something to re-run rather than something to believe.
+
+Also `feedbackDrafts: false` in the silence block — 2.1.247's `SendFeedback` tool lets
+Claude draft a feedback report when something goes wrong in a session, and for a founder
+running 3–8 sessions a gate refusing a turn is a normal event, not an incident to file.
+
 ## v1.54.0
 
 Four assumptions about the harness that Claude Code 2.1.241–2.1.247 either broke or paid off.

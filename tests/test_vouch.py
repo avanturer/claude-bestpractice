@@ -152,6 +152,34 @@ class TestTheBoundaryDoesNotMove(VouchCase):
         self.assertSilent("git status 'unterminated")
 
 
+class TestALineTheShellCannotRunIsNotVouchedFor(VouchCase):
+    """`allow_tool` ends the permission pipeline, so a vouch is the last word.
+
+    A dangling operator used to parse away: `make test &&` became `make test`, which is
+    this project's own check and therefore vouched — landing the approval ahead of Claude
+    Code 2.1.246's rule that a malformed command always requires approval. It also broke
+    this module's own stated rule, that anything it cannot account for ends the vouch for
+    the whole line. A line bash will not parse is the plainest case of that.
+    """
+
+    def test_the_vouchable_line_with_a_dangling_operator_is_not_vouched(self):
+        for line in ("make test &&", "make test ||", "make test |", "make test |&"):
+            self.assertSilent(line)
+
+    def test_a_read_with_a_dangling_operator_is_not_vouched_either(self):
+        for line in ("git status &&", "ls -la ||", "git diff |"):
+            self.assertSilent(line)
+
+    def test_the_same_lines_without_the_operator_still_vouch(self):
+        """The fix must not cost the founder the prompts this module exists to remove."""
+        for line in ("make test", "git status", "ls -la"):
+            self.assertTrue(self.vouches(line), f"{line!r} stopped vouching")
+
+    def test_a_legal_terminator_still_vouches(self):
+        """`;` ends a command legally. Refusing it would fix nothing and cost real work."""
+        self.assertTrue(self.vouches("make test ;"))
+
+
 class TestWritesInTheTreeTheSessionOccupies(RepoCase):
     def test_the_tree_the_session_stands_in(self):
         """`owned_by_session` is the test used to REFUSE foreign writes; inverted, it is

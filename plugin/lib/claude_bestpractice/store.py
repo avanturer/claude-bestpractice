@@ -145,7 +145,20 @@ def atomic_write(path: Path, data: str, mode: int = 0o600) -> None:
     temp file in /tmp may be on a different one. The fsync is what makes the content
     durable before the rename makes it visible — without it a crash can leave a
     correctly-named file with zero bytes.
+
+    A SYMLINK is followed rather than replaced. `os.replace` onto the link path leaves a
+    regular file where the link was, and `~/.claude/settings.json` — which `policy.apply`
+    writes from a hook on every session — is exactly the file a dotfile manager keeps as a
+    link into its own repository (nix/home-manager, stow, chezmoi). The link would not
+    survive the first session, and the founder's next switch either conflicts or silently
+    reverts everything this plugin wrote. Claude Code hit the same shape in its own sandbox
+    cleanup and fixed it in 2.1.247; the plugin does not get to be the one that breaks it.
+
+    Resolving also keeps the rename atomic, because the temp file then lands beside the
+    real target rather than beside the link, which may be on another filesystem entirely.
     """
+    if path.is_symlink():
+        path = Path(os.path.realpath(path))
     ensure_dir(path.parent)
     tmp = path.parent / f".{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
     try:
