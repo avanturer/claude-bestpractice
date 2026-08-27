@@ -146,5 +146,42 @@ class TestGuard(QuietCase):
         self.assertEqual(caught.exception.code, 2)
 
 
+class TestTheTailAGateHandsBack(unittest.TestCase):
+    """A refusal is bought with the founder's tokens, so the gate bounds what it says.
+
+    The line cap on its own bounded nothing: a runner that prints a base64 blob, a wide
+    assert diff or a minified bundle puts the whole overrun on ONE line and stays inside
+    25 of them.
+    """
+
+    def test_a_short_run_is_passed_through_unchanged(self):
+        out = hookio.tail_of("1 failed, 3 passed in 0.1s")
+        self.assertEqual(out, "1 failed, 3 passed in 0.1s")
+
+    def test_it_keeps_the_end_where_the_runner_puts_its_summary(self):
+        out = hookio.tail_of("\n".join(f"line {n}" for n in range(200)))
+        self.assertTrue(out.endswith("line 199"))
+        self.assertEqual(len(out.splitlines()), hookio.MAX_TAIL_LINES)
+
+    def test_one_enormous_line_cannot_escape_the_budget(self):
+        out = hookio.tail_of("x" * 1_000_000)
+        self.assertLessEqual(len(out), hookio.MAX_TAIL_CHARS)
+        self.assertIn(hookio.TRUNCATION_MARK, out)
+
+    def test_many_merely_long_lines_cannot_escape_it_either(self):
+        # Each line is under the per-line cap, so only the overall cap catches this.
+        out = hookio.tail_of("\n".join("y" * 300 for _ in range(hookio.MAX_TAIL_LINES)))
+        self.assertLessEqual(len(out), hookio.MAX_TAIL_CHARS)
+
+    def test_a_truncated_line_says_so(self):
+        out = hookio.tail_of("assert " + "z" * 5_000)
+        self.assertTrue(out.endswith(hookio.TRUNCATION_MARK))
+        self.assertTrue(out.startswith("assert zzz"))
+
+    def test_empty_output_stays_empty(self):
+        self.assertEqual(hookio.tail_of(""), "")
+        self.assertEqual(hookio.tail_of("   \n  \n"), "")
+
+
 if __name__ == "__main__":
     unittest.main()

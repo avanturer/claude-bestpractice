@@ -57,13 +57,31 @@ definitions, or an MCP server. Corollaries, each a lint or a hook:
 
 ### Funding mode is detectable for free
 
-Subscription auth silently gets a **one-hour** cache TTL; drawing on usage credits silently drops it
-to **five minutes**. The transcript exposes which: on the measured session
-`ephemeral_1h_input_tokens` was 231,807 against `ephemeral_5m` at 0.
+Subscription auth gets a **one-hour** cache TTL; drawing on usage credits drops it to **five
+minutes**. The transcript exposes which: on the measured session `ephemeral_1h_input_tokens` was
+231,807 against `ephemeral_5m` at 0. Five-minute writes appearing is still the signal that the
+founder is spending cash and that the reprocessing frequency of every injected token has multiplied
+by roughly an order of magnitude.
 
-When five-minute writes start appearing, the founder is spending cash and the reprocessing frequency
-of every injected token multiplies by roughly an order of magnitude. Switch to a frugal profile:
-suppress optional injection, stop background subagents.
+**Since Claude Code 2.1.243 that drop is a setting, not a verdict.** `promptCacheTtl` and
+`subagentPromptCacheTtl` let API-key and cloud-provider users hold the main conversation at one hour
+while subagents stay at five minutes — which is the right split rather than a compromise. The main
+conversation is where the cached prefix is long-lived and re-read on every turn; a subagent is a
+short spawn that will never see a second cache read, so paying an hour of write cost for it buys
+nothing. Set both explicitly; the defaults follow the funding mode and change under you.
+
+That retires half of the old advice. Suppressing optional injection still pays. **"Stop background
+subagents" no longer follows from a five-minute TTL** — the TTL is now the wrong reason to stop
+them. The reason that survives is the one in the budget table below: at 3–8 parallel sessions the
+per-spawn injection is the dominant recurring cost, and it is dominant whatever the TTL is.
+
+Two more knobs from the same release, both of which change what the numbers on screen mean:
+`modelPricing` (managed) makes `/cost`, the status line and telemetry report an organisation's
+contracted rates instead of list price — without it, every cost figure this plugin reads back is
+list price and reads high. `modelPicker` curates `/model`, which is worth setting for the reason in
+the cache rules above: the cheapest way to never pay a mid-session model switch is to not offer one.
+Note also that Sonnet 5's $2/$10 per Mtok is now its standard list price rather than a promotion, so
+it no longer carries an expiry to plan around.
 
 ## 2. The token budget
 

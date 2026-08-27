@@ -1,5 +1,164 @@
 # Changelog
 
+## v1.55.0
+
+Everything Claude Code 2.1.241–2.1.247 changed for this plugin, in two passes: the first
+read the changelog against our documentation, the second read it against our code. The
+second one found defects.
+
+Shipped as one version because it ships as one commit — a `## v1.54.0` heading with no tag
+behind it would put half of this outside the release notes, which are what anybody reads
+first.
+
+### A line the shell will not run was being vouched for
+
+`shellcmd.segments` dropped a dangling `&&`, `||` or `|` silently, so `make test &&`
+parsed **identically to** `make test` — this project's own check, and therefore vouched.
+`allow_tool` ends the permission pipeline, so that approval landed ahead of Claude Code
+2.1.246's own rule: *"always require approval for malformed commands with a dangling `&&`
+or `||`"*. We were overriding it.
+
+It also broke `vouch`'s own stated rule — *"The line, whole. Anything this cannot account
+for ends the vouch for the entire line."* A line bash refuses to parse is the plainest
+case there is.
+
+Measured before the fix: `bash -n` rejects `make test &&`, `make test ||`, `make test |`;
+`vouch.for_bash` approved all three. The bar is now bash itself, asserted on 18 lines in
+both directions — a trailing `;` and a trailing `&` are valid shell and still vouch, and
+`echo 'a && b'` is still one command. `commands()` shares the parser, so refusal gates
+inherit the same reading, where an unparseable line already means "fall back to the
+substring match" — the conservative direction.
+
+One divergence is left standing and written down rather than guessed at: `;;`, `;&` and
+`;;&` are `case` terminators that `shlex` returns as one ordinary token, so `a ;; b` reads
+here as `a` with two arguments while bash rejects the line. It predates this fix, bash
+runs nothing either way, and it is not what 2.1.246 named. Card 0059, with the reason it
+is not a one-liner: the obvious fix is one more branch in a function already at the
+complexity budget.
+
+### A write was eating the founder's symlink
+
+`store.atomic_write` does `os.replace` onto the path, which replaces a **symlink** with a
+regular file. `~/.claude/settings.json` is written by `policy.apply` from a hook on every
+session, and a dotfile manager (nix/home-manager, stow, chezmoi) keeps exactly that path
+as a link into its own repository. So the link did not survive the first session, and the
+founder's next `switch` either conflicted or silently reverted everything this plugin had
+written there.
+
+Measured on a simulated dotfiles layout: `is_symlink` True before, False after, the
+dotfiles copy still holding the old content. The write now follows the link to its target,
+which also keeps the rename atomic — the temp file lands beside the real file rather than
+beside the link, possibly on another filesystem. A dangling link is repaired rather than
+crashed on; an ordinary path is untouched.
+
+Claude Code fixed the same shape in its own sandbox cleanup in 2.1.247. The plugin does
+not get to be the one that breaks it instead.
+
+### The interruption budget is measured now, not assumed
+
+`policy/managed-settings.example.json` §3 asserts that `permissions.ask` is the only
+mechanism forcing a human prompt **in every mode** — the one line the whole nag budget
+rests on, and an assumption the file's own header says must be verified against the
+installed binary.
+
+Worth re-checking because reaching auto mode got much easier: 2.1.246 added an auto mode
+tab to `/permissions` for classifier rules, and 2.1.247 added a one-keystroke *"Yes, and
+switch to auto mode"* to Bash permission prompts. The classifier has already refused one
+of this plugin's own commands (#116).
+
+Measured on 2.1.247, controlled both ways: with `Bash(echo:*)` in `permissions.ask` under
+`--permission-mode auto`, the call was refused — *"permission to use Bash was not
+granted"*; with the list empty and nothing else changed, the same call ran. **The claim
+holds.** It now carries the version it was measured on and the pair of runs that measured
+it, so the next upgrade has something to re-run rather than something to believe.
+
+Also `feedbackDrafts: false` in the silence block — 2.1.247's `SendFeedback` tool lets
+Claude draft a feedback report when something goes wrong in a session, and for a founder
+running 3–8 sessions a gate refusing a turn is a normal event, not an incident to file.
+
+### A line budget bounded nothing
+
+A gate that refuses a turn hands the agent the end of whatever the runner printed. That end
+was bounded at **25 lines and nothing else** — so one base64 blob, one wide assert diff, one
+minified bundle on a single line put megabytes into the next turn. `docs/ECONOMICS.md` has
+budgeted a gate failure at ≤ 500 tokens since it was written; the budget was being held by an
+assumption about how long a line of test output is.
+
+Claude Code 2.1.247 fixed the harness side — *"a hook or background agent that printed
+megabytes of error output being able to overflow the conversation and wedge the session on
+Prompt is too long"*. That removes the crash, not the cost: the tokens are still bought, on
+every failing turn, out of the window the founder pays for. A gate bounds its own output.
+
+`hookio.tail_of` now caps lines, each line, and the total, keeping the END in all three —
+where a runner puts its summary — and marking a line it cut so the agent does not read the
+fragment as the whole assertion. It lives in `hookio` beside the two other "what may reach
+the model, and how much" budgets, because the evidence gate and the witness run both built
+one and the two drifting apart is how one keeps an unbounded path after the other is fixed.
+
+### The same overrun, written to disk permanently
+
+`unverified.jsonl` is append-only and clone-wide, and every pull-request readiness check
+parses all of it. The failure marker carried the gate's reason **verbatim** — so a run that
+failed with one enormous line wrote that line there, forever. Capped at write, and repair
+`0010-shrink-unverified-reasons` trims what earlier versions already left behind. The field
+shrinks and the row stays: which branch finished unverified is the only thing any reader
+looks at, and dropping the row would forgive a finish nobody proved.
+
+### The founder now reads one line, and 22 columns of it were ours
+
+2.1.247: *"Changed cross-session peer messages to collapse by default to a one-line
+`Message from @<sender>: <first line>` preview; Ctrl+O expands the full body"*. The harness
+names the sender itself in that line. `[claude-bestpractice]` was duplicating it in front of
+the one line that actually gets read — on a fact whose whole value is being read *before* the
+session acts on what it does not know. Now `[claude-bp]`, the spelling the founder already
+types.
+
+The marker itself stays, because the reason for it never went away: an unrecognised note
+becomes the recipient's task statement (#106, #118, #166) — and a rename is exactly how that
+would be re-entered, since an upgrade does not reach the sessions already running. A sibling
+still on 1.53.x delivers with the old marker, so `prompt-capture` matches both. The writer
+moved; the reader keeps every spelling it has ever emitted.
+
+### Cache TTL stopped being a verdict
+
+`docs/ECONOMICS.md` said usage credits "silently drop" the prompt cache to five minutes and
+advised stopping background subagents. 2.1.243 added `promptCacheTtl` and
+`subagentPromptCacheTtl` — the main conversation holds an hour while subagents stay at five
+minutes, which is the right split rather than a compromise: a subagent is a short spawn that
+never gets a second cache read, so an hour of write cost for it buys nothing.
+
+That retires half the old advice. Suppressing optional injection still pays; "stop background
+subagents" no longer follows *from the TTL*. The reason that survives is the one already in
+the budget table — at 3–8 parallel sessions the per-spawn injection is the dominant recurring
+cost, whatever the TTL is. `policy/managed-settings.example.json` carries both keys, plus
+`modelPricing` and `modelPicker` from the same release.
+
+### Two version floors, both of which fail quiet
+
+Written down because neither announces itself:
+
+- **2.1.243 for the live board.** The inbox socket has existed since 2.1.224, but 2.1.232's
+  socket-directory hardening switched cross-session messaging off *inside user namespaces and
+  rootless containers* until 2.1.243 fixed it. The plugin looks installed and says nothing.
+- **2.1.246 for worktrees.** Before it, the background retention sweep could remove a worktree
+  under `.claude/worktrees/` that the founder created, whenever a stale background-session
+  record pointed at it. This plugin provisions trees in exactly that directory, because it is
+  the one place entering never prompts.
+
+`claude plugin validate --strict` re-run against 2.1.247, on both manifests. The README said
+2.1.220, from before 2.1.246 fixed `/reload-plugins` reporting 0 skills for the
+`skills/*/SKILL.md` layout this plugin uses.
+
+### Checked and left alone
+
+- `inbox._send` connects and writes one complete newline-terminated payload, so 2.1.243
+  closing connections that send no complete line within 30 seconds needs nothing.
+- The version-less-plugin cache bug in 2.1.247 cannot reach this plugin: a version is
+  declared in both `plugin.json` and `marketplace.json`.
+- `if: Bash(git commit:*)` was firing on unrelated Bash calls carrying `$()` before 2.1.243
+  fixed it — spending a 300s timeout and an async rewake on nothing. Fixed upstream; the
+  floor is the fix.
+
 ## v1.53.2
 
 One `cd`, and the gate refused every tool for the rest of the session.

@@ -72,8 +72,27 @@ WIRE_LIMIT = 1 << 20
 CONNECT_TIMEOUT = 2.0
 
 # Names the sender in the recipient's transcript. Without it the founder reads a line that
-# looks like something they typed and does not remember typing.
-PREFIX = "[claude-bestpractice]"
+# looks like something they typed and does not remember typing — and, worse, `prompt-capture`
+# reads it as the session's statement of work.
+#
+# Short because of what the founder now actually sees. Claude Code 2.1.247 collapses a
+# cross-session message to a single `Message from @<sender>: <first line>` preview, expanded
+# with Ctrl+O. The harness names the sender itself in that line, so the long spelling was
+# 22 columns of duplicate in front of the one line that gets read — on a fact whose whole
+# value is being read before the session acts on what it does not know. The marker still has
+# to be there, because the model's reason for wanting it never went away.
+# Every marker this plugin has ever put in front of a delivered fact, newest first. The
+# writer emits MARKERS[0]; readers match ALL of them, and that asymmetry is the protocol
+# rather than a courtesy to old versions. An upgrade does not reach the sessions already
+# running: while it lands, a sibling on the previous release is still delivering, and a
+# note whose marker goes unrecognised becomes the recipient's statement of work — quoted
+# back by every drift refusal, used to name a branch, adding its paths to their scope.
+# That is #106, #118 and #166, and a rename is precisely how it gets re-entered.
+#
+# So a spelling is retired from the WRITER and never from the readers. Renaming again means
+# prepending here; nothing else moves.
+MARKERS = ("[claude-bp]", "[claude-bestpractice]")
+PREFIX = MARKERS[0]
 
 
 def deliverable(env: dict | None = None) -> bool:

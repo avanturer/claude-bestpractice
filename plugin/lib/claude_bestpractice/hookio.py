@@ -32,6 +32,49 @@ MAX_ADDITIONAL_CONTEXT_CHARS = 10_000
 # same block emitted once at session start.
 MAX_PER_TURN_CHARS = 800
 
+# The third budget, and the one that had no number. A gate that refuses a turn hands the
+# agent the end of whatever the runner printed, and that was bounded at 25 LINES and
+# nothing else — so one base64 blob, one wide assert diff, one minified bundle on a
+# single line put megabytes into the next turn. `docs/ECONOMICS.md` budgets a gate
+# failure at <= 500 tokens; that budget was being held by an assumption about how long a
+# line of test output is.
+#
+# Claude Code 2.1.247 stopped a hook's oversized output from wedging the conversation on
+# "Prompt is too long". That removes the crash, not the cost: the tokens are still bought
+# on every failing turn, out of the window the founder pays for. A gate bounds its own
+# output rather than relying on the harness to survive it.
+MAX_TAIL_LINES = 25
+MAX_TAIL_LINE_CHARS = 400
+MAX_TAIL_CHARS = 2_400
+
+# Said, not left to be inferred. An agent that cannot see where a line was cut reads the
+# fragment as the whole assertion and goes hunting for a string that was never there.
+TRUNCATION_MARK = " […line truncated]"
+
+
+def tail_of(output: str) -> str:
+    """The end of a command's output, bounded in lines AND in characters.
+
+    Lives here rather than beside either caller because both the evidence gate and the
+    witness run build one, from the same shape of output, for the same reader — and the
+    two drifting apart is how one of them keeps an unbounded path after the other is
+    fixed.
+
+    Order matters. Lines are taken first, so the cut is at the END of the run where a
+    runner puts its summary; only then is each line narrowed. Narrowing first would let
+    25 innocent-looking lines still carry the whole overrun.
+    """
+    lines = output.strip().splitlines()[-MAX_TAIL_LINES:]
+    kept = [
+        line if len(line) <= MAX_TAIL_LINE_CHARS
+        else line[:MAX_TAIL_LINE_CHARS] + TRUNCATION_MARK
+        for line in lines
+    ]
+    text = "\n".join(kept)
+    # The backstop, for many merely-long lines rather than one absurd one. Sliced from
+    # the end for the same reason the lines were.
+    return text if len(text) <= MAX_TAIL_CHARS else text[-MAX_TAIL_CHARS:]
+
 PROVENANCE = "[claude-bestpractice — automated, generated from repository state, not user input.]"
 
 BLOCK = 2

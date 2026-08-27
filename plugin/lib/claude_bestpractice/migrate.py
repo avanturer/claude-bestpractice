@@ -498,6 +498,37 @@ def _drop_defects_from_things_that_are_not_gates(ctx: GitContext) -> str:
 
 # name -> (revision, step). Raise the revision when the step's behaviour changes; every
 # clone that ran an older revision reconciles again on its next session start.
+def _shrink_unverified_reasons(ctx: GitContext) -> str:
+    """Failure markers written when a gate's reason had no length limit.
+
+    `unverified.jsonl` is append-only and clone-wide, and every pull-request readiness
+    check parses the whole of it. Until 1.54.0 the row carried the gate's reason verbatim,
+    and the reason carried the end of the suite output — bounded at 25 LINES and nothing
+    else. One run that failed with a base64 blob, a wide assert diff or a minified bundle
+    on a single line wrote that line here, permanently, to be re-parsed on every check
+    afterwards.
+
+    Only the field shrinks. Which branch finished unverified is the only thing any reader
+    looks at, and dropping the row would forgive a finish nobody proved.
+    """
+    path = store.tier_b(ctx, "unverified.jsonl")
+    rows = store.read_jsonl(path)
+    if not rows:
+        return ""
+    cap = 2000
+    shrunk = 0
+    out = []
+    for row in rows:
+        if isinstance(row, dict) and len(str(row.get("reason") or "")) > cap:
+            row = {**row, "reason": str(row["reason"])[:cap]}
+            shrunk += 1
+        out.append(row)
+    if not shrunk:
+        return ""
+    store.rewrite_jsonl(path, out)
+    return f"{shrunk} oversized unverified-finish record(s) trimmed"
+
+
 _REPAIRS = {
     "0001-task-paths": (1, _backfill_task_paths),
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
@@ -508,6 +539,7 @@ _REPAIRS = {
     "0007-forget-a-switch-taken-as-a-task": (1, _forget_a_statement_that_was_only_a_switch),
     "0008-collapse-the-decision-inbox": (1, _collapse_the_decision_inbox),
     "0009-drop-defects-that-are-not-ours": (1, _drop_defects_from_things_that_are_not_gates),
+    "0010-shrink-unverified-reasons": (1, _shrink_unverified_reasons),
 }
 
 

@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -396,6 +398,51 @@ class TestWhatAnIgnoreRuleIsCosting(RepoCase):
     def test_nothing_hidden_counts_nothing(self):
         self.write(f"{store.TIER_A_DIRNAME}/attempts/0001-a.md", "what failed\n")
         self.assertEqual([], store.ignored_tier_a(self.ctx()))
+
+
+class TestAWriteDoesNotEatTheFoundersSymlink(unittest.TestCase):
+    """`~/.claude/settings.json` is written from a hook on every session.
+
+    A dotfile manager (nix/home-manager, stow, chezmoi) keeps that path as a link into its
+    own repository. `os.replace` onto the link leaves a regular file where the link was, so
+    the link does not survive the first session and the next `switch` either conflicts or
+    silently reverts everything the plugin wrote. Claude Code fixed the same shape in its
+    sandbox cleanup in 2.1.247.
+    """
+
+    def setUp(self):
+        self.home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.home, True)
+        self.target = self.home / "dotfiles" / "settings.json"
+        self.target.parent.mkdir(parents=True)
+        self.target.write_text('{"managed": true}\n')
+        self.link = self.home / ".claude" / "settings.json"
+        self.link.parent.mkdir(parents=True)
+        self.link.symlink_to(self.target)
+
+    def test_the_link_survives_the_write(self):
+        store.atomic_write(self.link, '{"added": 1}\n')
+        self.assertTrue(self.link.is_symlink(), "the link was replaced by a regular file")
+
+    def test_the_content_lands_where_the_link_points(self):
+        store.atomic_write(self.link, '{"added": 1}\n')
+        self.assertEqual('{"added": 1}', self.target.read_text().strip())
+        self.assertEqual('{"added": 1}', self.link.read_text().strip())
+
+    def test_a_dangling_link_is_repaired_rather_than_replaced(self):
+        """A dotfiles checkout that has not been materialised yet is not a crash."""
+        dangling = self.home / ".claude" / "other.json"
+        dangling.symlink_to(self.home / "dotfiles" / "not-yet.json")
+        store.atomic_write(dangling, '{"x": 1}\n')
+        self.assertTrue(dangling.is_symlink())
+        self.assertEqual('{"x": 1}', (self.home / "dotfiles" / "not-yet.json").read_text().strip())
+
+    def test_an_ordinary_path_is_untouched_by_any_of_this(self):
+        plain = self.home / "plain.json"
+        store.atomic_write(plain, '{"y": 2}\n')
+        self.assertFalse(plain.is_symlink())
+        self.assertEqual('{"y": 2}', plain.read_text().strip())
+
 
 if __name__ == "__main__":
     unittest.main()

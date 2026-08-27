@@ -977,6 +977,46 @@ class TestTwoStoresThatFilledWithRepeats(RepoCase):
         self.assertEqual([], drafts.pending(self.ctx()),
                          "a draft the founder discarded came back after the collapse")
 
+    def unverified_holding(self, *reasons: str) -> "Path":
+        from claude_bestpractice import store
+
+        path = store.tier_b(self.ctx(), "unverified.jsonl")
+        for number, reason in enumerate(reasons):
+            store.append_jsonl(path, {"session_id": f"s{number}", "branch": "feat/a",
+                                      "baseline_commit": "abc", "reason": reason,
+                                      "recorded_at": 1.0})
+        return path
+
+    def test_a_failure_marker_carrying_a_whole_base64_blob_is_trimmed(self):
+        """Append-only, clone-wide, and re-parsed by every pull-request check.
+
+        Until 1.54.0 the gate's reason was bounded at 25 lines and nothing else, so a run
+        that failed with one enormous line wrote that line here permanently.
+        """
+        from claude_bestpractice import store
+
+        path = self.unverified_holding("the suite FAILS. " + "A" * 500_000, "short one")
+        changed = migrate.repair(self.ctx())
+
+        rows = store.read_jsonl(path)
+        self.assertEqual(2, len(rows), "a row was dropped rather than trimmed")
+        self.assertLessEqual(max(len(r["reason"]) for r in rows), 2000)
+        self.assertEqual("short one", rows[1]["reason"], "a small reason was rewritten")
+        self.assertTrue([line for line in changed if "unverified-finish" in line])
+
+    def test_which_branch_finished_unverified_survives_the_trim(self):
+        """The only field any reader looks at. Losing it forgives a finish nobody proved."""
+        from claude_bestpractice import delivery
+
+        self.unverified_holding("x" * 100_000)
+        migrate.repair(self.ctx())
+        self.assertTrue(delivery.unverified_on(self.ctx(), "feat/a"))
+
+    def test_markers_already_within_the_cap_are_left_alone(self):
+        self.unverified_holding("short", "also short")
+        self.assertEqual([], [line for line in migrate.repair(self.ctx())
+                              if "unverified-finish" in line])
+
     def test_crashes_from_things_the_plugin_does_not_ship_are_dropped(self):
         from claude_bestpractice import store
 

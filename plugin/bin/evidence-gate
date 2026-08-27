@@ -132,7 +132,11 @@ def _give_up(ctx, rec: sessions.SessionRecord, reason: str, changed: list) -> No
             "session_id": rec.session_id,
             "branch": branch,
             "baseline_commit": rec.baseline_commit,
-            "reason": reason,
+            # Capped like `_bump_blocks` caps its own copy, and for a harder reason: this
+            # file is APPEND-ONLY and clone-wide, and every `ready()` check parses all of
+            # it. An uncapped reason carried whatever the suite printed, so one run that
+            # failed with a base64 blob on a single line wrote that blob here permanently.
+            "reason": reason[:2000],
             "recorded_at": time.time(),
         },
     )
