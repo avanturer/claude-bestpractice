@@ -529,6 +529,88 @@ def commits(command: str) -> bool:
     return bool(COMMITS.search(command or ""))
 
 
+# Work done entirely through git, which no write gate can see. Every rule asking "is this
+# session doing something the board should be saying" reads the paths a call WRITES, and
+# these name none: `git merge`, `git rebase`, `git cherry-pick`, `git revert` and
+# `git am`/`git apply` rewrite the tree and the history without one Write call between
+# them. So a session could take somebody else's branch in, revert a release, or replay a
+# patch series with nothing on the board at all — which is the state the board exists not
+# to be in.
+#
+# `status`, `log`, `diff` and `show` are absent on purpose, and so is `commit`: the first
+# four are reconnaissance, and by the time anything is committed the write demand has
+# already fired. `push` is absent for a sharper reason — a merge this plugin gates closes
+# the cards it delivered, so demanding a card for the push that follows would refuse a
+# session for having just been closed correctly.
+CHANGES_THE_REPOSITORY = ("merge", "rebase", "cherry-pick", "revert", "am", "apply")
+
+# The end of an operation already in flight, never the start of one. Refusing these would
+# strand a session in a conflicted tree it is then not allowed to leave — the wedge every
+# rule in this file is written against — and `--check` and the `apply` report flags write
+# nothing at all.
+_NOT_STARTING_WORK = {"--abort", "--quit", "--skip", "--continue", "--check",
+                      "--stat", "--numstat", "--summary"}
+
+
+def changes_the_repository(command: str) -> str:
+    """The git subcommand in this line that rewrites the tree or history, or "".
+
+    Decided on the PROGRAM being run rather than on the text, for the reason #76 records:
+    `echo "git merge main"` is not a merge, and a gate that matched the string refused the
+    very tool being used to investigate it. A line the tokeniser cannot read returns
+    nothing and therefore allows — the opposite direction from the refusal gates, and
+    deliberate, because this one is asked before ordinary work rather than before
+    something irreversible.
+    """
+    for argv in shellcmd.commands(command or ""):
+        if argv[0].rsplit("/", 1)[-1] != "git":
+            continue
+        verb, rest = _subcommand_of(argv)
+        if verb not in CHANGES_THE_REPOSITORY or _NOT_STARTING_WORK.intersection(rest):
+            continue
+        if verb in ("merge", "rebase") and any(_names_the_trunk(arg) for arg in rest):
+            continue
+        return verb
+    return ""
+
+
+def _names_the_trunk(token: str) -> bool:
+    """Is this argument the base branch, with or without a remote in front of it?
+
+    Taking the base branch in is not the start of work — it is the maintenance step this
+    plugin's own pull-request flow ORDERS, and a gate that refuses the command satisfying
+    it is the trap every rule in this file is written to avoid. So `git merge origin/main`
+    and `git rebase main` stay free while `git merge feat/theirs` does not: the second is
+    somebody's work arriving, which is the thing a board is for.
+
+    A branch genuinely named `feat/main` is read as the trunk here. That errs towards
+    allowing a call with no card, which is where this rule stood yesterday, and the
+    alternative needs the repository's own default branch in a function that is otherwise
+    pure text.
+    """
+    if token.startswith("-"):
+        return False
+    head, _, tail = token.rpartition("/")
+    return token in TRUNK_NAMES or (bool(tail in TRUNK_NAMES) and "/" not in head)
+
+
+# Global options come BEFORE the subcommand, and two of them take a value. `shellcmd.runs`
+# compares the words straight after the program, so `git -C ../other merge main` read as a
+# call to a subcommand named `-C` and walked past every rule keyed on the verb. `COMMITS`
+# above already carries its own spelling of this; the argv form is the one that does not
+# need a new regex the next time a rule wants a different verb.
+_GLOBAL_WITH_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace",
+                      "--exec-path", "--config-env"}
+
+
+def _subcommand_of(argv: list[str]) -> tuple[str, list[str]]:
+    """A git argv split into its subcommand and that subcommand's own arguments."""
+    index = 1
+    while index < len(argv) and argv[index].startswith("-"):
+        index += 2 if argv[index] in _GLOBAL_WITH_VALUE else 1
+    return (argv[index], argv[index + 1:]) if index < len(argv) else ("", [])
+
+
 def commit_message(command: str) -> str:
     """The message out of a `git commit -m` command line, or empty if there is none."""
     match = COMMIT_MESSAGE.search(command)

@@ -778,6 +778,114 @@ def complete(ctx: GitContext, task_id: str) -> tuple[Task | None, str]:
     return landed, ""
 
 
+# The ledger had no closing half. `complete` had exactly one caller — the CLI — so a card
+# reached `doing` because a gate demanded it and left `doing` only if somebody remembered
+# to type the command. Nothing in eight releases ever did. Measured in this repository:
+# card 0050 sat in `doing` for four days, across every session, over work that had been
+# merged and tagged on the first of them.
+#
+# That is not untidiness. `doing` is the row every sibling reads to decide what is safe to
+# touch, and a card whose work shipped is the board asserting a collision that cannot
+# happen — the same lie the reaper and `sweep_idle` exist to stop telling from the other
+# end. And the founder's own account of it is the sharper one: they had given the word to
+# merge, and were then asked a second question about closing the cards, or waited for a
+# command, or got nothing at all.
+#
+# So the delivery closes them, and the plugin does it rather than asking. Decision 0010
+# already settles the authority: `+merge` is the founder's word on the work and the
+# session does the rest without asking again. The card that claimed that work is the rest.
+
+
+def carried_by(task: Task, delivered: list[str]) -> list[str]:
+    """The files this card named that the delivery actually carried.
+
+    A card cannot reach `doing` without naming its files — `claim` refuses one that does
+    not — so every in-flight card has something to compare a delivery against. That makes
+    "did this finish that card" a question with a mechanical answer instead of a judgement
+    the model would have to be trusted for, which is decision 0002 applied to the closing
+    end of the ledger rather than the opening one.
+
+    ANY of the files rather than all of them. A card names the code it changes and the test
+    that proves it, and half a dozen more when the work is a subsystem; a delivery that
+    carried the change and not the fixture is still the delivery of that work. Demanding
+    the whole list closes almost nothing, which is the failure this exists to end. A card
+    entry that names a directory matches everything under it, because that is what gets
+    written when the work is a subsystem rather than a file.
+    """
+    if not task.paths or not delivered:
+        return []
+    carried = []
+    for named in task.paths:
+        stem = named.rstrip("/")
+        if any(rel == stem or rel.startswith(stem + "/") for rel in delivered):
+            carried.append(named)
+    return carried
+
+
+def settle_delivered(ctx: GitContext, session_id: str, delivered: list[str],
+                     what: str) -> list[Task]:
+    """Close this session's cards whose files the delivery carried. Returns what closed.
+
+    Owned by THIS session only. A sibling's card over the same files is its own to close:
+    it may be mid-change on top of what just landed, and taking its row off the board is
+    the same lie in the other direction.
+
+    What closed it is written into the card before it moves, because a closure nobody can
+    account for is worse than a card left open — the founder reads outcomes, and "who
+    decided this was finished" has to be answerable from the file itself.
+    """
+    if not delivered:
+        return []
+    closed: list[Task] = []
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    for task in load_all(ctx, DOING):
+        if task.owner != session_id:
+            continue
+        carried = carried_by(task, delivered)
+        if not carried:
+            continue
+        note = f"[{stamp}] closed on delivery — {what} carried {', '.join(carried[:6])}."
+        task.body = f"{task.body}\n\n{note}".strip() if task.body else note
+        _rewrite_body(task)
+        landed, _ = complete(ctx, task.id)
+        if landed:
+            closed.append(landed)
+    return closed
+
+
+def held_by(ctx: GitContext, session_id: str) -> list[Task]:
+    """The cards this session is holding in `doing`."""
+    return [task for task in load_all(ctx, DOING) if task.owner == session_id]
+
+
+def closure_demand(tasks: list[Task]) -> str:
+    """Why a finish over delivered work is refused while its cards are still open.
+
+    The backstop for every delivery the plugin did not itself perform: a merge on the
+    website, a branch fast-forwarded by hand, a push straight to a trunk. `settle_delivered`
+    closes what it can see; this catches the rest, and it is a refusal rather than a note
+    because a note is the thing that was already being forgotten.
+
+    `pause` is offered beside `done` and is not a formality. Work can reach the base branch
+    and still not be finished — a feature merged behind a flag, a migration merged and not
+    yet run — and a gate whose only exit is "declare it done" buys a clean board by making
+    the ledger lie.
+    """
+    listed = "\n".join(f"  - {t.id}  {t.title[:80]}" for t in tasks[:6])
+    more = f"\n  ... and {len(tasks) - 6} more" if len(tasks) > 6 else ""
+    return (
+        "This session's work has reached the base branch and the board still says it is in "
+        f"flight:\n{listed}{more}\n"
+        "  Every sibling reads `doing` to decide what is safe to touch, so a card over "
+        "shipped work is the board claiming a collision that cannot happen.\n"
+        f"  claude-bp-plan done {tasks[0].id}\n"
+        f'  or, if it shipped without being finished: claude-bp-plan pause {tasks[0].id} '
+        '--blocker "<what is still owed>"\n'
+        "  Do not ask the founder which — they accepted the work when they accepted the "
+        "merge, and this is the half that follows from it."
+    )
+
+
 def release(ctx: GitContext, session_id: str) -> int:
     """Return every task this session held to `next`, in whichever worktree holds it.
 

@@ -1,5 +1,71 @@
 # Changelog
 
+## v1.56.0
+
+Card 0060. The board had an opening half and no closing half, and the founder had been
+watching the consequence rather than reading about it.
+
+### Nothing anywhere closed a card
+
+`plan.complete` had exactly one caller: the CLI. So a card reached `doing` because a gate
+demanded it, and left `doing` only if somebody remembered to type `claude-bp-plan done`.
+Nobody ever did. This repository's own card 0050 sat in `doing` for four days over a
+release it had merged and tagged on the first of them, and it was the ONLY thing in flight
+on a board whose whole claim is that it says what is in flight.
+
+That is not untidiness. `doing` is the row every sibling reads to decide what is safe to
+touch, so a card over shipped work is the board asserting a collision that cannot happen —
+the same lie the reaper and `sweep_idle` exist to stop telling from the other end.
+
+Three things now close them, in the order that costs the fewest turns:
+
+- **A merge this gate clears closes the cards it delivered.** Matched on the files the
+  card named against the files the merge carries — a card cannot reach `doing` without
+  naming its files, so the question has a mechanical answer rather than needing the model
+  to be trusted for one. Costs no turn and asks nobody: decision 0010 already settled that
+  `+merge` is the founder's word on the work and the session does the rest.
+- **At Stop, a branch that adds nothing over its base and holds nothing uncommitted closes
+  them the same way.** That is every delivery this plugin did not itself perform — a merge
+  on the website, a branch fast-forwarded by hand, a push straight to a trunk. The same
+  fact already decides the opposite demand: while there IS work the siblings cannot see, a
+  card is owed.
+- **A finish over delivered work with a card still open is refused**, naming `done` and
+  `pause`. The backstop, and deliberately last: a demand costs a blocked turn, so it only
+  covers what the two automatic closures could not account for.
+
+`pause` is offered beside `done` and is not a formality. Work can reach the base branch and
+still not be finished — merged behind a flag, merged and not yet run — and a gate whose
+only exit is "declare it done" buys a clean board by making the ledger lie.
+
+### And work done entirely through git needed no card at all
+
+The demand before the first write reads the paths a call WRITES. `git merge`, `git rebase`,
+`git cherry-pick`, `git revert` and `git am`/`git apply` name none, so a session could take
+another branch in, revert a release or replay a patch series with the board saying it was
+doing nothing. Those are refused now without a claimed card.
+
+`status`, `log`, `diff` and `show` are absent from that list, because reading is not doing
+— and `echo "git merge main"` is not a merge either, which is #76 one gate over: the
+decision is made on the program being run, not on the text of the line. `--abort`,
+`--continue` and `--skip` are never refused; stranding a session in a conflicted tree it is
+then not allowed to leave is the wedge every rule here is written against.
+
+`commit` and `push` are absent too, and for a sharper reason than reconnaissance: by the
+time anything is committed the write demand has already fired, and a merge that just closed
+its cards correctly would have the push after it refused for having none.
+
+`git -C ../other merge main` reached none of this before today. `shellcmd.runs` compares
+the words straight after the program, so a global option read as the subcommand — the argv
+is walked past global options now, in the one place a rule keyed on a git verb has to look.
+
+### The upgrade closes what it left behind
+
+`migrate._REPAIRS` gains a step: an in-flight card whose owner is not a live session and
+every one of whose files is byte-identical to the trunk is closed, with what closed it
+written into the card. Conservative where the live rule is not — ALL of the files rather
+than any — because this infers a delivery it did not watch, unattended, in somebody else's
+repository.
+
 ## v1.55.1
 
 Card 0059, the divergence 1.55.0 wrote down instead of guessing at. Looked at properly, it

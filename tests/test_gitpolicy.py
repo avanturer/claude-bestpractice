@@ -1651,3 +1651,77 @@ class TestOneDatabasePerSession(RepoCase):
         self.assertIn("STRIPE_KEY=sk_test_abc", body)
         self.assertIn("SENTRY=on", body)
         self.assertEqual(1, body.count("DATABASE_URL="))
+
+
+class TestWorkDoneThroughGitAlone(unittest.TestCase):
+    """Every rule asking "is this session doing something the board should say" reads the
+    paths a call WRITES, and `git merge`, `git rebase`, `git cherry-pick`, `git revert`
+    and `git am` name none — so a session could take another branch in, revert a release
+    or replay a patch series with the board saying it was doing nothing at all.
+    """
+
+    def test_the_verbs_that_rewrite_the_tree_or_the_history(self):
+        from claude_bestpractice import gitpolicy
+
+        for command, verb in (
+            ("git merge feat/theirs", "merge"),
+            ("git rebase -i HEAD~3", "rebase"),
+            ("git cherry-pick 9fceb02", "cherry-pick"),
+            ("git revert HEAD", "revert"),
+            ("git am /tmp/series.mbox", "am"),
+            ("git apply /tmp/fix.patch", "apply"),
+        ):
+            self.assertEqual(verb, gitpolicy.changes_the_repository(command), command)
+
+    def test_reconnaissance_is_not_work(self):
+        from claude_bestpractice import gitpolicy
+
+        for command in ("git status", "git log --merges", "git diff main",
+                        "git show HEAD", "git commit -m 'x'", "git apply --check p.patch"):
+            self.assertEqual("", gitpolicy.changes_the_repository(command), command)
+
+    def test_reading_about_a_merge_is_not_merging(self):
+        """#76, one gate over: `echo` of the invocation and a grep for it in documentation
+        were both refused as the thing they name."""
+        from claude_bestpractice import gitpolicy
+
+        for command in ('echo "git merge main"', "grep -rn 'git rebase' docs/",
+                        "cat notes/git-revert.md"):
+            self.assertEqual("", gitpolicy.changes_the_repository(command), command)
+
+    def test_finishing_one_already_in_flight_is_not_starting_work(self):
+        """Refusing these would strand a session in a conflicted tree it is then not
+        allowed to leave, which is the wedge every rule in this file is written against."""
+        from claude_bestpractice import gitpolicy
+
+        for command in ("git merge --abort", "git rebase --continue", "git am --skip",
+                        "git cherry-pick --quit"):
+            self.assertEqual("", gitpolicy.changes_the_repository(command), command)
+
+    def test_a_global_option_does_not_hide_the_subcommand(self):
+        """`shellcmd.runs` compares the words straight after the program, so
+        `git -C ../other merge main` read as a call to a subcommand named `-C`."""
+        from claude_bestpractice import gitpolicy
+
+        self.assertEqual("merge", gitpolicy.changes_the_repository("git -C ../other merge feat/theirs"))
+        self.assertEqual("revert", gitpolicy.changes_the_repository("git -c user.name=x revert HEAD"))
+        self.assertEqual("merge", gitpolicy.changes_the_repository("git --no-pager merge feat/theirs"))
+
+    def test_it_is_found_after_another_command_on_the_same_line(self):
+        from claude_bestpractice import gitpolicy
+
+        self.assertEqual("merge", gitpolicy.changes_the_repository("git fetch && git merge feat/theirs"))
+
+    def test_taking_the_base_branch_in_is_maintenance_rather_than_work(self):
+        """The step this plugin's own pull-request flow ORDERS. A gate that refuses the
+        command satisfying it is the trap every rule in this file is written against."""
+        from claude_bestpractice import gitpolicy
+
+        for command in ("git merge origin/main", "git merge main", "git rebase main",
+                        "git rebase origin/master", "git merge --no-ff develop"):
+            self.assertEqual("", gitpolicy.changes_the_repository(command), command)
+
+    def test_somebody_elses_branch_arriving_is_still_work(self):
+        from claude_bestpractice import gitpolicy
+
+        self.assertEqual("merge", gitpolicy.changes_the_repository("git merge --no-ff feat/x"))

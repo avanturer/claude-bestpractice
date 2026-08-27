@@ -850,3 +850,71 @@ class TestAFalseFindingCanBeRuledOut(PRCase):
 
         board.dismiss(self.ctx(), "sql-interpolation", "src/other.py")
         self.assertTrue(pullrequest.blockers(self.ctx(), "main"))
+
+
+class TestTheMergeClosesTheCardItDelivered(PRCase):
+    """Decision 0010 settles who decides: `+merge` is the founder's word on the work and
+    the session does the rest without asking again. The card that claimed that work is
+    part of the rest — and until this, nothing anywhere closed one. `plan.complete` had a
+    single caller, the CLI, so a delivered card sat in `doing` until somebody remembered a
+    command nobody ever did.
+    """
+
+    def green(self) -> None:
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+
+    def merge(self, session_id: str = "s1"):
+        self.accept(session_id)
+        return self.tool(
+            "mcp__github__merge_pull_request",
+            {"owner": "o", "repo": "r", "pullNumber": PRCase.PR_NUMBER}, session_id,
+        )
+
+    def test_the_card_over_what_merged_is_closed_by_the_merge(self):
+        from claude_bestpractice import plan
+
+        self.green()
+        self.start()
+        task = self.claim_a_task("s1", "src/app.py")
+        self.open_a_pr()
+        self.assertNotEqual("deny", self.decision(self.merge()))
+
+        self.assertEqual(plan.DONE, plan.find(self.ctx(), task.id).state)
+
+    def test_a_card_over_something_the_merge_did_not_carry_is_left_alone(self):
+        from claude_bestpractice import plan
+
+        self.green()
+        self.start()
+        task = self.claim_a_task("s1", "src/unrelated.py")
+        self.open_a_pr()
+        self.merge()
+
+        self.assertEqual(plan.DOING, plan.find(self.ctx(), task.id).state)
+
+    def test_a_refused_merge_closes_nothing(self):
+        """The closure follows the delivery, and a merge this gate refused is not one."""
+        from claude_bestpractice import plan
+
+        self.green()
+        self.start()
+        task = self.claim_a_task("s1", "src/app.py")
+        self.open_a_pr()
+        evidence.record_red(self.ctx(), ["pytest"], "2 failed")
+        self.assertEqual("deny", self.decision(self.merge()))
+
+        self.assertEqual(plan.DOING, plan.find(self.ctx(), task.id).state)
+
+    def test_the_ledger_switch_stands_it_down(self):
+        from claude_bestpractice import plan
+
+        self.configure(require_task=False)
+        self.green()
+        self.start()
+        task = self.claim_a_task("s1", "src/app.py")
+        self.open_a_pr()
+        self.merge()
+
+        self.assertEqual(plan.DOING, plan.find(self.ctx(), task.id).state)

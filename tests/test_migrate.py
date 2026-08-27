@@ -1025,3 +1025,72 @@ class TestTwoStoresThatFilledWithRepeats(RepoCase):
 
         self.assertEqual(["evidence-gate"], [row.get("gate") for row in store.read_jsonl(path)])
         self.assertTrue([line for line in changed if "does not ship" in line])
+
+
+class TestCardsLeftInFlightByTheMissingClosingHalf(RepoCase):
+    """Every repository that has been running this plugin carries rows saying work is in
+    flight over work that shipped weeks ago — nothing anywhere closed a card, so one left
+    `doing` only if somebody remembered a command. The new rule closes them going forward
+    and reaches nothing already on the board, which is the half an upgrade owes.
+    """
+
+    def shipped(self, *relpaths: str) -> None:
+        for rel in relpaths:
+            self.write(rel, "x = 1\n")
+        self.commit("the work")
+        git(["update-ref", "refs/remotes/origin/main", "HEAD"], self.repo)
+
+    def in_flight(self, owner: str, *paths: str):
+        ctx = self.ctx()
+        task = plan.add(ctx, "work that shipped", paths=list(paths), done_when="stated")
+        claimed, error = plan.claim(ctx, task.id, owner, ctx.branch)
+        self.assertEqual("", error)
+        return claimed
+
+    def test_a_card_over_work_already_on_the_trunk_is_closed(self):
+        self.shipped("src/app.py")
+        task = self.in_flight("a-session-that-is-gone", "src/app.py")
+
+        changed = migrate.repair(self.ctx())
+        self.assertEqual(plan.DONE, plan.find(self.ctx(), task.id).state)
+        self.assertTrue([line for line in changed if "already on the trunk" in line])
+
+    def test_a_card_a_live_session_is_holding_is_left_alone(self):
+        """A card a chat is holding right now is that chat's to close."""
+        from claude_bestpractice import sessions
+
+        self.shipped("src/app.py")
+        rec = self.session_record("live-one")
+        sessions.register(self.ctx(), rec)
+        task = self.in_flight(rec.session_id, "src/app.py")
+
+        migrate.repair(self.ctx())
+        self.assertEqual(plan.DOING, plan.find(self.ctx(), task.id).state)
+
+    def test_a_card_whose_work_has_not_shipped_is_left_alone(self):
+        self.shipped("src/app.py")
+        self.write("src/app.py", "x = 2  # moved on since the trunk\n")
+        self.commit("still ahead of the trunk")
+        task = self.in_flight("a-session-that-is-gone", "src/app.py")
+
+        migrate.repair(self.ctx())
+        self.assertEqual(plan.DOING, plan.find(self.ctx(), task.id).state)
+
+    def test_every_file_the_card_named_has_to_have_shipped(self):
+        """Conservative where `settle_delivered` is not: this runs unattended in somebody
+        else's repository and is inferring a delivery rather than watching one."""
+        self.shipped("src/app.py")
+        self.write("src/later.py", "y = 2\n")
+        self.commit("not on the trunk")
+        task = self.in_flight("a-session-that-is-gone", "src/app.py", "src/later.py")
+
+        migrate.repair(self.ctx())
+        self.assertEqual(plan.DOING, plan.find(self.ctx(), task.id).state)
+
+    def test_it_runs_once_and_says_nothing_the_second_time(self):
+        self.shipped("src/app.py")
+        self.in_flight("a-session-that-is-gone", "src/app.py")
+
+        migrate.repair(self.ctx())
+        self.assertEqual([], [line for line in migrate.repair(self.ctx())
+                              if "already on the trunk" in line])

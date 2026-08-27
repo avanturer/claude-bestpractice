@@ -749,3 +749,90 @@ class TestTheBoardLearnsTheTaskWhenItArrives(RepoCase):
 
         self.say("почини импортер")
         self.assertEqual(plan.FROM_THE_FOUNDER, self.board("next")[0].source)
+
+
+class TestDeliveryClosesTheCard(PlanCase):
+    """The ledger had no closing half: `complete` had one caller, the CLI, so a card left
+    `doing` only if somebody remembered the command. Nothing ever did, and a row saying
+    work is in flight over work that shipped is the board asserting a collision that
+    cannot happen — the same lie the reaper exists to stop telling from the other end.
+    """
+
+    def in_flight(self, session_id: str = "s1", *paths: str, title: str = "the work"):
+        ctx = self.ctx()
+        task = plan.add(ctx, title, paths=list(paths) or ["src/app.py"], done_when="stated")
+        claimed, error = plan.claim(ctx, task.id, session_id, ctx.branch)
+        self.assertEqual("", error)
+        return claimed
+
+    def test_a_delivery_closes_the_card_it_carried(self):
+        task = self.in_flight("s1", "src/app.py")
+        closed = plan.settle_delivered(self.ctx(), "s1", ["src/app.py", "README.md"], "the merge")
+        self.assertEqual([task.id], [t.id for t in closed])
+        self.assertEqual(plan.DONE, plan.find(self.ctx(), task.id).state)
+
+    def test_a_card_the_delivery_did_not_carry_stays_in_flight(self):
+        task = self.in_flight("s1", "src/billing.py")
+        self.assertEqual([], plan.settle_delivered(self.ctx(), "s1", ["src/app.py"], "the merge"))
+        self.assertEqual(plan.DOING, plan.find(self.ctx(), task.id).state)
+
+    def test_a_siblings_card_is_never_closed(self):
+        """It may be mid-change on top of what just landed, and taking its row off the
+        board is the same lie in the other direction."""
+        task = self.in_flight("s2", "src/app.py")
+        self.assertEqual([], plan.settle_delivered(self.ctx(), "s1", ["src/app.py"], "the merge"))
+        self.assertEqual(plan.DOING, plan.find(self.ctx(), task.id).state)
+
+    def test_a_directory_a_card_named_matches_what_shipped_under_it(self):
+        """What gets written when the work is a subsystem rather than a file."""
+        task = self.in_flight("s1", "plugin/lib")
+        closed = plan.settle_delivered(
+            self.ctx(), "s1", ["plugin/lib/claude_bestpractice/plan.py"], "the merge")
+        self.assertEqual([task.id], [t.id for t in closed])
+
+    def test_a_card_is_closed_on_any_of_its_files_not_all_of_them(self):
+        """A card names the code and the test that proves it; a delivery that carried the
+        change and not the fixture is still the delivery of that work. Demanding the whole
+        list closes almost nothing, which is the failure this exists to end."""
+        task = self.in_flight("s1", "src/app.py", "tests/test_app.py", "docs/app.md")
+        closed = plan.settle_delivered(self.ctx(), "s1", ["src/app.py"], "the merge")
+        self.assertEqual([task.id], [t.id for t in closed])
+
+    def test_what_closed_it_is_written_into_the_card(self):
+        """The founder reads outcomes, so "who decided this was finished" has to be
+        answerable from the file itself."""
+        task = self.in_flight("s1", "src/app.py")
+        plan.settle_delivered(self.ctx(), "s1", ["src/app.py"], "the merge of feat/x")
+        body = plan.find(self.ctx(), task.id).path.read_text(encoding="utf-8")
+        self.assertIn("closed on delivery", body)
+        self.assertIn("the merge of feat/x", body)
+        self.assertIn("src/app.py", body)
+
+    def test_a_delivery_that_carried_nothing_closes_nothing(self):
+        task = self.in_flight("s1", "src/app.py")
+        self.assertEqual([], plan.settle_delivered(self.ctx(), "s1", [], "the merge"))
+        self.assertEqual(plan.DOING, plan.find(self.ctx(), task.id).state)
+
+    def test_a_queued_card_is_not_closed_by_somebody_elses_delivery(self):
+        """Only what is in flight. A card nobody has started is not work that shipped."""
+        ctx = self.ctx()
+        task = plan.add(ctx, "not started", paths=["src/app.py"], done_when="stated")
+        self.assertEqual([], plan.settle_delivered(ctx, "s1", ["src/app.py"], "the merge"))
+        self.assertEqual(plan.NEXT, plan.find(ctx, task.id).state)
+
+    def test_the_demand_names_the_card_and_both_ways_out(self):
+        """`pause` beside `done` is not a formality: work can reach the base branch and
+        still not be finished, and a gate whose only exit is "declare it done" buys a
+        clean board by making the ledger lie."""
+        task = self.in_flight("s1", "src/app.py", title="the thing that shipped")
+        demand = plan.closure_demand(plan.held_by(self.ctx(), "s1"))
+        self.assertIn(task.id, demand)
+        self.assertIn("the thing that shipped", demand)
+        self.assertIn("claude-bp-plan done", demand)
+        self.assertIn("claude-bp-plan pause", demand)
+        self.assertIn("Do not ask the founder", demand)
+
+    def test_held_by_answers_for_one_session_only(self):
+        mine = self.in_flight("s1", "src/app.py")
+        self.in_flight("s2", "src/other.py")
+        self.assertEqual([mine.id], [t.id for t in plan.held_by(self.ctx(), "s1")])

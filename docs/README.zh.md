@@ -4,7 +4,7 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-1.55.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-1.56.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-1316%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-33%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
@@ -147,6 +147,14 @@ health: 3 live session(s), 1 reaped, 4 open item(s), 1 stale (suppressed)
 所以状态转移就是一次 `git mv`。五个 worktree 产生五次干净的新增，而不是同一个 JSON
 里五段互相冲突的 hunk。ID 的分配会参照所有兄弟 worktree，因为 worktree 在文件被提交
 之前就已经共享同一个命名空间。
+
+卡片在工作开始之前打开，并**由这份工作的交付来关闭**——两端都不会来问你。只要看板上没有
+任何"进行中"，本轮的第一次写入就会被拒绝；`git merge`、`rebase`、`cherry-pick`、`revert`
+和 `am` 同样如此——它们不写任何文件，因此从前绕过了所有依据写入目标判断的规则。另一端：
+本插件放行的合并会关闭那些文件被这次合并带走的卡片；而当工作已经进入基础分支、卡片却仍
+然开着时，结束本轮会被拒绝，并指明 `done` 与 `pause`。把基础分支并进来（`git merge
+origin/main`）依然自由：那是本插件自己要求的一步。你接受合并时就已经接受了这份工作，再
+为看板问你一次，正是这一切要消除的打断。
 
 ### 伪造"完成"的代价很高
 
