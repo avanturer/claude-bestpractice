@@ -101,7 +101,7 @@ class TestALineTheShellWillNotParse(unittest.TestCase):
 
     MALFORMED = ("make test &&", "make test ||", "make test |", "make test |&",
                  "&& make test", "|| make test", "make test && && ls",
-                 "cd x && ruff check &&")
+                 "cd x && ruff check &&", "a ;; b", "a ;& b", "a ;;& b")
     WELL_FORMED = ("make test", "ruff check src/ ;", "sleep 1 &", "a && b", "a | b",
                    "a; b", "echo 'a && b'", 'echo "x || y"', "cd x && ruff check")
 
