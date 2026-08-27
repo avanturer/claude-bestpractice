@@ -360,8 +360,30 @@ def main() -> None:
         # the session passes here silently.
         from claude_bestpractice import plan
 
+        # The same fact decides both halves. While there is work the siblings cannot see,
+        # a card is owed; once there is none — nothing over the base branch, nothing
+        # uncommitted — the work has landed and the card that claimed it is owed a close.
+        # The ledger had no closing half at all before this: `complete` had one caller, the
+        # CLI, so a card left `doing` only if somebody remembered the command, and card
+        # 0050 in this repository sat there for four days over merged and tagged work.
+        delivered = not _work_the_siblings_cannot_see(ctx)
+        if delivered:
+            # `pre-tool` closes the cards of a merge it gates itself, which is the ordinary
+            # route and costs no turn. This is every other one: a merge on the website, a
+            # branch fast-forwarded by hand, a push straight to a trunk. Nothing is
+            # inferred here — the condition above IS the delivery, so the files the session
+            # changed are the files the base branch now carries.
+            plan.settle_delivered(ctx, rec.session_id, everything, "the base branch")
+
         mine = [t for t in plan.load_all(ctx, plan.DOING) if t.owner == rec.session_id]
-        if not mine and _work_the_siblings_cannot_see(ctx):
+        if mine and delivered:
+            # What the closure above could not account for: a card whose named files are
+            # not in this session's diff at all. Refused rather than noted, because a note
+            # is precisely the thing that was being forgotten — and the exit is `done` or
+            # `pause`, never a question put to the founder, who accepted this work when
+            # they accepted the merge (decision 0010).
+            problems.append(plan.closure_demand(mine))
+        if not mine and not delivered:
             problems.append(
                 f"Nothing on the board says this session is working: {len(changed)} file(s) "
                 "changed and no task in the ledger is claimed by it.\n"

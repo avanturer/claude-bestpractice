@@ -354,6 +354,17 @@ def _files_against(ctx: GitContext, base: str, head: str = "HEAD") -> set[str] |
     return None
 
 
+def delivered_paths(ctx: GitContext, base: str, head: str = "") -> list[str]:
+    """The files a merge of `head` into `base` would carry, or [] when git cannot say.
+
+    Public because the ledger asks it. A card names the files it is about, so the only
+    mechanical answer to "did this merge finish that card" is whether the merge carried
+    them — and empty is the right answer to fall back on, because it closes nothing.
+    """
+    found = _files_against(ctx, base, head or "HEAD")
+    return sorted(found) if found else []
+
+
 def merge_refusal(record: dict[str, Any], problems: list[str]) -> str:
     """Why this merge is refused, and what the model is to do instead of fixing it."""
     named = record.get("number") and f"#{record['number']}" or record.get("branch", "this branch")

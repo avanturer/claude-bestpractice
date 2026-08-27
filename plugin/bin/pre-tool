@@ -158,17 +158,29 @@ def _sibling_of_repo(ctx, target) -> bool:
     return resolved.parent == root.parent and resolved.name.startswith(f"{root.name}-")
 
 
+def _holds_a_card(ctx, session_id: str) -> bool:
+    """Is a task on the board claimed by this session?
+
+    Split out because the answer is now wanted about a call that names no path at all —
+    `_ledger_covers` reads `touched`, and `all()` over an empty list is True, so asking it
+    about a `git merge` would have answered yes for every session on the machine.
+    """
+    from claude_bestpractice import plan
+
+    return any(t.owner == session_id for t in plan.load_all(ctx, plan.DOING))
+
+
 def _ledger_covers(ctx, session_id: str, touched: list[str]) -> bool:
     """Is a task on the board claimed by this session? The ledger's own files always are.
 
     Exempt paths too: a turn that only touches `.claude/` needs no card for the same
     reason it needs no test run — the gate's own bookkeeping is not the founder's work.
     """
-    from claude_bestpractice import plan, store
+    from claude_bestpractice import store
 
     if all(rel.startswith(store.TIER_A_DIRNAME) or rel.startswith(".claude/") for rel in touched):
         return True
-    return any(t.owner == session_id for t in plan.load_all(ctx, plan.DOING))
+    return _holds_a_card(ctx, session_id)
 
 
 def proposed_content(event: hookio.HookEvent) -> str:
@@ -568,6 +580,28 @@ def main() -> None:
                 # always this branch's. A merge of somebody else's is not gated at all and
                 # never arrives (#135) — which is what makes settling here safe.
                 pullrequest.settle(ctx, ctx.branch, pullrequest.MERGED)
+                # And the cards that claimed this work are closed by the delivery of it,
+                # here, without anybody being asked. The founder's account of the failure
+                # is the specification: having given the word to merge, they were then
+                # asked a second question about closing the cards, or the session waited
+                # for a command, or it simply forgot and the row sat in `doing` for days.
+                # Decision 0010 already settles who decides — `+merge` is their word on the
+                # work and the session does the rest without asking again — and the card
+                # that claimed that work is part of the rest.
+                #
+                # Recorded on the way through for the same reason the obligation above is:
+                # a PreToolUse hook never sees the result. A merge that then failed leaves
+                # a card closed early, and the cost of that is one `claude-bp-plan add`
+                # against a board that was wrong about everything it ever delivered.
+                if cfg.require_task:
+                    from claude_bestpractice import plan
+
+                    head = str(gated.get("branch") or "") or ctx.branch
+                    plan.settle_delivered(
+                        ctx, event.session_id,
+                        pullrequest.delivered_paths(ctx, base, head),
+                        f"the merge of {head}",
+                    )
                 # Every other session's baseline just went stale. They measure their diff
                 # from a commit that is no longer where the branch begins, so drift and
                 # scope both read wrong until they take the merge in.
@@ -883,6 +917,35 @@ def main() -> None:
                     "asked BEFORE the write, while there is still something to protect.\n"
                     f'  claude-bp-plan add "<what you are about to do>" --paths {writing_now[0]}\n'
                     "  then: claude-bp-plan claim <id>   (or claim the task you are on)"
+                )
+
+        # And the work that never writes a file. The demand above reads the paths a call
+        # WRITES, so `git merge`, `git rebase`, `git cherry-pick`, `git revert` and
+        # `git am` named none and walked straight past it — a session could take somebody
+        # else's branch in, revert a release or replay a patch series with the board saying
+        # it was doing nothing at all. That is not reconnaissance; `status`, `log` and
+        # `diff` are, and this does not fire on them. Nor on taking the BASE branch in,
+        # which is the step the pull-request flow above orders and would be a gate refusing
+        # its own instruction.
+        #
+        # Without the task-statement condition the write demand carries. That condition is
+        # there because a drift refusal quotes the statement back, and none of this quotes
+        # anything: a session rewriting history with no card is the board being wrong
+        # whether or not the founder's first message happened to parse as an instruction.
+        if cfg.require_task and event.tool_name == "Bash":
+            doing = gitpolicy.changes_the_repository(str(ti.get("command", "")))
+            if doing and not _holds_a_card(ctx, event.session_id):
+                hookio.deny_tool(
+                    f"claude-bestpractice: `git {doing}` changes this repository and nothing "
+                    "on the board says this session is working.\n"
+                    "  It writes no file, so no other rule here sees it — and every "
+                    "sibling reads the board to decide what is safe to touch, so this is "
+                    "the last moment there is still something to protect.\n"
+                    '  claude-bp-plan add "<what you are about to do>" --paths <the files '
+                    "this touches>\n"
+                    "  then: claude-bp-plan claim <id>   (or claim the task you are on)\n"
+                    "  Finishing one already in flight — `--abort`, `--continue`, "
+                    "`--skip` — is never refused here."
                 )
 
         # A registry being stood up beside the ledger, caught while it is one file rather

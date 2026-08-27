@@ -529,6 +529,36 @@ def _shrink_unverified_reasons(ctx: GitContext) -> str:
     return f"{shrunk} oversized unverified-finish record(s) trimmed"
 
 
+def _close_cards_whose_work_shipped(ctx: GitContext) -> str:
+    """Cards left in flight by a ledger that had no closing half.
+
+    Until 1.56.0 nothing anywhere closed a card: `plan.complete` had one caller, the CLI,
+    so a card reached `doing` because a gate demanded it and left only if somebody
+    remembered to type the command. Every repository that has been running this plugin
+    therefore carries rows saying work is in flight over work that shipped weeks ago —
+    this one carried card 0050 for four days, over a release it had merged and tagged on
+    the first of them. The new rule closes them going forward and reaches nothing already
+    on the board, which is the half an upgrade owes.
+
+    Two conditions, both conservative, because this runs unattended in somebody's
+    repository. The owner must not be a live session — a card a chat is holding right now
+    is that chat's to close. And EVERY file the card named must be byte-identical to what
+    the trunk holds, where `settle_delivered` needs only one: it is judging a delivery it
+    watched happen, and this is inferring one from the state left behind.
+    """
+    from . import evidence, plan, sessions
+
+    closed = 0
+    for task in plan.load_all(ctx, plan.DOING):
+        holder = sessions.get(ctx, task.owner) if task.owner else None
+        if holder is not None and sessions.is_live(ctx, holder):
+            continue
+        if not task.paths or len(evidence.landed(ctx, task.paths)) != len(task.paths):
+            continue
+        closed += len(plan.settle_delivered(ctx, task.owner, task.paths, "the trunk"))
+    return f"{closed} in-flight card(s) closed over work already on the trunk" if closed else ""
+
+
 _REPAIRS = {
     "0001-task-paths": (1, _backfill_task_paths),
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
@@ -540,6 +570,7 @@ _REPAIRS = {
     "0008-collapse-the-decision-inbox": (1, _collapse_the_decision_inbox),
     "0009-drop-defects-that-are-not-ours": (1, _drop_defects_from_things_that_are_not_gates),
     "0010-shrink-unverified-reasons": (1, _shrink_unverified_reasons),
+    "0011-close-shipped-cards": (1, _close_cards_whose_work_shipped),
 }
 
 

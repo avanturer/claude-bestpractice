@@ -1928,3 +1928,90 @@ class TestACardBeforeTheCode(RepoCase):
         self.start()
         proc = self.gate("pre-tool", self.write_event(".claude/claude-bestpractice/x.json"))
         self.assertNotEqual("deny", self.decision(proc), proc.stdout)
+
+
+class TestDeliveryClosesTheCardEndToEnd(GateCase):
+    """The founder's account of the failure, which is also the specification: having given
+    the word to merge, they were asked a second question about closing the cards, or the
+    session waited for a command, or it simply forgot. Card 0050 in this repository sat in
+    `doing` for four days over a release it had merged and tagged on the first of them.
+    """
+
+    def working_on(self, statement: str = "add a csv export") -> None:
+        self.start()
+        self.gate("prompt-capture", {
+            "session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": statement,
+        })
+
+    def decision(self, proc) -> str:
+        try:
+            return json.loads(proc.stdout or "{}").get(
+                "hookSpecificOutput", {}).get("permissionDecision", "")
+        except json.JSONDecodeError:
+            return ""
+
+    def running(self, command: str):
+        return self.gate("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse",
+            "tool_name": "Bash", "tool_input": {"command": command},
+        })
+
+    def test_work_the_delivery_carried_does_not_stay_in_flight(self):
+        self.start()
+        task = self.claim_a_task("s1", "feature.py")
+        self.write("feature.py", "x = 1\n")
+        self.write("junit.xml", JUNIT_PASS)
+        self.commit("the work, delivered")
+
+        proc = self.stop()
+        self.assertEqual(plan.DONE, plan.find(self.ctx(), task.id).state, proc.stderr)
+        self.assertNotIn("still says it is in flight", proc.stderr)
+
+    def test_work_still_in_flight_keeps_its_card(self):
+        """The other half of the same fact: while there is something the siblings cannot
+        see, the card is what tells them, and closing it would be the board going quiet
+        over work that is happening."""
+        self.start()
+        task = self.claim_a_task("s1", "feature.py")
+        self.write("feature.py", "x = 1\n")
+        self.write("junit.xml", JUNIT_PASS)
+
+        self.stop()
+        self.assertEqual(plan.DOING, plan.find(self.ctx(), task.id).state)
+
+    def test_a_card_the_delivery_did_not_carry_is_refused_at_the_finish(self):
+        """The backstop for every delivery the plugin did not perform itself. Refused
+        rather than noted, because a note is precisely what was being forgotten."""
+        self.start()
+        self.claim_a_task("s1", "somewhere/else.py")
+        self.write("feature.py", "x = 1\n")
+        self.write("junit.xml", JUNIT_PASS)
+        self.commit("delivered, and the card names other files")
+
+        proc = self.stop()
+        self.assertEqual(2, proc.returncode)
+        self.assertIn("reached the base branch", proc.stderr)
+        self.assertIn("claude-bp-plan done", proc.stderr)
+        self.assertIn("claude-bp-plan pause", proc.stderr)
+
+    def test_a_merge_with_no_card_is_refused_before_it_runs(self):
+        self.working_on()
+        proc = self.running("git merge feat/theirs")
+        self.assertEqual("deny", self.decision(proc))
+        self.assertIn("nothing on the board says this session is working", proc.stdout)
+
+    def test_a_merge_is_free_once_the_board_says_who_is_doing_it(self):
+        self.working_on()
+        self.claim_a_task("s1", "feature.py")
+        self.assertNotEqual("deny", self.decision(self.running("git merge feat/theirs")))
+
+    def test_finishing_a_merge_already_in_flight_is_never_refused(self):
+        """A session stranded in a conflicted tree it is not allowed to leave is the wedge
+        every rule in this gate is written against."""
+        self.working_on()
+        for command in ("git merge --abort", "git rebase --continue"):
+            self.assertNotEqual("deny", self.decision(self.running(command)), command)
+
+    def test_reading_about_a_merge_is_not_refused_as_one(self):
+        self.working_on()
+        self.assertNotEqual("deny", self.decision(self.running('echo "git merge main"')))

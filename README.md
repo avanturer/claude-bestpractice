@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-1.55.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-1.56.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-1316%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-33%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -179,6 +179,16 @@ simply silent.
 directory, so a transition is `git mv`. Five worktrees produce five clean adds instead of
 five conflicting hunks in one JSON blob. Ids allocate against every sibling worktree,
 because worktrees share the namespace before their files are ever committed.
+
+A card is opened before the work and **closed by the delivery of it**, neither of them a
+question put to you. The first write of a turn is refused while the board says nothing is
+in flight — and so is a `git merge`, `rebase`, `cherry-pick`, `revert` or `am`, which write
+no file and so slipped past every rule that reads write targets. At the other end, a merge
+this plugin clears closes the cards whose files that merge carried, and a finish over work
+that has reached the base branch with a card still open is refused, naming `done` and
+`pause`. Taking the base branch in (`git merge origin/main`) stays free — that is the step
+this plugin itself orders. You accepted the work when you accepted the merge; being asked
+again about the board is the interruption this exists to remove.
 
 ### Completion is expensive to fake
 

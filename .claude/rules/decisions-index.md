@@ -10,3 +10,4 @@
 - [0008] The plugin holds the pen on facts about this repository, never on grants — `decisions/0008-the-plugin-writes-facts-never-grants.md`
 - [0009] Sessions talk through the inbox a hook writes — `decisions/0009-sessions-talk-through-the-inbox.md`
 - [0010] The founder accepts the work, the session does the rest — `decisions/0010-the-founder-accepts-the-work.md`
+- [0011] A delivery closes the card it delivered — `decisions/0011-a-delivery-closes-the-card.md`
