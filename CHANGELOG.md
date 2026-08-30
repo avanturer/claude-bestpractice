@@ -1,5 +1,88 @@
 # Changelog
 
+## v2.0.0
+
+The gate said the founder had accepted it. The founder had not.
+
+**Breaking, and the first major this project has cut.** `+merge` must now be alone on its
+line. See "What you have to type differently" at the end.
+
+### What it said
+
+The Stop gate wrote this after every turn, on a pull request with an empty
+`reviewDecision`, no approval and no comment:
+
+> pull request on feat/ugc-corrections is open, **the founder has accepted it** and every
+> check passes… Merge it now. Their word is already given and it is spent on this merge…
+
+The founder had said, in the chat, «пока не вливай, я не оценил ничего». The session read
+the empty `reviewDecision`, was told by this sentence that the word was already given, and
+merged two pull requests. One nearly reached people alongside a neighbouring session's OTA
+publish. It took a revert pull request and a conversation to undo (#192).
+
+**A claim about a person, made by a gate that cannot see one.** And not merely unverified:
+unverifiable. The record behind `accepted` is a single repository-wide flag with no pull
+request attached, so even a real `+merge` may have been given for other work in another
+session of the same clone. The gate now says what is on record and states that limit —
+*"an unspent `+merge` is on record in this repository… that record carries no pull request,
+so it may have been given for other work"* — and lets the reader decide. It no longer
+speaks for anybody.
+
+That alone would not have prevented the merges, because the flag really was set. So the
+two ways it could be set without the founder granting anything are closed too.
+
+### A sentence refusing a merge was granting one
+
+`+merge` was recognised anywhere it ended a line. So:
+
+```
+пока не вливай, я не говорил +merge     ->  authorised the merge
+```
+
+The refusal and the consent are the same shape — «всё нравится, +merge» and «я не говорил
++merge» differ only in words, and no reading of the words around a token can be trusted to
+tell a grant from a mention. **So the shape carries the whole meaning: a grant is a line
+that is the token and nothing else.**
+
+This is the breaking change, and it was taken deliberately over the alternative of leaving
+a refusal able to authorise a merge to a deploying trunk. The cost is one newline; the cost
+the other way was measured in a revert.
+
+### The plugin could authorise its own merge
+
+`is_harness_block` already knew this plugin's own voice and the harness's block shapes, and
+it was wired into the task statement alone. The grant path had no such check — so any text
+arriving as a user turn could set the flag, and **the inbox delivers this plugin's own notes
+exactly that way.** Demonstrated before the fix:
+
+```
+GRANTED   the founder actually approving
+GRANTED   the founder DENYING it
+GRANTED   the plugin's own voice quoted back
+```
+
+That is the road that produced #106, #118, #166 and v1.52.0, each time landing on the task
+statement, where the cost is a stale sentence. Here it landed on the grant, which decision
+0008 says the plugin must never hold. After the fix only the first line grants.
+
+### What you have to type differently
+
+```
+всё нравится, +merge      ->  no longer authorises
+всё нравится
++merge                    ->  authorises
+```
+
+`+merge` on its own line, with nothing else on it. Leading and trailing spaces are fine, a
+trailing `.` or `!` is fine, and the sentence before it can be anything. The same applies to
+`+release`, `+deploy` and `+migration`.
+
+### On the tests
+
+Six mutations, each breaking one of the three fixes on purpose, each caught — including the
+two that matter in opposite directions: a refusal granting again, and real consent ceasing
+to work.
+
 ## v1.56.2
 
 The founder's `+merge` could be walked past, and the way it happened is the way it happened

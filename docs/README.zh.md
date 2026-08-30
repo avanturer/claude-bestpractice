@@ -4,7 +4,7 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-1.56.2-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-1316%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-33%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
@@ -194,7 +194,15 @@ Stop gate **丢弃智能体的自述文字**，自己去运行你的测试套件
 | `+release` | 发布到生产环境 | 一次发布 |
 | `+migration` | 迁移中的破坏性 DDL | 一次迁移 |
 
-字面量锚定在行尾，所以"如果 `+migration` 我们就发"是在谈论迁移，而不是批准它。前缀是符号
+**必须独占一行，该行不能有其他内容。** 前面想写什么都行，把这个词放到下一行：
+
+```
+看着不错，发吧
++merge
+```
+
+与正文同处一行的令牌，无法与"被谈论的令牌"区分开来，而这个缝隙的方向是错的："我没说过
+`+merge`"——一句拒绝——却批准了合并，两个未经批准的 PR 因此进入了会触发部署的主干。前缀是符号
 而非英文单词 "ok"，因为闸门不应取决于你此刻用哪种语言书写。会话写下
 的任何内容都无法代替这些词：只有你自己的发言才能到达记录它们的钩子。这正是关键所在——
 守卫不可逆操作的闸门，不该由它所守卫的那一方来打开。

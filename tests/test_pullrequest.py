@@ -64,7 +64,7 @@ class PRCase(RepoCase):
         self.gate("prompt-capture", {
             "session_id": session_id,
             "hook_event_name": "UserPromptSubmit",
-            "prompt": "looks good to me, +merge",
+            "prompt": "looks good to me\n+merge",
         })
 
     def open_a_pr(self, session_id: str = "s1", number: int = 0):
@@ -435,9 +435,13 @@ class TestAPullRequestIsNeverLeftHanging(PRCase):
         self.assertIn("+merge", proc.stderr, "the way through must be named")
         self.assertNotIn("Merge it now", proc.stderr)
 
-    def test_once_the_founder_has_accepted_it_the_turn_cannot_end_quietly(self):
+    def test_once_the_word_is_on_record_the_turn_cannot_end_quietly(self):
         """The other half, and the reason this is not simply a softer gate: once the word
-        is given the assistant merges on its own, without asking again."""
+        is on record the assistant merges on its own, without asking again.
+
+        The instruction stays; what left with #192 is the gate reporting the founder's
+        state of mind. It now says what is on record and what that record cannot tell.
+        """
         self.write("src/app.py", "x = 1\n")
         self.commit("add the app module")
         evidence.record_green(self.ctx(), ["pytest"])
@@ -447,7 +451,8 @@ class TestAPullRequestIsNeverLeftHanging(PRCase):
 
         proc = self.stop()
         self.assertEqual(2, proc.returncode, proc.stdout)
-        self.assertIn("Merge it now", proc.stderr)
+        self.assertIn("merge it now", proc.stderr, "the instruction has to survive")
+        self.assertNotIn("has accepted", proc.stderr, "the gate spoke for the founder")
 
     def test_a_blocked_pull_request_is_reported_rather_than_repaired(self):
         self.write("src/app.py", "x = 1\n")
@@ -610,6 +615,89 @@ class TestAMergeWaitsForTheFoundersWord(PRCase):
                      "next step: release", "расскажи, что такое migration"):
             self.assertEqual({}, config.approvals_in(said), said)
 
+    def test_the_demand_never_reports_an_approval_it_cannot_see(self):
+        """The sentence in the issue title.
+
+        The Stop gate wrote "the founder has accepted it" and "Their word is already
+        given" — a claim about a person, made by a gate that cannot see one. Unverifiable
+        rather than merely unverified: the record is one repository-wide flag with no
+        pull request attached, so even a real `+merge` may have been given for other work
+        in another session of the same clone.
+
+        It outranked the model's own evidence. The session read an empty `reviewDecision`,
+        was told by this line that the word was already given, and merged anyway (#192).
+        """
+        from claude_bestpractice import pullrequest
+
+        said = pullrequest.stop_demand({"number": 48}, [], accepted=True)
+        for claim in ("has accepted", "Their word is already given", "founder has"):
+            self.assertNotIn(claim, said, f"the gate spoke for the founder: {claim!r}")
+        self.assertIn("+merge", said, "it must still say what is on record")
+        self.assertIn("may have been given for other work", said,
+                      "the record's own limit has to be stated, not hidden")
+
+    def test_an_unaccepted_pull_request_is_still_left_to_the_founder(self):
+        """Unchanged, and asserted because the fix must not blur the two branches: with
+        nothing on record the gate asks rather than instructs (#140)."""
+        from claude_bestpractice import pullrequest
+
+        said = pullrequest.stop_demand({"number": 48}, [], accepted=False)
+        self.assertIn("waiting for the founder", said)
+        self.assertNotIn("Merge it now", said)
+
+    def test_a_sentence_refusing_a_merge_does_not_authorise_one(self):
+        """The line that cost two unapproved merges.
+
+        `+merge` was recognised anywhere it ended a line, so «пока не вливай, я не
+        говорил +merge» — a refusal — set the same flag as consent. The founder said
+        almost exactly that; the gate then reported the word as given, the session merged
+        two pull requests it had been told to leave alone, and one nearly shipped to
+        people alongside a neighbouring session's OTA publish (#192).
+
+        No reading of the surrounding words separates these: «всё нравится, +merge» and
+        «я не говорил +merge» are the same shape. So the shape carries the meaning — a
+        grant is a line that is the token and nothing else.
+        """
+        from claude_bestpractice import config
+
+        for said in ("пока не вливай, я не говорил +merge",
+                     "не мержи, я ещё не сказал +merge",
+                     "I never said +merge",
+                     "do not do this until I say +merge"):
+            self.assertEqual({}, config.approvals_in(said), said)
+
+    def test_the_founders_word_on_its_own_line_still_carries(self):
+        """The other direction. A rule that also refused real consent would be the gate
+        the founder switches off, which is how #147 started."""
+        from claude_bestpractice import config
+
+        for said in ("+merge", "  +merge  ", "выглядит хорошо\n+merge",
+                     "looks good to me\n+merge\n"):
+            self.assertNotEqual({}, config.approvals_in(said), said)
+
+    def test_this_plugins_own_voice_can_never_grant_a_merge(self):
+        """Decision 0008: the plugin holds the pen on facts, never on grants.
+
+        `is_harness_block` already knew this plugin's voice and the harness's block
+        shapes, and it was wired into the task statement alone — so any text arriving as
+        a user turn could set the flag, and the inbox delivers this plugin's own notes
+        exactly that way. On the statement that road cost a stale sentence (#106, #118,
+        #166, v1.52.0); on the grant it merges to a deploying trunk.
+        """
+        from claude_bestpractice import config
+
+        spoken = "claude-bestpractice: when they are happy they say\n+merge"
+        self.assertNotEqual({}, config.approvals_in(spoken),
+                            "precondition: the text does contain a grant-shaped line")
+
+        self.gate("prompt-capture", {
+            "session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": spoken,
+        })
+        self.assertFalse(
+            config.approved(self.ctx(), config.APPROVE_MERGE),
+            "the plugin's own voice authorised a merge",
+        )
+
     def test_a_symbol_inside_a_word_is_not_the_literal(self):
         """`+` has to start the token. Without that, any word ending in the symbol plus
         the noun authorises — and the symbol was chosen precisely because it cannot turn
@@ -626,12 +714,17 @@ class TestAMergeWaitsForTheFoundersWord(PRCase):
 
         The nouns stay, because they are the words spoken in both. The word that had to
         go is `ok`, which is the half that was English.
+
+        The preamble moved to its own line in v1.57.0: a token sharing a line with prose
+        cannot be told from a token being talked about, and the sentence withholding a
+        merge was granting one (#192). The founder's own words still carry it; they just
+        end before the token rather than running into it.
         """
         from claude_bestpractice import config
 
-        for said in ("всё нравится, +merge",
-                     "посмотрел на превью, красиво. +release",
-                     "проверил, эту таблицу никто не читает. +migration"):
+        for said in ("всё нравится\n+merge",
+                     "посмотрел на превью, красиво.\n+release",
+                     "проверил, эту таблицу никто не читает.\n+migration"):
             self.assertNotEqual({}, config.approvals_in(said), said)
 
 
@@ -653,7 +746,7 @@ class TestPromotingToProductionTakesTheFoundersWord(PRCase):
     def approve(self) -> None:
         self.gate("prompt-capture", {
             "session_id": "s1", "hook_event_name": "UserPromptSubmit",
-            "prompt": "checked the preview, +release",
+            "prompt": "checked the preview\n+release",
         })
 
     def test_a_promotion_nobody_approved_is_refused(self):
