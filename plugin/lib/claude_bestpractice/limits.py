@@ -142,5 +142,6 @@ def install(command: str, home=None) -> tuple:
     settings[SETTING] = {"type": "command", "command": command}
     path = policy.settings_path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
-    store.atomic_write(path, json.dumps(settings, indent=2, ensure_ascii=False), mode=0o600)
+    store.atomic_write(path, json.dumps(settings, indent=2, ensure_ascii=False),
+                       mode=0o600, follow_symlink=True)
     return True, command

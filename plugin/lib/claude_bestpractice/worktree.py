@@ -391,7 +391,7 @@ def trust(path: str) -> bool:
     entry["hasTrustDialogAccepted"] = True
 
     try:
-        store.atomic_write(config, json.dumps(data, indent=2), mode=0o600)
+        store.atomic_write(config, json.dumps(data, indent=2), mode=0o600, follow_symlink=True)
     except OSError:
         return False
     return True

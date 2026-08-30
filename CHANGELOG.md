@@ -1,5 +1,42 @@
 # Changelog
 
+## v1.56.1
+
+A security regression this project shipped in 1.55.0, and an older one beside it that the
+same look found. Both were spotted by reading Claude Code 2.1.251's changelog against our
+own diff rather than against our documentation.
+
+### A cloned repository could redirect this plugin's writes
+
+1.55.0 taught `atomic_write` to follow a symlink, so nix/home-manager and stow would stop
+losing `~/.claude/settings.json`. Right for the founder's home. Wrong for everything else:
+**most of what this plugin writes lives in `.claude/claude-bestpractice/`, inside the
+repository — and a repository arrives by `git clone`.**
+
+So a repository could ship `failing-suite.json` as a symlink pointing anywhere, and the
+first red suite wrote the record through it onto the founder's file. From a HOOK, where no
+permission check stands at all. Demonstrated end to end before the fix, and again after it.
+
+`append_jsonl` had the same escape and older: `os.open` follows a link without `O_NOFOLLOW`,
+while `os.replace` at least replaced one. It was never covered by the 1.55.0 change because
+it never went through `atomic_write`.
+
+Following is opt-in now — `follow_symlink=True` — and passed by exactly the three call sites
+that write the founder's OWN files: `~/.claude/settings.json` twice and `~/.claude.json`
+once. Everything else replaces a link, which is what `atomic_write` did before 1.55.0.
+`append_jsonl` opens `O_NOFOLLOW` and replaces a planted link rather than raising, because a
+hostile plant is not the founder's file and a gate that raises there refuses their work over
+somebody else's doing.
+
+**The distinction is who planted the link** — the founder in their own home, or whoever
+wrote the repository. Claude Code fixed the same class in its own file tools in 2.1.251
+("following a symlink swapped inside the working directory after the permission check").
+Ours was worse in one way and better in another: worse because a hook has no permission
+check to be swapped after, better because the plant has to survive a clone.
+
+Nothing to repair on disk: the escape wrote through links rather than leaving state behind,
+and a planted link is replaced the next time anything writes to it.
+
 ## v1.56.0
 
 Card 0060. The board had an opening half and no closing half, and the founder had been
