@@ -138,7 +138,7 @@ def ensure_dir(path: Path) -> Path:
     return path
 
 
-def atomic_write(path: Path, data: str, mode: int = 0o600) -> None:
+def atomic_write(path: Path, data: str, mode: int = 0o600, follow_symlink: bool = False) -> None:
     """Write via temp-in-same-dir, fsync, rename.
 
     Same directory matters: `os.replace` is only atomic within a filesystem, and a
@@ -146,18 +146,26 @@ def atomic_write(path: Path, data: str, mode: int = 0o600) -> None:
     durable before the rename makes it visible — without it a crash can leave a
     correctly-named file with zero bytes.
 
-    A SYMLINK is followed rather than replaced. `os.replace` onto the link path leaves a
-    regular file where the link was, and `~/.claude/settings.json` — which `policy.apply`
-    writes from a hook on every session — is exactly the file a dotfile manager keeps as a
-    link into its own repository (nix/home-manager, stow, chezmoi). The link would not
-    survive the first session, and the founder's next switch either conflicts or silently
-    reverts everything this plugin wrote. Claude Code hit the same shape in its own sandbox
-    cleanup and fixed it in 2.1.247; the plugin does not get to be the one that breaks it.
+    A SYMLINK is REPLACED unless the caller says otherwise, and that default is the
+    security boundary. Most of what this writes lives in `.claude/claude-bestpractice/`
+    inside the repository — which arrived by `git clone` and can therefore ship a symlink
+    pointing anywhere. Following it would let a cloned repository redirect this plugin's
+    own writes onto the founder's files, from a HOOK, where no permission check stands at
+    all. Demonstrated before this default existed: a planted `failing-suite.json` link and
+    the red-suite record landed outside the tree. Claude Code fixed the same shape in its
+    file tools in 2.1.251.
 
-    Resolving also keeps the rename atomic, because the temp file then lands beside the
-    real target rather than beside the link, which may be on another filesystem entirely.
+    `follow_symlink=True` is for the founder's OWN files — `~/.claude/settings.json`,
+    `~/.claude.json` — which a dotfile manager (nix/home-manager, stow, chezmoi) keeps as
+    a link into its own repository. Replacing those breaks the link and the next `switch`
+    silently reverts what this wrote (v1.55.0). The distinction is who planted the link:
+    the founder in their own home, or whoever wrote the repository.
+
+    Resolving also keeps the rename atomic when following, because the temp file then
+    lands beside the real target rather than beside the link, possibly on another
+    filesystem.
     """
-    if path.is_symlink():
+    if follow_symlink and path.is_symlink():
         path = Path(os.path.realpath(path))
     ensure_dir(path.parent)
     tmp = path.parent / f".{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
@@ -220,7 +228,18 @@ def append_jsonl(path: Path, obj: Any, mode: int = 0o600) -> None:
     """
     ensure_dir(path.parent)
     line = dumps(obj, sort_keys=True) + "\n"
-    fd = os.open(str(path), os.O_CREAT | os.O_WRONLY | os.O_APPEND, mode)
+    # O_NOFOLLOW, for the reason `atomic_write` refuses a link by default: these logs live
+    # in the repository, a clone can ship one as a symlink, and appending through it writes
+    # outside the tree from a hook. Older than the `atomic_write` case and never covered by
+    # it — `os.replace` at least replaced the link, and O_APPEND never did.
+    #
+    # Replaced rather than raised: a hostile link is not the founder's file, and a gate that
+    # raises here refuses their work over somebody else's plant. `getattr` because Windows
+    # has no O_NOFOLLOW and no symlinks to speak of.
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow and path.is_symlink():
+        path.unlink()
+    fd = os.open(str(path), os.O_CREAT | os.O_WRONLY | os.O_APPEND | nofollow, mode)
     try:
         os.write(fd, line.encode("utf-8"))
     finally:

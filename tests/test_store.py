@@ -421,11 +421,11 @@ class TestAWriteDoesNotEatTheFoundersSymlink(unittest.TestCase):
         self.link.symlink_to(self.target)
 
     def test_the_link_survives_the_write(self):
-        store.atomic_write(self.link, '{"added": 1}\n')
+        store.atomic_write(self.link, '{"added": 1}\n', follow_symlink=True)
         self.assertTrue(self.link.is_symlink(), "the link was replaced by a regular file")
 
     def test_the_content_lands_where_the_link_points(self):
-        store.atomic_write(self.link, '{"added": 1}\n')
+        store.atomic_write(self.link, '{"added": 1}\n', follow_symlink=True)
         self.assertEqual('{"added": 1}', self.target.read_text().strip())
         self.assertEqual('{"added": 1}', self.link.read_text().strip())
 
@@ -433,15 +433,64 @@ class TestAWriteDoesNotEatTheFoundersSymlink(unittest.TestCase):
         """A dotfiles checkout that has not been materialised yet is not a crash."""
         dangling = self.home / ".claude" / "other.json"
         dangling.symlink_to(self.home / "dotfiles" / "not-yet.json")
-        store.atomic_write(dangling, '{"x": 1}\n')
+        store.atomic_write(dangling, '{"x": 1}\n', follow_symlink=True)
         self.assertTrue(dangling.is_symlink())
         self.assertEqual('{"x": 1}', (self.home / "dotfiles" / "not-yet.json").read_text().strip())
+
+    def test_following_is_opt_in_because_the_default_is_the_boundary(self):
+        """v1.55.0 followed unconditionally, which is the defect the next class covers."""
+        store.atomic_write(self.link, '{"added": 1}\n')
+        self.assertFalse(self.link.is_symlink(), "a link was followed without being asked")
+        self.assertEqual('{"managed": true}', self.target.read_text().strip())
 
     def test_an_ordinary_path_is_untouched_by_any_of_this(self):
         plain = self.home / "plain.json"
         store.atomic_write(plain, '{"y": 2}\n')
         self.assertFalse(plain.is_symlink())
         self.assertEqual('{"y": 2}', plain.read_text().strip())
+
+
+
+class TestAClonedRepositoryCannotRedirectAWrite(RepoCase):
+    """Tier A lives INSIDE the repository, and a repository arrives by `git clone`.
+
+    So it can ship `.claude/claude-bestpractice/failing-suite.json` as a symlink pointing
+    anywhere, and every write this plugin makes happens in a HOOK, where no permission
+    check stands. v1.55.0 taught `atomic_write` to follow a link — right for the founder's
+    own `~/.claude/settings.json`, wrong for everything that came out of a clone.
+    `append_jsonl` had the same escape and older: `os.open` follows a link without
+    `O_NOFOLLOW`, while `os.replace` at least replaced one.
+    """
+
+    def victim(self) -> Path:
+        target = Path(self.repo).parent / "victim.rc"
+        target.write_text("untouched\n")
+        return target
+
+    def plant(self, name: str, target: Path) -> Path:
+        planted = store.tier_a(self.ctx(), name)
+        planted.parent.mkdir(parents=True, exist_ok=True)
+        planted.symlink_to(target)
+        return planted
+
+    def test_a_planted_link_does_not_carry_an_atomic_write_out_of_the_tree(self):
+        target = self.victim()
+        planted = self.plant("failing-suite.json", target)
+        store.write_json(planted, {"tail": "pwned"})
+        self.assertEqual("untouched", target.read_text().strip(), "the write escaped the tree")
+        self.assertFalse(planted.is_symlink(), "the link was kept and will escape next time")
+
+    def test_a_planted_link_does_not_carry_an_append_out_of_the_tree(self):
+        target = self.victim()
+        planted = self.plant("unverified.jsonl", target)
+        store.append_jsonl(planted, {"reason": "pwned"})
+        self.assertEqual("untouched", target.read_text().strip(), "the append escaped the tree")
+
+    def test_the_state_is_still_written_where_it_belongs(self):
+        """Denying the escape must not cost the plugin the record it was writing."""
+        planted = self.plant("failing-suite.json", self.victim())
+        store.write_json(planted, {"tail": "kept"})
+        self.assertEqual({"tail": "kept"}, store.read_json(planted))
 
 
 if __name__ == "__main__":

@@ -224,7 +224,8 @@ def prune(home: Path | None = None) -> list[str]:
 
     path = settings_path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
-    store.atomic_write(path, json.dumps(settings, indent=2, ensure_ascii=False), mode=0o600)
+    store.atomic_write(path, json.dumps(settings, indent=2, ensure_ascii=False),
+                       mode=0o600, follow_symlink=True)
     return sorted(doomed)
 
 
@@ -285,7 +286,8 @@ def apply(ctx: GitContext, test_command: list[str], home: Path | None = None) ->
 
     path = settings_path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
-    store.atomic_write(path, json.dumps(settings, indent=2, ensure_ascii=False), mode=0o600)
+    store.atomic_write(path, json.dumps(settings, indent=2, ensure_ascii=False),
+                       mode=0o600, follow_symlink=True)
     return found
 
 
