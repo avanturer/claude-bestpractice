@@ -22,7 +22,8 @@ import shlex
 # The operators bash uses to end one command and start another. `shlex` with
 # `punctuation_chars` emits these as their own tokens, and — the part that matters —
 # leaves them inside a token when they are quoted, so `echo 'a && b'` stays one command.
-_SEPARATORS = {"&&", "||", ";", "|", "|&", "&", "\n", ";;", ";&", ";;&"}
+_SEPARATORS = {"&&", "||", ";", "|", "|&", "&", "\n", ";;", ";&", ";;&",
+              "(", ")", "<(", ">(", "`"}
 
 # The subset that bash requires a command on BOTH sides of. A line ending on one of these —
 # or starting on one — is a SYNTAX ERROR, not a shorter line, and the difference is the
@@ -36,22 +37,33 @@ _SEPARATORS = {"&&", "||", ";", "|", "|&", "&", "\n", ";;", ";&", ";;&"}
 # valid shell, and refusing them would cost real work to fix nothing.
 _NEEDS_A_FOLLOWER = {"&&", "||", "|", "|&"}
 
-# `case` terminators, which this tokeniser does not model — and the reason it declines the
-# line rather than reading around them. `shlex` returns each as one ordinary token, so both
-# of these were wrong, in the same way, in opposite directions:
+# Shell this tokeniser does not model, and the reason it declines the whole line rather
+# than reading around it. Two families, found the same way and wrong the same way — a
+# confident argv over a line that runs something else entirely.
+#
+# CASE TERMINATORS. `shlex` returns each as one ordinary token:
 #
 #   `a ;; b`                      bash rejects the line; this read `a` with two arguments
 #   `case x in a) echo 1;; esac`  bash accepts it; this read ONE command named `case`
 #
-# The second is the worse half. A compound statement is not a simple command, so a gate
-# asking "which program is this, with which subcommand" was being handed nonsense and
-# answering confidently. Declining is right for both: `;;` only means anything inside a
-# `case`, and knowing whether we are inside one needs a parser this module does not have.
+# SUBSTITUTION AND SUBSHELLS, which is the one that mattered. Measured against the armed
+# merge gate: `gh pr merge 1 --squash` was denied and `FOO=$(gh pr merge 1) echo hi` was
+# ALLOWED, with bash shown to execute the substitution. The program position parsed as
+# `(`, so `runs()` never matched `gh` — and `pullrequest._gh_subcommand` never reached the
+# regex fallback that WOULD have caught it. A session could merge without the founder's
+# `+merge`, which is the whole of decision 0006 walked past.
 #
-# The cost is a real `case` statement no longer being vouched for, and refusal gates falling
-# back to the substring match on one — which is the direction this module already fails in,
-# and the direction that refuses rather than allows.
-_UNMODELLED = {";;", ";&", ";;&"}
+# QUOTING IS THE DISCRIMINATOR, and it survives tokenisation: `echo '$(gh pr merge 1)'`
+# keeps the substitution inside ONE token and is still read as text. That is why this is
+# asked of the token stream and never of the raw line — matching text is #76, the defect
+# this module was written to end. The backtick earns its place in `punctuation_chars` for
+# the same reason: unquoted it becomes its own token, quoted it stays inside one.
+#
+# The cost, stated: `find . \( -name '*.py' \) -print` is declined too, because an escaped
+# paren and a real one are the same token here. A declined line is not vouched for and its
+# gates fall back to the substring match — the direction that refuses rather than allows,
+# and the one this module already documents as its failure mode.
+_UNMODELLED = {";;", ";&", ";;&", "(", ")", "<(", ">(", "`"}
 
 # Programs that run their argument as the real command, so the thing being gated is one
 # position further along. The same list Claude Code itself strips, plus `env`, which takes
@@ -84,7 +96,8 @@ def segments(line: str) -> list[list[str]]:
     if not line:
         return []
     try:
-        lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+        # The backtick is added to the default `();<>|&` so an unquoted one is its own token.
+        lexer = shlex.shlex(line, posix=True, punctuation_chars="();<>|&`")
         lexer.whitespace_split = True
         tokens = list(lexer)
     except ValueError:
