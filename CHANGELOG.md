@@ -1,11 +1,18 @@
 # Changelog
 
-## v2.0.0
+## v1.57.0
 
 The gate said the founder had accepted it. The founder had not.
 
-**Breaking, and the first major this project has cut.** `+merge` must now be alone on its
-line. See "What you have to type differently" at the end.
+**One thing changes in what you type: `+merge` must now be alone on its line.** See "What
+you have to type differently" at the end.
+
+Cut as a minor on the founder's word, and the reasoning is written down because the rule
+says otherwise. RELEASING.md's table calls a gate refusing what it used to allow a MAJOR,
+and by that table this is one. The founder's call was 1.57.0: this sits in a run of
+parallel-session bug fixes, the inline form is typed by one person in one repository, and
+a 2.0.0 would signal a migration to everybody else that nobody has to perform. The rule
+stands; this is a recorded exception to it, not an amendment.
 
 ### What it said
 
