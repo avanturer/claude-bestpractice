@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-1.56.2-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-1.57.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-1316%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-33%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -268,9 +268,19 @@ grant.
 | `+release` | promoting to production | one promotion |
 | `+migration` | destructive DDL in a migration | one migration |
 
-Anchored to the end of a line, so *"if `+merge` then we ship"* is talk about a merge and
-not one. The prefix is a symbol rather than the word "ok" because "ok" is English and the
-gate should not depend on which language you happen to be writing in. Nothing the session writes can stand in for these — only your own turns reach the
+**On a line of its own, with nothing else on it.** Say whatever you like first, then put
+the word on the next line:
+
+```
+looks good, ship it
++merge
+```
+
+A token sharing a line with prose cannot be told from a token being talked about, and that
+gap ran the wrong way: *"I never said `+merge`"* — a refusal — authorised the merge, and
+two unapproved pull requests reached a deploying trunk before it was caught. The prefix is a
+symbol rather than the word "ok" because "ok" is English and the gate should not depend on
+which language you happen to be writing in. Nothing the session writes can stand in for these — only your own turns reach the
 hook that records them, which is the whole point: the gate on an irreversible action must
 not be openable by the party it gates.
 

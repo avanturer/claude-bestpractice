@@ -384,12 +384,17 @@ def merge_refusal(record: dict[str, Any], problems: list[str]) -> str:
 def stop_demand(record: dict[str, Any], problems: list[str], accepted: bool = True) -> str:
     """The one interruption a pull request gets: merge it, or say why it cannot be.
 
-    `accepted` is the founder's word, and without it this does not demand a merge at all.
-    The demand used to read "there is no reviewer and no approval step in this repository",
-    which was true about GitHub and false about the product: the reviewer is the founder
-    and the review happens in the chat. So a session that had been told "не кати, буду
-    смотреть" was instructed on every turn to merge anyway, and had to argue its way out
-    in writing (#140).
+    `accepted` is whether an unspent `+merge` is on record, and without it this does not
+    demand a merge at all. The demand used to read "there is no reviewer and no approval
+    step in this repository", which was true about GitHub and false about the product: the
+    reviewer is the founder and the review happens in the chat. So a session that had been
+    told "не кати, буду смотреть" was instructed on every turn to merge anyway, and had to
+    argue its way out in writing (#140).
+
+    It is a record, NOT a person's state of mind, and the difference is the whole of #192.
+    The flag is repository-wide and names no pull request, so this text says what is on
+    record and lets the reader decide whether it was meant here — it does not report that
+    the founder accepted anything.
     """
     named = f"#{record['number']}" if record.get("number") else f"on {record.get('branch', '')}"
     if not problems and not accepted:
@@ -402,14 +407,27 @@ def stop_demand(record: dict[str, Any], problems: list[str], accepted: bool = Tr
             "This will not be raised again."
         )
     if not problems:
+        # WHAT IS ON RECORD, never what the founder feels. The line here read "the founder
+        # has accepted it" and "Their word is already given" — a claim about a person,
+        # made by a gate that cannot see one. It is not merely unverified, it is
+        # unverifiable: the record is one repository-wide flag with no pull request
+        # attached, so even a real `+merge` may have been given for other work in another
+        # session of the same clone.
+        #
+        # It was believed over a check that contradicted it. The session read an empty
+        # `reviewDecision`, was told by this sentence that the word was already given,
+        # and merged two pull requests the founder had explicitly asked it to leave alone
+        # (#192). A gate that asserts a fact it cannot hold outranks the model's own
+        # evidence, which is the opposite of what this plugin is for.
         return (
-            f"claude-bestpractice: pull request {named} is open, the founder has accepted it and "
-            "every check passes, and this turn was about to end without it being merged.\n"
-            "Merge it now. Their word is already given and it is spent on this merge — a "
-            "pull request left open is work that is finished everywhere except where it "
-            "counts.\n"
-            "If you believe it genuinely must not be merged yet, say so to the founder in "
-            "one line; this will not be raised again."
+            f"claude-bestpractice: pull request {named} is open, every check passes, and this "
+            "turn was about to end without it being merged. An unspent `+merge` is on "
+            "record in this repository.\n"
+            "That record carries no pull request, so it may have been given for other "
+            "work: if it was meant for this one, merge it now — a pull request left open "
+            "is work that is finished everywhere except where it counts.\n"
+            "If it was not, or you believe this must not be merged yet, say so to the "
+            "founder in one line and leave it open; this will not be raised again."
         )
     listed = "\n".join(f"  - {p}" for p in problems[:6])
     return (

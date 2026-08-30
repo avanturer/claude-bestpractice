@@ -376,11 +376,20 @@ APPROVE_MIGRATION = "approve:migration"
 # it (#147).
 #
 # `+` carries no language. The nouns stay because they are already the words spoken in
-# both — «мерж», «релиз», «миграция» are these words. Still anchored to the END of a
-# line, so a sentence ABOUT a merge is not one: "we should merge okay soon" authorised
-# one before that anchor existed.
+# both — «мерж», «релиз», «миграция» are these words.
+#
+# THE LINE IS THE TOKEN AND NOTHING ELSE. Anchoring to the end of a line was the previous
+# rule and it read a refusal as consent: «пока не вливай, я не говорил +merge» ends with
+# the token, so the sentence withholding the merge authorised it. The founder said almost
+# exactly that, two unapproved changes reached the trunk, and one of them nearly shipped
+# to people alongside a neighbouring session's OTA publish (#192).
+#
+# No amount of reading the words around it fixes that — a grant cannot be inferred from
+# prose it happens to end. So the shape carries the whole meaning: a line whose entire
+# content is `+merge` is a deliberate act and cannot be a sentence about one. It costs
+# the founder a newline before the word; the other direction cost a revert.
 _APPROVAL = re.compile(
-    r"(?im)(?:^|\s)\+(?P<subject>merge|release|deploy|migration)\s*[.!]?\s*$"
+    r"(?im)^\s*\+(?P<subject>merge|release|deploy|migration)\s*[.!]?\s*$"
 )
 
 _APPROVAL_KEYS = {
@@ -392,7 +401,14 @@ _APPROVAL_KEYS = {
 
 
 def approvals_in(text: str) -> dict[str, str]:
-    """Acceptances the founder gave in their own message. Usually empty."""
+    """Acceptances the founder gave IN THEIR OWN MESSAGE. Usually empty.
+
+    The caller is responsible for handing this the founder's words and nothing else. A
+    grant is the one thing in this plugin that the gated party must never be able to
+    write, and the plugin's own voice reaches the prompt reader as an ordinary user turn
+    — that road produced #106, #118, #166 and v1.52.0, each time on the task statement.
+    Here it lands on the grant, which is decision 0008 inverted by the plugin itself.
+    """
     return {
         _APPROVAL_KEYS[found["subject"].lower()]: "yes"
         for found in _APPROVAL.finditer(text or "")

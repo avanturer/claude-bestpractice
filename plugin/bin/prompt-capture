@@ -267,7 +267,16 @@ def main() -> None:
         config.record_switches(ctx, config.switches_in(safe))
         # Acceptance travels the same road as a switch, and for the same reason: it is
         # the founder's own word, recorded where the session being gated cannot write it.
-        config.record_switches(ctx, config.approvals_in(safe))
+        #
+        # THE FOUNDER'S WORD ONLY. `is_harness_block` already knows this plugin's own
+        # voice and the harness's block shapes, and it was wired into the task statement
+        # alone — so a grant, the one thing the gated party must never be able to write,
+        # was reachable from any text that arrived as a user turn. The inbox delivers this
+        # plugin's notes exactly that way, which is how the same mistake landed on the
+        # task statement in #106, #118, #166 and again in v1.52.0. On this path it does
+        # not cost a stale statement, it merges to a deploying trunk (#192).
+        if not is_harness_block(prompt):
+            config.record_switches(ctx, config.approvals_in(safe))
         # An update that landed AFTER this session started. The board says this at session
         # start and could never say it afterwards — which is the one moment it is needed,
         # because the founder updates mid-session and the running hooks stay behind. They
