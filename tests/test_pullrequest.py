@@ -227,6 +227,56 @@ class TestTheMergeIsJudged(PRCase):
         self.assertNotEqual("deny", self.decision(self.merge()))
 
 
+class TestAMergeHiddenInASubstitutionIsStillAMerge(PRCase):
+    """`allow_tool` is not the only way past a gate — an unreadable line was another.
+
+    MEASURED before the fix, against this same armed gate: `gh pr merge 1 --squash` was
+    denied and `FOO=$(gh pr merge 1) echo hi` was ALLOWED, with bash shown to execute the
+    substitution. `shlex` splits `$(` into tokens, so `segments` returned a confident argv
+    whose program position was `(`; `runs()` never matched `gh`, and `_gh_subcommand` never
+    reached the regex fallback that would have caught it. A session could merge without the
+    founder's `+merge` — decision 0006 walked past.
+    """
+
+    # The recorded number, because a merge of a pull request this gate has no record of
+    # is somebody else's and deliberately not gated at all.
+    HIDDEN = (f"FOO=$(gh pr merge {PRCase.PR_NUMBER}) echo hi",
+              f"X=`gh pr merge {PRCase.PR_NUMBER}` echo hi",
+              f"RANDOM=a[$(gh pr merge {PRCase.PR_NUMBER})] echo hi",
+              f"(gh pr merge {PRCase.PR_NUMBER})")
+
+    def armed(self):
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+        self.open_a_pr()
+
+    def bash(self, command: str):
+        return self.tool("Bash", {"command": command}, "s1")
+
+    def test_the_plain_form_is_refused(self):
+        """The control. Without it a green run below proves nothing."""
+        self.armed()
+        self.assertEqual(
+            "deny", self.decision(self.bash(f"gh pr merge {self.PR_NUMBER} --squash")))
+
+    def test_a_merge_hidden_in_a_substitution_is_refused_too(self):
+        self.armed()
+        for command in self.HIDDEN:
+            self.assertEqual("deny", self.decision(self.bash(command)),
+                             f"{command!r} merged without the founder's word")
+
+    def test_writing_about_a_merge_is_still_not_one(self):
+        """#76, which this must not undo: quoting keeps a substitution inside one token."""
+        self.armed()
+        for command in (f"echo 'gh pr merge {self.PR_NUMBER}'",
+                        "grep -r 'gh pr merge' docs/",
+                        f"echo '$(gh pr merge {self.PR_NUMBER})'"):
+            self.assertNotEqual("deny", self.decision(self.bash(command)),
+                                f"{command!r} was refused for writing about a merge")
+
+
 class TestOpeningOneIsNotAQuestion(PRCase):
     """The founder watched the idea, the checks and the commits go by in the chat and was
     then asked, as a formality, whether to open the pull request. The obligation this

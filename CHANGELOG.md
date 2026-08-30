@@ -1,5 +1,54 @@
 # Changelog
 
+## v1.56.2
+
+The founder's `+merge` could be walked past, and the way it happened is the way it happened
+twice before: the parser returned a confident argv over a line that ran something else.
+
+### A merge hidden in a substitution was not a merge the gate could see
+
+Measured against the armed gate, before the fix:
+
+```
+deny     gh pr merge 48 --squash
+deny     FOO=bar gh pr merge 48 --squash
+allow    FOO=$(gh pr merge 48) echo hi          <- and bash runs the merge
+allow    X=`gh pr merge 48` echo hi
+allow    RANDOM=a[$(gh pr merge 48)] echo hi
+```
+
+`bash -c 'FOO=$(touch marker) echo hi'` was run to confirm the premise rather than assume
+it: all three forms execute. So a **session** could merge a pull request without the
+founder's word — which is the entire subject of decision 0006, walked past.
+
+`shlex` splits `$(` into tokens, so `segments` handed back an argv whose program position
+was `(`. `runs()` compares position zero, never matched `gh`, and
+`pullrequest._gh_subcommand` therefore never reached the regex fallback — which WOULD have
+caught it. The fallback was there the whole time; the parser just never admitted it could
+not read the line.
+
+Third time this shape: a dangling operator (1.55.0), a `case` terminator (1.55.1), a
+substitution (here). Each was the parser answering confidently instead of declining.
+
+### Quoting is the discriminator, and it survives tokenisation
+
+The reason this is asked of the token stream and never of the raw line: matching text is
+**#76**, the defect this module was written to end — `echo` of a merge invocation refused as
+a merge, `grep` for it in documentation refused as a merge.
+
+An unquoted `$(`, `<(`, `>(` or subshell `(` reaches `shlex` as a token of its own; a quoted
+one stays inside a single token. So `echo '$(gh pr merge 48)'` is still text and still
+allowed, asserted in the same test that asserts the refusals. The backtick earns a place in
+`punctuation_chars` for exactly that property.
+
+**Cost, stated:** `find . \( -name '*.py' \) -print` is declined too — an escaped paren and
+a real one are the same token here. A declined line is not vouched for and its gates fall
+back to the substring match: the direction that refuses rather than allows, and the one this
+module already documents as its failure mode.
+
+No complexity budget was moved. `(`, `)`, `<(`, `>(` and the backtick joined the sets the
+existing check already reads, so `segments` stays at 10.
+
 ## v1.56.1
 
 A security regression this project shipped in 1.55.0, and an older one beside it that the
