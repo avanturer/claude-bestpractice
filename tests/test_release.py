@@ -710,3 +710,36 @@ class TestTheCheckersStayOutOfProvisionedWorktrees(RepoCase):
         self.assertTrue(any("dup.py" in p for p in scanned), "it scanned nothing at all")
         inside = [p for p in scanned if str(nested) in p]
         self.assertEqual([], inside, "the checker read files from inside the worktree")
+
+
+class TestTheChangelogCountsItsOwnEntries(unittest.TestCase):
+    """A release note that opens "Four things" over six sections is the shape this whole
+    release was about: text that promises something the artifact does not carry.
+
+    It shipped that way. The heading was written for the first commit and two more sections
+    were appended under it, and the release workflow cuts the published notes straight from
+    this file — so the count reached everybody who read them.
+
+    Only the newest entry, and only when it opens with a count. Older entries are history
+    and a note that never states a number has nothing to contradict.
+    """
+
+    WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+             "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12}
+
+    def test_the_newest_entry_states_a_count_it_can_keep(self):
+        text = read("CHANGELOG.md")
+        entries = re.split(r"(?m)^## ", text)
+        self.assertGreater(len(entries), 1, "the changelog has no versioned entry")
+        newest = entries[1]
+
+        opening = newest.split("\n", 1)[1].strip().split("\n", 1)[0]
+        stated = self.WORDS.get(opening.split()[0].lower().strip(",.")) if opening else None
+        if stated is None:
+            return
+
+        sections = len(re.findall(r"(?m)^### ", newest))
+        self.assertEqual(
+            stated, sections,
+            f"the entry opens with {stated} and carries {sections} sections:\n  {opening}",
+        )
