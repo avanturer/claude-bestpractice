@@ -565,4 +565,39 @@ def subagent_brief(ctx: GitContext, max_chars: int = 2_000) -> str:
                 parts.append(f"    breaks if wrong: {entity.breaks_if_wrong}")
 
     text = "\n".join(parts).strip()
-    return text[:max_chars]
+    return _to_line_boundary(text, max_chars)
+
+
+def _to_line_boundary(text: str, max_chars: int) -> str:
+    """Cut between lines, never inside one.
+
+    A raw character slice ends the brief wherever the budget lands, and what it lands on is
+    usually an entity — leaving `[plugin/lib/claude_bestpractice/evidence`, an anchor with
+    its file sliced off. That is worse than dropping the entity outright: it names a path
+    that does not exist, and the subagent this is written for inherits no project rules and
+    has nothing to check it against. Measured on this repository, the brief ran 913
+    characters over and ended in exactly that state.
+
+    A trailing heading goes with it. `## Entities` with nothing underneath reads as "this
+    repository has no entities", which is a different and false claim.
+    """
+    if len(text) <= max_chars:
+        return text
+
+    kept: list[str] = []
+    used = 0
+    for line in text.splitlines():
+        cost = len(line) + (1 if kept else 0)
+        if used + cost > max_chars:
+            break
+        kept.append(line)
+        used += cost
+
+    while kept and kept[-1].lstrip().startswith("#"):
+        kept.pop()
+
+    # Nothing fits only when a single line is longer than the entire budget, which means a
+    # malformed layer rather than a large one. Returning a mangled fragment of it would be
+    # the very cut this exists to avoid, and `subagent-brief` fails open by design: a
+    # subagent starting without a brief is explicitly better than one that never starts.
+    return "\n".join(kept)

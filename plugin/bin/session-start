@@ -215,7 +215,14 @@ def _restored_line(ctx: GitContext, event) -> str:
         return ""
     body = text.split("---", 2)[-1].strip()
     if len(body) > MAX_RESTORED:
-        body = body[:MAX_RESTORED] + "\n[…truncated; the whole checkpoint is on disk]"
+        # Name the directory. "on disk" without a path is a pointer to nowhere, and the
+        # session it is addressed to has just been compacted and knows least of anyone.
+        where = store.tier_a(ctx, "checkpoints")
+        try:
+            where = where.relative_to(ctx.worktree_root)
+        except ValueError:
+            pass
+        body = body[:MAX_RESTORED] + f"\n[…truncated; the whole checkpoint is in {where}/]"
     return (
         "\n\nRESTORED AFTER COMPACTION — this is what the window held before it was "
         "compacted, written at the time by this plugin rather than summarised now. Treat it "

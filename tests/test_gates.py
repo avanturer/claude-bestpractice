@@ -561,9 +561,14 @@ class TestWhatCompactionDestroysIsHandedBack(GateCase):
         self.assertIn("LoRA r=16", said)
         self.assertIn("не влезает в 80GB", said)
 
-    def test_an_empty_ledger_does_not_claim_there_is_nothing_while_showing_something(self):
-        """`list.extend` returns None, so `extend(...) or append(...)` always appends —
-        "(none recorded)" printed underneath a real attempt on the first run."""
+    def test_an_attempt_is_never_delivered_beside_a_claim_that_there_are_none(self):
+        """`list.extend` returns None, so `extend(...) or append(...)` always appended —
+        "(none recorded)" printed underneath a real attempt on the first run.
+
+        The checkpoint section that bug lived in is gone; a restored window is handed the
+        attempt log by `board.render` instead, keyed on this session's own subject. The
+        property is unchanged and is asserted here against the payload that now carries it.
+        """
         from claude_bestpractice import attempts
 
         self.start()
@@ -572,13 +577,88 @@ class TestWhatCompactionDestroysIsHandedBack(GateCase):
         self.gate("checkpoint", {"session_id": "s1", "hook_event_name": "PreCompact",
                                  "trigger": "auto", "cwd": str(self.repo)})
         said = self.context(self.compacted())
-        ruled_out = said.split("Already ruled out")[1].split("##")[0]
-        self.assertIn("an approach", ruled_out)
-        self.assertNotIn("(none recorded)", ruled_out)
+        self.assertIn("an approach", said)
+        self.assertNotIn("(none recorded)", said)
+
+    def test_the_card_survives_a_session_that_touched_a_lot_of_files(self):
+        """The restore is sliced from the head, so section ORDER decides what a busy
+        session gets back.
+
+        Measured on this repository before the order changed: with the file list ahead of
+        the work, the attempt log fell out of the restore at 21 changed files and the
+        ledger heading at 22, and the repository's own restore tests never noticed because
+        every one of them changes at most three files. What is asserted here is the part
+        no other channel replaces — `plan.render_for_board` renders `id` and `title[:80]`
+        and never the body, and the body is what the compaction demand tells the session
+        to write.
+        """
+        from claude_bestpractice import plan
+
+        self.start()
+        ctx = self.ctx()
+        task = plan.add(ctx, "finish the ingest rewrite",
+                        body="the retry budget belongs to the caller, not the client",
+                        paths=["ingest/core.py"], done_when="stated")
+        plan.claim(ctx, task.id, sid(self.repo, "s1"), "feat/ingest")
+        for n in range(45):
+            self.write(f"ingest/generated/module_with_a_realistic_name_{n:03d}.py", f"x = {n}\n")
+        self.gate("checkpoint", {"session_id": "s1", "hook_event_name": "PreCompact",
+                                 "trigger": "auto", "cwd": str(self.repo)})
+
+        said = self.context(self.compacted())
+        restored = said.split("RESTORED AFTER COMPACTION")[1]
+        self.assertIn("the retry budget belongs to the caller", restored)
+        self.assertIn("ingest/core.py", restored)
+        self.assertIn("finish the ingest rewrite", restored)
 
     def test_a_compaction_with_nothing_captured_says_nothing(self):
         self.start()
         self.assertNotIn("RESTORED AFTER COMPACTION", self.context(self.compacted()))
+
+
+class TestEverySourceThatStartsASessionReachesTheGate(GateCase):
+    """A source missing from the matcher is not a conservative default — it is this gate
+    not running at all on that kind of start.
+
+    `--fork-session` resumes a session under a NEW id in the SAME worktree. While `fork`
+    was absent from the pattern the forked session got no board, no registration, no reap
+    and no pre-push arming: the entire coordination layer, missing on exactly the workflow
+    this product exists for. Enforcement was never the casualty — `evidence-gate` adopts a
+    missing record at the branch point rather than at HEAD — so what a fork lost was
+    awareness, silently.
+    """
+
+    # Claude Code 2.1.258. The harness matches a SessionStart matcher against `source`, and
+    # an unmatched source skips the hook rather than failing, so this list going stale is
+    # invisible until someone notices a session that never registered.
+    SOURCES = ("startup", "resume", "clear", "compact", "fork")
+
+    def matcher(self) -> str:
+        raw = json.loads((BIN.parent / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+        return raw["hooks"]["SessionStart"][0]["matcher"]
+
+    def test_the_matcher_admits_every_documented_source(self):
+        import re
+
+        pattern = self.matcher()
+        for source in self.SOURCES:
+            with self.subTest(source=source):
+                self.assertTrue(
+                    re.search(pattern, source),
+                    f"source {source!r} never reaches session-start: matcher is {pattern!r}",
+                )
+
+    def test_a_forked_session_registers_and_is_handed_the_board(self):
+        from claude_bestpractice import sessions
+
+        proc = self.gate("session-start", {"session_id": "forked", "source": "fork",
+                                           "hook_event_name": "SessionStart"})
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIsNotNone(
+            sessions.get(self.ctx(), sid(self.repo, "forked")),
+            "a forked session left no record, so no sibling can see it holding anything",
+        )
+        self.assertIn("hookSpecificOutput", json.loads(proc.stdout))
 
 
 class TestTheCompactionIsBlockedOnceForTheNotes(GateCase):
@@ -601,7 +681,38 @@ class TestTheCompactionIsBlockedOnceForTheNotes(GateCase):
         self.write("pipeline.py", "run = True\n")
         proc = self.compact()
         self.assertEqual(2, proc.returncode, proc.stdout)
-        self.assertIn("claude-bp-attempt record", proc.stderr)
+        for field in ("LEARNED", "RULED OUT", "DECIDED"):
+            self.assertIn(field, proc.stderr)
+
+    def test_every_command_it_names_is_one_that_exists(self):
+        """This block is the only interruption the whole session is allowed, and it spent
+        it handing out `claude-bp-attempt record`, which is not a subcommand — the verb is
+        `add`. `claim` was named for writing a task body it cannot write, and `add` files a
+        SECOND card for a session that already holds one.
+
+        Asserted by invoking each named command rather than by matching its text, because a
+        string assertion is what let the wrong one live here: the previous test pinned the
+        broken spelling in place.
+        """
+        import re
+        import subprocess
+
+        self.start()
+        self.write("pipeline.py", "run = True\n")
+        said = self.compact().stderr
+
+        named = set(re.findall(r"claude-bp-[a-z]+(?:\s+[a-z]+)?", said))
+        self.assertTrue(named, "the demand named no command at all")
+        for phrase in sorted(named):
+            cli, _, sub = phrase.partition(" ")
+            with self.subTest(command=phrase):
+                self.assertTrue((BIN / cli).exists(), f"{cli} is not a gate that ships")
+                argv = [sys.executable, str(BIN / cli)] + ([sub] if sub else []) + ["--help"]
+                proc = subprocess.run(argv, capture_output=True, text=True, timeout=60,
+                                      cwd=str(self.repo))
+                self.assertEqual(0, proc.returncode,
+                                 f"`{phrase}` is named in the demand and does not exist:\n"
+                                 f"{proc.stderr}")
 
     def test_it_is_never_raised_twice(self):
         """A session that ignores this, crashes, or meets the next compaction must not be
