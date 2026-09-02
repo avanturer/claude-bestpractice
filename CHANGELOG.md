@@ -2,8 +2,9 @@
 
 ## v1.58.0
 
-Four things the plugin was doing to itself, found by reading a paper about somebody else's
-runtime and then measuring our own.
+Six things the plugin was doing to itself, found by reading a paper about somebody else's
+runtime and then measuring our own — four of them, and then two more that the first four's
+own guard turned up.
 
 ### A forked session started with nothing
 
