@@ -143,7 +143,7 @@ def cmd_brief(ctx) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Manage the claude-bp knowledge layer.")
+    parser = argparse.ArgumentParser(description="Manage the knowledge layer.")
     sub = parser.add_subparsers(dest="command", required=True)
     init = sub.add_parser("init", help="scaffold the four always-on files")
     init.add_argument("--force", action="store_true", help="overwrite existing templates")

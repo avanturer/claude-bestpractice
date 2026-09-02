@@ -406,8 +406,9 @@ def _verify_by_reading(ctx: GitContext, globs: list[str], changed: list[str]) ->
         True,
         f"{artifact.path.name}: {artifact.detail} — UNBOUND. No test command could be run "
         "here, so this artifact was read, not witnessed, and a hand-written one is "
-        "indistinguishable from a real one. Set `test_command` in "
-        ".claude/claude-bestpractice/config.json to make finishing verifiable.",
+        "indistinguishable from a real one. `test_command` in "
+        ".claude/claude-bestpractice/config.json makes finishing verifiable — that file is "
+        "refused to sessions, so this is the founder's to set, not yours.",
         artifact,
         unverified=True,
     )

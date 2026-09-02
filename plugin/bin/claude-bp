@@ -288,10 +288,14 @@ def cmd_set(ctx, key: str, value: str) -> int:
     time it blocks something.
     """
     if key in config.EVIDENCE_KEYS:
-        print(f"{key} decides whether a finish is verifiable, so it is not set here.",
-              file=sys.stderr)
-        print("  claude-bp ci owns it: it runs the command and records what happened, "
-              "which is the difference between changing the check and proving it.",
+        # Not "some other command owns it". Nothing does, and saying otherwise sent the
+        # reader looking for a command that has never existed — the #108 shape again, in
+        # the one place its fix did not reach.
+        print(f"{key} decides whether a finish is verifiable, so no session sets it — "
+              "including this one, which is usually run from inside one.", file=sys.stderr)
+        print("  It is detected from the project. Where detection is wrong or absent, "
+              ".claude/claude-bestpractice/config.json is yours to edit directly: that "
+              "file is refused to sessions, which is what makes it the founder's.",
               file=sys.stderr)
         return 1
 

@@ -238,6 +238,30 @@ class TestSubagentBrief(KnowledgeCase):
     def test_empty_layer_yields_an_empty_brief(self):
         self.assertEqual(knowledge.subagent_brief(self.ctx()), "")
 
+    def test_it_never_ends_inside_an_entry(self):
+        """The budget was applied as a raw character slice, so the brief ended inside
+        whichever line it landed on — and the line it lands on is usually an entity, which
+        left the anchor with its file sliced off. A half anchor is worse than a missing one:
+        it names a path that does not exist, to a subagent that inherits no project rules
+        and has nothing to check it against.
+
+        Swept rather than pinned to one budget, because the failure is a property of where
+        the cut falls and any single number passes by luck.
+        """
+        self.seed()
+        full = knowledge.subagent_brief(self.ctx(), max_chars=10_000)
+        self.assertIn("[", full, "the fixture carries no anchor, so this proves nothing")
+
+        for budget in range(20, len(full) + 1, 3):
+            brief = knowledge.subagent_brief(self.ctx(), max_chars=budget)
+            with self.subTest(budget=budget):
+                self.assertLessEqual(len(brief), budget)
+                self.assertFalse(brief.rstrip().endswith("## Entities"),
+                                 "a heading with nothing under it claims there are none")
+                for line in brief.splitlines():
+                    self.assertEqual(line.count("["), line.count("]"),
+                                     f"anchor cut in half: {line!r}")
+
 
 class TestCli(KnowledgeCase):
     def run_cli(self, *args: str) -> subprocess.CompletedProcess:

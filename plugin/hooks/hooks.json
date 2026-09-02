@@ -1,6 +1,6 @@
 {
   "$comment": [
-    "Nine entries across eight events. Budget is 12 for the whole plugin; a thirteenth requires deleting one.",
+    "Eleven entries across ten events. Budget is 12 for the whole plugin; a thirteenth requires deleting one.",
     "",
     "PROTOCOL, because these are the cheap ways to ship a gate that enforces nothing:",
     "  - Exit 2 blocks. Exit 1 is a NON-blocking error and the tool RUNS.",
@@ -38,7 +38,18 @@
     ],
     "SessionStart": [
       {
-        "matcher": "startup|resume|clear|compact",
+        "$comment": [
+          "`fork` is a source like any other, and leaving it out of this matcher is not a",
+          "conservative default — it is this gate not running at all on a forked session.",
+          "`--fork-session` resumes a session under a NEW id in the SAME worktree, so the",
+          "fork gets no board, no registration, no reap and no pre-push arming, which is",
+          "the entire coordination layer, on exactly the workflow this product is for.",
+          "",
+          "Enforcement is unaffected either way: `evidence-gate` adopts a missing record",
+          "at `branch_point`, never at HEAD, so an unregistered session is over-reported",
+          "rather than let through. What a fork loses is awareness, not the gate."
+        ],
+        "matcher": "startup|resume|clear|compact|fork",
         "hooks": [
           {
             "type": "command",

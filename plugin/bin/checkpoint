@@ -120,70 +120,139 @@ def _demand_the_notes_once(ctx, event, rec, changed) -> None:
     task = ""
     if rec and rec.task_statement:
         task = f"\nThis session was asked: {rec.task_statement[:200]}\n"
+
+    # Name the card and the command that writes it, not the field in the abstract. The
+    # previous wording named three commands and got all three wrong: `claude-bp-attempt
+    # record` is not a subcommand at all (the verb is `add`), `claim` cannot write a body,
+    # and `add` files a SECOND card for a session that already holds one. This is the only
+    # interruption the whole session is allowed, and it was spending it on instructions
+    # that error out.
+    learned = (
+        '`claude-bp-plan add "<what this window was for>" '
+        '--body "<what you learned that is not in the code>"`'
+    )
+    from claude_bestpractice import plan
+
+    try:
+        # OWNERSHIP IS REQUIRED HERE, unlike in `_carried`. Without a record `_carried`
+        # carries every in-flight card, which over-reports into this window's own restore
+        # and costs nothing. Naming one in the demand is different: it hands out a WRITE
+        # command, and the first card in `doing` may belong to a live sibling.
+        mine = [] if rec is None else [
+            t for t in plan.load_all(ctx, plan.DOING) if t.owner == rec.session_id
+        ]
+    except Exception:  # noqa: BLE001 - the demand must survive an unreadable ledger
+        mine = []
+    if mine:
+        card = mine[0]
+        task += f"The card it holds is {card.id} {card.title}.\n"
+        # `--note` REPLACES the handoff (`plan.amend`: `note.strip() or body`), so a demand
+        # that called this "add what you learned" would have the window silently delete the
+        # plan a `park` left behind. Say what the command does.
+        learned = (f'`claude-bp-plan update {card.id} --note "<the handoff, rewritten to '
+                   'carry what you learned>"` — this REPLACES the card body, so keep what '
+                   'is still true')
+
     hookio.block(
         "claude-bestpractice: this window is about to be compacted, and after it you will be "
         "nearly new. What is on disk survives; what is only in this conversation does not.\n"
         f"{task}"
         "Write down now, before anything else — this is the last moment the material still "
-        "exists:\n"
-        "  - what you have LEARNED that is not in the code yet: update the body of your "
-        "task with `claude-bp-plan add`/`claim` or edit the task file directly.\n"
-        "  - what you TRIED and abandoned, and why: `claude-bp-attempt record` — an approach "
-        "ruled out and not written down is one the next window will try again.\n"
-        "  - anything decided that outlives this task: `claude-bp-decide`.\n"
+        "exists. Three fields, three commands:\n"
+        f"  LEARNED   — not in the code yet: {learned}\n"
+        "              (this is the field a restored window is handed back; the board "
+        "renders the title alone.)\n"
+        '  RULED OUT — tried and abandoned: `claude-bp-attempt add "<approach>" '
+        '--why "<why it failed>" --paths <files>`\n'
+        "              (an approach ruled out and not written down is one the next window "
+        "tries again.)\n"
+        "  DECIDED   — outlives this task: say it plainly in this turn. It is harvested "
+        "when the turn ends; `claude-bp-decide list` shows what was caught and "
+        "`claude-bp-decide accept <n>` promotes it.\n"
         "Then let the compaction proceed. This will not be raised again in this session, so "
         "if you skip it the material is gone."
     )
 
 
-def _carried(ctx, rec) -> list:
-    """The goal, the plan, and what has already been ruled out.
+# One claimed card, its body and its paths. The section is bounded because the restore
+# that reads it is head-sliced: an unbounded section here would evict the opening request
+# instead of the file list, which is the same defect pointing the other way.
+MAX_CARRIED_CHARS = 900
 
-    A restored window needs the shape of the work, not only the last few turns: what this
-    session is for, what is in flight beside it, and which approaches are already dead. All
-    three are on disk before this hook runs — the ledger, the board and the attempt log —
-    so carrying them into the checkpoint is a read and a join.
+
+def _paths_line(paths: list, room: int) -> str:
+    """As many paths as fit, and a count for the rest.
+
+    Dropping the line whole was the first answer and it was wrong: a 400-character body
+    leaves under 400 for ten realistic paths, so the section that card 0064 exists to carry
+    would arrive with the body and none of the files. The paths are the cheaper half and the
+    more actionable one — they are where the next window opens — so they are trimmed by
+    count rather than by character, and the count says what was left behind.
     """
-    from claude_bestpractice import attempts, board, plan
+    prefix = "  paths: "
+    shown: list = []
+    used = len(prefix)
+    for path in paths[:10]:
+        cost = len(path) + (2 if shown else 0)
+        # Always keep the first, even if it alone is over: one path is a pointer and no
+        # path is nothing, and the section bound still truncates the whole line if it must.
+        if shown and used + cost > max(room, 0):
+            break
+        shown.append(path)
+        used += cost
+    left = len(paths) - len(shown)
+    return prefix + ", ".join(shown) + (f" (+{left} more in the ledger)" if left else "")
+
+
+def _carried(ctx, rec) -> list:
+    """The claimed card's body and paths — the only part of the work the board cannot hand
+    back by itself.
+
+    This used to copy the queued tasks, the other sessions' cards, the last eight attempts
+    and the open items as well. All four are re-injected by `board.render` into the SAME
+    SessionStart payload, and injected better: attempts keyed on this session's own subject
+    rather than by recency, open items filtered to fresh provenance. So the duplicates
+    bought nothing and cost the only budget that matters — the restore is sliced from the
+    head, so whatever sits last is what disappears.
+
+    What is genuinely unrecoverable is this: `plan.render_for_board` prints `id` and
+    `title[:80]` and never the body, and the body is exactly where `_demand_the_notes_once`
+    blocks the compaction to make the session write what it learned. Measured before this
+    changed: past ~21 changed files the restore contained neither.
+    """
+    from claude_bestpractice import plan
 
     out = ["", "## The work this window was doing", ""]
     try:
+        # A missing record means "cannot tell whose this is", and dropping the section is
+        # the wrong direction for a restore, so an unknown owner carries everything.
         mine = [t for t in plan.load_all(ctx, plan.DOING)
                 if not rec or t.owner == rec.session_id]
-        others = [t for t in plan.load_all(ctx, plan.DOING) if t not in mine]
+        if not mine:
+            out.append("- (this session held no card)")
         for task in mine:
             out.append(f"- CLAIMED BY THIS SESSION: {task.id} {task.title}")
             if task.body:
                 out.append(f"  {task.body[:400]}")
             if task.paths:
-                out.append(f"  paths: {', '.join(task.paths[:10])}")
-        for task in plan.load_all(ctx, plan.NEXT)[:6]:
-            out.append(f"- queued: {task.id} {task.title}")
-        for task in others:
-            out.append(f"- another session: {task.id} {task.title}")
+                out.append(_paths_line(task.paths, MAX_CARRIED_CHARS - len("\n".join(out))))
     except Exception:  # noqa: BLE001 - a checkpoint that dies saves nothing
         out.append("- (the ledger could not be read)")
 
-    out += ["", "## Already ruled out — do not try these again", ""]
-    try:
-        tried = attempts.load_all(ctx)[-8:]
-        # `list.extend` returns None, so `extend(...) or append(...)` always appends — the
-        # "(none recorded)" line printed underneath a real attempt on the first run.
-        out.extend(f"- {a.title}: {a.why[:200]}" for a in tried)
-        if not tried:
-            out.append("- (none recorded)")
-    except Exception:  # noqa: BLE001
-        out.append("- (the attempt log could not be read)")
-
-    out += ["", "## Open items", ""]
-    try:
-        items = board.open_items(ctx)[:8]
-        out.extend(f"- {str(i.get('text', ''))[:200]}" for i in items)
-        if not items:
-            out.append("- (none)")
-    except Exception:  # noqa: BLE001
-        out.append("- (the board could not be read)")
-    return out
+    # Whole lines, never a character slice. A card with ten realistic paths renders past
+    # 900 chars, and cutting mid-line ends the `paths:` line inside a path — the exact
+    # defect `knowledge._to_line_boundary` exists to remove, reproduced here by the same
+    # change that removed it there.
+    kept: list = []
+    used = 0
+    for line in out:
+        cost = len(line) + (1 if kept else 0)
+        if used + cost > MAX_CARRIED_CHARS:
+            kept.append("- […the rest of the card is in the ledger]")
+            break
+        kept.append(line)
+        used += cost
+    return kept
 
 
 def main() -> None:
@@ -223,6 +292,11 @@ def main() -> None:
     else:
         lines.append("- (transcript unavailable or in an unrecognised format)")
 
+    # Before the file list, never after it. The file list is the one unbounded section
+    # here, and the restore that reads this back is sliced from the head — so whatever
+    # follows it is what a busy session loses.
+    lines.extend(_carried(ctx, rec))
+
     lines += ["", "## Files changed since baseline", ""]
     if changed:
         # Blob hashes, not mtimes: creating a worktree or switching branches resets
@@ -233,11 +307,6 @@ def main() -> None:
             lines.append(f"- ... and {len(changed) - 60} more")
     else:
         lines.append("- (none)")
-
-    # Everything durable this window was working from, gathered so the restore is one read
-    # rather than a scavenger hunt. All of it already exists on disk — this is a snapshot,
-    # not a summary, and still costs no model call.
-    lines.extend(_carried(ctx, rec))
 
     stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
     name = f"{stamp}-{(event.session_id or 'anon')[:8]}.md"

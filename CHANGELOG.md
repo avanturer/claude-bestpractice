@@ -1,5 +1,112 @@
 # Changelog
 
+## v1.58.0
+
+Four things the plugin was doing to itself, found by reading a paper about somebody else's
+runtime and then measuring our own.
+
+### A forked session started with nothing
+
+Claude Code 2.1.258 lists five sources for `SessionStart`: `startup`, `resume`, `clear`,
+`compact` and `fork`. The matcher here named four. Matchers filter on `source`, and an
+unmatched source skips the hook silently — so `claude --fork-session` produced a session
+with no board, no registration, no reap and no pre-push arming: the entire coordination
+layer, absent on exactly the workflow this plugin exists for.
+
+Enforcement was never the casualty, and it is worth saying which half broke. `evidence-gate`
+adopts a missing record at the branch point rather than at HEAD, so an unregistered session
+is over-reported to the gate, never let through. What a fork lost was awareness.
+
+The matcher now lists every documented source, and a test asserts that — against the list,
+not against one example, so the next source added upstream fails here loudly.
+
+### Compaction handed back a list of paths instead of the work
+
+The checkpoint wrote the opening request, the last three turns, up to sixty changed-file
+lines, and then the work: the claimed card, the ruled-out attempts, the open items. The
+restore takes the first 2,400 characters. The work was last, so the work was what went.
+
+Measured on this repository's real path lengths: with the founder's messages at the 300-character
+cap the attempt log fell out at 21 changed files and the card at 22. With no readable
+transcript at all it survived to 41. There was no configuration in which a large session
+kept it. The repository's own restore tests never caught it because every one of them
+changes at most three files.
+
+Most of what was being cut was a duplicate: `board.render` re-injects the ledger, the
+attempt log and the open items into the same payload, and injects them better — attempts
+keyed on this session's subject rather than the last eight by recency, open items filtered
+to fresh provenance. What was not duplicated anywhere is the claimed card's body and paths,
+because `plan.render_for_board` renders `id` and `title[:80]` and stops. That is the field
+the compaction demand blocks the session to make it write.
+
+So the checkpoint now carries the card and drops the three the board already delivers, and
+it sits ahead of the file list — the one unbounded section, and therefore the one the
+head-slice should eat. A test drives a session that changes 45 files and asserts the card
+comes back.
+
+### The one interruption a session gets was spending it on commands that do not exist
+
+`PreCompact` blocks once per session to make the window write down what only it knows. That
+block named three commands and got all three wrong:
+
+- `claude-bp-attempt record` — not a subcommand. The verb is `add`. A session following the
+  instruction literally got `invalid choice: 'record'`.
+- `claude-bp-plan add`/`claim` "to update the body of your task" — `claim` cannot write a
+  body, and `add` files a SECOND card for a session that already holds one.
+- `claude-bp-decide` — has no direct record; it lists and promotes drafts harvested at Stop.
+
+The existing test pinned the broken spelling in place by asserting the string was present.
+The block now names the session's actual card id and the command that actually writes each
+field, and the test invokes every command it names instead of matching its text.
+
+### Three refusals sent the session to a command that does not exist
+
+`pre-tool` refused `config.json` and told the session to change the test command with
+`claude-bp ci`. `claude-bp set test_command` refused and said the same. `config.py` stated
+it as the rule: "`claude-bp ci` owns them because it PROVES the command before it writes
+it." All three are false. The spelling is `claude-bp-ci`; its verbs are fixed
+(`status`, `local`, `github`, `off`, `record-green`, `green-covers-tree`) and none of them
+writes config; and `ci.py` only reads a detected command for the pre-push hook. Meanwhile
+`evidence.py` told the reader to set `test_command` in the very file `pre-tool` refuses.
+
+A session told to make finishing verifiable therefore had no path at all, and each of the
+three messages it was handed either errored or was refused. `cmd_set` already carries the
+name for this shape — issue #108, "the remedy the founder was read out loud was one the
+assistant then said it could not perform" — fixed once for gate switches and never for
+these keys.
+
+The messages now say what is true: nothing sets `test_command`, it is detected, and where
+detection is wrong the founder edits `config.json`, which is refused to sessions and is
+what makes it theirs. The test that covered this asserted the broken spelling was present,
+which is how it survived; there is now a repository-wide test that takes every string the
+plugin emits, extracts the commands named in it, and **runs** them.
+
+### `make check` broke the moment the plugin provisioned a worktree
+
+`check_slop` walked `ROOT.rglob("*.py")` past a skip list with no entry for a worktree. The
+plugin puts worktrees under `.claude/worktrees/` by its own design, so a second checkout of
+the repository sat inside the repository and every file was counted twice: 22,044 duplicate
+blocks against a budget of zero, `complex_functions` 38 against 19, and `make check` — the
+one definition of done — exiting 1. `test_release` had the same hole and reported the
+worktree's manifest as a second marketplace registration.
+
+Nothing under `tools/` mentioned worktrees at all, so the scope question had never been
+asked. It is now asked of `git worktree list` rather than of a directory name, because the
+name is a convention and the answer is a fact git already holds.
+
+The first version of the test for this passed against the unscoped scanner — a small
+fixture stays under budget even when everything in it is counted twice. It asserts on the
+list of files the checker decided to read.
+
+### A half anchor names a path that does not exist
+
+`subagent_brief` applied its budget as a raw character slice, so it ended inside whatever
+line the cut landed on — usually an entity, leaving its anchor with the file sliced off.
+Measured here: 913 characters over budget, ending at `[plugin/lib/claude_bestpractice/evidence`.
+A subagent inherits no project rules and has nothing to check that against. The budget is
+unchanged; the cut now falls between lines, and a trailing `## Entities` with nothing under
+it goes with it.
+
 ## v1.57.0
 
 The gate said the founder had accepted it. The founder had not.
