@@ -151,8 +151,9 @@ def changed_files() -> list[Path]:
 
 
 def all_files() -> list[Path]:
-    # Same reason as `check_slop`: a nested worktree is this repository again, and
-    # this fallback runs exactly when git could not narrow the list itself.
+    # Same reason as `check_slop`: a nested worktree is this repository again. This is the
+    # `--all` path, which `make check` takes, so it walks the tree rather than asking git
+    # for a file list and has to exclude the worktrees itself.
     nested = _scope.nested_worktrees(ROOT)
     return [p for p in ROOT.rglob("*") if p.is_file() and not _scope.is_inside(p, nested)]
 

@@ -576,6 +576,24 @@ class TestEveryCommandTheGatesNameCanBeRun(unittest.TestCase):
 
     NAMED = re.compile(r"claude-bp(?:-[a-z]+)?(?:[ \t]+[a-z][a-z-]*)?")
 
+    def assert_each_one_runs(self, seen: dict, verb: str) -> None:
+        """Invoke every command that was found, and say where it was found when it fails."""
+        for phrase, files in sorted(seen.items()):
+            cli, _, sub = phrase.partition(" ")
+            with self.subTest(command=phrase):
+                where = ", ".join(sorted(files))
+                self.assertTrue((BIN / cli).exists(),
+                                f"`{phrase}` in {where}: no such gate ships")
+                if not sub or sub in self.PROSE_AFTER:
+                    continue
+                proc = subprocess.run([sys.executable, str(BIN / cli), sub, "--help"],
+                                      capture_output=True, text=True, timeout=60)
+                self.assertEqual(
+                    0, proc.returncode,
+                    f"`{phrase}` is {verb} in {where} and cannot be run:\n"
+                    f"{proc.stderr.strip()[:300]}",
+                )
+
     def emitted_strings(self, path: Path) -> list[str]:
         """Every string literal in the file that is not a docstring."""
         import ast
@@ -609,20 +627,35 @@ class TestEveryCommandTheGatesNameCanBeRun(unittest.TestCase):
                     seen.setdefault(" ".join(match.group(0).split()), set()).add(path.name)
         self.assertTrue(seen, "no command is named anywhere, so this proves nothing")
 
-        for phrase, files in sorted(seen.items()):
-            cli, _, sub = phrase.partition(" ")
-            with self.subTest(command=phrase):
-                self.assertTrue((BIN / cli).exists(),
-                                f"`{phrase}` in {', '.join(sorted(files))}: no such gate ships")
-                if not sub or sub in self.PROSE_AFTER:
-                    continue
-                proc = subprocess.run([sys.executable, str(BIN / cli), sub, "--help"],
-                                      capture_output=True, text=True, timeout=60)
-                self.assertEqual(
-                    0, proc.returncode,
-                    f"`{phrase}` is named in {', '.join(sorted(files))} and cannot be run:\n"
-                    f"{proc.stderr.strip()[:300]}",
-                )
+        self.assert_each_one_runs(seen, "named")
+
+    # Written for a reader, and read by one: the founder opens the docs, and every session
+    # is handed `decisions-index.md`. A record that cites a command which exits 2 sends the
+    # reader back to it with the authority of a decision — which is where this shipped.
+    PROSE_FILES = ("README.md", "docs/README.ru.md", "docs/README.zh.md")
+
+    def markdown_under_review(self) -> list[Path]:
+        found = [REPO_ROOT / name for name in self.PROSE_FILES]
+        found += sorted((REPO_ROOT / "docs").glob("*.md"))
+        found += sorted((REPO_ROOT / ".claude" / "rules").rglob("*.md"))
+        # The changelog records what was fixed, so it quotes commands that no longer run —
+        # on purpose, and one of them is the fix this test guards.
+        return [p for p in dict.fromkeys(found) if p.is_file() and p.name != "CHANGELOG.md"]
+
+    def test_no_document_offers_a_command_that_errors(self):
+        # Backticked spans only. A command in prose is written as code; the bare words
+        # around it are English, and matching those would make this test unrunnable.
+        span = re.compile(r"`([^`\n]+)`")
+
+        seen: dict[str, set[str]] = {}
+        for path in self.markdown_under_review():
+            for code in span.findall(path.read_text(encoding="utf-8")):
+                match = self.NAMED.match(code.strip())
+                if match:
+                    seen.setdefault(" ".join(match.group(0).split()), set()).add(path.name)
+        self.assertTrue(seen, "no document names a command, so this proves nothing")
+
+        self.assert_each_one_runs(seen, "offered")
 
 
 class TestTheCheckersStayOutOfProvisionedWorktrees(RepoCase):

@@ -134,14 +134,24 @@ def _demand_the_notes_once(ctx, event, rec, changed) -> None:
     from claude_bestpractice import plan
 
     try:
-        mine = [t for t in plan.load_all(ctx, plan.DOING)
-                if not rec or t.owner == rec.session_id]
+        # OWNERSHIP IS REQUIRED HERE, unlike in `_carried`. Without a record `_carried`
+        # carries every in-flight card, which over-reports into this window's own restore
+        # and costs nothing. Naming one in the demand is different: it hands out a WRITE
+        # command, and the first card in `doing` may belong to a live sibling.
+        mine = [] if rec is None else [
+            t for t in plan.load_all(ctx, plan.DOING) if t.owner == rec.session_id
+        ]
     except Exception:  # noqa: BLE001 - the demand must survive an unreadable ledger
         mine = []
     if mine:
         card = mine[0]
         task += f"The card it holds is {card.id} {card.title}.\n"
-        learned = f'`claude-bp-plan update {card.id} --note "<what you learned>"`'
+        # `--note` REPLACES the handoff (`plan.amend`: `note.strip() or body`), so a demand
+        # that called this "add what you learned" would have the window silently delete the
+        # plan a `park` left behind. Say what the command does.
+        learned = (f'`claude-bp-plan update {card.id} --note "<the handoff, rewritten to '
+                   'carry what you learned>"` — this REPLACES the card body, so keep what '
+                   'is still true')
 
     hookio.block(
         "claude-bestpractice: this window is about to be compacted, and after it you will be "
@@ -168,6 +178,30 @@ def _demand_the_notes_once(ctx, event, rec, changed) -> None:
 # that reads it is head-sliced: an unbounded section here would evict the opening request
 # instead of the file list, which is the same defect pointing the other way.
 MAX_CARRIED_CHARS = 900
+
+
+def _paths_line(paths: list, room: int) -> str:
+    """As many paths as fit, and a count for the rest.
+
+    Dropping the line whole was the first answer and it was wrong: a 400-character body
+    leaves under 400 for ten realistic paths, so the section that card 0064 exists to carry
+    would arrive with the body and none of the files. The paths are the cheaper half and the
+    more actionable one — they are where the next window opens — so they are trimmed by
+    count rather than by character, and the count says what was left behind.
+    """
+    prefix = "  paths: "
+    shown: list = []
+    used = len(prefix)
+    for path in paths[:10]:
+        cost = len(path) + (2 if shown else 0)
+        # Always keep the first, even if it alone is over: one path is a pointer and no
+        # path is nothing, and the section bound still truncates the whole line if it must.
+        if shown and used + cost > max(room, 0):
+            break
+        shown.append(path)
+        used += cost
+    left = len(paths) - len(shown)
+    return prefix + ", ".join(shown) + (f" (+{left} more in the ledger)" if left else "")
 
 
 def _carried(ctx, rec) -> list:
@@ -201,14 +235,24 @@ def _carried(ctx, rec) -> list:
             if task.body:
                 out.append(f"  {task.body[:400]}")
             if task.paths:
-                out.append(f"  paths: {', '.join(task.paths[:10])}")
+                out.append(_paths_line(task.paths, MAX_CARRIED_CHARS - len("\n".join(out))))
     except Exception:  # noqa: BLE001 - a checkpoint that dies saves nothing
         out.append("- (the ledger could not be read)")
 
-    rendered = "\n".join(out)
-    if len(rendered) > MAX_CARRIED_CHARS:
-        rendered = rendered[:MAX_CARRIED_CHARS] + "\n- […the rest of the card is in the ledger]"
-    return rendered.split("\n")
+    # Whole lines, never a character slice. A card with ten realistic paths renders past
+    # 900 chars, and cutting mid-line ends the `paths:` line inside a path — the exact
+    # defect `knowledge._to_line_boundary` exists to remove, reproduced here by the same
+    # change that removed it there.
+    kept: list = []
+    used = 0
+    for line in out:
+        cost = len(line) + (1 if kept else 0)
+        if used + cost > MAX_CARRIED_CHARS:
+            kept.append("- […the rest of the card is in the ledger]")
+            break
+        kept.append(line)
+        used += cost
+    return kept
 
 
 def main() -> None:

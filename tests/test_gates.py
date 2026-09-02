@@ -611,6 +611,63 @@ class TestWhatCompactionDestroysIsHandedBack(GateCase):
         self.assertIn("ingest/core.py", restored)
         self.assertIn("finish the ingest rewrite", restored)
 
+    def test_a_card_too_big_for_the_section_is_cut_between_lines(self):
+        """`_carried` sits ahead of the file list now, so an unbounded section would evict
+        the opening request instead — which `test_the_opening_request_survives_the_compaction`
+        forbids. `MAX_CARRIED_CHARS` is that bound and nothing exercised it.
+
+        The bound must also cut whole lines. A card with ten realistic paths renders past
+        900 characters, and a character slice ends the `paths:` line inside a path — the
+        same defect `knowledge._to_line_boundary` removes, three hundred lines away in the
+        same change.
+        """
+        from claude_bestpractice import plan
+
+        paths = [f"services/ingest/pipeline/stage_{n}/transform_and_validate.py"
+                 for n in range(10)]
+        self.long_session()
+        ctx = self.ctx()
+        task = plan.add(ctx, "rewrite the ingest pipeline", body="B" * 400,
+                        paths=paths, done_when="stated")
+        plan.claim(ctx, task.id, sid(self.repo, "s1"), "feat/ingest")
+        self.gate("checkpoint", {"session_id": "s1", "hook_event_name": "PreCompact",
+                                 "trigger": "auto", "cwd": str(self.repo)})
+
+        said = self.context(self.compacted())
+        self.assertIn("довести пайплайн", said, "the opening request was evicted")
+        restored = said.split("RESTORED AFTER COMPACTION")[1]
+
+        self.assertIn("B" * 400, restored, "the body the demand forces was dropped")
+        listed = [line for line in restored.splitlines() if line.startswith("  paths:")]
+        self.assertEqual(1, len(listed), "the paths line was dropped whole")
+        # A short marker on purpose: a character slice can leave fewer than a dozen
+        # characters of the path it lands in, and a long prefix would miss exactly the one
+        # that was cut. The first version of this test used forty and passed against a slice.
+        for n, path in enumerate(paths):
+            if f"stage_{n}/" in restored:
+                self.assertIn(path, restored, f"a path was cut in half: {path}")
+        self.assertIn("more in the ledger", listed[0],
+                      "it trimmed the list without saying anything was left behind")
+
+    def test_the_demand_never_names_a_card_it_cannot_prove_is_ours(self):
+        """Without a session record the checkpoint carries every in-flight card into its own
+        restore, which over-reports and costs nothing. The demand is different: it hands out
+        a WRITE command, and the first card in `doing` may belong to a live sibling.
+        """
+        from claude_bestpractice import plan
+
+        ctx = self.ctx()
+        task = plan.add(ctx, "a sibling's work", body="theirs", paths=["their.py"],
+                        done_when="stated")
+        plan.claim(ctx, task.id, "some-other-session", "feat/theirs")
+        self.write("mine.py", "x = 1\n")
+        proc = self.gate("checkpoint", {"session_id": "no-record-for-this-one",
+                                        "hook_event_name": "PreCompact",
+                                        "trigger": "manual", "cwd": str(self.repo)})
+        self.assertEqual(2, proc.returncode, proc.stdout)
+        self.assertNotIn(task.id, proc.stderr, "it named a card this session does not hold")
+        self.assertNotIn("The card it holds", proc.stderr)
+
     def test_a_compaction_with_nothing_captured_says_nothing(self):
         self.start()
         self.assertNotIn("RESTORED AFTER COMPACTION", self.context(self.compacted()))

@@ -14,8 +14,14 @@ they asked for in their own words — `scope_drift_block off` — where no sessi
 it, and `set` refuses without a matching one. The word is consumed on use.
 
 **`test_command` and the artifact keys are not settable this way at all.** They decide
-whether a finish is verifiable. `claude-bp ci` owns them because it runs the command
-before writing it.
+whether a finish is verifiable, and no command sets them: `test_command` is detected from
+the project, and where detection is wrong the founder edits `config.json` directly — the
+file `pre-tool` refuses to sessions, which is what makes it theirs.
+
+This paragraph used to name a "claude-bp ci" command as their owner. No such command exists,
+the sentence had been copied into two refusals and a comment, and a session reading this
+record for authority was sent to something that exits 2. Removed, not rewritten: nothing
+replaced it.
 
 ## Why
 `evidence-gate` blocked a turn and offered, as one of two ways out, setting
