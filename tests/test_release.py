@@ -22,6 +22,21 @@ from helpers import BIN, REPO_ROOT, RepoCase, session_record_for
 READMES = ("README.md", "docs/README.ru.md", "docs/README.zh.md")
 
 
+def scope():
+    """`tools/_scope.py`, loaded by path.
+
+    `tools/` is not a package and these tests do not run from it, so an import statement
+    cannot reach it. Worth reaching: a provisioned worktree is a second copy of this
+    repository INSIDE it, and every walk that does not exclude one finds everything twice.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_scope", REPO_ROOT / "tools" / "_scope.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def read(rel: str) -> str:
     return (REPO_ROOT / rel).read_text(encoding="utf-8")
 
@@ -349,8 +364,11 @@ class TestItInstallsTheShortestWay(unittest.TestCase):
 
     def test_there_is_exactly_one_marketplace_manifest(self):
         """Two of them means the installer and the shorthand register different ids."""
+        # A worktree the plugin provisioned holds a checkout of this repository, manifest
+        # and all, so a bare walk reports the founder's own tree as a second registration.
+        nested = scope().nested_worktrees(REPO_ROOT)
         found = [p for p in REPO_ROOT.rglob(".claude-plugin/marketplace.json")
-                 if ".git" not in p.parts]
+                 if ".git" not in p.parts and not scope().is_inside(p, nested)]
         self.assertEqual(len(found), 1, f"found {[str(p) for p in found]}")
 
     def test_the_plugin_source_resolves(self):
@@ -527,3 +545,135 @@ class TestThisRepositoryRunsUnderItsOwnPlugin(unittest.TestCase):
         The step shipped without it and did not work the first time it was run."""
         body = (REPO_ROOT / "RELEASING.md").read_text(encoding="utf-8")
         self.assertIn("claude plugin update claude-bestpractice@claude-bestpractice --scope project", body)
+
+
+class TestEveryCommandTheGatesNameCanBeRun(unittest.TestCase):
+    """A refusal that names a command which does not exist is a dead end with a helpful
+    tone.
+
+    Three of them shipped at once: `pre-tool` refused `config.json` and sent the session to
+    `claude-bp ci`, `claude-bp set` refused `test_command` and said the same, and the
+    compaction demand named `claude-bp-attempt record`. None of the three is a command. The
+    tests that covered those messages asserted their text, which is how the wrong spelling
+    stayed in place — so this asserts by INVOKING.
+
+    Scoped to string literals the plugin emits. Docstrings and comments are prose about the
+    code and may name a command family loosely; a string the founder or the model is handed
+    may not.
+    """
+
+    # A command name followed by an English word is prose inside a sentence, not an
+    # invocation. Kept small on purpose: a word wrongly listed here hides a real defect.
+    PROSE_AFTER = {
+        "is", "are", "was", "owns", "runs", "reads", "writes", "prints", "exits", "and",
+        "or", "the", "to", "on", "in", "it", "its", "a", "no", "not", "will", "does",
+        "can", "by", "for", "of", "with", "at", "as", "so", "that", "this", "then",
+        "than", "when", "if", "you", "your", "they", "them", "one", "here", "there",
+        "now", "still", "already", "never", "always", "which", "what", "who", "why",
+        "asks", "says", "said", "told", "tells", "needs", "wants", "cannot", "could",
+        "would", "should", "may", "must", "did", "do", "has", "have", "had", "from",
+    }
+
+    NAMED = re.compile(r"claude-bp(?:-[a-z]+)?(?:[ \t]+[a-z][a-z-]*)?")
+
+    def emitted_strings(self, path: Path) -> list[str]:
+        """Every string literal in the file that is not a docstring."""
+        import ast
+
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        docstrings = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                doc = ast.get_docstring(node, clean=False)
+                if doc is not None:
+                    docstrings.add(id(node.body[0].value))
+        return [
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and id(node) not in docstrings
+        ]
+
+    def test_no_emitted_string_names_a_command_that_errors(self):
+        sources = sorted(
+            [p for p in BIN.iterdir() if p.is_file() and not p.suffix]
+            + list((BIN.parent / "lib" / "claude_bestpractice").glob("*.py"))
+        )
+        self.assertGreater(len(sources), 20, "the source sweep found almost nothing")
+
+        seen: dict[str, set[str]] = {}
+        for path in sources:
+            for text in self.emitted_strings(path):
+                for match in self.NAMED.finditer(text):
+                    seen.setdefault(" ".join(match.group(0).split()), set()).add(path.name)
+        self.assertTrue(seen, "no command is named anywhere, so this proves nothing")
+
+        for phrase, files in sorted(seen.items()):
+            cli, _, sub = phrase.partition(" ")
+            with self.subTest(command=phrase):
+                self.assertTrue((BIN / cli).exists(),
+                                f"`{phrase}` in {', '.join(sorted(files))}: no such gate ships")
+                if not sub or sub in self.PROSE_AFTER:
+                    continue
+                proc = subprocess.run([sys.executable, str(BIN / cli), sub, "--help"],
+                                      capture_output=True, text=True, timeout=60)
+                self.assertEqual(
+                    0, proc.returncode,
+                    f"`{phrase}` is named in {', '.join(sorted(files))} and cannot be run:\n"
+                    f"{proc.stderr.strip()[:300]}",
+                )
+
+
+class TestTheCheckersStayOutOfProvisionedWorktrees(RepoCase):
+    """`make check` is the one definition of done, and it failed for anyone using the
+    plugin's own worktree flow.
+
+    The plugin provisions worktrees under `.claude/worktrees/`, which puts a second
+    checkout of the repository inside the repository. `check_slop` walked into it and
+    reported every file twice: measured here at 22,044 duplicate blocks against a budget of
+    zero, with `complex_functions` and `long_functions` over budget too. Nothing under
+    `tools/` mentioned worktrees at all, so the scope question had never been asked.
+    """
+
+    def with_a_nested_worktree(self) -> Path:
+        self.write("dup.py", "def one(a, b):\n" + "".join(
+            f"    x{i} = a + b + {i}\n" for i in range(12)) + "    return x0\n")
+        subprocess.run(["git", "add", "-A"], cwd=self.repo, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "seed"], cwd=self.repo, check=True,
+                       capture_output=True)
+        nested = self.repo / ".claude" / "worktrees" / "work-probe"
+        nested.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "worktree", "add", "-q", "-b", "probe", str(nested)],
+                       cwd=self.repo, check=True, capture_output=True)
+        return nested
+
+    def test_a_nested_worktree_is_not_scanned(self):
+        nested_worktrees_of = scope().nested_worktrees
+
+        nested = self.with_a_nested_worktree()
+        found = nested_worktrees_of(self.repo)
+        self.assertIn(nested.resolve(), [p.resolve() for p in found])
+        self.assertNotIn(self.repo.resolve(), [p.resolve() for p in found])
+
+    def test_the_slop_checker_takes_no_file_from_inside_one(self):
+        """Asserted on the scan set, not on the exit code.
+
+        An exit code passes for the wrong reason — a small fixture stays under budget even
+        when every file in it is counted twice — and that is exactly what a first version of
+        this test did: it went green against the unscoped scanner. What discriminates is the
+        list of files the checker decided to read.
+        """
+        nested = self.with_a_nested_worktree()
+        proc = subprocess.run(
+            [sys.executable, "-c",
+             "import sys, json; sys.path.insert(0, sys.argv[1]); import check_slop; "
+             "print(json.dumps([str(p) for p in check_slop.python_files(None)]))",
+             str(REPO_ROOT / "tools")],
+            cwd=self.repo, capture_output=True, text=True, timeout=120,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        scanned = json.loads(proc.stdout)
+        self.assertTrue(any("dup.py" in p for p in scanned), "it scanned nothing at all")
+        inside = [p for p in scanned if str(nested) in p]
+        self.assertEqual([], inside, "the checker read files from inside the worktree")

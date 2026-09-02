@@ -1606,12 +1606,21 @@ class TestTheGateNamesADoorThatOpens(GateCase):
 
     def test_the_test_command_is_not_settable_here_at_all(self):
         """Pointing it at `true` buys a green finish and erases the record of the real
-        failure. `claude-bp ci` owns it because it RUNS the command before writing it."""
+        failure, so no session sets it — not even through the founder's word.
+
+        This used to assert that the refusal said "claude-bp ci", which is not a command:
+        the spelling is `claude-bp-ci`, its verbs are fixed, and none of them writes
+        config. The assertion is what kept the wrong answer alive, so what is asserted now
+        is that the refusal sends the reader somewhere that exists and names no command at
+        all — the file is the founder's, and asking them is the session's only move.
+        """
         self.start()
         self.founder_says("test_command true")
         proc = self.cli("set", "test_command", "true")
         self.assertEqual(1, proc.returncode)
-        self.assertIn("claude-bp ci", proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr, "a crash is not a refusal")
+        self.assertIn(".claude/claude-bestpractice/config.json", proc.stderr)
+        self.assertNotIn("claude-bp ci", proc.stderr)
 
     def test_the_scope_drift_refusal_names_the_door_and_not_the_file(self):
         from claude_bestpractice import config

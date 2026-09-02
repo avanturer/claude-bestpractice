@@ -37,6 +37,9 @@ import sys
 from collections import Counter
 from dataclasses import dataclass
 
+# Sibling module; `tools/` is on sys.path because these run as scripts from there.
+import _scope
+
 BUDGET_FILE = ".claude/claude-bestpractice/slop-budget.json"
 
 DEFAULT_BUDGETS = {
@@ -129,10 +132,16 @@ _RATCHETABLE = {"long_functions", "complex_functions", "duplicate_blocks"}
 def python_files(paths: list[str] | None) -> list[pathlib.Path]:
     if paths:
         return [ROOT / p for p in paths if p.endswith(".py") and (ROOT / p).is_file()]
+    # A provisioned worktree is a second checkout of this repository sitting inside it, so
+    # walking into one reports every file twice and the duplicate budget of zero can never
+    # be met. Named by git rather than by directory, because the founder may put them
+    # anywhere and `.claude/worktrees/` is only the default.
+    nested = _scope.nested_worktrees(ROOT)
     return [
         p
         for p in ROOT.rglob("*.py")
         if not _SKIP_DIRS & set(p.relative_to(ROOT).parts)
+        and not _scope.is_inside(p, nested)
     ]
 
 

@@ -251,8 +251,14 @@ _BOOL_WORDS = {
 }
 
 # Keys that decide whether a finish is verifiable, which is the one thing a blocked
-# session has a motive to change. `claude-bp ci` owns them because it PROVES the command
-# before it writes it; nothing here can, so nothing here may.
+# session has a motive to change. No command writes them: `test_command` is detected from
+# the project, and where detection is wrong the founder edits `config.json`, which is on
+# `PROTECTED_STATE` and therefore theirs alone.
+#
+# This comment used to name `claude-bp ci` as their owner. That command cannot set them —
+# its verbs are fixed and none of them writes config — and the claim had been copied into
+# two refusals, so a session told to make finishing verifiable was handed a command that
+# errors, by three different messages. Say what is true or say nothing.
 EVIDENCE_KEYS = {"test_command", "artifact_globs", "clean_rerun"}
 
 # The founder's own words, captured by the hook that reads them and stored where no

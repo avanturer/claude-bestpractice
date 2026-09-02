@@ -59,6 +59,45 @@ The existing test pinned the broken spelling in place by asserting the string wa
 The block now names the session's actual card id and the command that actually writes each
 field, and the test invokes every command it names instead of matching its text.
 
+### Three refusals sent the session to a command that does not exist
+
+`pre-tool` refused `config.json` and told the session to change the test command with
+`claude-bp ci`. `claude-bp set test_command` refused and said the same. `config.py` stated
+it as the rule: "`claude-bp ci` owns them because it PROVES the command before it writes
+it." All three are false. The spelling is `claude-bp-ci`; its verbs are fixed
+(`status`, `local`, `github`, `off`, `record-green`, `green-covers-tree`) and none of them
+writes config; and `ci.py` only reads a detected command for the pre-push hook. Meanwhile
+`evidence.py` told the reader to set `test_command` in the very file `pre-tool` refuses.
+
+A session told to make finishing verifiable therefore had no path at all, and each of the
+three messages it was handed either errored or was refused. `cmd_set` already carries the
+name for this shape — issue #108, "the remedy the founder was read out loud was one the
+assistant then said it could not perform" — fixed once for gate switches and never for
+these keys.
+
+The messages now say what is true: nothing sets `test_command`, it is detected, and where
+detection is wrong the founder edits `config.json`, which is refused to sessions and is
+what makes it theirs. The test that covered this asserted the broken spelling was present,
+which is how it survived; there is now a repository-wide test that takes every string the
+plugin emits, extracts the commands named in it, and **runs** them.
+
+### `make check` broke the moment the plugin provisioned a worktree
+
+`check_slop` walked `ROOT.rglob("*.py")` past a skip list with no entry for a worktree. The
+plugin puts worktrees under `.claude/worktrees/` by its own design, so a second checkout of
+the repository sat inside the repository and every file was counted twice: 22,044 duplicate
+blocks against a budget of zero, `complex_functions` 38 against 19, and `make check` — the
+one definition of done — exiting 1. `test_release` had the same hole and reported the
+worktree's manifest as a second marketplace registration.
+
+Nothing under `tools/` mentioned worktrees at all, so the scope question had never been
+asked. It is now asked of `git worktree list` rather than of a directory name, because the
+name is a convention and the answer is a fact git already holds.
+
+The first version of the test for this passed against the unscoped scanner — a small
+fixture stays under budget even when everything in it is counted twice. It asserts on the
+list of files the checker decided to read.
+
 ### A half anchor names a path that does not exist
 
 `subagent_brief` applied its budget as a raw character slice, so it ended inside whatever

@@ -854,8 +854,10 @@ def main() -> None:
                 "session being enforced does not get to edit it — pointing `test_command` at "
                 "`true` would buy a green finish and erase the record of the real failure.\n"
                 "Change a gate switch with `claude-bp set <key> <value>`, which needs the "
-                "founder to have asked for it in their own words, and the test command with "
-                "`claude-bp ci`, which proves it before writing it. Everything else under "
+                "founder to have asked for it in their own words. `test_command` is not one "
+                "of those: no command sets it, it is detected from the project, and where "
+                "detection is wrong the founder edits this file themselves — so ask them "
+                "rather than looking for a command. Everything else under "
                 ".claude/claude-bestpractice/ is yours to write."
             )
 

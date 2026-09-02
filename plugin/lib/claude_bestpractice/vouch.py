@@ -444,7 +444,7 @@ def _own_command(argv: list[str]) -> bool:
     """Is this the plugin's own CLI, from this install?
 
     The gate's refusals name these commands: `claude-bp-plan add`, `claude-bp-plan claim`,
-    `claude-bp ci`, `claude-bp set`. A refusal that names a command the founder is then
+    `claude-bp-ci status`, `claude-bp set`. A refusal that names a command the founder is then
     asked to authorise is the interruption `allow_tool` exists to remove — and for
     `claude-bp policy --apply` it was worse than an interruption: the classifier refused
     the command whose whole purpose is that the agent, not the founder, maintains the file
