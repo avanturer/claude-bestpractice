@@ -1,5 +1,78 @@
 # Changelog
 
+## v1.59.0
+
+The suite ran for fourteen minutes, and the gate said nothing had ever run.
+
+### The observation was thrown away
+
+On a branch whose pre-push hook had just run the full backend suite — 3436 passed, 1
+failed, 880 seconds — three surfaces reported:
+
+```
+no test run has ever been observed on this branch
+```
+
+and the Stop gate then re-ran the same suite to rediscover the same failure. The hook had
+watched the exit code and discarded it: `record_green` fires only when the checks PASS, so
+a failing run left no trace at all, and absence of a green was being reported as absence of
+a run (#198).
+
+The hook now records the run itself, pass or fail. The three surfaces say what was seen:
+
+```
+the last run observed on this branch FAILED (2h) — `make test`; nothing has passed since
+```
+
+### A fact, never a blocker — and that is the whole design
+
+The obvious place to bank a failure is the red ledger, and it is the wrong one. That ledger
+holds a merge until **the same command** passes, and the hook's command is routinely not the
+gate's: the hook runs the project's `make test`, while the gate drives `pytest` directly
+whenever it can. Measured on a fixture before choosing: a failure recorded there under
+`make test` is cleared by neither a green `pytest` from the gate nor — because
+`record_green` declines to write while a red stands — by anything else. The founder's own
+workflow in this report, a `--no-verify` push, removes the one later hook run that might
+have matched it.
+
+A blocker nothing can clear is worse than the wrong sentence it replaced. So the run record
+is its own thing, it blocks nothing, and what blocks is still what the gate itself ran.
+
+**No repair step is needed and that is not an oversight.** A branch carrying only the older
+green record would have read as "never observed" the moment this shipped; `last_run` falls
+back to it, because a green is a run by definition.
+
+### The checks now die with the push
+
+Second half of the same report: a client that kills `git push` on a timeout left the suite
+running, reparented to init. Two of those held a shared test database until they were killed
+by hand, and the next push sat in that project's own queue waiting for them.
+
+Reproduced before it was fixed, and the reproduction is why the fix is what it is:
+
+```
+SIGTERM to the hook  ->  hook gone, make Terminated, the suite ITSELF still running
+```
+
+The suite is a GRANDCHILD, and a signal to one process is not a signal to a tree — killing
+`$!` would have reproduced the bug exactly. The checks now run in their own process group
+via `setsid`, and the hook's trap reaps the group. On a machine with no `setsid` the checks
+run exactly as before: a hook that refused to run them over a missing convenience would be a
+far worse failure than the one this prevents.
+
+### One defect of this change's own, caught by its own test
+
+The first version wrote `if make check; then …; fi` and read `$?` afterwards. A condition
+that fails with no `else` leaves `$?` at zero, so the failure was recorded and the hook then
+exited 0 — every push a red suite should have stopped would have sailed through, on every
+tier, silently. The status is captured off the command now, and the test that caught it is
+the first one in the new class.
+
+### On the tests
+
+Ten mutations, each caught, including the two that matter in opposite directions: the push
+ceasing to fail, and a branch where nothing ran no longer saying so.
+
 ## v1.58.0
 
 Six things the plugin was doing to itself, found by reading a paper about somebody else's

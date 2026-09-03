@@ -163,6 +163,13 @@ def _test_health(ctx: GitContext) -> str:
         return red
     if evidence.last_green(ctx):
         return "Tests: green (observed by the gate)."
+    # "NEVER RUN" was said of branches whose suite had just run, at length, inside this
+    # plugin's own pre-push hook and failed. Absence of a green is not absence of a run
+    # (#198), and this surface is the one built for a founder who reads no code.
+    seen = evidence.last_run(ctx)
+    if seen:
+        return (f"Tests: the last run FAILED — `{' '.join(seen.get('command') or ['?'])}`. "
+                "Nothing has passed here since.")
     return "Tests: NEVER RUN here — nothing has verified this."
 
 
@@ -248,8 +255,9 @@ def ready(ctx: GitContext, base: str) -> list[str]:
     said = evidence.red_problem(ctx)
     if said:
         problems.append(said)
-    if not evidence.last_green(ctx):
-        problems.append("no test run has ever been observed on this branch")
+    unproven = evidence.unproven(ctx)
+    if unproven:
+        problems.append(unproven)
     if _unverified_here(ctx):
         problems.append("this branch carries an UNVERIFIED finish")
 

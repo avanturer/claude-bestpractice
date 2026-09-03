@@ -27,7 +27,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Choose where the checks run.")
     parser.add_argument(
         "command", nargs="?", default="status",
-        choices=["status", "local", "github", "off", "record-green", "green-covers-tree"],
+        choices=["status", "local", "github", "off", "record-green", "record-run",
+                 "green-covers-tree"],
     )
     parser.add_argument(
         "ran", nargs="?", default="", help="with `record-green`, the command that passed"
@@ -64,6 +65,26 @@ def main() -> int:
             print(f"  a recorded failure REMAINS: {' '.join(entry.get('command') or [])} "
                   f"on {entry.get('branch') or '?'} — only that same command passing "
                   "clears it")
+        return 0
+
+    if args.command == "record-run":
+        # Called by the pre-push hook when the project's own checks FAILED. The plugin ran
+        # them and saw the exit code; throwing that away is why three surfaces reported "no
+        # test run has ever been observed on this branch" about a branch whose full suite
+        # had just run for fourteen minutes in this very hook (#198).
+        #
+        # A fact, not a blocker. The red ledger is not used here on purpose: it holds a
+        # merge until THE SAME COMMAND passes, and the hook's command is routinely not the
+        # gate's — the hook runs `make test`, the gate drives `pytest` directly when it
+        # can. A failure banked there could be cleared by neither, and a `--no-verify`
+        # push removes the one later hook run that might have.
+        from claude_bestpractice import evidence
+
+        ran = args.ran.split() or ["pre-push"]
+        evidence.record_run(ctx, ran, passed=False)
+        print(f"recorded a FAILED run: {' '.join(ran)} on {ctx.branch}")
+        print(f"  {evidence._run_path(ctx)}")
+        print("  this does not block a merge; what blocks is what the gate itself ran")
         return 0
 
     if args.command == "green-covers-tree":
