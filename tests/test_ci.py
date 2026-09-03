@@ -8,8 +8,10 @@ hosted workflow costs nothing until it is switched on. So most of this drives re
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import unittest
@@ -818,8 +820,12 @@ class TestAPrePushRunIsEvidence(RepoCase):
         self.assertIsNotNone(observed, "the hook ran the suite and recorded nothing")
         self.assertEqual(self.ctx().branch, observed.get("branch"))
 
-    def test_a_failing_run_records_nothing(self):
-        """The recorder sits after the exit-code check, not beside it."""
+    def test_a_failing_run_records_nothing_green(self):
+        """The green recorder sits after the exit-code check, not beside it.
+
+        The run itself IS recorded since #198 — see `TestAFailingPrePushRunIsStillARun`.
+        What must never appear is a green.
+        """
         from claude_bestpractice import ci, evidence
 
         ctx = self.ctx()
@@ -832,6 +838,189 @@ class TestAPrePushRunIsEvidence(RepoCase):
         )
         self.assertNotEqual(0, proc.returncode)
         self.assertIsNone(evidence.last_green(ctx), "a red run was recorded as green")
+
+
+class TestAFailingPrePushRunIsStillARun(RepoCase):
+    """Issue #198. The hook ran the full backend suite — 3436 passed, 1 failed, fourteen
+    minutes — refused the push, and threw the observation away. Three surfaces then said
+    "no test run has ever been observed on this branch", and the Stop gate re-ran the same
+    suite to rediscover what the hook had just watched.
+
+    Recorded as a FACT, never as a blocker, and that distinction is the design. The red
+    ledger holds a merge until THE SAME COMMAND passes, and the hook's command is
+    routinely not the gate's — the hook runs the project's `make test`, the gate drives
+    `pytest` directly when it can. A failure banked there could be cleared by neither, and
+    the founder's own workflow (a `--no-verify` push) removes the one later hook run that
+    might have. A blocker nothing can clear is worse than the wrong sentence it replaced.
+    """
+
+    def ran(self, makefile: str):
+        """A fresh hook against a given Makefile, run as git would run it.
+
+        Cleared BEFORE each run rather than after: cleaning up afterwards is skipped the
+        moment an assertion fails, and the next case then exercised the previous case's
+        hook — which is how this fixture first reported a bug the code did not have.
+        """
+        from claude_bestpractice import ci, evidence, store
+
+        self.reset_hook()
+        ctx = self.ctx()
+        self.write("Makefile", makefile)
+        self.commit("a project with checks of its own")
+        ci.ensure(ctx)
+        proc = subprocess.run(
+            [str(ci.hook_path(ctx))], cwd=str(self.repo),
+            capture_output=True, text=True, timeout=180,
+        )
+        return proc, evidence.last_run(self.ctx())
+
+    def reset_hook(self) -> None:
+        from claude_bestpractice import ci, evidence, store
+
+        (self.repo / "Makefile").unlink(missing_ok=True)
+        for folder in ("green", evidence.RUN_FILE):
+            shutil.rmtree(store.tier_b(self.ctx(), folder), ignore_errors=True)
+        ci.hook_path(self.ctx()).unlink(missing_ok=True)
+
+    def test_the_push_is_still_refused(self):
+        """The status is captured off the command, never read back after an `if`.
+
+        A condition that fails with no `else` leaves `$?` at 0, so the first version of
+        this recorded the failure and then exited 0 — every push a red suite should have
+        stopped would have sailed through, silently, on every tier.
+        """
+        for makefile, tier in (
+            ("check:\n\t@exit 3\n", "check target"),
+            ("test:\n\t@exit 3\n", "detected runner, no check target"),
+        ):
+            with self.subTest(tier=tier):
+                proc, _ = self.ran(makefile)
+                self.assertNotEqual(0, proc.returncode,
+                                    f"{tier}: the suite failed and the push was allowed")
+
+    def test_every_tier_records_the_failing_run(self):
+        """One per TIER, for the same reason #87 enumerated them for the green half: the
+        generated tier is the one most projects use and the one a fix reaches last."""
+        for makefile, tier in (
+            ("check:\n\t@exit 1\n", "check target"),
+            ("test:\n\t@exit 1\n", "detected runner, no check target"),
+        ):
+            with self.subTest(tier=tier):
+                _proc, seen = self.ran(makefile)
+                self.assertIsNotNone(seen, f"{tier}: the suite ran and nothing was recorded")
+                self.assertFalse(seen.get("passed"), f"{tier}: a failing run recorded as passed")
+                self.assertEqual(self.ctx().branch, seen.get("branch"))
+
+    def test_it_creates_no_blocker_the_gate_cannot_clear(self):
+        """The wedge this design exists to avoid: a red ledger entry under the hook's
+        command, which neither the gate's own run nor a `--no-verify` push can clear."""
+        from claude_bestpractice import evidence
+
+        self.ran("test:\n\t@exit 1\n")
+        self.assertIsNone(evidence.red(self.ctx()),
+                          "the hook banked a merge blocker keyed to its own command")
+
+    def test_the_surfaces_say_what_was_seen_instead_of_that_nothing_was(self):
+        from claude_bestpractice import delivery, evidence
+
+        self.ran("test:\n\t@exit 1\n")
+        ctx = self.ctx()
+
+        said = evidence.unproven(ctx)
+        self.assertIn("FAILED", said)
+        self.assertIn("make test", said)
+        self.assertNotIn("has ever been observed", said)
+        self.assertIn("FAILED", delivery._test_health(ctx))
+        self.assertNotIn("NEVER RUN", delivery._test_health(ctx))
+
+    def test_a_branch_where_nothing_ran_still_says_so(self):
+        """The other direction. Softening this into "the last run failed" everywhere would
+        report a run that never happened, which is the defect pointing the other way."""
+        from claude_bestpractice import evidence
+
+        self.assertIn("has ever been observed", evidence.unproven(self.ctx()))
+
+    def test_a_green_from_before_this_record_existed_still_counts_as_a_run(self):
+        """The repair, and why this change needs no step in `migrate._REPAIRS`: a branch
+        carrying only the older green record must not read as "never observed" the moment
+        this ships."""
+        from claude_bestpractice import evidence, store
+
+        evidence.record_green(self.ctx(), ["make", "test"])
+        shutil.rmtree(store.tier_b(self.ctx(), evidence.RUN_FILE), ignore_errors=True)
+
+        seen = evidence.last_run(self.ctx())
+        self.assertIsNotNone(seen, "a branch with a green record reported no run")
+        self.assertTrue(seen.get("passed"))
+
+
+class TestTheChecksDieWithTheHook(RepoCase):
+    """Issue #198, second half. A client that kills `git push` on a timeout left the
+    suite running, reparented to init: two of those held a shared test database until they
+    were killed by hand, and the next push waited in that project's own queue for them.
+
+    Measured before it was fixed, and the measurement is why the fix is what it is: a
+    SIGTERM to the hook took the hook and `make` with it and left the suite ITSELF alive,
+    because it is a grandchild and a signal to one process is not a signal to a tree.
+    Killing `$!` would have reproduced the bug exactly; only the process group works.
+    """
+
+    def alive(self, pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False
+        return True
+
+    def test_killing_the_hook_takes_the_whole_suite_with_it(self):
+        import signal
+        import time
+
+        from claude_bestpractice import ci
+
+        marker = self.tmp / "suite.pid"
+        self.write("Makefile", f"test:\n\t@sh -c 'echo $$$$ > {marker}; sleep 60'\n")
+        self.commit("a project whose suite takes a while")
+        ci.ensure(self.ctx())
+
+        hook = subprocess.Popen(
+            [str(ci.hook_path(self.ctx()))], cwd=str(self.repo),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        try:
+            for _ in range(100):
+                if marker.exists():
+                    break
+                time.sleep(0.1)
+            self.assertTrue(marker.exists(), "the suite never started, so nothing was proven")
+            suite = int(marker.read_text().strip())
+            self.assertTrue(self.alive(suite), "precondition: the suite is running")
+
+            hook.send_signal(signal.SIGTERM)
+            hook.wait(timeout=30)
+            for _ in range(100):
+                if not self.alive(suite):
+                    break
+                time.sleep(0.1)
+            self.assertFalse(
+                self.alive(suite),
+                "the hook died and left its suite running, holding whatever it had open",
+            )
+        finally:
+            hook.kill()
+            with contextlib.suppress(Exception):
+                os.kill(int(marker.read_text().strip()), signal.SIGKILL)
+
+    def test_a_machine_without_setsid_still_runs_its_checks(self):
+        """The fallback, and the reason it exists: a hook that refuses to run the checks
+        because a convenience is missing is a far worse failure than the one this
+        prevents."""
+        from claude_bestpractice import ci
+
+        body = ci.hook_body()
+        self.assertIn("if command -v setsid", body)
+        self.assertIn('if [ -z "$_cbp_setsid" ]; then', body,
+                      "no path for a machine that has no setsid")
 
 
 class TestAStaleHookIsBroughtUpToDate(RepoCase):

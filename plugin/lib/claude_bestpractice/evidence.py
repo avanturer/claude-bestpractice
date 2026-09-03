@@ -1315,6 +1315,7 @@ def record_green(ctx: GitContext, command: list[str]) -> bool:
     have.
     """
     cleared = clear_red(ctx, command)
+    record_run(ctx, command, passed=True)
     store.write_json(
         _green_path(ctx),
         {
@@ -1352,6 +1353,93 @@ def last_green(ctx: GitContext, branch: str = "") -> dict | None:
     if isinstance(legacy, dict) and legacy.get("command") and legacy.get("branch") == wanted:
         return legacy
     return None
+
+
+RUN_FILE = "runs"
+
+
+def _run_path(ctx: GitContext, branch: str = ""):
+    """Where "a suite ran here" is written, beside "and it passed". Tier B, per branch."""
+    name = re.sub(r"[^A-Za-z0-9._-]", "-", branch or ctx.branch or "detached") or "detached"
+    return store.tier_b(ctx, RUN_FILE, f"{name}.json")
+
+
+def _lasted(stamp: object) -> str:
+    """How long ago, as the boards say it: "2d", "3h", or "just now".
+
+    Shared by the red ledger and the run record because they are the same sentence about
+    two records. `_ago` cannot serve here — its one-hour floor exists so a fresh failure
+    does not read "0h ago", and a run that happened forty seconds ago would inherit that
+    floor and claim an hour.
+    """
+    try:
+        age = max(time.time() - float(stamp or time.time()), 0)
+    except (TypeError, ValueError):
+        return "just now"
+    days, hours = int(age // 86_400), int((age % 86_400) // 3600)
+    return f"{days}d" if days else f"{hours}h" if hours else "just now"
+
+
+def record_run(ctx: GitContext, command: list[str], passed: bool) -> None:
+    """Remember that a suite RAN, whatever it then said.
+
+    Separate from the green record because they answer different questions, and the
+    difference was being reported as one. `last_green` is absent both when nothing ever
+    ran and when something ran and failed, so three surfaces said "no test run has ever
+    been observed on this branch" about a branch whose full suite had just run for
+    fourteen minutes inside this plugin's own pre-push hook — 3436 passed, 1 failed. The
+    hook saw the exit code and threw the observation away, and the Stop gate then re-ran
+    the same suite to rediscover it (#198).
+
+    NOT the red ledger, and this is the whole reason it is its own record. That ledger
+    blocks a merge until THE SAME COMMAND passes, and the hook's command is routinely not
+    the gate's: the hook runs the project's `make test`, while the gate drives `pytest`
+    directly when it can, so a failure banked there could be cleared by neither — and the
+    founder's own workflow, a `--no-verify` push, removes the one later hook run that
+    could have. A blocker nothing can clear is worse than the wrong sentence it replaced.
+    So this records the fact and nothing more; what blocks is still what the gate ran.
+    """
+    store.write_json(
+        _run_path(ctx),
+        {
+            "command": list(command),
+            "passed": bool(passed),
+            "at": time.time(),
+            "branch": ctx.branch,
+        },
+    )
+
+
+def last_run(ctx: GitContext, branch: str = "") -> dict | None:
+    """The last run observed on a branch, or None when none ever was.
+
+    Falls back to the green record, which is a run by definition. Without that, every
+    branch already carrying a green from before this record existed would have reported
+    "never observed" the moment this shipped — the repair for this change, and the reason
+    it needs no step in `migrate._REPAIRS`: the older record still answers the question.
+    """
+    got = store.read_json(_run_path(ctx, branch), default=None)
+    if isinstance(got, dict) and got.get("command"):
+        return got
+    green = last_green(ctx, branch)
+    return {**green, "passed": True} if green else None
+
+
+def unproven(ctx: GitContext, branch: str = "") -> str:
+    """Why this branch has no passing run, in terms of what was actually seen. "" when green.
+
+    One sentence for the three surfaces that used to compose their own, because they were
+    composing the same false one: absence of a green was reported as absence of a run.
+    """
+    if last_green(ctx, branch):
+        return ""
+    seen = last_run(ctx, branch)
+    where = f" on {branch}" if branch else " on this branch"
+    if not seen:
+        return f"no test run has ever been observed{where}"
+    ran = " ".join(seen.get("command") or ["?"])
+    return (f"the last run observed{where} FAILED ({_lasted(seen.get('at'))}) — `{ran}`; "
+            "nothing has passed since")
 
 
 def _covers_the_red_run(ctx: GitContext, entry: dict, executed: int | None) -> bool:
@@ -1472,9 +1560,7 @@ def red_line(ctx: GitContext) -> str:
     entry = red(ctx)
     if not entry:
         return ""
-    age = max(time.time() - float(entry.get("first_seen") or time.time()), 0)
-    days, hours = int(age // 86_400), int((age % 86_400) // 3600)
-    lasted = f"{days}d" if days else f"{hours}h" if hours else "just now"
+    lasted = _lasted(entry.get("first_seen"))
     ran = " ".join(entry.get("command") or [])
     shared = str(entry.get("shared_with") or "")
     if shared:

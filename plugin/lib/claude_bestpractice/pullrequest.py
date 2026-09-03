@@ -331,8 +331,9 @@ def _about_the_pull_request(ctx: GitContext, base: str, head: str) -> list[str]:
     said = evidence.red_problem(ctx, head)
     if said:
         problems.append(said)
-    if not evidence.last_green(ctx, head):
-        problems.append(f"no test run has ever been observed on {head}")
+    unproven = evidence.unproven(ctx, head)
+    if unproven:
+        problems.append(unproven)
     if delivery.unverified_on(ctx, head):
         problems.append(f"{head} carries an UNVERIFIED finish")
     return problems

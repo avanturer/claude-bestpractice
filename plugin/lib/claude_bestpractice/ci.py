@@ -90,6 +90,41 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR
 unset GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX GIT_NAMESPACE GIT_QUARANTINE_PATH
 unset GIT_CONFIG_COUNT GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM
 
+# The checks run in their OWN process group, so that killing this hook kills them.
+# Measured rather than assumed: a SIGTERM to the hook takes the hook and `make` with it
+# and leaves the suite itself running, reparented to init, because it is a GRANDCHILD and
+# a signal to one process is not a signal to a tree. Two of those then held a shared test
+# database until they were killed by hand, and the next push sat in that project's own
+# queue waiting for them (#198).
+#
+# `setsid` when there is one, and plain execution when there is not: a hook that refuses
+# to run the checks because a convenience is missing would be a far worse failure than the
+# one this prevents. The trap forwards to the group, which is the whole point — killing
+# $! alone reproduces the bug exactly.
+_group=""
+_reap() {{
+    if [ -n "$_group" ]; then kill -TERM "-$_group" 2>/dev/null || true; fi
+}}
+trap '_reap; exit 143' HUP INT TERM
+
+_cbp_run() {{
+    if [ -z "$_cbp_setsid" ]; then
+        "$@"
+        return $?
+    fi
+    setsid "$@" &
+    _group=$!
+    _cbp_status=0
+    wait "$_group" || _cbp_status=$?
+    _group=""
+    return $_cbp_status
+}}
+
+_cbp_setsid=""
+if command -v setsid >/dev/null 2>&1; then
+    _cbp_setsid=1
+fi
+
 # A pre-push hook that was already here runs first, with the same stdin and arguments
 # git gave us, and its refusal is still a refusal. Displacing a husky or lefthook hook
 # without running it would switch off a check you rely on.
@@ -107,9 +142,14 @@ if __GREEN_COVERS__ >/dev/null 2>&1; then
 fi
 
 if [ -f Makefile ] && grep -q '^check:' Makefile; then
-    make check || exit $?
-    __RECORD_GREEN__ 'make check' >/dev/null 2>&1 || true
-    exit 0
+    _status=0
+    _cbp_run make check || _status=$?
+    if [ "$_status" -eq 0 ]; then
+        __RECORD_GREEN__ 'make check' >/dev/null 2>&1 || true
+        exit 0
+    fi
+    __RECORD_RUN__ 'make check' >/dev/null 2>&1 || true
+    exit "$_status"
 fi
 
 __TEST_COMMAND__
@@ -119,7 +159,12 @@ __TEST_COMMAND__
 # does not, which is why the tier above exists at all.
 _cmd="$(claude-bp-ci --print-test-command 2>/dev/null || true)"
 if [ -n "$_cmd" ]; then
-    sh -c "$_cmd" || exit $?
+    _status=0
+    _cbp_run sh -c "$_cmd" || _status=$?
+    if [ "$_status" -ne 0 ]; then
+        __RECORD_RUN__ "$_cmd" >/dev/null 2>&1 || true
+        exit "$_status"
+    fi
     __RECORD_GREEN__ "$_cmd" >/dev/null 2>&1 || true
 fi
 
@@ -156,9 +201,19 @@ if command -v "$_runner" >/dev/null 2>&1; then
     # #84 added recording to the two literal tiers of the template and never reached this
     # one, which is generated here and is the tier that fires for any project with a
     # detected runner and no `check:` target. That is most of them (#87).
-    {command} || exit $?
-    __RECORD_GREEN__ {quoted} >/dev/null 2>&1 || true
-    exit 0
+    # Captured off the command, never read back after an `if`: a condition that fails
+    # with no `else` leaves $? at 0, and the first version of this recorded the failure
+    # and then exited 0 — a push refused for fifty releases sailed through.
+    _status=0
+    _cbp_run sh -c {quoted} || _status=$?
+    if [ "$_status" -eq 0 ]; then
+        __RECORD_GREEN__ {quoted} >/dev/null 2>&1 || true
+        exit 0
+    fi
+    # The run happened and it failed, which is a fact about this branch. Thrown away
+    # until #198: three surfaces then said nothing had ever run here.
+    __RECORD_RUN__ {quoted} >/dev/null 2>&1 || true
+    exit "$_status"
 fi
 
 echo "claude-bestpractice: $_runner is not on PATH, so this project's suite could not" >&2
@@ -190,6 +245,20 @@ def _recorder() -> str:
 
     recorder = Path(__file__).resolve().parent.parent.parent / "bin" / "claude-bp-ci"
     return f"{quote(sys.executable)} {quote(str(recorder))} record-green"
+
+
+def _run_recorder() -> str:
+    """The command that records a run this hook watched FAIL.
+
+    The same standard as `_recorder` and the same swallowed failure, for the opposite
+    outcome. Only the observation is banked, never a blocker: what a failed run is allowed
+    to do here is stop three surfaces claiming that nothing ever ran on this branch (#198).
+    """
+    import sys
+    from shlex import quote
+
+    recorder = Path(__file__).resolve().parent.parent.parent / "bin" / "claude-bp-ci"
+    return f"{quote(sys.executable)} {quote(str(recorder))} record-run"
 
 
 def _green_check() -> str:
@@ -235,6 +304,7 @@ def hook_body(ctx: GitContext | None = None) -> str:
         )
     body = HOOK_TEMPLATE.replace("__TEST_COMMAND__", rendered)
     body = body.replace("__RECORD_GREEN__", _recorder())
+    body = body.replace("__RECORD_RUN__", _run_recorder())
     body = body.replace("__GREEN_COVERS__", _green_check())
     return body.replace("__VERSION__", __version__)
 
