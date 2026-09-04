@@ -336,6 +336,133 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class TestTheBoardOutlivesTheWorktreeThatWroteIt(RepoCase):
+    """Issue #200. Reading has unioned the siblings since #123, so a task added in a
+    worktree could be LISTED from anywhere — and the file existed in that worktree and
+    nowhere else, so `git worktree remove` destroyed it. Measured on a fixture before the
+    fix: listed from the main checkout, then gone from every tree after the removal.
+
+    Fourteen real tasks were nearly lost that way and were kept only by `git add -f` by
+    hand. Committing does not save them in the repository that reported this either: a
+    global ignore rule covers `.claude/claude-bestpractice/`, which the plugin's own
+    health line already reports, so git never held a copy.
+    """
+
+    def a_task_added_from_a_worktree(self):
+        from claude_bestpractice import plan
+        from claude_bestpractice.gitctx import resolve
+
+        tree = self.add_worktree("science-first")
+        task = plan.add(resolve(tree), "science first pass",
+                        done_when="stated", paths=["src/app.py"])
+        return task, tree
+
+    def test_the_file_lands_in_the_main_checkout(self):
+        from claude_bestpractice import plan, store
+
+        task, tree = self.a_task_added_from_a_worktree()
+        self.assertTrue(
+            str(task.path).startswith(str(self.repo.resolve())),
+            f"the task was written into the worktree, where removal erases it: {task.path}",
+        )
+        stray = tree / store.TIER_A_DIRNAME / plan.PLAN_DIR
+        self.assertFalse(
+            any(stray.rglob("*.md")) if stray.is_dir() else False,
+            "a copy was left in the worktree as well",
+        )
+
+    def test_it_survives_the_worktree_being_removed(self):
+        """The whole of the report: the board is one board per project, and it was one
+        board per worktree."""
+        from claude_bestpractice import plan
+        from helpers import git
+
+        task, tree = self.a_task_added_from_a_worktree()
+        self.assertIn(task.id, [t.id for t in plan.load_all(self.ctx())],
+                      "precondition: the task is on the board while the worktree exists")
+
+        git(["worktree", "remove", "--force", str(tree)], self.repo)
+        self.assertIn(
+            task.id, [t.id for t in plan.load_all(self.ctx())],
+            "the task died with the worktree that wrote it",
+        )
+
+    def test_the_whole_lifecycle_still_runs_from_the_worktree(self):
+        """The file is no longer where the session stands, and `_move` follows the FILE —
+        so claiming and closing from a worktree has to keep working."""
+        from claude_bestpractice import plan
+        from claude_bestpractice.gitctx import resolve
+
+        task, tree = self.a_task_added_from_a_worktree()
+        elsewhere = resolve(tree)
+
+        plan.claim(elsewhere, task.id, "s1", "t/science-first")
+        self.assertEqual(1, plan.summary(self.ctx())["doing"])
+        plan.complete(elsewhere, task.id)
+        self.assertEqual(1, plan.summary(self.ctx())["done"])
+
+    def test_an_add_is_never_refused_when_the_trees_cannot_be_listed(self):
+        """`main_checkout` shells out to git with a timeout, so it can raise. A task
+        written somewhere awkward is recoverable; a task refused is not."""
+        from claude_bestpractice import plan, worktree
+
+        def explode(_ctx):
+            raise subprocess.TimeoutExpired("git worktree list", 30)
+
+        original = worktree.main_checkout
+        worktree.main_checkout = explode
+        self.addCleanup(setattr, worktree, "main_checkout", original)
+
+        task = plan.add(self.ctx(), "still filed", done_when="stated", paths=["src/app.py"])
+        self.assertTrue(task.path.exists(), "the add was refused when git could not answer")
+
+    def test_a_task_already_stranded_is_carried_home(self):
+        """The repair. New tasks land in the main checkout; these are the ones already
+        sitting in a tree that is about to be removed."""
+        from claude_bestpractice import migrate, plan, store
+        from claude_bestpractice.gitctx import resolve
+
+        tree = self.add_worktree("science-first")
+        stray = tree / store.TIER_A_DIRNAME / plan.PLAN_DIR / plan.NEXT
+        stray.mkdir(parents=True)
+        (stray / "0007-stranded.md").write_text(
+            "---\nid: '0007'\ntitle: Stranded\nstate: next\nowner: ''\nbranch: ''\n"
+            "paths: src/app.py\nsource: ''\ndone_when: stated\nblocker: ''\n---\n\n",
+            encoding="utf-8",
+        )
+
+        changed = migrate.repair(resolve(tree))
+        self.assertTrue(any("carry-worktree-tasks-home" in line for line in changed), changed)
+        self.assertTrue(
+            (self.repo / store.TIER_A_DIRNAME / plan.PLAN_DIR / plan.NEXT
+             / "0007-stranded.md").exists(),
+            "the stranded task was not carried to the main checkout",
+        )
+        self.assertFalse(list(stray.glob("*.md")), "a copy was left behind in the worktree")
+
+    def test_the_repair_never_clobbers_a_more_advanced_copy(self):
+        """The reader ranks copies by how far the lifecycle carried them, so overwriting a
+        `done/` copy with a stale `next/` one is the reversal #123 fixed, re-entered."""
+        from claude_bestpractice import migrate, plan, store
+        from claude_bestpractice.gitctx import resolve
+
+        task = plan.add(self.ctx(), "already closed", done_when="stated", paths=["src/app.py"])
+        plan.claim(self.ctx(), task.id, "s1", "main")
+        plan.complete(self.ctx(), task.id)
+
+        tree = self.add_worktree("science-first")
+        stray = tree / store.TIER_A_DIRNAME / plan.PLAN_DIR / plan.NEXT
+        stray.mkdir(parents=True)
+        (stray / task.path.name).write_text("---\nid: '0001'\nstate: next\n---\n", encoding="utf-8")
+
+        migrate.repair(resolve(tree))
+        self.assertFalse(
+            (self.repo / store.TIER_A_DIRNAME / plan.PLAN_DIR / plan.NEXT / task.path.name).exists(),
+            "a stale queued copy was carried over the closed one",
+        )
+        self.assertEqual(1, plan.summary(self.ctx())["done"])
+
+
 class TestTheLedgerIsVisibleToGit(PlanCase):
     """A parked task that git cannot see is not parked, whatever `park` printed.
 
