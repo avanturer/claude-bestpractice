@@ -496,6 +496,68 @@ def _drop_defects_from_things_that_are_not_gates(ctx: GitContext) -> str:
             "dropped, because `claude-bp-report send` would have filed them")
 
 
+def _carry_this_worktrees_tasks_home(ctx: GitContext) -> str:
+    """Task files stranded in a worktree, moved to the main checkout where they survive.
+
+    Until #200 a task added in a worktree was written into that worktree and nowhere
+    else, so `git worktree remove` destroyed it — and where `.claude/claude-bestpractice/`
+    is covered by an ignore rule, which the health line already reports, git never held a
+    copy either. New tasks land in the main checkout now; these are the ones already
+    sitting in a tree that is going to be removed.
+
+    THIS worktree's only, never a sibling's. A session owns the tree it stands in and
+    nothing else, and each tree runs this on its own next session start — so the whole
+    clone is carried over without one session reaching into another's files while a claim
+    is being written there.
+
+    A name already present in the main checkout is left alone rather than overwritten:
+    the reader ranks copies by how far the lifecycle has carried them, and clobbering a
+    `done/` copy with a stale `next/` one is exactly the reversal #123 fixed.
+    """
+    from . import plan, worktree
+
+    try:
+        home = worktree.main_checkout(ctx).resolve()
+    except Exception:  # noqa: BLE001 - an unlistable clone has nowhere to carry them to
+        return ""
+    # Which is also how "run from the main checkout" ends: `main_checkout` returns the
+    # tree we are standing in, and there is nothing to carry anywhere. An `is_worktree`
+    # test above this said the same thing twice, and no mutation could tell them apart.
+    if home == ctx.worktree_root.resolve():
+        return ""
+
+    ours = ctx.worktree_root / store.TIER_A_DIRNAME / plan.PLAN_DIR
+    theirs = home / store.TIER_A_DIRNAME / plan.PLAN_DIR
+    carried = sum(
+        _carry_one(path, theirs / state / path.name)
+        for state in plan.STATES
+        for path in sorted((ours / state).glob("[0-9][0-9][0-9][0-9]-*.md"))
+        if not _already_home(theirs, path.name, plan.STATES)
+    )
+    return f"{carried} task(s) moved out of this worktree, where removal would erase them" \
+        if carried else ""
+
+
+def _already_home(home: Path, name: str, states: tuple) -> bool:
+    """Is this task file in the main checkout already, in ANY state?
+
+    Any state, because the copy there may have moved on: the reader ranks copies by how
+    far the lifecycle carried them, so carrying a stale `next` over a `done` is the
+    reversal #123 fixed, re-entered through the repair.
+    """
+    return any((home / state / name).exists() for state in states)
+
+
+def _carry_one(path: Path, target: Path) -> int:
+    """Move one task file, or leave it where it is. Returns how many moved, for the sum."""
+    try:
+        store.ensure_dir(target.parent)
+        path.replace(target)
+    except OSError:
+        return 0
+    return 1
+
+
 # name -> (revision, step). Raise the revision when the step's behaviour changes; every
 # clone that ran an older revision reconciles again on its next session start.
 def _shrink_unverified_reasons(ctx: GitContext) -> str:
@@ -571,6 +633,7 @@ _REPAIRS = {
     "0009-drop-defects-that-are-not-ours": (1, _drop_defects_from_things_that_are_not_gates),
     "0010-shrink-unverified-reasons": (1, _shrink_unverified_reasons),
     "0011-close-shipped-cards": (1, _close_cards_whose_work_shipped),
+    "0012-carry-worktree-tasks-home": (1, _carry_this_worktrees_tasks_home),
 }
 
 

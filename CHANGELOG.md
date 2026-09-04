@@ -1,5 +1,77 @@
 # Changelog
 
+## v1.60.0
+
+The board was one board per worktree, and `git worktree remove` was a delete button.
+
+### What happened
+
+A session in `../fuddy-science-first` added fourteen tasks. They were written into that
+worktree's `.claude/claude-bestpractice/plan/next/` and nowhere else. A global ignore rule
+covers `.claude/claude-bestpractice/` in that repository — the plugin's own health line
+already says so — so git never staged them either. The worktree was their only copy, and
+`git worktree remove` would have taken all fourteen. They survived because the founder ran
+`git add -f` by hand (#200).
+
+Reproduced on a fixture before anything was changed, and the reproduction is worth stating
+exactly, because half the report did not reproduce:
+
+```
+before `git worktree remove`, listed from the main checkout:  0001  Science first pass
+after  `git worktree remove`, listed from the main checkout:  GONE
+```
+
+**Listing was already right.** `load_all` has unioned every sibling worktree since #123, so
+a task added in a worktree IS on the board everywhere while that worktree exists. What was
+wrong was durability: one copy, in the most temporary tree in the clone.
+
+### New tasks land in the main checkout
+
+`plan_dir` now resolves to the main checkout — the one tree that outlives all the others.
+One line, one caller: `add` is the only thing that creates a task file. Transitions still
+happen where the FILE is, because `_move` follows it, so claiming and closing from a
+worktree keep working and a task already sitting in one keeps moving.
+
+It never fails an `add`: a clone whose trees cannot be listed falls back to the local tree,
+because a task written somewhere awkward is recoverable and a task refused is not.
+
+### And the ones already stranded are carried home
+
+`migrate._REPAIRS` gains a step that moves this worktree's task files into the main
+checkout on its next session start. **This worktree's only, never a sibling's** — a session
+owns the tree it stands in, and each tree runs the repair for itself, so no session reaches
+into another's files while a claim is being written there.
+
+A name already present in the main checkout is left alone rather than overwritten. The
+reader ranks copies by how far the lifecycle carried them, so carrying a stale `next` over
+a `done` would be the reversal #123 fixed, re-entered through the repair. There is a test
+for that specific reversal.
+
+### What is still true and was left alone
+
+The ledger is still Tier A, still one file per task, still committed. Moving it to the git
+common dir was the report's first suggestion and was not taken: Tier B dies with the clone,
+and a board that cannot be committed is a board that cannot travel to another machine or be
+reviewed in a diff.
+
+The remaining half of the founder's setup — that a global ignore rule keeps the ledger out
+of git — is unchanged and is not this fix's to make. It is reported already, on every
+board, by the health line the issue quotes.
+
+### On the tests
+
+Six mutations, each caught — but three survived the first run and all three were worth the
+time. One was an untested branch: `main_checkout` shells out to git with a timeout, so it
+can raise, and the fallback that keeps an `add` from being refused had nothing holding it;
+it has a test now. One was a redundant line — an `is_worktree` guard saying the same thing
+as the equality check below it, which is why nothing could tell them apart — and it was
+deleted. The third was a malformed mutation of mine rather than a gap: `A if False else B`
+never evaluates `A`, so the mutant was a no-op; it was replaced with one that expresses a
+real defect, cutting the sibling union that lets a worktree session reach the file at all.
+
+The slop gate caught one more thing this nearly shipped: the repair came in at cyclomatic
+complexity 11 against a budget of 10, and was split rather than ratcheted.
+
 ## v1.59.0
 
 The suite ran for fourteen minutes, and the gate said nothing had ever run.

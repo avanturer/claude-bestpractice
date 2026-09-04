@@ -88,7 +88,35 @@ class Task:
 
 
 def plan_dir(ctx: GitContext, state: str = "") -> Path:
-    return store.tier_a(ctx, PLAN_DIR, state) if state else store.tier_a(ctx, PLAN_DIR)
+    """Where a NEW task file is created: the main checkout, whichever tree is asking.
+
+    The board is one board per project, and it was one board per WORKTREE. Reading has
+    unioned the siblings since #123, so a task added in a worktree could be listed from
+    anywhere — but the file existed in that worktree and nowhere else, so `git worktree
+    remove` destroyed it. Measured on a fixture: listed from the main checkout before the
+    removal, gone from every tree after it. Fourteen tasks were nearly lost that way, and
+    were kept only by `git add -f` by hand (#200).
+
+    Committing does not save them either in the repository that reported this: a global
+    ignore rule covers `.claude/claude-bestpractice/`, which the plugin's own health line
+    already reports, so the files were never staged and the worktree was their only copy.
+
+    The main checkout is the one tree in a clone that outlives every other, which is why
+    it is where the ledger lives. Transitions still happen where the FILE is — `_move`
+    follows it — so a task already sitting in a worktree keeps working, and the repair
+    carries it over on the next session start there.
+
+    Never fails an `add`: a clone whose trees cannot be listed falls back to this one,
+    because a task written somewhere awkward is recoverable and a task refused is not.
+    """
+    from . import worktree
+
+    try:
+        root = worktree.main_checkout(ctx)
+    except Exception:  # noqa: BLE001 - an unlistable clone still has to accept a task
+        root = ctx.worktree_root
+    base = root.joinpath(store.TIER_A_DIRNAME, PLAN_DIR)
+    return base / state if state else base
 
 
 def _frontmatter(text: str) -> tuple[dict[str, str], str]:
