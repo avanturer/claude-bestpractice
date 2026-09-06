@@ -119,6 +119,28 @@ def plan_dir(ctx: GitContext, state: str = "") -> Path:
     return base / state if state else base
 
 
+def named_for(ctx: GitContext, path: Path) -> str:
+    """How to name a ledger file to somebody standing in THIS worktree.
+
+    Relative while the file is under the tree the session is in, which is every repository
+    with no worktrees and so nearly every line this ever prints. Absolute once the ledger
+    root and the session's tree are two different directories, because that is the case
+    where a relative path is a pointer to nowhere: `add` from a worktree returned
+    `.claude/claude-bestpractice/plan/next/0241-….md`, and no such file exists in the tree
+    the reader is standing in.
+
+    It crashed rather than misleading — `relative_to` raises on a path outside the root —
+    which is how #202 was found one release after `plan_dir` moved the ledger into the main
+    checkout (#200). The traceback came AFTER the file was written and the id was printed,
+    so the task existed and the command still failed; a caller that only wants to name a
+    file it just wrote should never be able to fail at all.
+    """
+    try:
+        return path.relative_to(ctx.worktree_root).as_posix()
+    except ValueError:
+        return str(path)
+
+
 def _frontmatter(text: str) -> tuple[dict[str, str], str]:
     if not text.startswith("---"):
         return {}, text

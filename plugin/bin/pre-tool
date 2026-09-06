@@ -203,6 +203,26 @@ BASH_WRITE_TARGETS = re.compile(r"(?:>>?\s*|\btee\s+(?:-a\s+)?)(?P<path>[\"']?[\
 # path-shaped enough (`s/x/y/`) to fool a single pattern.
 SED_IN_PLACE = re.compile(r"\bsed\s+(?:-\S+\s+|'[^']*'\s+|\"[^\"]*\"\s+)*(?P<path>[\w./@+-]+)")
 
+# A verb writes only when it is the command being RUN, and `\b` matched it as an ARGUMENT
+# too. `install` is a subcommand of nearly every package manager there is, so `pip install
+# pdfminer.six` was read as `install`'s destination, resolved to `<cwd>/pdfminer.six`, and
+# refused by the main-checkout rule as a write INTO the repository — for a package name
+# that is not a path at all. Every `pip`, `npm`, `cargo`, `go`, `apt` and `brew` install
+# run from the main checkout was blocked that way, and `docker rm <container>` with it.
+# Reported as #203 by a session that gave up on a local PDF extractor and read seventy-two
+# pages into the model context instead.
+#
+# The wrappers are let through because the verb after them still names files: `git rm
+# secrets.env`, `sudo rm -rf /etc/x` and `xargs -0 rm` all write, and dropping them would
+# take the leases and the protected-state refusal with them. Segments arrive already split
+# on `&&`, `||`, `;` and newline, so what is left to recognise here is the start of one and
+# the separators that survive inside it.
+_RUNS = (
+    r"(?:^|[|(`{&])\s*"
+    r"(?:\w+=\S*\s+)*"
+    r"(?:(?:sudo|env|command|nohup|time|timeout|xargs|git)\s+(?:-\S+\s+|\d+\s+|\w+=\S*\s+)*)*"
+)
+
 # DESTRUCTION is not a redirect, and the write scanner only ever looked for redirects.
 # So every rule keyed on "which paths does this command write" — the credential scan, the
 # leases, and the protected-state refusal — was bypassable with `rm`. Deleting the record
@@ -211,7 +231,7 @@ SED_IN_PLACE = re.compile(r"\bsed\s+(?:-\S+\s+|'[^']*'\s+|\"[^\"]*\"\s+)*(?P<pat
 #
 # Every path-shaped argument of these verbs counts, because `rm -rf a b c` names three.
 BASH_REMOVES = re.compile(
-    r"\b(?:rm|unlink|shred|truncate)\b(?P<args>(?:\s+(?:-\S+|[\w./@+~-]+))+)"
+    _RUNS + r"(?:rm|unlink|shred|truncate)\b(?P<args>(?:\s+(?:-\S+|[\w./@+~-]+))+)"
 )
 
 # `cp`, `mv`, `install` and `ln` write their LAST argument and READ the rest. Taking every
@@ -220,7 +240,7 @@ BASH_REMOVES = re.compile(
 # bytes came FROM and the destination was inside our own tree. Reading a sibling checkout —
 # an `.env`, a shared key, a diff — is routine. Reported as issue #42.
 BASH_COPIES = re.compile(
-    r"\b(?:mv|cp|install|ln)\b(?P<args>(?:\s+(?:-\S+|[\w./@+~-]+))+)"
+    _RUNS + r"(?:mv|cp|install|ln)\b(?P<args>(?:\s+(?:-\S+|[\w./@+~-]+))+)"
 )
 
 # A heredoc body is DATA. `select … where n_live_tup > 0` inside one looks exactly like a
@@ -236,7 +256,14 @@ _ARG = re.compile(r"[\w./@+~-]+")
 # refused as a write to `<repo>/a.py` — a file it never touched. Reported from a real
 # machine, alongside the opposite error: an absolute path outside the repository raised
 # ValueError and was dropped entirely, so the same write went through unexamined.
-_CD = re.compile(r"^\s*cd\s+(?P<path>[\"']?[\w./@+~-]+[\"']?)\s*$")
+# A leading `(` is part of the segment, because `_SEGMENTS` splits on operators and not on
+# brackets. Without it `(cd /tmp/scratch && rm -rf work)` had its `cd` unread and `work`
+# resolved against the repository root — refused as a write into the main checkout, for a
+# directory in /tmp. Which is the shape this gate RECOMMENDS: `strands_the_shell` answers
+# with "`(cd … && ...)` leaves this shell where it is", so taking the advice was what
+# triggered the refusal (#203). A subshell's `cd` moves the commands inside it; it is only
+# the PARENT shell's final directory that it leaves alone, and that is asked elsewhere.
+_CD = re.compile(r"^\s*[(\s]*cd\s+(?P<path>[\"']?[\w./@+~-]+[\"']?)\s*$")
 _SEGMENTS = re.compile(r"&&|\|\||;|\n")
 
 # Git destroys a working tree without ever naming a file in it, so every rule here keyed
@@ -274,18 +301,34 @@ _INTERPRETER_WRITE = re.compile(
 )
 
 
-def _segments_with_cwd(scannable: str, cwd: Path):
-    """Each shell segment paired with the directory it would actually run in."""
+def _segments_with_cwd(scannable: str, cwd: Path, literal: str = ""):
+    """Each shell segment paired with the directory it would actually run in.
+
+    Both copies of the segment come back: the blanked one, which is the only copy a path
+    scan can be trusted on, and the raw one, which is the only copy where an interpreter's
+    quoted path survives at all. Blanking preserves LENGTH, so one set of offsets cuts
+    both, and the raw half is no longer scanned whole against a cwd the `cd`s have moved.
+    """
     here = cwd
-    for segment in _SEGMENTS.split(scannable):
+    raw = literal or scannable
+    edges = [0]
+    for match in _SEGMENTS.finditer(scannable):
+        edges += [match.start(), match.end()]
+    edges.append(len(scannable))
+    for start, end in zip(edges[0::2], edges[1::2]):
+        segment = scannable[start:end]
         moved = _CD.match(segment)
         if moved:
             # Tracked, never executed. `cd` into a path that does not exist still changes
             # what the rest of the line means to this scanner, and guessing wrong here
             # only costs a target that lands outside every tree, which is ignored anyway.
-            here = (here / moved.group("path").strip("\"'")).expanduser()
+            # Through `_resolve`, because `here / "~/x"` is `<here>/~/x` and `.expanduser()`
+            # does not touch it — the #37 rewrite of a home path into a repository one,
+            # still live in this half of the file long after the other half was fixed.
+            moved_to = _resolve(here, moved.group("path"))
+            here = moved_to if moved_to is not None else here
             continue
-        yield segment, here
+        yield segment, raw[start:end], here
 
 
 def _resolve(base: Path, raw: str) -> Path | None:
@@ -315,7 +358,7 @@ def git_tree_targets(command: str, cwd: Path) -> list[Path]:
     """
     scannable = _QUOTED.sub(lambda m: " " * len(m.group(0)), command)
     out: list[Path] = []
-    for segment, here in _segments_with_cwd(scannable, cwd):
+    for segment, _literal, here in _segments_with_cwd(scannable, cwd):
         found = _GIT_VERB.search(segment)
         if not found:
             continue
@@ -363,14 +406,18 @@ def bash_write_targets(command: str, cwd: Path) -> list[Path]:
 
     out: list[Path] = []
 
-    # On the RAW command, because `_QUOTED` blanks quoted spans and an interpreter's path
-    # is always quoted — scanning the blanked copy would find nothing, every time.
-    for match in _INTERPRETER_WRITE.finditer(command):
-        resolved = _resolve(cwd, match.group("a") or match.group("b") or "")
-        if resolved is not None and resolved not in out:
-            out.append(resolved)
+    for segment, literal, here in _segments_with_cwd(scannable, cwd, command):
+        # On the RAW segment, because `_QUOTED` blanks quoted spans and an interpreter's
+        # path is always quoted — scanning the blanked copy would find nothing, every time.
+        # Per SEGMENT rather than over the whole line, because the whole line carries no
+        # `cd`: `cd /tmp/scratch && python3 -c "open('out.txt','w')…"` was resolved against
+        # the repository root and refused as a write into the main checkout, for a file in
+        # /tmp the command never went near (#203).
+        for match in _INTERPRETER_WRITE.finditer(literal):
+            resolved = _resolve(here, match.group("a") or match.group("b") or "")
+            if resolved is not None and resolved not in out:
+                out.append(resolved)
 
-    for segment, here in _segments_with_cwd(scannable, cwd):
         matches = list(BASH_WRITE_TARGETS.finditer(segment))
         if "sed" in segment and " -i" in segment:
             matches += list(SED_IN_PLACE.finditer(segment))
