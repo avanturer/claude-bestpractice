@@ -387,6 +387,50 @@ class TestTheBoardOutlivesTheWorktreeThatWroteIt(RepoCase):
             "the task died with the worktree that wrote it",
         )
 
+    def test_the_command_that_writes_it_can_still_say_where(self):
+        """Issue #202, one release later: `add` printed the id, wrote the file, and THEN
+        raised `ValueError` from `relative_to` — the ledger root and the session's tree are
+        two different directories now, and the CLI was still naming the file against the
+        one it is standing in. The task existed and the command failed, which is the worst
+        of both.
+
+        Through the executable rather than the helper, because the traceback was in the
+        executable and a unit test of `named_for` alone would have passed while `add`
+        still crashed.
+        """
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        from helpers import BIN
+
+        tree = self.add_worktree("science-first")
+        proc = subprocess.run(
+            [sys.executable, str(BIN / "claude-bp-plan"), "add", "science first pass",
+             "--paths", "src/app.py", "--done-when", "stated"],
+            capture_output=True, text=True, cwd=str(tree), timeout=180,
+        )
+        self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
+
+        # Named so the reader standing in the worktree can open it. A path relative to a
+        # root they are not in resolves to nothing, which is how this went unnoticed until
+        # `relative_to` happened to raise instead of misleading.
+        named = proc.stdout.strip().splitlines()[-1].strip()
+        self.assertTrue(Path(named).is_file(), f"{named!r} names no file from {tree}")
+
+    def test_a_ledger_file_in_this_tree_is_still_named_the_short_way(self):
+        """Which is every repository with no worktrees, and so nearly every line this
+        prints. Absolute everywhere would be a regression in the common case."""
+        from claude_bestpractice import plan
+
+        ctx = self.ctx()
+        task = plan.add(ctx, "in the main checkout", done_when="stated")
+        self.assertEqual(
+            task.path.relative_to(self.repo).as_posix(),
+            plan.named_for(ctx, task.path),
+        )
+
     def test_the_whole_lifecycle_still_runs_from_the_worktree(self):
         """The file is no longer where the session stands, and `_move` follows the FILE —
         so claiming and closing from a worktree has to keep working."""

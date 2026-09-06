@@ -1,5 +1,65 @@
 # Changelog
 
+## v1.60.1
+
+A package name read as a file path, and a ledger file named against the wrong root.
+
+### `pip install` was a write into the repository (#203)
+
+`bash_write_targets` matched its verbs with `\b`, which finds them as ARGUMENTS as well as
+commands. `install` is a subcommand of nearly every package manager there is, so:
+
+```
+pip install pdfminer.six   ->  writes <cwd>/pdfminer.six
+docker rm mycontainer      ->  removes <cwd>/mycontainer
+```
+
+Neither path exists and neither command goes near one. From the main checkout the
+main-checkout rule then refused the write, provisioned a worktree nobody asked for, and
+said to redo the write there. Every `pip`, `npm`, `cargo`, `go`, `apt` and `brew` install
+run from the main checkout was blocked that way. The session that reported it gave up on a
+local PDF extractor and read seventy-two pages into the model context instead.
+
+The gate had been judging the TARGET rather than the session's directory since #37, which
+is correct and is why this was not caught: the rule was right and the target was invented.
+A verb now counts only in command position — start of a segment, or past a `|`, `(`, `` ` ``
+or `{`. Wrappers pass through, because the verb after them still names files: `git rm
+secrets.env`, `sudo rm -rf /etc/x` and `xargs -0 rm` are all still scanned, and the leases
+and the protected-state refusal that read this list keep everything they had.
+
+### The scanner did not follow the shell into every segment (#203)
+
+Two more paths in the same command, found while reproducing the first:
+
+- The interpreter scan ran against the whole line and the session's own directory, never
+  the `cd`. `cd /tmp/scratch && python3 -c "open('out.txt','w')…"` was refused as a write
+  to `<repo>/out.txt`.
+- `_CD` did not recognise a `cd` inside a subshell — which is the form this gate
+  *recommends*. `strands_the_shell` answers with "`(cd … && ...)` leaves this shell where
+  it is", so taking the plugin's own advice was what triggered the refusal.
+- `cd ~/scratch && rm -rf junk` resolved to `<repo>/~/scratch/junk`. That is #37 again,
+  fixed in `_resolve` at the time and still live in this half of the file.
+
+Segments now carry both copies of themselves — blanked for the path scan, raw for the
+interpreter scan — and blanking preserves length, so one set of offsets cuts both.
+
+### `claude-bp-plan add` crashed after writing the task (#202)
+
+v1.60.0 moved new task files into the main checkout so `git worktree remove` could not
+delete them. The CLI still named the file relative to the tree the session is standing in,
+and `relative_to` raises on a path outside its root:
+
+```
+ValueError: '…/fuddy/.claude/claude-bestpractice/plan/next/0241-….md'
+            is not in the subpath of '…/fuddy-accounts'
+```
+
+The id was printed and the file was written first, so the task existed and the command
+failed anyway. `plan.named_for` names a ledger file relative to the session's tree while it
+is inside it — every repository with no worktrees, and so nearly every line this prints —
+and absolutely once the two roots differ, because a relative path into a tree the reader is
+not standing in resolves to nothing.
+
 ## v1.60.0
 
 The board was one board per worktree, and `git worktree remove` was a delete button.

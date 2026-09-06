@@ -28,6 +28,22 @@ def _verdict(proc) -> tuple[str, str]:
         return "allow", ""
 
 
+def write_targets(command: str, cwd: Path) -> list[str]:
+    """What `pre-tool` thinks a shell command writes, as absolute strings.
+
+    The executable is not importable by name, and three test classes were each loading it
+    by hand — which the slop gate counted as duplication, correctly: the loading is not
+    what any of them is about.
+    """
+    import importlib.machinery
+    import importlib.util
+
+    loader = importlib.machinery.SourceFileLoader("pt", str(BIN / "pre-tool"))
+    module = importlib.util.module_from_spec(importlib.util.spec_from_loader("pt", loader))
+    loader.exec_module(module)
+    return [str(path) for path in module.bash_write_targets(command, cwd)]
+
+
 class PolicyCase(RepoCase):
     relax_git_policy = False
 
@@ -313,22 +329,13 @@ class TestTheRuleIsAboutTheTargetNotTheSession(PolicyCase):
         """`where n_live_tup > 0` inside a heredoc looked like a redirect to a file named
         `0`, and the guard refused a write to `<cwd>/0` — a path that does not exist and
         was never named, so the message gave no way to find the real problem."""
-        import importlib.machinery
-        import importlib.util
-
-        loader = importlib.machinery.SourceFileLoader("pt", str(BIN / "pre-tool"))
-        module = importlib.util.module_from_spec(
-            importlib.util.spec_from_loader("pt", loader))
-        loader.exec_module(module)
-
         command = (
             "cat > /tmp/scratch/t.sql <<'SQL'\n"
             "select relname from pg_class where n_live_tup > 0 order by 1;\n"
             "SQL\n"
             "ssh root@H 'psql' < /tmp/scratch/t.sql 2>&1 | tail -28"
         )
-        targets = [str(p) for p in module.bash_write_targets(command, self.repo)]
-        self.assertEqual(targets, ["/tmp/scratch/t.sql"])
+        self.assertEqual(["/tmp/scratch/t.sql"], write_targets(command, self.repo))
 
     def test_a_relative_redirect_is_resolved_where_the_shell_would(self):
         """`cd /tmp/x && printf > a.py` writes /tmp/x/a.py, not <repo>/a.py.
@@ -351,6 +358,127 @@ class TestTheRuleIsAboutTheTargetNotTheSession(PolicyCase):
                 cwd=self.repo,
             )
             self.assertEqual(_verdict(proc)[0], "allow")
+
+
+class TestAPackageNameIsNotAPath(PolicyCase):
+    """`install` is a subcommand of nearly every package manager there is.
+
+    The write scanner matched the verb anywhere in a line, so `pip install pdfminer.six`
+    was read as `install` writing `pdfminer.six`, resolved against the working directory,
+    and refused by the main-checkout rule as a write INTO the repository — for a package
+    name that names no file at all. Every `pip`, `npm`, `cargo`, `go`, `apt` and `brew`
+    install run from the main checkout was blocked that way, and `docker rm <container>`
+    with it.
+
+    Reported as #203 by a session that could not stand up a local PDF extractor and read
+    seventy-two pages into the model context instead. The gate had been judging the target
+    rather than the cwd since #37 — correctly — and was inventing the target.
+    """
+
+    def test_an_installer_writes_nothing_this_gate_can_name(self):
+        for command in (
+            "pip install pdfminer.six",
+            "uv pip install requests",
+            "npm install react",
+            "cargo install ripgrep",
+            "go install ./cmd/thing",
+            "sudo apt-get install -y poppler-utils",
+            "docker rm mycontainer",
+            "npm rm left-pad",
+        ):
+            self.assertEqual([], write_targets(command, self.repo), command)
+
+    def test_the_verb_still_counts_when_it_is_the_command(self):
+        """The whole point of scanning these verbs is that `rm` is how a record disappears
+        without a redirect. Dropping the false positives must not drop them."""
+        for command, expected in (
+            ("rm -rf build", "build"),
+            ("sudo rm -rf /etc/thing", "/etc/thing"),
+            ("cat list | xargs -0 rm -f junk", "junk"),
+            ("make && rm -rf dist", "dist"),
+            # A tab, not a space. An agent writing a multi-line command indents the
+            # continuation, and `[ ]*` where the separator is followed by whitespace
+            # silently dropped every tab-indented line.
+            ("make\n\trm -rf dist", "dist"),
+            ("FOO=1 rm doomed", "doomed"),
+            ("cp src.txt dst.txt", "dst.txt"),
+            ("install -m 755 tool /usr/local/bin/tool", "/usr/local/bin/tool"),
+            ("truncate -s 0 log.txt", "log.txt"),
+            # git is a wrapper, not a stranger: these name files in the working tree, and
+            # the protected-state refusal reads exactly this list.
+            ("git rm secrets.env", "secrets.env"),
+            ("git mv a.py b.py", "b.py"),
+        ):
+            want = expected if expected.startswith("/") else str(self.repo / expected)
+            self.assertIn(want, write_targets(command, self.repo), command)
+
+    def test_a_venv_in_the_scratchpad_is_not_the_repository(self):
+        """End to end, from the main checkout, which is where the report came from."""
+        with tempfile.TemporaryDirectory() as tmp:
+            for command in (
+                f"python3 -m venv {tmp}/pdfenv",
+                f"{tmp}/pdfenv/bin/pip install pdfminer.six",
+                f"python3 -m venv {tmp}/env && {tmp}/env/bin/pip install pdfminer.six",
+            ):
+                proc = self.run_hook(
+                    "pre-tool",
+                    {"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+                     "tool_input": {"command": command}, "cwd": str(self.repo)},
+                    cwd=self.repo,
+                )
+                self.assertEqual(_verdict(proc)[0], "allow", f"{command} -> {_verdict(proc)[1]}")
+
+
+class TestTheScannerFollowsTheShellIntoEverySegment(PolicyCase):
+    """A relative path means whatever the last `cd` says it means, everywhere.
+
+    Two halves of `bash_write_targets` were not reading the `cd` the third half tracks. The
+    interpreter scan ran against the whole line and the session's own directory, so
+    `cd /tmp/scratch && python3 -c "open('out.txt','w')…"` was refused as a write to
+    `<repo>/out.txt`. And `_CD` did not recognise a `cd` inside a subshell — which is the
+    form this gate RECOMMENDS, in `strands_the_shell`: take the advice, and the relative
+    paths inside the subshell were resolved against the repository root and refused. Both
+    reported as #203.
+    """
+
+    def test_an_interpreter_writes_where_the_shell_is_standing(self):
+        self.assertEqual(
+            ["/tmp/scratch/out.txt"],
+            write_targets(
+                "cd /tmp/scratch && python3 -c \"open('out.txt','w').write('x')\"",
+                self.repo,
+            ),
+        )
+
+    def test_a_subshell_moves_the_commands_inside_it(self):
+        for command, expected in (
+            ("(cd /tmp/scratch && rm -rf work)", "/tmp/scratch/work"),
+            ("( cd /tmp/scratch && cp a.txt b.txt )", "/tmp/scratch/b.txt"),
+            ("(cd /tmp/scratch && python3 -c \"open('o.txt','w')\")", "/tmp/scratch/o.txt"),
+        ):
+            self.assertIn(expected, write_targets(command, self.repo), command)
+
+    def test_a_home_relative_cd_is_expanded_rather_than_appended(self):
+        """`here / "~/x"` is `<here>/~/x` and `.expanduser()` does not touch it, so the
+        #37 rewrite of a home path into a repository one was still live in this half of
+        the file long after the other half was fixed."""
+        home = Path.home()
+        self.assertEqual(
+            [str(home / "scratch" / "junk")],
+            write_targets("cd ~/scratch && rm -rf junk", self.repo),
+        )
+
+    def test_an_absolute_write_is_still_read_where_it_points(self):
+        """The `cd` tracking must not swallow the case it was added for."""
+        self.assertIn(
+            str(self.repo / ".claude" / "claude-bestpractice" / "config.json"),
+            write_targets(
+                "cd /tmp && python3 -c \"open('"
+                + str(self.repo / '.claude' / 'claude-bestpractice' / 'config.json')
+                + "','w')\"",
+                self.repo,
+            ),
+        )
 
 
 class TestGitItselfReachesIntoOtherTrees(PolicyCase):

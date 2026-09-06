@@ -45,7 +45,7 @@ def cmd_add(ctx, title: str, body: str, paths: str = "", done_when: str = "",
                     paths=_list(paths), done_when=done_when,
                     after=_list(after), together=_list(together))
     print(f"{task.id}  {task.title}")
-    print(f"  {task.path.relative_to(ctx.worktree_root)}")
+    print(f"  {plan.named_for(ctx, task.path)}")
     if not body and not paths:
         # Nothing marked `add` as the impoverished one, so thirteen tasks were filed with
         # it and their files backfilled by hand afterwards. Said once, at the moment the
