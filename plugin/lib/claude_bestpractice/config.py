@@ -59,6 +59,16 @@ AUTONOMY = ("vibecode", "pair")
 @dataclass
 class Config:
     test_command: list[str] = field(default_factory=list)
+    # One suite per PATH, for the repositories that have more than one. A mobile app and a
+    # backend in one tree are two suites, and the backend's says nothing about the app: a
+    # branch touching nothing under `backend/` was refused four times over a backend test
+    # that failed for the state of a local database, while the jest run that did cover the
+    # change was invisible because the gate knew exactly one command (#206).
+    #
+    #   "test_commands": {"mobile/": "npx jest --ci", "backend/": "make test"}
+    #
+    # `test_command` above stays what answers for everything no entry here claims.
+    test_commands: dict[str, Any] = field(default_factory=dict)
     artifact_globs: list[str] = field(default_factory=lambda: list(DEFAULT_ARTIFACT_GLOBS))
     # Paths the gate's own run skips. Lives HERE, not in pytest.ini: this file is refused
     # to the session by `pre-tool`, so the list is the founder's, while `addopts` in a
@@ -127,6 +137,7 @@ class Config:
     def to_dict(self) -> dict[str, Any]:
         return {
             "test_command": self.test_command,
+            "test_commands": self.test_commands,
             "artifact_globs": self.artifact_globs,
             "witness_exclude": self.witness_exclude,
             "isolate_databases": self.isolate_databases,
@@ -217,6 +228,7 @@ def _make_has_test(root: Path) -> bool:
 # than one written out.
 _EXPECTED: dict[str, type] = {
     "test_command": list,
+    "test_commands": dict,
     "artifact_globs": list,
     "witness_exclude": list,
     "isolate_databases": bool,
@@ -259,7 +271,7 @@ _BOOL_WORDS = {
 # its verbs are fixed and none of them writes config — and the claim had been copied into
 # two refusals, so a session told to make finishing verifiable was handed a command that
 # errors, by three different messages. Say what is true or say nothing.
-EVIDENCE_KEYS = {"test_command", "artifact_globs", "clean_rerun"}
+EVIDENCE_KEYS = {"test_command", "test_commands", "artifact_globs", "clean_rerun"}
 
 # The founder's own words, captured by the hook that reads them and stored where no
 # session can write. Tier B by decision 0001: bookkeeping about this clone, not a fact
@@ -576,8 +588,26 @@ def _as_text(value: Any) -> str | None:
     return str(value) if isinstance(value, (str, int, float)) else None
 
 
-_COERCERS = {bool: _as_bool, float: _as_number, int: _as_int, list: _as_list, str: _as_text}
-_NAMES = {bool: "true or false", float: "a number", int: "a whole number", list: "a list", str: "text"}
+def _as_map(value: Any) -> dict[str, Any] | None:
+    """A path-to-command map, with every entry that cannot be one dropped.
+
+    Dropped rather than rejected, because this key is a list of independent statements and
+    one malformed entry is not a reason to lose the others — a typo in the third suite must
+    not silently take the first two down with it, which is what returning None would do.
+    """
+    if not isinstance(value, dict):
+        return None
+    out: dict[str, Any] = {}
+    for where, command in value.items():
+        if isinstance(where, str) and where.strip() and isinstance(command, (str, list)):
+            out[where.strip()] = command
+    return out
+
+
+_COERCERS = {bool: _as_bool, float: _as_number, int: _as_int, list: _as_list, str: _as_text,
+             dict: _as_map}
+_NAMES = {bool: "true or false", float: "a number", int: "a whole number", list: "a list",
+          str: "text", dict: "a map of path to test command"}
 
 
 def load(ctx: GitContext) -> Config:

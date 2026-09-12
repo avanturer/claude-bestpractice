@@ -1963,6 +1963,90 @@ class TestTheCeilingCountsALoopNotAnAfternoon(GateCase):
         self.assertIn(f"[2/{ceiling}]", self.stop().stderr)
 
 
+class TestTheGateDoesNotAskWhatItForbade(GateCase):
+    """Issue #206. The pull-request demand said "report exactly this to the founder and
+    stop. Do NOT push changes to make the check pass". The session did. The evidence gate
+    then refused the finish until the check passed — four times, each refusal a full run of
+    the suite, on a tree nobody had touched in between.
+
+    Standing down is not evidence and is not accepted as any: the turn ends UNVERIFIED,
+    which is recorded, filed as a failed attempt and put on the board. What it stops being
+    is a question asked four times of a session this plugin had forbidden to answer it.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        git(["checkout", "-q", "-b", "feat/mobile"], self.repo)
+
+    def open_a_pr(self, session_id: str = "s1") -> None:
+        """Both halves, the way a session opens one: the request, then the response."""
+        tool_input = {"owner": "o", "repo": "r", "title": "t", "head": "feat/mobile", "base": "main"}
+        self.gate("pre-tool", {
+            "session_id": session_id, "hook_event_name": "PreToolUse",
+            "tool_name": "mcp__github__create_pull_request", "tool_input": tool_input,
+        })
+        self.gate("pr-opened", {
+            "session_id": session_id, "hook_event_name": "PostToolUse",
+            "tool_name": "mcp__github__create_pull_request", "tool_input": tool_input,
+            "tool_response": {"url": "https://github.com/o/r/pull/7"},
+        })
+
+    def committed_work_with_no_evidence(self) -> None:
+        self.start()
+        self.write("feature.py", "def go():\n    return 1\n")
+        self.claim_a_task("s1", "feature.py")
+        self.commit("add the feature module")
+
+    def test_the_same_refusal_on_an_unchanged_tree_is_recorded_not_repeated(self):
+        self.committed_work_with_no_evidence()
+        self.open_a_pr()
+
+        self.assertEqual(2, self.stop().returncode, "the pull request was not raised")
+        refused = self.stop()
+        self.assertEqual(2, refused.returncode)
+        self.assertIn(f"[1/{evidence_ceiling()}]", refused.stderr)
+
+        standing = self.stop()
+        self.assertEqual(0, standing.returncode, "the same question was asked a third time")
+        self.assertIn("UNVERIFIED", standing.stderr)
+        self.assertIn("nothing has changed since", standing.stderr)
+
+    def test_it_is_filed_rather_than_forgotten(self):
+        """An allowed finish that nobody records is the hole this gate exists to close."""
+        from claude_bestpractice import store
+
+        self.committed_work_with_no_evidence()
+        self.open_a_pr()
+        for _ in range(3):
+            self.stop()
+        filed = store.read_jsonl(store.tier_b(self.ctx(), "unverified.jsonl"))
+        self.assertEqual(1, len(filed), filed)
+        self.assertEqual("feat/mobile", filed[0].get("branch"))
+
+    def test_work_in_progress_is_not_a_session_standing_still(self):
+        """A dirty tree hashes to nothing, so the streak runs its full length."""
+        self.committed_work_with_no_evidence()
+        self.open_a_pr()
+        self.stop()
+        codes = []
+        for index in range(3):
+            self.write("feature.py", f"def go():\n    return {index}\n")
+            codes.append(self.stop().returncode)
+        self.assertEqual([2, 2, 2], codes)
+
+    def test_without_a_pull_request_the_streak_is_untouched(self):
+        """Nobody has been told anything yet, so the four chances to fix it stand."""
+        self.committed_work_with_no_evidence()
+        codes = [self.stop().returncode for _ in range(evidence_ceiling())]
+        self.assertEqual([2] * evidence_ceiling(), codes)
+
+
+def evidence_ceiling() -> int:
+    from claude_bestpractice import evidence
+
+    return evidence.MAX_CONSECUTIVE_BLOCKS
+
+
 class TestProgressIsNotARepeat(RepoCase):
     """Issue #95. Five sequential edits to five different parts of one module are ordinary
     work, and they shared a signature — so the fifth was refused as "run 4 times in a row
