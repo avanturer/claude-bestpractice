@@ -125,6 +125,77 @@ class TestWhichSuitesAChangeSelects(SuiteCase):
         self.assertEqual([], suites.for_changes(self.ctx(), self.cfg(test_command=[]), ["a.py"]))
 
 
+class TestAPlantedSuiteIsNotASuite(SuiteCase):
+    """The forgery this selection would otherwise hand out for free.
+
+    The count floor compares what a run reports against what the suite's subtree declares,
+    and `testcount.plausible` passes anything when the tree declares nothing. So a
+    directory holding a `package.json` with a `test` script and no tests at all would be a
+    narrow suite with no floor under it — one file for a session to write itself, and every
+    number it reports unfalsifiable. A subtree that declares no tests is therefore not a
+    detected suite, and the repository's own command answers for those files.
+
+    `test_commands` needs no such rule: `config.json` is on `PROTECTED_STATE` and no
+    session can write it, so a declared suite is the founder's word by construction.
+    """
+
+    def a_planted_runner(self) -> None:
+        self.write("sneaky/package.json", json.dumps({"scripts": {"test": "echo ok"}}))
+        self.write("sneaky/src/thing.js", "export const thing = 1\n")
+
+    def test_a_runner_with_no_tests_under_it_is_not_detected(self):
+        self.a_planted_runner()
+        plan = suites.for_changes(self.ctx(), self.cfg(test_command=["make", "test"]),
+                                 ["sneaky/src/thing.js"])
+        self.assertEqual([""], [s.path for s in plan], "a planted suite narrowed the run")
+
+    def test_the_wide_suite_still_judges_the_change(self):
+        """End to end: the forged narrow command is never reached, so the real one decides."""
+        self.a_planted_runner()
+        self.write("sneaky/Makefile", "test:\n\t@echo '40 passed'\n")
+        cfg = self.cfg(test_command=FAILS)
+        self.commit("a planted runner and a real failure")
+        plan = suites.for_changes(self.ctx(), cfg, ["sneaky/src/thing.js"])
+        verdict = evidence.verify(self.ctx(), cfg.artifact_globs, ["sneaky/src/thing.js"],
+                                  cfg.test_command, plan)
+        self.assertFalse(verdict.ok, verdict.reason)
+
+    def test_real_declarations_under_it_make_it_a_suite_again(self):
+        """The honest shape of the same directory. Writing real tests is the price."""
+        self.a_planted_runner()
+        self.write("sneaky/__tests__/thing.test.js", MOBILE_TESTS)
+        plan = suites.for_changes(self.ctx(), self.cfg(test_command=["make", "test"]),
+                                 ["sneaky/src/thing.js"])
+        self.assertEqual(["sneaky/"], [s.path for s in plan])
+
+
+class TestDetectionHasAnOffSwitch(SuiteCase):
+    """An inference about somebody's repository layout that they cannot switch off is one
+    they have to live with. Off is the stricter direction — the wide command answers for
+    everything, as it did before suites existed — which is why it is a founder's switch
+    rather than an evidence key.
+    """
+
+    def test_off_leaves_only_what_the_founder_declared(self):
+        self.a_mobile_app()
+        cfg = self.cfg(test_command=["make", "test"], detect_suites=False)
+        self.assertEqual([], [s.path for s in suites.scoped(self.ctx(), cfg)])
+        self.assertEqual([""], [s.path for s in
+                                suites.for_changes(self.ctx(), cfg, ["mobile/src/screen.js"])])
+
+    def test_off_does_not_touch_a_declared_suite(self):
+        self.a_mobile_app()
+        cfg = self.cfg(test_command=["make", "test"], detect_suites=False,
+                       test_commands={"mobile/": "npx jest"})
+        plan = suites.for_changes(self.ctx(), cfg, ["mobile/src/screen.js"])
+        self.assertEqual(["mobile/"], [s.path for s in plan])
+
+    def test_the_switch_is_the_founders_word_not_a_sessions(self):
+        """It is settable, unlike `test_command` — and harmless because it only tightens."""
+        self.assertNotIn("detect_suites", config.EVIDENCE_KEYS)
+        self.assertIn("detect_suites", config.switches_in("detect_suites off"))
+
+
 class TestOnlyTheSuitesTheDiffTouchesRun(SuiteCase):
     def test_the_wide_suite_is_not_run_for_a_subproject_only_diff(self):
         """#206 end to end: the repository command fails, the change is green anyway."""

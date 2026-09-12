@@ -69,6 +69,15 @@ class Config:
     #
     # `test_command` above stays what answers for everything no entry here claims.
     test_commands: dict[str, Any] = field(default_factory=dict)
+    # Whether a subproject carrying a runner AND test declarations of its own counts as a
+    # suite without being named above. On, because this file exists to correct a detection
+    # rather than to have one — but it is an inference about somebody's repository layout,
+    # and an inference the founder cannot switch off is one they have to live with.
+    #
+    # Off is the STRICTER setting: the repository-wide command then answers for everything,
+    # which is what happened before suites existed. That direction is why this is not an
+    # evidence key — a session has nothing to gain by asking for it.
+    detect_suites: bool = True
     artifact_globs: list[str] = field(default_factory=lambda: list(DEFAULT_ARTIFACT_GLOBS))
     # Paths the gate's own run skips. Lives HERE, not in pytest.ini: this file is refused
     # to the session by `pre-tool`, so the list is the founder's, while `addopts` in a
@@ -138,6 +147,7 @@ class Config:
         return {
             "test_command": self.test_command,
             "test_commands": self.test_commands,
+            "detect_suites": self.detect_suites,
             "artifact_globs": self.artifact_globs,
             "witness_exclude": self.witness_exclude,
             "isolate_databases": self.isolate_databases,
@@ -229,6 +239,7 @@ def _make_has_test(root: Path) -> bool:
 _EXPECTED: dict[str, type] = {
     "test_command": list,
     "test_commands": dict,
+    "detect_suites": bool,
     "artifact_globs": list,
     "witness_exclude": list,
     "isolate_databases": bool,

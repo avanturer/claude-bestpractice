@@ -60,6 +60,32 @@ More than three suites in one diff collapses back to one wide run. The Stop hook
 budget and every suite in the plan spends part of it; the suites now share one deadline rather
 than each being handed the whole of it.
 
+`detect_suites off` switches the guessing off entirely, leaving `test_commands` and the
+repository-wide command. That is the STRICTER setting — the wide command then answers for
+everything, as it did before suites existed — which is why it is a founder's switch and not
+an evidence key: a blocked session has nothing to gain by asking for it. An inference about
+somebody's repository layout that they cannot switch off is one they have to live with.
+
+### A planted suite is not a suite (#206)
+
+Found by re-reading the change adversarially rather than by anything failing, and it is the
+one part of it that had to be closed before shipping.
+
+The count floor that stops a forged `@echo '40 passed'` compares the number against what the
+suite's own subtree DECLARES, and `testcount.plausible` passes anything when the tree declares
+nothing. A directory holding a `package.json` with a `test` script and no tests at all would
+therefore have been a narrow suite with no floor under it — one file for a session to write
+itself, every number it reports unfalsifiable, and the repository's real suite skipped for any
+diff that stayed inside it.
+
+So a DETECTED suite must declare at least one test. A subtree that declares none is not a
+subproject this gate knows about, and the repository-wide command answers for those files —
+the behaviour before any of this existed. Writing forty real test declarations to hide one
+failure remains possible and remains the price this plugin is content to charge.
+
+`test_commands` needs no such rule and does not get one: `config.json` is on
+`PROTECTED_STATE`, so a declared suite is the founder's word by construction.
+
 ### A failure already observed is re-asserted, not re-run (#206)
 
 This module refuses to cache a test result, and the refusal is load-bearing: every way of

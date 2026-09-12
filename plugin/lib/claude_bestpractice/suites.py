@@ -18,6 +18,14 @@ Declared beats detected, and the two are trusted differently:
   repository-wide command answers for those files instead — exactly what happened before
   this module existed. A guess must never be able to make a finish harder than it was.
 
+A detected suite must also DECLARE TESTS, and that rule is a security boundary rather than
+a nicety. The count floor that stops a forged "40 passed" compares the number against the
+declarations in the suite's own subtree, and `plausible()` passes anything when the tree
+declares nothing — so a directory holding a `package.json` and no tests would have been a
+free, narrow, unfalsifiable suite that a session could write for itself in one file. A
+subproject with no test declarations is therefore not a subproject this gate knows about.
+`test_commands` is unaffected: that file is the founder's and no session can write it.
+
 Bounded on purpose. This runs inside the Stop gate, once per turn, so the scan is shallow,
 the number of runner probes is capped, and more subprojects than `MAX_SUITES` collapses
 back to one wide run rather than spending the hook's whole budget on five of them.
@@ -108,7 +116,7 @@ def detected(root: Path) -> list[Suite]:
     `packages/api` behind a container directory that has no runner itself. Deeper than
     that and the cost stops being worth a guess.
     """
-    from . import config
+    from . import config, testcount
 
     found: list[Suite] = []
     probes = 0
@@ -119,7 +127,9 @@ def detected(root: Path) -> list[Suite]:
             continue
         probes += 1
         command = config.detect_test_command(directory)
-        if command:
+        # The declarations are what the count floor is measured against, so a subtree that
+        # declares none is a suite nothing can be checked against. See the module docstring.
+        if command and testcount.count_tree(directory) > 0:
             found.append(Suite(f"{directory.relative_to(root).as_posix()}/", tuple(command), False))
     return found
 
@@ -152,9 +162,10 @@ def scoped(ctx: GitContext, cfg: Any) -> list[Suite]:
     """
     known = declared(getattr(cfg, "test_commands", None))
     claimed = {suite.path for suite in known}
-    for guess in detected(ctx.worktree_root):
-        if guess.path not in claimed:
-            known.append(guess)
+    if getattr(cfg, "detect_suites", True):
+        for guess in detected(ctx.worktree_root):
+            if guess.path not in claimed:
+                known.append(guess)
     return sorted(known, key=lambda suite: len(suite.path), reverse=True)
 
 
