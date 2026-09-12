@@ -4,8 +4,8 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-1.60.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-1316%20passing-2ea44f)](#已验证)
+[![version](https://img.shields.io/badge/version-1.61.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-1516%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-33%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#运行要求)
@@ -179,6 +179,13 @@ Stop gate **丢弃智能体的自述文字**，自己去运行你的测试套件
 在原型之后的阶段，它还会针对已提交树的干净检出再跑一次，用来抓"我这儿是绿的、别处是
 红的"那一类问题——某个未提交的文件，或某个本地环境变量。
 
+**一个仓库里有两个项目，就有两个测试套件。** `.claude/claude-bestpractice/config.json` 里的
+`test_commands` 把路径映射到命令，自带 runner 的子项目无需声明也会被识别，而一轮改动只由它
+的 diff 真正触及的那些套件来判定——只改移动端的分支不再因为一个它从未碰过的后端测试被拒，
+真正覆盖了这次改动的 jest 运行也算数。被自动识别的套件必须自己声明了测试才算套件，而
+`detect_suites off` 可以把这种推断整个关掉。随后，在完全相同的这棵树上已经观察到的失败会
+被重新援引而不是重新运行：同一次拒绝只花一秒，而不是再跑一遍整个套件。
+
 它也会升级而不是把人卡死：连续四次被拦截之后，它记录一次"未经验证的完成"并放行该轮，
 因为一个永远挡住创始人工作流的 gate，就是一个会被卸载的 gate。
 
@@ -317,7 +324,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 ## 已验证
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 1316 个测试 · 33 项 doctor 检查 · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 1516 个测试 · 33 项 doctor 检查 · budget
 ```
 
 doctor 通过**真的去做那件坏事**来证明 gate 有效，而不是把配置读回来对一遍——

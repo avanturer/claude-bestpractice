@@ -148,33 +148,43 @@ def _has_python_tests(root: Path) -> bool:
     return (root / "tests").is_dir() or (root / "test").is_dir()
 
 
-def run(ctx: GitContext, env: dict[str, str] | None = None) -> Witnessed | None:
-    """Drive the detected runner ourselves. None when we cannot witness anything."""
-    runner = detect(ctx.worktree_root)
+def run(ctx: GitContext, env: dict[str, str] | None = None,
+        where: Path | None = None, seconds: float | None = None) -> Witnessed | None:
+    """Drive the detected runner ourselves. None when we cannot witness anything.
+
+    `where` is the directory to drive it in, for a repository whose suites are per
+    subproject; `seconds` is what is left of the Stop hook's budget once the suites that
+    already ran have spent their share of it. Both default to the whole repository and the
+    whole budget, which is every single-suite repository.
+    """
+    root = where or ctx.worktree_root
+    runner = detect(root)
     if not runner:
         return None
     # The report lands OUTSIDE the working tree. Inside it, the project's own recipe could
     # write the file before we ever run — which is the attack this exists to end.
     with tempfile.TemporaryDirectory(prefix="claude-bestpractice-witness-") as scratch:
         if runner == "pytest":
-            return _run_pytest(ctx, Path(scratch) / "report.xml", env)
-        return _run_go(ctx, env)
+            return _run_pytest(ctx, Path(scratch) / "report.xml", env, root, seconds)
+        return _run_go(ctx, env, root, seconds)
 
 
-def _spawn(ctx: GitContext, argv: list[str], env: dict[str, str] | None) -> subprocess.CompletedProcess | None:
+def _spawn(ctx: GitContext, argv: list[str], env: dict[str, str] | None,
+           where: Path | None = None, seconds: float | None = None) -> subprocess.CompletedProcess | None:
+    limit = timeout_for() if seconds is None else max(FLOOR, seconds)
     try:
         return subprocess.run(
             argv,
-            cwd=str(ctx.worktree_root),
+            cwd=str(where or ctx.worktree_root),
             capture_output=True,
             encoding="utf-8",
             errors="replace",
-            timeout=timeout_for(),
+            timeout=limit,
             env={**os.environ, **(env or {})},
             start_new_session=True,
         )
     except subprocess.TimeoutExpired as killed:
-        raise RanOutOfTime(killed.timeout or timeout_for()) from None
+        raise RanOutOfTime(killed.timeout or limit) from None
     except OSError:
         return None
 
@@ -217,22 +227,26 @@ def _excluded(ctx: GitContext) -> list[str]:
     return [f"--ignore={name}" for name in wanted if isinstance(name, str) and name.strip()]
 
 
-def _run_pytest(ctx: GitContext, report: Path, env: dict[str, str] | None) -> Witnessed | None:
+def _run_pytest(ctx: GitContext, report: Path, env: dict[str, str] | None,
+                where: Path | None = None, seconds: float | None = None) -> Witnessed | None:
     # `-o addopts=` and an empty PYTEST_ADDOPTS neutralise the one-line attack: a single
     # `addopts = -k "not price"` or `--ignore=tests/test_total.py` in a config file the
     # gate was otherwise happy to honour narrowed the run to whatever still passed. The
     # gate had taken the recipe out of the trust path and left the runner's CONFIGURATION
     # in it — it chose where the report went, and not what was executed.
+    root = where or ctx.worktree_root
     proc = _spawn(
         ctx,
         [
             "python3", "-m", "pytest", "-q",
-            "-c", str(_pytest_config(ctx.worktree_root, report.parent)),
+            "-c", str(_pytest_config(root, report.parent)),
             "-o", "addopts=",
             f"--junitxml={report}",
             *_excluded(ctx),
         ],
         {**(env or {}), "PYTEST_ADDOPTS": ""},
+        root,
+        seconds,
     )
     if proc is None or not report.is_file():
         return None
@@ -246,7 +260,8 @@ def _run_pytest(ctx: GitContext, report: Path, env: dict[str, str] | None) -> Wi
     return Witnessed(proc.returncode, executed, artifact.failed, _tail(proc), "pytest")
 
 
-def _run_go(ctx: GitContext, env: dict[str, str] | None) -> Witnessed | None:
+def _run_go(ctx: GitContext, env: dict[str, str] | None,
+            where: Path | None = None, seconds: float | None = None) -> Witnessed | None:
     """`go test -json` emits one event per test action on stdout.
 
     Go has no report-file flag, so the stream is the report — but the stream comes from
@@ -257,7 +272,8 @@ def _run_go(ctx: GitContext, env: dict[str, str] | None) -> Witnessed | None:
     # ~/.config/go/env outside the repository, appears in no diff and no commit, and
     # silently restricted the gate's own `go test` to a test that passes. Zero bytes
     # changed inside the thing under review.
-    proc = _spawn(ctx, ["go", "test", "-json", "./..."], {**(env or {}), "GOFLAGS": ""})
+    proc = _spawn(ctx, ["go", "test", "-json", "./..."], {**(env or {}), "GOFLAGS": ""},
+                  where, seconds)
     if proc is None:
         return None
 

@@ -180,6 +180,18 @@ def unhanded(ctx: GitContext, branch: str) -> dict[str, Any] | None:
     return None
 
 
+def handed_off(ctx: GitContext, branch: str) -> bool:
+    """Has this branch's pull request already been put to the founder?
+
+    `stop_demand` tells the session to report exactly what is in the way and stop, and not
+    to push changes to make the check pass. Once that has been said, a session standing
+    still on an unchanged tree is a session doing as it was told — which is why the evidence
+    gate reads this before refusing the same thing a third and fourth time (#206).
+    """
+    record = _records(ctx).get(branch) or {}
+    return bool(record.get("handed_off_at"))
+
+
 def hand_off(ctx: GitContext, record: dict[str, Any], blockers: list[str]) -> None:
     """Mark the obligation as surfaced, so it is raised once and then carried.
 

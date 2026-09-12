@@ -1,5 +1,156 @@
 # Changelog
 
+## v1.61.0
+
+A single test command per repository, and a failure rediscovered four times.
+
+### What happened
+
+A session opened a mobile-only pull request — the diff reaches nothing under `backend/`.
+The pre-push hook runs `make test`, which is the backend's pytest suite, and one test in it
+fails for the contents of a local database rather than for anything on the branch. The first
+Stop said what this plugin says about a pull request that cannot merge:
+
+```
+Report exactly this to the founder and stop. Do NOT push changes to make the check pass
+```
+
+The session reported it and stopped. The Stop gate then refused the finish four more times
+— `[1/4]`, `[2/4]`, `[3/4]`, `[4/4]` — each refusal re-running the whole backend suite for
+about three and a half minutes, over a failure nothing had changed and which this plugin had
+itself forbidden the session to fix. Fourteen minutes of wall clock to re-answer one
+question, and the jest suite that DOES cover the change was invisible throughout, because
+the gate knew exactly one command (#206).
+
+Four separate defects, and the shape they share is worth naming: every one of them is this
+gate assuming a repository is one project with one suite on one tree.
+
+### A suite is a path, not a repository (#206)
+
+`test_command` was the whole vocabulary. Now `test_commands` maps a path to a command, and
+the gate runs only the suites the diff actually reaches:
+
+```json
+"test_commands": {
+  "mobile/": "npx jest --ci",
+  "backend/": "make test"
+}
+```
+
+`test_command` stays what answers for everything no entry claims, and a diff that reaches
+past every scoped suite runs it too — so a single-project repository behaves exactly as it
+did. Subprojects are also DETECTED, two levels down, by the same rules that detect the
+repository's own runner: `mobile/package.json` with a `test` script is a suite whether or not
+anybody wrote it down.
+
+Declared and detected are trusted differently, and that asymmetry is the guard against this
+inference making anything worse. A suite the founder named is a promise about how those files
+are tested, so a wrapper reporting that its runner is missing refuses the finish. A DETECTED
+suite is a guess, and a guess whose runner is not installed is dropped — the repository-wide
+command answers for those files, which is precisely what happened before anybody guessed.
+
+Everything downstream is scoped with it: the declared-test-count floor counts the suite's own
+subtree (against the whole tree, three jest tests look like a run that missed three thousand
+backend ones), the artifact is looked for in the suite's directory, the clean-checkout re-run
+runs in it, and the red ledger records which suite failed so the line the founder reads names
+it. A scoped green is stamped as scoped, so one passing jest run cannot make the pre-push hook
+skip the backend suite for the same tree.
+
+More than three suites in one diff collapses back to one wide run. The Stop hook has a fixed
+budget and every suite in the plan spends part of it; the suites now share one deadline rather
+than each being handed the whole of it.
+
+`detect_suites off` switches the guessing off entirely, leaving `test_commands` and the
+repository-wide command. That is the STRICTER setting — the wide command then answers for
+everything, as it did before suites existed — which is why it is a founder's switch and not
+an evidence key: a blocked session has nothing to gain by asking for it. An inference about
+somebody's repository layout that they cannot switch off is one they have to live with.
+
+### A planted suite is not a suite (#206)
+
+Found by re-reading the change adversarially rather than by anything failing, and it is the
+one part of it that had to be closed before shipping.
+
+The count floor that stops a forged `@echo '40 passed'` compares the number against what the
+suite's own subtree DECLARES, and `testcount.plausible` passes anything when the tree declares
+nothing. A directory holding a `package.json` with a `test` script and no tests at all would
+therefore have been a narrow suite with no floor under it — one file for a session to write
+itself, every number it reports unfalsifiable, and the repository's real suite skipped for any
+diff that stayed inside it.
+
+So a DETECTED suite must declare at least one test. A subtree that declares none is not a
+subproject this gate knows about, and the repository-wide command answers for those files —
+the behaviour before any of this existed. Writing forty real test declarations to hide one
+failure remains possible and remains the price this plugin is content to charge.
+
+`test_commands` needs no such rule and does not get one: `config.json` is on
+`PROTECTED_STATE`, so a declared suite is the founder's word by construction.
+
+### A failure already observed is re-asserted, not re-run (#206)
+
+This module refuses to cache a test result, and the refusal is load-bearing: every way of
+keying such a cache turned out to be a way of answering "the tests pass" without the tests
+having passed.
+
+A recorded FAILURE is different in kind. The worst it can do is refuse a finish that was
+already refused, on a tree nobody has touched since it was refused for it — it has no
+direction in which it can be generous. So the red record now carries the tree it judged, and
+a Stop on exactly that tree gets the failure back in a second rather than in three and a half
+minutes.
+
+Bounded three ways, because a suite that is red for its environment rather than for its code
+must not be held red by a memory of it: a tree with uncommitted work hashes to nothing and
+never matches, the record must name the same suite, and after an hour the suite runs again
+whatever the record says. A database that has since been fixed is rediscovered within the
+hour rather than never.
+
+### The gate stops asking what it forbade (#206)
+
+The streak of four exists to give a session room to fix what it was refused for. It is not
+room when the plugin has told the session to stand down: the pull-request demand says to
+report the blockers and not to push changes to make the check pass, and the evidence gate
+then refuses the finish until the check passes. The session obeyed the first gate and was
+punished by the second.
+
+So the streak now collapses where it has become a contradiction rather than a chance: the
+pull request is already with the founder, the refusal is the same one word for word, and the
+committed tree hashes to what the last block judged. All three, or nothing changes — without
+a pull request in the founder's hands the four chances stand, and a dirty tree hashes to
+nothing, so work in progress is never read as a session standing still.
+
+It does not accept the work. Standing down is not evidence and is not taken as any: the turn
+ends UNVERIFIED, recorded, filed as a failed attempt and put on the board — exactly as the
+ceiling would have ended it three turns later.
+
+### Every tree was materially dirty (#206)
+
+`tree_hash` returned "" for any difference at all between the working tree and `HEAD`. In a
+live session there is always one: the gates write their own state under `.claude/`, and a run
+leaves `__pycache__` and the very artifact the gate asked it to write. So the hash was empty
+in almost every real repository, which silently switched off both things that read it — the
+push-time skip shipped in v1.59, and now the re-assertion above.
+
+It asks the same question `material_changes` answers everywhere else in this gate, and
+matches the status line rather than slicing it at a fixed offset: `gitctx._run` strips its
+output and so eats the leading space of an unstaged line, which took the first character of
+the path with it. Every tree then read as dirty over a file called `claude/…` that does not
+exist.
+
+### Nothing to repair in a repository that upgrades
+
+Every record this touches is read defensively, so an installation upgrading onto this
+carries no state that needs rewriting and `migrate._REPAIRS` gains no step: a red record
+with no `path` reads as the whole repository, one with no `tree_hash` is simply re-run,
+and a green with no `path` is the wide green it was written as. The repair here is that
+the old records still answer the question they were written for.
+
+### Still one command at push time
+
+The pre-push hook runs the repository-wide command, unchanged. It is baked into a shell script
+at install time and resolves no diff, so a mobile-only push still runs the backend suite
+there. The Stop gate is what refused the turn four times and is what this release fixes;
+narrowing the push hook needs the plan resolved at push time and is its own change.
+
 ## v1.60.1
 
 A package name read as a file path, and a ledger file named against the wrong root.

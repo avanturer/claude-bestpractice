@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import attempts, board, config, discipline, drafts, evidence, hookio, inbox, options, pullrequest, sessions, stage, store  # noqa: E402
+from claude_bestpractice import attempts, board, config, discipline, drafts, evidence, hookio, inbox, options, pullrequest, sessions, stage, store, suites  # noqa: E402
 from claude_bestpractice.gitctx import changed_files, resolve  # noqa: E402
 
 BLOCK_COUNTER = "_consecutive_blocks"
@@ -31,6 +31,7 @@ FAILURE_MARKER = "unverified.jsonl"
 BLOCK_REASON = "_last_block_reason"
 BLOCK_PATHS = "_last_block_paths"
 BLOCK_AT = "_last_block_at"
+BLOCK_TREE = "_last_block_tree"
 
 # A gap this long between blocks is not the thing the ceiling exists to stop. The ceiling
 # catches a session looping — block, retry, block, retry, minutes apart — and lets it
@@ -55,7 +56,7 @@ def _blocks(rec: sessions.SessionRecord) -> int:
 
 
 def _bump_blocks(ctx, rec: sessions.SessionRecord, value: int,
-                 reason: str = "", changed: list | None = None) -> None:
+                 reason: str = "", changed: list | None = None, tree: str = "") -> None:
     """Count the block, and remember WHAT it was about.
 
     The ceiling branch had nothing to hand forward, so it wrote the literal string
@@ -70,7 +71,35 @@ def _bump_blocks(ctx, rec: sessions.SessionRecord, value: int,
     if reason:
         payload[BLOCK_REASON] = reason[:2000]
         payload[BLOCK_PATHS] = list(changed or [])[:64]
+        payload[BLOCK_TREE] = tree
     sessions.touch(ctx, rec.session_id, tool_signatures=payload)
+
+
+def _asked_and_answered(ctx, rec: sessions.SessionRecord, reason: str, tree: str) -> bool:
+    """The same refusal, over a tree nothing has changed since, after we said to stand down.
+
+    All three conditions, and none of them is optional.
+
+    The pull-request demand tells the session "report exactly this to the founder and stop.
+    Do NOT push changes to make the check pass" — and the evidence gate then refused the
+    finish until the check passed. The session obeyed the first gate and was refused by the
+    second, four times, each refusal a full run of the suite: fourteen minutes of wall clock
+    to re-answer a question whose answer this plugin had forbidden it to change (#206).
+
+    So the streak collapses only where it has become a contradiction rather than a chance to
+    fix something: the pull request is already with the founder, the refusal is the same one
+    word for word, and the COMMITTED tree hashes to what the last block judged. A dirty tree
+    hashes to nothing and never matches, so work in progress is never read as standing still.
+
+    It does NOT accept the work. The turn ends UNVERIFIED — recorded, filed as a failed
+    attempt, on the board — exactly as the ceiling would have ended it three turns later.
+    """
+    stored = rec.tool_signatures
+    if not tree or stored.get(BLOCK_TREE) != tree:
+        return False
+    if stored.get(BLOCK_REASON) != reason[:2000]:
+        return False
+    return pullrequest.handed_off(ctx, ctx.branch)
 
 
 def _remembered_block(rec: sessions.SessionRecord) -> tuple:
@@ -301,6 +330,12 @@ def main() -> None:
     if not changed:
         _allow(ctx, rec)
 
+    # Which suites answer for these files. In a single-project repository this is the one
+    # command the repository has always had; in a repository with two projects it is only
+    # the suites the diff reaches, so a mobile-only branch is no longer refused over a
+    # backend test it never touched (#206).
+    must_pass = suites.for_changes(ctx, cfg, changed)
+
     problems: list[str] = []
 
     if cfg.scope_drift_block and gates["scope_drift"]:
@@ -407,7 +442,7 @@ def main() -> None:
     unverified_reason = ""
     if gates["evidence_gate"]:
         try:
-            verdict = evidence.verify(ctx, cfg.artifact_globs, changed, cfg.test_command)
+            verdict = evidence.verify(ctx, cfg.artifact_globs, changed, cfg.test_command, must_pass)
         except Exception as exc:  # noqa: BLE001 - deliberate: see below
             # A crash inside verification used to escape into hookio.guard, which blocks
             # WITHOUT touching the escalation counter — so one bad glob in config.json
@@ -447,9 +482,20 @@ def main() -> None:
             # this gate exists to close.
             unverified_reason = verdict.reason
         elif gates["clean_rerun"] and (cfg.clean_rerun is not False):
-            clean = evidence.clean_rerun(ctx, cfg.test_command)
-            if not clean.ok:
-                problems.append(clean.reason)
+            # The same plan, or the tier that catches green-in-my-directory would quietly
+            # run the wide suite the plan just decided not to run.
+            #
+            # DECLARED suites only. A fresh checkout of a subproject has no `node_modules`
+            # and no virtualenv, so a runner this gate merely INFERRED would fail there for
+            # reasons that are nothing to do with the code — and a refusal invented by an
+            # inference is the one thing this plugin's guessing is not allowed to produce.
+            for suite in must_pass or [suites.Suite("", tuple(cfg.test_command), True)]:
+                if not suite.declared:
+                    continue
+                clean = evidence.clean_rerun(ctx, list(suite.command), suite.path)
+                if not clean.ok:
+                    problems.append(clean.reason)
+                    break
 
     if not problems:
         if unverified_reason:
@@ -458,17 +504,22 @@ def main() -> None:
         _allow(ctx, rec)
 
     reason = "\n\n".join(problems)
+    tree = evidence.tree_hash(ctx)
+    repeated = bool(blocked) and _asked_and_answered(ctx, rec, reason, tree)
 
-    if blocked >= evidence.MAX_CONSECUTIVE_BLOCKS:
+    if blocked >= evidence.MAX_CONSECUTIVE_BLOCKS or repeated:
         _give_up(ctx, rec, reason, changed)
         _bump_blocks(ctx, rec, 0)
         sys.stderr.write(
+            "claude-bestpractice: finishing UNVERIFIED — the same refusal over a tree "
+            "nothing has changed since; asking again cannot answer it differently.\n"
+            if repeated else
             "claude-bestpractice: finishing UNVERIFIED after "
             f"{blocked} blocked attempts. Recorded for the next session.\n"
         )
         hookio.emit_silent()
 
-    _bump_blocks(ctx, rec, blocked + 1, reason=reason, changed=changed)
+    _bump_blocks(ctx, rec, blocked + 1, reason=reason, changed=changed, tree=tree)
     hookio.block(
         f"claude-bestpractice [{blocked + 1}/{evidence.MAX_CONSECUTIVE_BLOCKS}] — not done yet.\n\n"
         f"{reason}\n\n"

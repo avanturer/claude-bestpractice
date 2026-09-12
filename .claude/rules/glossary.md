@@ -11,6 +11,7 @@ Board — the injected view of other live sessions. Code: `board.render`. Not: s
 Baseline — the commit a session's diff is measured from. Code: `baseline_commit`. Not: base, start.
 Lease — a session's claim on a path IN ITS OWN WORKTREE. Code: `sessions.acquire_lease`. Not: lock, mutex.
 Evidence — a fresh passing machine-readable test artifact. Code: `Artifact`. Not: proof, result.
+Suite — a test command and the paths it answers for. Code: `suites.Suite`. Not: runner, package.
 Anchor — an entity's canonical identifier plus its file. Code: `anchor_resolves`. Not: reference.
 Stage — the repository's inferred maturity. Code: `stage.current`. Not: phase, level, maturity.
 Drift — files changed beyond those the task named. Code: `scope_drift`. Not: creep, spill.
