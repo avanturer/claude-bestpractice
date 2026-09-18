@@ -621,6 +621,54 @@ def _close_cards_whose_work_shipped(ctx: GitContext) -> str:
     return f"{closed} in-flight card(s) closed over work already on the trunk" if closed else ""
 
 
+def _ledger_root(ctx: GitContext) -> Path:
+    """The checkout the ledger lives in, whichever tree is asking.
+
+    The same answer `plan.plan_dir` gives, and for the same reason: the main checkout is
+    the one tree in a clone that outlives every other.
+    """
+    from . import worktree
+
+    try:
+        return worktree.main_checkout(ctx)
+    except Exception:  # noqa: BLE001 - an unlistable clone still has a tree to repair
+        return ctx.worktree_root
+
+
+def _restage_ledger_moves_git_lost(ctx: GitContext) -> str:
+    """Renames earlier versions made on disk only, which git still reads as deletions.
+
+    Until 1.61.1 a state transition unlinked the tracked file and wrote an untracked one.
+    Where an ignore rule covers the ledger — the founder's global one does — the new file
+    is invisible to `git status` and the old one shows as an unstaged `D`, so a paused task
+    is indistinguishable from a deleted one. Fifty-odd of them had piled up in one checkout
+    before anyone looked (#208).
+
+    Matched by FILENAME, which carries the id and the slug and is what a transition keeps
+    identical; a deletion whose file is nowhere on the board is left exactly as it is,
+    because it may be a real one somebody meant.
+    """
+    from . import plan
+
+    root = _ledger_root(ctx)
+    base = root.joinpath(store.TIER_A_DIRNAME, plan.PLAN_DIR)
+    gone_paths = plan.stranded_deletions(root, base)
+    if not gone_paths:
+        return ""
+    on_the_board = {
+        path.name: path
+        for state in plan.STATES
+        for path in sorted((base / state).glob("*.md"))
+    }
+    moved = [
+        (gone, on_the_board[gone.name])
+        for gone in gone_paths
+        if on_the_board.get(gone.name) not in (None, gone)
+    ]
+    restaged = sum(1 for gone, target in moved if plan.follow_in_git(gone, target))
+    return f"{restaged} ledger move(s) git had recorded as deletions restaged" if restaged else ""
+
+
 _REPAIRS = {
     "0001-task-paths": (1, _backfill_task_paths),
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
@@ -634,6 +682,7 @@ _REPAIRS = {
     "0010-shrink-unverified-reasons": (1, _shrink_unverified_reasons),
     "0011-close-shipped-cards": (1, _close_cards_whose_work_shipped),
     "0012-carry-worktree-tasks-home": (1, _carry_this_worktrees_tasks_home),
+    "0013-restage-ledger-moves": (1, _restage_ledger_moves_git_lost),
 }
 
 
