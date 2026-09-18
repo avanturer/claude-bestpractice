@@ -1,5 +1,37 @@
 # Changelog
 
+## v1.61.1
+
+A state transition moved the file and never told git.
+
+### What happened
+
+Fifty-odd tracked task files showed up as unstaged deletions in one working checkout, with
+nothing anywhere to say where they had gone (#208). Nothing was lost — every file was
+intact one directory across, under `plan/paused/` — but `git status` could only show the
+half it could see.
+
+The ledger has always encoded a task's state in its directory, and the module says a
+transition is `git mv`. It was not: `_move` wrote the new file and unlinked the old one,
+entirely outside git. That is invisible while both paths look the same to git, and this
+repository is exactly the case where they do not — the founder's global ignore covers
+`.claude/claude-bestpractice/`, which the health line already reports, so `plan/paused/`
+was never tracked while `plan/next/` and `plan/doing/` were committed months ago. Pausing
+a committed task therefore deleted a tracked file and created an ignored one.
+
+### What changed
+
+A transition now carries the move into the index when — and only when — git is already
+tracking the file, with `add -f` on the destination so an ignore rule cannot silently drop
+it. Git records a rename, which is what merges cleanly, and a repository that never
+committed its ledger keeps an empty index: preserving what the founder tracks is the
+opposite of the plugin granting itself a place in their history (decision 0008).
+
+The moves already stranded are repaired on the next session start. Each tracked-but-missing
+ledger file is matched by filename against the board and staged as the rename it always
+was; a deletion with no counterpart anywhere is left exactly as it is, because it may be
+one somebody meant.
+
 ## v1.61.0
 
 A single test command per repository, and a failure rediscovered four times.

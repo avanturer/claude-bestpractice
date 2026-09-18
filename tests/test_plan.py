@@ -1007,3 +1007,48 @@ class TestDeliveryClosesTheCard(PlanCase):
         mine = self.in_flight("s1", "src/app.py")
         self.in_flight("s2", "src/other.py")
         self.assertEqual([mine.id], [t.id for t in plan.held_by(self.ctx(), "s1")])
+
+
+class TestATransitionIsARenameInGitToo(PlanCase):
+    """A tracked task file that moves must move in the index as well (#208).
+
+    The founder's global ignore covers `.claude/claude-bestpractice/`, so a state the
+    repository never committed — `paused` — is invisible to git. Moving a committed task
+    into it deleted a tracked file and created a hidden one: fifty unstaged `D` rows in a
+    working checkout, each one indistinguishable from lost work.
+    """
+
+    def ignore_the_ledger(self) -> None:
+        """The founder's rule, in the one place a fixture may write it."""
+        exclude = self.repo / ".git" / "info" / "exclude"
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        exclude.write_text(".claude/claude-bestpractice/\n", encoding="utf-8")
+
+    def committed_task(self):
+        task = plan.add(self.ctx(), "Do a thing", done_when="stated", paths=["src/app.py"])
+        self.commit("ledger")
+        self.ignore_the_ledger()
+        return task
+
+    def test_pausing_a_committed_task_leaves_no_phantom_deletion(self):
+        task = self.committed_task()
+        plan.pause(self.ctx(), task.id, "waiting on the API key")
+
+        status = git(["status", "--short"], self.repo)
+        self.assertNotIn(" D ", f" {status} ", status)
+        self.assertIn("plan/paused/", git(["diff", "--cached", "--name-only"], self.repo))
+
+    def test_git_records_it_as_a_rename(self):
+        task = self.committed_task()
+        plan.claim(self.ctx(), task.id, sid(self.repo, "s1"), "main")
+
+        moved = git(["diff", "--cached", "--name-status", "-M"], self.repo)
+        self.assertTrue(moved.startswith("R"), moved)
+
+    def test_an_untracked_ledger_is_not_quietly_added_to_git(self):
+        """Preserving what the founder tracks is not the same as granting a place in it."""
+        self.ignore_the_ledger()
+        task = plan.add(self.ctx(), "Do a thing", done_when="stated", paths=["src/app.py"])
+        plan.pause(self.ctx(), task.id, "waiting on the API key")
+
+        self.assertEqual("", git(["diff", "--cached", "--name-only"], self.repo))

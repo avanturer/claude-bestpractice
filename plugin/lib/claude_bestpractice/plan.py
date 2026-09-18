@@ -481,9 +481,75 @@ def find(ctx: GitContext, task_id: str) -> Task | None:
     return None
 
 
+def _git(args: list[str], cwd: Path) -> tuple[int, str]:
+    """Run one git command in a tree, answering with its status and output.
+
+    Separate from `gitctx._run` on purpose: that module promises never to shell out to
+    anything that mutates the repository, and the calls below write the index. The
+    promise is worth keeping where it is made, so the writing lives here.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=str(cwd),
+            capture_output=True,
+            encoding="utf-8", errors="surrogateescape",
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return 1, ""
+    return proc.returncode, proc.stdout.strip()
+
+
+def follow_in_git(source: Path, target: Path) -> bool:
+    """Carry a TRACKED task file's move into the index, so git records a rename.
+
+    A transition has always been a rename on disk and nothing in git, which is invisible
+    while both paths look the same to git and a disaster the moment they do not. The
+    founder's global ignore covers `.claude/claude-bestpractice/`, and `plan/paused/` was
+    never committed, so pausing a task committed earlier deleted a tracked file and
+    created an ignored one: `git status` showed a bare `D` with no counterpart anywhere,
+    fifty times over, and every one of them looked like lost work (#208).
+
+    Only ever for a file git is ALREADY tracking. Adding an ignored file the founder never
+    committed would be the plugin granting itself a place in their history, which is the
+    line decision 0008 draws; preserving what they already track is the opposite.
+
+    `add -f` is what makes it work at all: without the force the target is ignored and the
+    add is a silent no-op, which is exactly the bug. Never raises, and answers whether the
+    index actually moved — a ledger transition that fails because git is busy is a task
+    the founder cannot pause.
+    """
+    tree = target.parent
+    code, out = _git(["ls-files", "--error-unmatch", "--", str(source)], tree)
+    if code != 0 or not out:
+        return False
+    if _git(["add", "-f", "--", str(target)], tree)[0] != 0:
+        return False
+    return _git(["add", "-A", "--", str(source)], tree)[0] == 0
+
+
+def stranded_deletions(root: Path, base: Path) -> list[Path]:
+    """Ledger files git still has in its index and cannot find on disk.
+
+    The trace a pre-1.61.1 transition left behind: the file was unlinked and rewritten one
+    directory across, git was never told, and where an ignore rule hides the new copy the
+    only visible half is the deletion. Absolute paths, so a caller standing anywhere can
+    act on them.
+    """
+    code, out = _git(["ls-files", "--deleted", "--", str(base)], root)
+    if code != 0 or not out:
+        return []
+    return [root / line for line in out.splitlines() if line.strip()]
+
+
 def _move(task: Task, state: str, owner: str = "", branch: str = "",
           blocker: str | None = None) -> Task:
-    """A state transition is a rename. Git records it as a rename, which merges cleanly.
+    """A state transition is a rename, in the working tree and in the index alike.
+
+    Git records it as a rename, which merges cleanly — but only because `follow_in_git`
+    puts it there. The move itself is plain filesystem work, so that a repository where
+    git is unavailable or the file untracked still transitions.
 
     The rename happens where the FILE is, not where the caller is. Now that the ledger
     reads across siblings, `plan_dir(ctx, ...)` would have written the moved copy into
@@ -516,6 +582,7 @@ def _move(task: Task, state: str, owner: str = "", branch: str = "",
     store.atomic_write(target, updated, mode=0o644)
     if target != task.path:
         task.path.unlink(missing_ok=True)
+        follow_in_git(task.path, target)
     moved = _load(target, state)
     if moved:
         moved.worktree = task.worktree

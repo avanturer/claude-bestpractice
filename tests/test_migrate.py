@@ -1094,3 +1094,39 @@ class TestCardsLeftInFlightByTheMissingClosingHalf(RepoCase):
         migrate.repair(self.ctx())
         self.assertEqual([], [line for line in migrate.repair(self.ctx())
                               if "already on the trunk" in line])
+
+
+class TestRenamesGitWasNeverToldAbout(RepoCase):
+    """Fifty unstaged deletions, one per task a pre-1.61.1 transition moved (#208).
+
+    The fix only helps transitions that have not happened yet, and the founder upgrades on
+    top of what was already running — so the upgrade owes the checkout it lands in the
+    same repair.
+    """
+
+    def stranded(self):
+        """A committed task file moved the way transitions used to move: on disk only."""
+        task = plan.add(self.ctx(), "Do a thing", done_when="stated", paths=["src/app.py"])
+        self.commit("ledger")
+        target = task.path.parent.parent / plan.PAUSED / task.path.name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(task.path.read_text(encoding="utf-8"), encoding="utf-8")
+        task.path.unlink()
+        return task, target
+
+    def test_the_deletion_becomes_the_rename_it_always_was(self):
+        _task, target = self.stranded()
+        migrate.repair(self.ctx())
+
+        staged = git(["diff", "--cached", "--name-status", "-M"], self.repo)
+        self.assertTrue(staged.startswith("R"), staged)
+        self.assertIn(target.name, staged)
+
+    def test_a_deletion_with_no_counterpart_is_left_alone(self):
+        """It may be one somebody meant; a repair that guesses is worse than the defect."""
+        task = plan.add(self.ctx(), "Do a thing", done_when="stated", paths=["src/app.py"])
+        self.commit("ledger")
+        task.path.unlink()
+
+        migrate.repair(self.ctx())
+        self.assertEqual("", git(["diff", "--cached", "--name-only"], self.repo))
