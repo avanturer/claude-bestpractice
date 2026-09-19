@@ -18,12 +18,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import attempts, hookio  # noqa: E402
+from claude_bestpractice import __version__, attempts, hookio  # noqa: E402
 from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Record and read failed approaches.")
+    # The version the founder is actually running, from the one place that holds it.
+    # `claude-bp-plan --version` printed nothing and exited 2, so a bug report
+    # against this plugin could not state which version it was against (#210).
+    parser.add_argument("--version", action="version", version=__version__)
     # required=True, or argparse leaves `command` as None, the branch below falls
     # through, and the next line reads a field that was never populated — a
     # traceback where a shipped command should print its usage.

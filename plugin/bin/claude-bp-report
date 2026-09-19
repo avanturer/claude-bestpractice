@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """Defects this plugin hit here, and the one command that sends them.
 
-    claude-bp-report          what was captured, and exactly what would be sent
-    claude-bp-report send     file them as issues against the plugin's repository
+    claude-bp-report            what was captured, and exactly what would be sent
+    claude-bp-report defect "…" record a gate that refused the wrong thing
+    claude-bp-report send       file them as issues against the plugin's repository
+
+`defect` is what a blocked session does instead of interrupting the founder. A crash
+files itself; a gate that runs exactly as written and refuses the wrong call cannot,
+and every defect of that kind this plugin has fixed was carried by a person who stopped
+their own work to write it up.
 
 Sending lives here rather than in a hook, and that is the whole shape of this feature.
 A hook that talks to the network is a hook that can be slow, can fail, and can be
@@ -21,7 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import config, defects, hookio  # noqa: E402
+from claude_bestpractice import __version__, config, defects, hookio  # noqa: E402
 from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
 
 
@@ -36,7 +42,10 @@ def cmd_list(ctx) -> int:
         seen = int(report.get("seen", 1))
         repeats = f"  ×{seen}" if seen > 1 else ""
         print(f"  [{i}] {defects.title(report)}{repeats}")
-        print(f"      at {report.get('where') or 'unknown'}")
+        # A session-filed report has no frame to name: nothing failed. Printing the
+        # `where` field anyway said "at observed", which reads like a place and is not.
+        if report.get("kind") != defects.OBSERVED:
+            print(f"      at {report.get('where') or 'unknown'}")
     print(f"\nThis is the whole of what would be sent to {defects.REPORT_REPO}:\n")
     print("\n".join("  " + line for line in defects.body(waiting[0]).splitlines()))
     print("\nSend with: claude-bp-report send")
@@ -75,14 +84,25 @@ def cmd_send(ctx) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Defects this plugin hit in this repository.")
+    # The version the founder is actually running, from the one place that holds it.
+    # `claude-bp-plan --version` printed nothing and exited 2, so a bug report
+    # against this plugin could not state which version it was against (#210).
+    parser.add_argument("--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("list", help="show captured defects (default)")
     sub.add_parser("send", help="file them against the plugin's repository")
+    filed = sub.add_parser("defect", help="record a gate that refused the wrong thing")
+    filed.add_argument("what", help="what it refused, and why that is wrong")
+    filed.add_argument("--gate", default="",
+                       help="which gate said it, if the refusal named one")
     args = parser.parse_args()
 
     ctx = resolve_for_cli()
     if config.load(ctx).report_defects == defects.OFF:
         print("defect reporting is off for this repository")
+        return 0
+    if args.command == "defect":
+        print(defects.observed(ctx, args.what, args.gate))
         return 0
     return cmd_send(ctx) if args.command == "send" else cmd_list(ctx)
 

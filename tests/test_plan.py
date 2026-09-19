@@ -1052,3 +1052,76 @@ class TestATransitionIsARenameInGitToo(PlanCase):
         plan.pause(self.ctx(), task.id, "waiting on the API key")
 
         self.assertEqual("", git(["diff", "--cached", "--name-only"], self.repo))
+
+
+class TestATransitionLandsInTheOneLedger(PlanCase):
+    """Issue #210. `done` and `update` wrote the ledger copy of whichever tree called
+    them, so one card sat in three worktrees in three different states: the main checkout
+    held 0028 and 0075 closed, one worktree held 0045 and 0092, another held 0044 and
+    0092 — and the closures made in a tree that was later removed went with it. `list`
+    from the main checkout showed the closed cards as `next` again.
+    """
+
+    def a_card_checked_out_in_two_trees(self):
+        """The ordinary case: the ledger is committed, so every tree has a copy of it."""
+        from claude_bestpractice.gitctx import resolve
+
+        task = plan.add(self.ctx(), "export the CSV", done_when="stated", paths=["src/app.py"])
+        self.commit("ledger")
+        return task, resolve(self.add_worktree("worker"))
+
+    def test_closing_from_a_worktree_writes_the_main_checkouts_copy(self):
+        task, elsewhere = self.a_card_checked_out_in_two_trees()
+        plan.complete(elsewhere, task.id)
+
+        self.assertTrue(
+            (plan.plan_dir(self.ctx(), plan.DONE) / task.path.name).is_file(),
+            "the closure was written somewhere other than the ledger",
+        )
+
+    def test_the_closure_survives_the_worktree_being_removed(self):
+        task, elsewhere = self.a_card_checked_out_in_two_trees()
+        plan.complete(elsewhere, task.id)
+        git(["worktree", "remove", "--force", str(elsewhere.worktree_root)], self.repo)
+
+        closed = {t.id: t.state for t in plan.load_all(self.ctx())}
+        self.assertEqual(plan.DONE, closed.get(task.id),
+                         "the closure died with the tree that typed it")
+
+    def test_a_note_added_from_a_worktree_is_visible_from_that_worktree(self):
+        """The copy in the ledger outranks a stale one on a tie, or an amendment made
+        here is invisible here: the local copy won a tie it was no longer the truth of."""
+        task, elsewhere = self.a_card_checked_out_in_two_trees()
+        plan.amend(elsewhere, task.id, note="the API returns cents, not dollars")
+
+        seen = plan.find(elsewhere, task.id)
+        self.assertIn("cents", seen.body)
+
+    def test_the_stale_copy_a_branch_carries_is_left_alone(self):
+        """It is that branch's content. Deleting it would put an unexplained `D` in a
+        tree this session does not own, which is #208 inflicted on somebody else."""
+        task, elsewhere = self.a_card_checked_out_in_two_trees()
+        plan.complete(elsewhere, task.id)
+
+        self.assertEqual("", git(["status", "--short"], elsewhere.worktree_root).strip())
+
+    def test_an_untracked_copy_in_another_tree_is_taken_with_it(self):
+        """The one this issue is about: that copy exists on disk and nowhere else, so
+        leaving it behind is how a card comes to be in two states at once."""
+        from claude_bestpractice import store
+        from claude_bestpractice.gitctx import resolve
+
+        tree = self.add_worktree("worker")
+        elsewhere = resolve(tree)
+        stray = tree / store.TIER_A_DIRNAME / plan.PLAN_DIR / plan.NEXT
+        stray.mkdir(parents=True, exist_ok=True)
+        (stray / "0009-stranded.md").write_text(
+            "---\nid: 0009\ntitle: stranded\nstate: next\npaths: src/app.py\n"
+            "done_when: stated\n---\n\nbody\n",
+            encoding="utf-8",
+        )
+
+        plan.complete(elsewhere, "0009")
+        self.assertFalse((stray / "0009-stranded.md").exists(),
+                         "the open copy was left behind in the worktree")
+        self.assertTrue((plan.plan_dir(self.ctx(), plan.DONE) / "0009-stranded.md").is_file())

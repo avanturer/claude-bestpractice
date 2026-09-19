@@ -81,6 +81,10 @@ class Task:
     # Empty when the task file is in THIS checkout. The sibling's directory name
     # otherwise, so the board can say where the work actually is.
     worktree: str = ""
+    # Whether this copy is the one in the ledger itself, which is where every write
+    # lands. A stale copy checked out in some other tree carries the same id, the same
+    # filename and an older state, and the reader has to be able to tell them apart.
+    at_home: bool = False
 
     @property
     def number(self) -> int:
@@ -88,7 +92,7 @@ class Task:
 
 
 def plan_dir(ctx: GitContext, state: str = "") -> Path:
-    """Where a NEW task file is created: the main checkout, whichever tree is asking.
+    """Where a task file BELONGS: the main checkout, whichever tree is asking.
 
     The board is one board per project, and it was one board per WORKTREE. Reading has
     unioned the siblings since #123, so a task added in a worktree could be listed from
@@ -102,21 +106,34 @@ def plan_dir(ctx: GitContext, state: str = "") -> Path:
     already reports, so the files were never staged and the worktree was their only copy.
 
     The main checkout is the one tree in a clone that outlives every other, which is why
-    it is where the ledger lives. Transitions still happen where the FILE is — `_move`
-    follows it — so a task already sitting in a worktree keeps working, and the repair
-    carries it over on the next session start there.
+    it is where the ledger lives — for a transition as much as for a new card. Following
+    the FILE instead was the half-measure: `done` and `update` called from a worktree wrote
+    that worktree's copy, so closures scattered across three trees, `list` from the main
+    checkout showed the closed cards as `next` again, and the ones made in a tree that was
+    later removed went with it (#210). Every write lands here now and `_retire` deals with
+    the copy it came from.
 
     Never fails an `add`: a clone whose trees cannot be listed falls back to this one,
     because a task written somewhere awkward is recoverable and a task refused is not.
     """
+    base = ledger_root(ctx).joinpath(store.TIER_A_DIRNAME, PLAN_DIR)
+    return base / state if state else base
+
+
+def ledger_root(ctx: GitContext) -> Path:
+    """The checkout the one ledger lives in: the main one, whichever tree is asking.
+
+    Public because three modules need the same answer and a second spelling of it is a
+    second ledger. Never raises: a clone whose trees cannot be listed still has the tree
+    in hand, and a card written somewhere awkward is recoverable where a card refused is
+    not.
+    """
     from . import worktree
 
     try:
-        root = worktree.main_checkout(ctx)
+        return worktree.main_checkout(ctx)
     except Exception:  # noqa: BLE001 - an unlistable clone still has to accept a task
-        root = ctx.worktree_root
-    base = root.joinpath(store.TIER_A_DIRNAME, PLAN_DIR)
-    return base / state if state else base
+        return ctx.worktree_root
 
 
 def named_for(ctx: GitContext, path: Path) -> str:
@@ -213,9 +230,11 @@ def load_all(ctx: GitContext, state: str = "") -> list[Task]:
     # directory cannot see that a sibling has moved the task on, so the dedup above never
     # runs: `startable` counted a task this worktree had closed, because it looked in
     # `next/` alone and found the stale copy (#123).
+    home = ledger_root(ctx).resolve()
     for root in sibling_worktrees(ctx) or [ctx.worktree_root]:
         label = "" if root.resolve() == ctx.worktree_root.resolve() else root.name
         for task in _tasks_under(root, list(STATES), label):
+            task.at_home = root.resolve() == home
             previous = best.get(task.path.name)
             if previous is None or _rank(task) > _rank(previous):
                 best[task.path.name] = task
@@ -253,8 +272,17 @@ def _tasks_under(root: Path, states: list[str], label: str) -> list[Task]:
 _ADVANCEMENT = {DONE: 4, PAUSED: 3, DOING: 2, NEXT: 1}
 
 
-def _rank(task: Task) -> tuple[int, int]:
-    return (_ADVANCEMENT.get(task.state, 0), 0 if task.worktree else 1)
+def _rank(task: Task) -> tuple[int, int, int]:
+    """Advancement first, then the ledger's own copy, then ours.
+
+    The middle term is what makes one ledger readable. Every write lands in the main
+    checkout, so on equal states that copy is the one written last — while the copies
+    checked out in other trees are whatever their branches happened to carry. Without it
+    an amendment made from a worktree was invisible in that same worktree, because the
+    local copy won the tie it was no longer the truth of (#210).
+    """
+    return (_ADVANCEMENT.get(task.state, 0), 1 if task.at_home else 0,
+            0 if task.worktree else 1)
 
 
 def sibling_worktrees(ctx: GitContext) -> list[Path]:
@@ -521,12 +549,39 @@ def follow_in_git(source: Path, target: Path) -> bool:
     the founder cannot pause.
     """
     tree = target.parent
-    code, out = _git(["ls-files", "--error-unmatch", "--", str(source)], tree)
-    if code != 0 or not out:
+    if not _tracked(source):
         return False
     if _git(["add", "-f", "--", str(target)], tree)[0] != 0:
         return False
     return _git(["add", "-A", "--", str(source)], tree)[0] == 0
+
+
+def _tracked(path: Path) -> bool:
+    """Is git holding this file in the index of the checkout it sits in?
+
+    Asked in the file's OWN directory, because a worktree has its own index and asking
+    the wrong one about it answers no for a file that is tracked.
+    """
+    code, out = _git(["ls-files", "--error-unmatch", "--", str(path)], path.parent)
+    return code == 0 and bool(out)
+
+
+def follow_across_trees(source: Path, target: Path) -> bool:
+    """Carry a tracked ledger file's move into both indexes when it changes CHECKOUT.
+
+    Two worktrees of one clone have two indexes, so a move between them cannot be one
+    rename however git is asked: the deletion belongs to the tree the file left and the
+    addition to the tree it arrived in. Staging both is what keeps the move from reading
+    as the loss it is not — the bare `D` with no counterpart that fifty stranded files
+    taught this repository to recognise (#208).
+
+    Same rule as `follow_in_git`: only for a file git ALREADY tracks. Where the founder
+    does not commit the ledger, neither index is touched and nothing is granted (0008).
+    """
+    if not _tracked(source):
+        return False
+    staged = _git(["add", "-f", "--", str(target)], target.parent)[0] == 0
+    return _git(["add", "-A", "--", str(source)], source.parent)[0] == 0 and staged
 
 
 def stranded_deletions(root: Path, base: Path) -> list[Path]:
@@ -543,7 +598,49 @@ def stranded_deletions(root: Path, base: Path) -> list[Path]:
     return [root / line for line in out.splitlines() if line.strip()]
 
 
-def _move(task: Task, state: str, owner: str = "", branch: str = "",
+def _retire(source: Path, target: Path) -> None:
+    """Take the copy a transition came FROM out of the way of the one it landed in.
+
+    Three cases, and the middle one is why this is a function rather than an `unlink`.
+
+    Same ledger — the ordinary transition — is a rename: unlink, and carry it into the
+    index where git was already tracking the file.
+
+    ANOTHER checkout, untracked there: unlink it. That copy exists on disk and nowhere
+    else, `git worktree remove` erases it, and leaving it behind is how one card came to
+    sit in three trees in three different states (#210).
+
+    Another checkout, TRACKED there: leave it exactly as it is. It is that branch's
+    content, not ours; deleting it would put an unexplained `D` in a tree this session
+    does not own, which is the shape of #208 inflicted on somebody else. The reader ranks
+    the ledger's own copy above it, so the stale one cannot outvote the closure.
+    """
+    same_ledger = source.parent.parent == target.parent.parent
+    if same_ledger:
+        source.unlink(missing_ok=True)
+        follow_in_git(source, target)
+        return
+    if _tracked(source):
+        return
+    source.unlink(missing_ok=True)
+
+
+def _land(ctx: GitContext, task: Task, state: str, rendered: str) -> Path:
+    """Write a card's file where the ledger lives, and retire the copy it came from.
+
+    Every write goes through here — transition and amendment alike — because a ledger
+    with two writing paths has two places to be wrong about where it lives.
+    """
+    target_dir = plan_dir(ctx, state)
+    store.ensure_dir(target_dir)
+    target = target_dir / task.path.name
+    store.atomic_write(target, rendered, mode=0o644)
+    if target != task.path:
+        _retire(task.path, target)
+    return target
+
+
+def _move(ctx: GitContext, task: Task, state: str, owner: str = "", branch: str = "",
           blocker: str | None = None) -> Task:
     """A state transition is a rename, in the working tree and in the index alike.
 
@@ -551,15 +648,11 @@ def _move(task: Task, state: str, owner: str = "", branch: str = "",
     puts it there. The move itself is plain filesystem work, so that a repository where
     git is unavailable or the file untracked still transitions.
 
-    The rename happens where the FILE is, not where the caller is. Now that the ledger
-    reads across siblings, `plan_dir(ctx, ...)` would have written the moved copy into
-    this worktree while leaving the original in place — two files, one id, both claiming
-    to be the truth, and the sibling still showing it unclaimed.
+    It lands in the LEDGER, not beside the file it came from. Following the file was the
+    older rule, and it made a closure a property of the tree that typed it: three
+    worktrees, three different sets of closed cards, and the ones closed in a tree that
+    was later removed lost outright (#210).
     """
-    target_dir = task.path.parent.parent / state
-    store.ensure_dir(target_dir)
-    target = target_dir / task.path.name
-
     text = task.path.read_text(encoding="utf-8")
     meta, body = _frontmatter(text)
     updated = _render(
@@ -579,10 +672,7 @@ def _move(task: Task, state: str, owner: str = "", branch: str = "",
         _ids(meta.get("after", "")),
         _ids(meta.get("with", "")),
     )
-    store.atomic_write(target, updated, mode=0o644)
-    if target != task.path:
-        task.path.unlink(missing_ok=True)
-        follow_in_git(task.path, target)
+    target = _land(ctx, task, state, updated)
     moved = _load(target, state)
     if moved:
         moved.worktree = task.worktree
@@ -644,7 +734,7 @@ def sweep_idle(ctx: GitContext, hours: float = IDLE_HOURS) -> list[Task]:
                 f"{int(idle)}h.")
         task.body = f"{task.body}\n\n{note}".strip() if task.body else note
         _rewrite_body(task)
-        released = _move(task, NEXT)
+        released = _move(ctx, task, NEXT)
         if released:
             moved.append(released)
     return moved
@@ -677,7 +767,7 @@ def sweep_queue(ctx: GitContext, days: float = QUEUE_STALE_DAYS) -> list[Task]:
         if not idle or task.owner:
             continue
         blocker = f"nobody picked this up in {int(idle // 24)}d — resume it if it still matters"
-        parked = _move(task, PAUSED, blocker=blocker)
+        parked = _move(ctx, task, PAUSED, blocker=blocker)
         if parked:
             moved.append(parked)
     return moved
@@ -769,7 +859,7 @@ def pause(ctx: GitContext, task_id: str, blocker: str) -> tuple[Task | None, str
         return None, f"no task {task_id}"
     if task.state == DONE:
         return None, f"task {task.id} is already done"
-    return _move(task, PAUSED, blocker=blocker.strip()), ""
+    return _move(ctx, task, PAUSED, blocker=blocker.strip()), ""
 
 
 def resume(ctx: GitContext, task_id: str) -> tuple[Task | None, str]:
@@ -779,7 +869,7 @@ def resume(ctx: GitContext, task_id: str) -> tuple[Task | None, str]:
         return None, f"no task {task_id}"
     if task.state != PAUSED:
         return None, f"task {task.id} is not paused"
-    return _move(task, NEXT, blocker=""), ""
+    return _move(ctx, task, NEXT, blocker=""), ""
 
 
 def amend(ctx: GitContext, task_id: str, note: str = "", paths: list[str] | None = None,
@@ -804,8 +894,11 @@ def amend(ctx: GitContext, task_id: str, note: str = "", paths: list[str] | None
         task.blocker,
         meta.get("created_at", ""),
     )
-    store.atomic_write(task.path, updated, mode=0o644)
-    return _load(task.path, task.state), ""
+    # Through `_land`, not in place: an amendment typed in a worktree used to be written
+    # to that worktree's copy, which is the same defect as a closure written there — the
+    # note survives exactly as long as the tree does (#210).
+    landed = _land(ctx, task, task.state, updated)
+    return _load(landed, task.state), ""
 
 
 def _unplanned(task: Task) -> str:
@@ -863,7 +956,7 @@ def claim(ctx: GitContext, task_id: str, session_id: str, branch: str) -> tuple[
         if unplanned:
             return None, unplanned
 
-    return _move(task, DOING, owner=session_id, branch=branch), ""
+    return _move(ctx, task, DOING, owner=session_id, branch=branch), ""
 
 
 def complete(ctx: GitContext, task_id: str) -> tuple[Task | None, str]:
@@ -877,7 +970,7 @@ def complete(ctx: GitContext, task_id: str) -> tuple[Task | None, str]:
     task = find(ctx, task_id)
     if task is None:
         return None, f"no task {task_id}"
-    landed = _move(task, DONE)
+    landed = _move(ctx, task, DONE)
 
     # Whoever was waiting on this is waiting right now, in a session that will not be
     # restarted for hours. `startable` already answers "what can begin"; nobody reads it

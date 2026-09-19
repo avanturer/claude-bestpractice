@@ -146,6 +146,24 @@ class TestACodeReferenceIsNotACredential(unittest.TestCase):
         self.assertIn("assigned-secret", redact.find(
             'AWS_SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"'))
 
+    def test_an_unquoted_expression_is_not_a_credential(self):
+        """Issue #205. `const tokens = useMemo(...)` was refused as an assigned secret:
+        the name matched and the value was eight characters of ordinary React. The
+        founder renamed a variable to get the file written, and the issue reporting it
+        was refused for quoting the line."""
+        for line in (
+            "const tokens = useMemo(() => parse(raw), [raw])",
+            "const [tokens, setTokens] = useState([])",
+            "secret = compute_secret(seed, salt)",
+            "api_key = os.environ.get(KEY_NAME)",
+        ):
+            self.assertEqual([], redact.find(line), line)
+
+    def test_a_quoted_value_with_brackets_is_still_a_secret(self):
+        """Quoting is the discriminator everywhere in this module. A literal is a literal
+        whatever punctuation it carries."""
+        self.assertIn("assigned-secret", redact.find('password = "hunter2(correct)battery"'))
+
     def test_scrub_still_removes_the_real_one(self):
         """A value ONLY the assignment rule catches. An `sk-ant-…` key here would be
         redacted by its own pattern whatever the assignment branch did, so the test would
