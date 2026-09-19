@@ -298,7 +298,10 @@ def main() -> None:
         # growth in a session record is how a fail-closed gate gets slow.
         fresh = extract_paths(prompt, ctx.worktree_root)
         merged = sorted(set(rec.task_paths) | set(fresh))
-        updates: dict[str, object] = {"task_paths": merged[:MAX_TASK_PATHS]}
+        # And the fan-out budget starts again. The founder asking a second question is
+        # a new piece of work, not a continuation of the delegation the last one needed.
+        updates: dict[str, object] = {"task_paths": merged[:MAX_TASK_PATHS],
+                                      "spawns_this_turn": 0}
         # The statement follows the founder rather than freezing at the first thing they
         # said. It used to be written once and never again, so a session that had long
         # since moved on was still being measured against "посмотри заново бд" — and every
@@ -348,7 +351,7 @@ def main() -> None:
         # filename is not a credential. Scrubbing first would lose real paths.
         sessions.touch(ctx, event.session_id, **updates)
     else:
-        sessions.touch(ctx, event.session_id)
+        sessions.touch(ctx, event.session_id, spawns_this_turn=0)
 
     hookio.emit_silent()
 

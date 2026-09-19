@@ -92,6 +92,15 @@ class SessionRecord:
     last_touched: list[str] = field(default_factory=list)
     tool_calls: int = 0
     tool_signatures: dict[str, int] = field(default_factory=dict)
+    # The last thing a gate here refused, and whether it is the session's to resolve.
+    # Written by `pre-tool` as it denies, read by the Stop gate, cleared the moment it
+    # is raised: a turn that ends on a block nobody acted on is a turn that handed the
+    # founder a question about this plugin instead of doing the work.
+    refusal: dict[str, Any] = field(default_factory=dict)
+    # Subagents started since the founder's last message. Per TURN and not per session,
+    # because the cost being bounded is the fan-out — five agents at once — and not the
+    # fifth question of a long conversation. `prompt-capture` puts it back to zero.
+    spawns_this_turn: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

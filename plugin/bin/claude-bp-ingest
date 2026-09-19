@@ -31,7 +31,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import hookio, redact, store  # noqa: E402
+from claude_bestpractice import __version__, hookio, redact, store  # noqa: E402
 from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
 
 SIGNALS_DIR = ".claude/signals"
@@ -175,6 +175,10 @@ def ingest(ctx, raw_items: list[dict]) -> list[Path]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Sanitise production signals into repo files.")
+    # The version the founder is actually running, from the one place that holds it.
+    # `claude-bp-plan --version` printed nothing and exited 2, so a bug report
+    # against this plugin could not state which version it was against (#210).
+    parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument("--file", help="read JSON from a file instead of stdin")
     args = parser.parse_args()
 

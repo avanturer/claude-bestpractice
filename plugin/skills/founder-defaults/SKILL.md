@@ -88,6 +88,41 @@ Worktree per session, never the trunk, conventional commit messages, no conflict
 — all enforced. The parts that are not: keep a commit to one logical change, and write
 the body when the subject cannot carry the reason.
 
+## Delegating to a subagent **[enforced]**
+
+- **Name the tier on every spawn.** `model` is a field on the call, and a call that omits
+  it runs the subagent on this session's own model — the most expensive one in the room.
+  A tier pinned in the agent's own definition counts and needs nothing on the call.
+    - `haiku` — mechanical work with one right answer: search, extraction, a scripted
+      edit, reading a log.
+    - `sonnet` — ordinary implementation and review. Most delegated work belongs here.
+    - `opus` — design, ambiguity, a judgement the parent cannot make for itself.
+    - `fable` — a long autonomous run that has to investigate before it acts.
+- **A fan-out needs a reason beyond speed.** Each agent pays for its own context of this
+  repository before it reads a line of the answer, and three searching the same tree
+  return the same answer three times. Three per turn is the ceiling; it is the founder's
+  number, not this session's.
+- **Delegate a QUESTION, not a chapter.** An agent that comes back with a conclusion has
+  earned its context. One that comes back with the files it read has spent it.
+
+## When a gate here blocks you **[enforced]**
+
+A refusal from this plugin is yours to resolve, and the founder is not the next step.
+
+1. **Decide which it is.** Either the gate is right — in which case what it asked for is
+   still owed — or it is wrong about this case. You have the refusal, the call and the
+   repository; nobody else is better placed to tell.
+2. **If it is right, do what it names.** The refusal says what would satisfy it.
+3. **If it is wrong, file it and carry on:**
+   `claude-bp-report defect "<what it refused and why that is wrong>"`. It costs the turn
+   nothing and sends nothing without `claude-bp-report send`. Then take the shortest
+   correct route to the same work.
+
+Reporting a gate to the founder is not a finish, and the Stop gate refuses a turn that
+ends on a block nothing was done about. The exceptions are the refusals that genuinely
+wait on a person — an unapproved merge, a production deploy, a switch that is theirs to
+set. Those say so, and stopping is the right answer to them.
+
 ## When these conflict with the task
 
 The task wins, and you say so in the code: one comment naming the default and why this

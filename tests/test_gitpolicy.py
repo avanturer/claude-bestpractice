@@ -412,6 +412,37 @@ class TestAPackageNameIsNotAPath(PolicyCase):
             want = expected if expected.startswith("/") else str(self.repo / expected)
             self.assertIn(want, write_targets(command, self.repo), command)
 
+    def test_an_operator_is_not_a_redirect(self):
+        """Issue #205. `data @> '{}'` sent to psql was read as a redirect, and the board
+        gate refused the call for "working on @" — a path nobody named, in a command that
+        writes no file. Every language here has one of these."""
+        for command in (
+            "psql $DB -c 'select 1 from t where data @> b'",
+            "psql -c 'select 1 from t where b <@ data'",
+            "grep -o 'node->next' src/list.c",
+            "node -e 'const f = (x) => x'",
+            "psql -c 'select 1 where a <> b'",
+        ):
+            self.assertEqual([], write_targets(command, self.repo), command)
+
+    def test_a_real_redirect_beside_an_operator_still_counts(self):
+        """The fix must not cost the write. A query CAN be redirected into a file, and
+        that file is exactly what the leases and the credential scan are about."""
+        self.assertIn(
+            str(self.repo / "rows.txt"),
+            write_targets("psql -c \"select a->>'k' from t where b @> c\" > rows.txt", self.repo),
+        )
+        for command, expected in (
+            ("cmd &> combined.log", "combined.log"),
+            ("make 2> errors.txt", "errors.txt"),
+        ):
+            self.assertIn(str(self.repo / expected), write_targets(command, self.repo), command)
+
+    def test_a_target_with_no_name_in_it_is_not_a_file(self):
+        """`@` alone is what is left of an operator some scan read through, and the
+        refusal that named it as the file this session was working on came from here."""
+        self.assertEqual([], write_targets("rm -rf @", self.repo))
+
     def test_a_venv_in_the_scratchpad_is_not_the_repository(self):
         """End to end, from the main checkout, which is where the report came from."""
         with tempfile.TemporaryDirectory() as tmp:

@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-1.61.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-1.62.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-1521%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-33%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -386,6 +386,7 @@ configuration silently.
 | `claude-bp-attempt` | The dead-end ledger: what was tried, and why it failed |
 | `claude-bp-options` | Record a decision as a scored comparison of alternatives |
 | `claude-bp-ship` | What this branch delivered, for someone who never reads code (`--pr` opens one) |
+| `claude-bp-report` | Defects this plugin hit here; `defect "…"` records a gate that refused the wrong thing |
 
 In a session: `/claude-bestpractice:status` · `/claude-bestpractice:plan` · `/claude-bestpractice:review`
 
@@ -396,12 +397,12 @@ In a session: `/claude-bestpractice:status` · `/claude-bestpractice:plan` · `/
 | `setup` | Setup | fails open | Derives the knowledge layer, creates the plan, seeds the stage |
 | `session-start` | SessionStart | fails open | Reaps the dead, registers, injects board + plan + stage |
 | `prompt-capture` | UserPromptSubmit | fails open | Records the verbatim task. **Injects nothing** |
-| `pre-tool` | PreToolUse | **fails closed** | Call ceiling, loop break, secret pre-write scan, leases, migration and deploy gating |
+| `pre-tool` | PreToolUse | **fails closed** | Call ceiling, loop break, secret pre-write scan, leases, migration and deploy gating, subagent tier and fan-out |
 | `review-commit` | `if: Bash(git commit:*)` | async rewake | Reviews this turn's diff; wakes you only when there is something to say |
 | `worktree-create` | WorktreeCreate | fails open | Names it, seeds trust, derives a private port and database |
 | `subagent-brief` | SubagentStart | fails open | Non-goals, entities and a query-biased map to agents that inherit no rules |
 | `checkpoint` | PreCompact | fails open | Extractive checkpoint, zero model calls, secrets scrubbed |
-| `evidence-gate` | Stop | **fails closed** | Scope drift, test evidence, clean re-run; harvests decision drafts |
+| `evidence-gate` | Stop | **fails closed** | Scope drift, test evidence, clean re-run, a turn ending on an unanswered block; harvests decision drafts |
 
 Nine entries against a self-imposed budget of twelve. Always-on context **~332 tokens**
 against a cap of 400 — roughly 0.1 % of a 200k window.

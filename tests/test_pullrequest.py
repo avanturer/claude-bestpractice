@@ -1061,3 +1061,99 @@ class TestTheMergeClosesTheCardItDelivered(PRCase):
         self.merge()
 
         self.assertEqual(plan.DOING, plan.find(self.ctx(), task.id).state)
+
+
+class TestAMergedPullRequestIsNotAnOpenOne(PRCase):
+    """Issue #205. Nothing here watches GitHub: the obligation is discharged by the merge
+    this plugin performs, so one merged from the website, from another clone, or with a
+    `gh pr merge --squash --delete-branch` this tokeniser declined stays OPEN forever.
+
+    The founder was told to report and merge a pull request that had been merged days
+    earlier and whose branch no longer existed.
+    """
+
+    def stop(self, session_id: str = "s1"):
+        return self.gate("evidence-gate", {
+            "session_id": session_id, "hook_event_name": "Stop", "stop_hook_active": False,
+        })
+
+    def a_branch_with_work_on_it(self) -> None:
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+
+    def squash_it_onto_the_trunk(self) -> None:
+        """What a squash merge leaves behind: the same CONTENT on the trunk, reached by a
+        commit this branch has never seen. The tip is an ancestor of nothing."""
+        git(["checkout", "-q", "main"], self.repo)
+        self.write("src/app.py", "x = 1\n")
+        self.commit("squashed: add the app module")
+        git(["update-ref", "refs/remotes/origin/main", "HEAD"], self.repo)
+        git(["checkout", "-q", "feat/x"], self.repo)
+
+    def test_a_squash_merged_branch_settles_its_own_obligation(self):
+        self.a_branch_with_work_on_it()
+        self.start()
+        self.open_a_pr()
+        self.squash_it_onto_the_trunk()
+
+        self.assertEqual(["feat/x"], pullrequest.reconcile(self.ctx(), "feat/x"))
+        self.assertEqual([], pullrequest.outstanding(self.ctx()))
+
+    def test_the_stop_gate_stops_demanding_a_merge_that_happened(self):
+        self.a_branch_with_work_on_it()
+        self.start()
+        self.open_a_pr()
+        self.squash_it_onto_the_trunk()
+
+        proc = self.stop()
+        self.assertNotIn("cannot be merged", proc.stderr)
+        self.assertNotIn("waiting for the founder", proc.stderr)
+
+    def test_a_merge_the_trunk_has_since_moved_past_settles_too(self):
+        """The case the content test cannot answer, which is why the ancestor test is
+        asked first: the branch went in, and somebody then edited the same file on the
+        trunk. Every delivered path now differs from what the trunk holds, and the work
+        is on the trunk all the same."""
+        self.a_branch_with_work_on_it()
+        self.start()
+        self.open_a_pr()
+
+        git(["checkout", "-q", "main"], self.repo)
+        git(["merge", "-q", "--no-ff", "-m", "merge feat/x", "feat/x"], self.repo)
+        self.write("src/app.py", "x = 99  # moved on since\n")
+        self.commit("the trunk moved on")
+        git(["update-ref", "refs/remotes/origin/main", "HEAD"], self.repo)
+        git(["checkout", "-q", "feat/x"], self.repo)
+
+        pullrequest.reconcile(self.ctx(), "feat/x")
+        self.assertEqual([], pullrequest.outstanding(self.ctx()))
+
+    def test_an_unmerged_pull_request_is_left_exactly_as_it_was(self):
+        """Settling one that is really open costs the founder the single reminder they
+        get, so the test that matters here is the one that must not fire."""
+        self.a_branch_with_work_on_it()
+        self.start()
+        self.open_a_pr()
+
+        pullrequest.reconcile(self.ctx(), "feat/x")
+        self.assertEqual(1, len(pullrequest.outstanding(self.ctx())))
+
+    def test_a_partial_match_settles_nothing(self):
+        """One file of three on the trunk is a branch somebody cherry-picked from, not a
+        merge."""
+        self.write("src/app.py", "x = 1\n")
+        self.write("src/other.py", "y = 2\n")
+        self.commit("two modules")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+        self.open_a_pr()
+
+        git(["checkout", "-q", "main"], self.repo)
+        self.write("src/app.py", "x = 1\n")
+        self.commit("took one of them")
+        git(["update-ref", "refs/remotes/origin/main", "HEAD"], self.repo)
+        git(["checkout", "-q", "feat/x"], self.repo)
+
+        pullrequest.reconcile(self.ctx(), "feat/x")
+        self.assertEqual(1, len(pullrequest.outstanding(self.ctx())))

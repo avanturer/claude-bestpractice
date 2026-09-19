@@ -4,7 +4,7 @@
 
 **Память, координация и принуждение для разработки продукта в нескольких параллельных сессиях Claude Code.**
 
-[![version](https://img.shields.io/badge/version-1.61.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-1.62.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-1521%20passing-2ea44f)](#проверено)
 [![doctor](https://img.shields.io/badge/doctor-33%20checks-2ea44f)](#проверено)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#требования)
@@ -334,6 +334,7 @@ claude-bp-ci off        # снять pre-push хук
 | `claude-bp-attempt` | Журнал тупиков: что пробовали и почему не вышло |
 | `claude-bp-options` | Записать решение как сравнение вариантов по метрикам |
 | `claude-bp-ship` | Что доставила эта ветка — для того, кто не читает код (`--pr` откроет PR) |
+| `claude-bp-report` | Дефекты этого плагина здесь; `defect "…"` записывает гейт, отказавший не по делу |
 
 В сессии: `/claude-bestpractice:status` · `/claude-bestpractice:plan` · `/claude-bestpractice:review`
 
@@ -344,12 +345,12 @@ claude-bp-ci off        # снять pre-push хук
 | `setup` | Setup | fails open | Выводит слой знания, создаёт план, засевает стадию |
 | `session-start` | SessionStart | fails open | Подчищает мёртвых, регистрирует, вкидывает борд + план + стадию |
 | `prompt-capture` | UserPromptSubmit | fails open | Записывает задачу дословно. **Ничего не вкидывает** |
-| `pre-tool` | PreToolUse | **fails closed** | Потолок вызовов, разрыв цикла, скан секретов до записи, лизы, гейт миграций и деплоя |
+| `pre-tool` | PreToolUse | **fails closed** | Потолок вызовов, разрыв цикла, скан секретов до записи, лизы, гейт миграций и деплоя, тир и число субагентов |
 | `review-commit` | `if: Bash(git commit:*)` | async rewake | Ревьюит дифф этого хода; будит только когда есть что сказать |
 | `worktree-create` | WorktreeCreate | fails open | Именует, засевает доверие, выводит приватный порт и БД |
 | `subagent-brief` | SubagentStart | fails open | Non-goals, сущности и карта под запрос — агентам, которые не наследуют правил |
 | `checkpoint` | PreCompact | fails open | Экстрактивный чекпойнт, ноль вызовов модели, секреты вычищены |
-| `evidence-gate` | Stop | **fails closed** | Дрейф скоупа, тестовое доказательство, чистый повторный прогон; собирает черновики решений |
+| `evidence-gate` | Stop | **fails closed** | Дрейф скоупа, тестовое доказательство, чистый повторный прогон, ход, заканчивающийся неотвеченным отказом; собирает черновики решений |
 
 Девять записей против самоограничения в двенадцать. Постоянный контекст **~332 токена**
 против потолка в 400 — примерно 0.1 % окна на 200k.

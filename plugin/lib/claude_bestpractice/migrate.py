@@ -514,12 +514,9 @@ def _carry_this_worktrees_tasks_home(ctx: GitContext) -> str:
     the reader ranks copies by how far the lifecycle has carried them, and clobbering a
     `done/` copy with a stale `next/` one is exactly the reversal #123 fixed.
     """
-    from . import plan, worktree
+    from . import plan
 
-    try:
-        home = worktree.main_checkout(ctx).resolve()
-    except Exception:  # noqa: BLE001 - an unlistable clone has nowhere to carry them to
-        return ""
+    home = plan.ledger_root(ctx).resolve()
     # Which is also how "run from the main checkout" ends: `main_checkout` returns the
     # tree we are standing in, and there is nothing to carry anywhere. An `is_worktree`
     # test above this said the same thing twice, and no mutation could tell them apart.
@@ -549,12 +546,21 @@ def _already_home(home: Path, name: str, states: tuple) -> bool:
 
 
 def _carry_one(path: Path, target: Path) -> int:
-    """Move one task file, or leave it where it is. Returns how many moved, for the sum."""
+    """Move one task file, or leave it where it is. Returns how many moved, for the sum.
+
+    The move is carried into both indexes when git was tracking the file. Without that
+    this repair RECREATED the defect the one after it exists to undo: a tracked file
+    leaving a worktree with git never told is a bare `D` in that tree and an untracked
+    copy in another (#208).
+    """
+    from . import plan
+
     try:
         store.ensure_dir(target.parent)
         path.replace(target)
     except OSError:
         return 0
+    plan.follow_across_trees(path, target)
     return 1
 
 
@@ -621,20 +627,6 @@ def _close_cards_whose_work_shipped(ctx: GitContext) -> str:
     return f"{closed} in-flight card(s) closed over work already on the trunk" if closed else ""
 
 
-def _ledger_root(ctx: GitContext) -> Path:
-    """The checkout the ledger lives in, whichever tree is asking.
-
-    The same answer `plan.plan_dir` gives, and for the same reason: the main checkout is
-    the one tree in a clone that outlives every other.
-    """
-    from . import worktree
-
-    try:
-        return worktree.main_checkout(ctx)
-    except Exception:  # noqa: BLE001 - an unlistable clone still has a tree to repair
-        return ctx.worktree_root
-
-
 def _restage_ledger_moves_git_lost(ctx: GitContext) -> str:
     """Renames earlier versions made on disk only, which git still reads as deletions.
 
@@ -650,7 +642,7 @@ def _restage_ledger_moves_git_lost(ctx: GitContext) -> str:
     """
     from . import plan
 
-    root = _ledger_root(ctx)
+    root = plan.ledger_root(ctx)
     base = root.joinpath(store.TIER_A_DIRNAME, plan.PLAN_DIR)
     gone_paths = plan.stranded_deletions(root, base)
     if not gone_paths:

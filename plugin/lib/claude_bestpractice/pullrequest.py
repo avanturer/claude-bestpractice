@@ -161,6 +161,63 @@ def settle(ctx: GitContext, branch: str, state: str) -> None:
         _write(ctx, {**record, "state": state, "settled_at": time.time()})
 
 
+def landed(ctx: GitContext, record: dict[str, Any]) -> bool:
+    """Has this record's work already reached the trunk, whatever happened to the record?
+
+    Nothing here watches GitHub. The obligation is discharged by `settle`, which is
+    reached from the one merge this session performs — so a pull request merged from the
+    website, from another clone, or by `gh pr merge` in a shell this gate could not parse
+    leaves a record saying OPEN forever. The founder then gets the Stop demand for a pull
+    request that was merged and whose branch was deleted, told to report a merge that had
+    already happened (#205).
+
+    Two answers, and the second is the one that matters. An ANCESTOR test settles an
+    ordinary merge exactly. A SQUASH rewrites the commits, so the branch tip is an
+    ancestor of nothing — and squash is what `gh pr merge --squash --delete-branch` does,
+    which is the line in the report. For that, the question is asked of the CONTENT: every
+    file this branch delivers is byte-identical to what the trunk holds.
+
+    Deliberately conservative in three ways, because settling an obligation that is really
+    open costs the founder the one reminder they get. The content test is only asked of
+    the tree standing on that branch, since `evidence.landed` reads THIS checkout's HEAD;
+    a branch that delivers no file is never settled by it; and a partial match settles
+    nothing. What it cannot distinguish — somebody else landing this exact content — is
+    the work reaching the trunk either way, which is what the obligation was about.
+    """
+    from . import evidence
+    from .gitctx import is_ancestor
+
+    branch = str(record.get("branch") or "")
+    if not branch:
+        return False
+    base = str(record.get("base") or "") or "main"
+    for trunk in (f"origin/{base}", "origin/HEAD"):
+        if is_ancestor(ctx, branch, trunk):
+            return True
+    if branch != ctx.branch:
+        return False
+    delivered = delivered_paths(ctx, base, branch)
+    return bool(delivered) and len(evidence.landed(ctx, delivered)) == len(delivered)
+
+
+def reconcile(ctx: GitContext, branch: str = "") -> list[str]:
+    """Settle every open record whose work is already on the trunk. The branches settled.
+
+    Called by the surfaces that ACT on an open pull request — the Stop gate and the status
+    line — rather than from `outstanding`, so reading the board never writes to it. One
+    branch when named, because the Stop gate only ever asks about the one it is standing
+    on, and `landed`'s content test can only answer for that tree anyway.
+    """
+    settled: list[str] = []
+    for record in outstanding(ctx):
+        if branch and record.get("branch") != branch:
+            continue
+        if landed(ctx, record):
+            settle(ctx, str(record.get("branch") or ""), MERGED)
+            settled.append(str(record.get("branch") or ""))
+    return settled
+
+
 def outstanding(ctx: GitContext) -> list[dict[str, Any]]:
     """Every pull request this clone knows about and has not seen the end of."""
     now = time.time()

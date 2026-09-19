@@ -4,7 +4,7 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-1.61.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-1.62.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-1521%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-33%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
@@ -299,6 +299,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 | `claude-bp-attempt` | 死路台账：试过什么、为什么没成 |
 | `claude-bp-options` | 把决策记成一次按指标打分的方案比较 |
 | `claude-bp-ship` | 这条分支交付了什么，写给不读代码的人（`--pr` 直接开 PR）|
+| `claude-bp-report` | 本仓库里这个插件的缺陷；`defect "…"` 记录一次拦错的门禁 |
 
 在会话中：`/claude-bestpractice:status` · `/claude-bestpractice:plan` · `/claude-bestpractice:review`
 
@@ -309,12 +310,12 @@ claude-bp-ci off        # 移除 pre-push 钩子
 | `setup` | Setup | 失败放行 | 推导知识层，创建计划，播种阶段 |
 | `session-start` | SessionStart | 失败放行 | 回收死会话，注册自身，注入看板 + 计划 + 阶段 |
 | `prompt-capture` | UserPromptSubmit | 失败放行 | 逐字记录任务。**不注入任何东西** |
-| `pre-tool` | PreToolUse | **失败拦截** | 调用上限、循环打断、写入前密钥扫描、租约、迁移与部署管控 |
+| `pre-tool` | PreToolUse | **失败拦截** | 调用上限、循环打断、写入前密钥扫描、租约、迁移与部署管控、子智能体的档位与数量 |
 | `review-commit` | `if: Bash(git commit:*)` | 异步唤醒 | 审查本轮的 diff；只在确实有话要说时才叫醒你 |
 | `worktree-create` | WorktreeCreate | 失败放行 | 命名、播种信任、推导私有端口与数据库 |
 | `subagent-brief` | SubagentStart | 失败放行 | 把非目标、实体和按查询偏置的代码图交给不继承任何规则的子智能体 |
 | `checkpoint` | PreCompact | 失败放行 | 抽取式检查点，零模型调用，密钥已清洗 |
-| `evidence-gate` | Stop | **失败拦截** | 范围漂移、测试证据、干净重跑；顺带收割决策草稿 |
+| `evidence-gate` | Stop | **失败拦截** | 范围漂移、测试证据、干净重跑、以未处理的拦截收场的一轮；顺带收割决策草稿 |
 
 九个条目，自设上限是十二个。常驻上下文 **约 332 tokens**，上限 400 ——
 大约是 200k 窗口的 0.1 %。
