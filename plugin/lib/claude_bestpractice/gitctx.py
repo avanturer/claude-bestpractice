@@ -44,6 +44,20 @@ def _run(args: list[str], cwd: Path | str, check: bool = True) -> str:
     return proc.stdout.strip()
 
 
+def _status(args: list[str], cwd: Path | str) -> tuple[int, str]:
+    """A git call whose FAILURE is data: (exit status, stdout).
+
+    `_run(check=False)` answers "" for a command that failed and for one that found
+    nothing, and those are opposite facts about a diff — one means no change, the other
+    means the question could not be asked.
+    """
+    proc = subprocess.run(
+        ["git", *args], cwd=str(cwd), capture_output=True,
+        encoding="utf-8", errors="surrogateescape", timeout=30,
+    )
+    return proc.returncode, proc.stdout.strip()
+
+
 @dataclass(frozen=True)
 class GitContext:
     """Everything about the repository a gate needs, resolved once.
@@ -197,19 +211,64 @@ def changed_files(ctx: GitContext, since: str | None = None) -> list[str]:
     # quoting was the cause rather than the test.
     quiet = ["-c", "core.quotePath=false"]
     out: set[str] = set()
+    measured = False
     if since:
         floor = _authored_floor(ctx, since)
-        diff = _run(quiet + ["diff", "--name-only", f"{floor}..HEAD"], ctx.worktree_root, check=False)
+        # The baseline against the WORKING TREE, in one diff: `floor..HEAD` answered for
+        # the commits and the uncommitted scans below answered for everything else in the
+        # tree — including files that were already dirty when the session started and have
+        # not been touched since. In a main checkout shared by three to eight sessions that
+        # is somebody else's work, and it was being counted as this session's: 335 files
+        # it had never opened, with a scope-drift refusal and a demand for a card over them
+        # (#213). The baseline commit already carries the dirty tree as it stood at session
+        # start (`stash_baseline`), so diffing against it says what THIS session changed.
+        code, diff = _status(quiet + ["diff", "--name-only", floor], ctx.worktree_root)
+        measured = code == 0
         out.update(p for p in diff.splitlines() if p)
 
-    for args in (["diff", "--name-only", "HEAD"], ["diff", "--name-only", "--cached"]):
-        out.update(p for p in _run(quiet + args, ctx.worktree_root, check=False).splitlines() if p)
+    # The baseline is a `git stash create` commit, and git prunes unreachable objects: a
+    # baseline it can no longer resolve answers nothing at all. Falling through to the
+    # working-tree scans is what keeps a session whose baseline has been collected visible
+    # to every gate — the alternative is a diff that comes back empty and a Stop that
+    # certifies a turn it never looked at.
+    if not measured:
+        for args in (["diff", "--name-only", "HEAD"], ["diff", "--name-only", "--cached"]):
+            out.update(
+                p for p in _run(quiet + args, ctx.worktree_root, check=False).splitlines() if p
+            )
 
     untracked = _run(
         quiet + ["ls-files", "--others", "--exclude-standard"], ctx.worktree_root, check=False
     )
-    out.update(p for p in untracked.splitlines() if p)
+    already = _untracked_at(ctx, since) if measured else {}
+    for rel in untracked.splitlines():
+        # An untracked file that was already sitting there, byte for byte, when this
+        # session started is not this session's change — it is whatever the tree happened
+        # to be carrying, which in a shared main checkout is another session's work (#213).
+        if rel and already.get(rel) != blob_sha(ctx, rel):
+            out.add(rel)
     return sorted(out)
+
+
+def _untracked_at(ctx: GitContext, since: str) -> dict[str, str]:
+    """The untracked files the baseline captured, as path -> blob sha.
+
+    `stash create -u` files them in a third parent rather than in the commit's own tree,
+    so they are asked for by name. Empty for a baseline taken before this was recorded, or
+    for a clean tree — in which case every untracked file reads as new, which is the
+    behaviour this had always.
+
+    By CONTENT and not by name: a file that was there and has since been rewritten is this
+    session's change, and dropping it by name would hide it.
+    """
+    listing = _run(["ls-tree", "-r", f"{since}^3"], ctx.worktree_root, check=False)
+    found: dict[str, str] = {}
+    for line in listing.splitlines():
+        meta, _, path = line.partition("\t")
+        parts = meta.split()
+        if path and len(parts) >= 3:
+            found[path] = parts[2]
+    return found
 
 
 def stash_baseline(ctx: GitContext) -> str:
@@ -219,7 +278,13 @@ def stash_baseline(ctx: GitContext) -> str:
     modify the index, the working tree, or the stash reflog. Returns HEAD when the
     tree is clean (stash create prints nothing in that case).
     """
-    sha = _run(["stash", "create"], ctx.worktree_root, check=False)
+    # `-u`, so the baseline also records the untracked files the tree was already carrying.
+    # Without it every untracked file present at session start read as this session's work
+    # for the rest of the session, which in a shared main checkout is another session's
+    # scratch — and it arrived as scope drift against the session that never touched it.
+    sha = _run(["stash", "create", "-u"], ctx.worktree_root, check=False)
+    if not sha:
+        sha = _run(["stash", "create"], ctx.worktree_root, check=False)
     # VALIDATE, never trust the stdout. Mid-merge and mid-rebase `stash create` refuses
     # and prints its refusal, which was then stored as the session's baseline — a
     # baseline that resolves to nothing makes every diff empty, so the Stop gate saw no

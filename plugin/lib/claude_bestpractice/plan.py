@@ -481,6 +481,71 @@ def find(ctx: GitContext, task_id: str) -> Task | None:
     return None
 
 
+def copies(ctx: GitContext, task_id: str) -> list[Task]:
+    """Every file in this clone that IS this task — one per worktree carrying a copy.
+
+    `find` answers "which copy speaks for this task"; this answers "which files have to
+    move when it changes state". They were the same question while a ledger had one copy,
+    and they stopped being the same the moment reading unioned the siblings (#123): a
+    transition moved the copy `find` returned and left the others exactly where they were,
+    so `done` printed success while the board went on showing the task as waiting, and
+    `list` read the stale copy back (#212).
+
+    Undeduplicated on purpose. `load_all` keeps the most advanced copy per filename, which
+    is the right answer for a reader and the wrong one for a writer — the copies it hides
+    are precisely the ones left behind.
+
+    Matched by id and not by filename, because the same task carries a different slug in a
+    tree where its title was amended, and those copies are the ones that outlive the board.
+    """
+    wanted = task_id.zfill(4)
+    out: list[Task] = []
+    for root in sibling_worktrees(ctx) or [ctx.worktree_root]:
+        label = "" if root.resolve() == ctx.worktree_root.resolve() else root.name
+        for task in _tasks_under(root, list(STATES), label):
+            if task.id in (wanted, task_id):
+                out.append(task)
+    # This tree first, so a caller that reports one file reports the one the reader can see.
+    return sorted(out, key=lambda t: (1 if t.worktree else 0, t.worktree, t.path.name))
+
+
+def reconcile_copies(ctx: GitContext) -> int:
+    """Bring every copy of every task up to the state the board already shows it in.
+
+    The repair for ledgers older transitions scattered: they moved the copy the command
+    could see and no other, so the files disagreed while the board — which keeps the most
+    advanced copy — read correctly, right up until the tree holding the advanced copy was
+    removed and the task came back from the dead (#210, #212).
+
+    Forward only, because a task file only ever moves forward: this can bring a stale copy
+    up to a closure, never undo one.
+    """
+    moved = 0
+    for task in load_all(ctx):
+        for copy in copies(ctx, task.id):
+            if STATES.index(copy.state) >= STATES.index(task.state):
+                continue
+            if _move(copy, task.state, owner=copy.owner, branch=copy.branch) is not None:
+                moved += 1
+    return moved
+
+
+def _move_every(ctx: GitContext, task_id: str, state: str, **kwargs) -> Task | None:
+    """Carry one transition to every copy of the task, and answer with the nearest one.
+
+    A closure that reaches one worktree is a closure that dies with `git worktree remove`
+    — reported as tasks coming back as `next` after the tree that closed them was removed
+    (#210). Moving every copy makes the transition a fact about the repository rather than
+    about the directory the command happened to be run from.
+    """
+    landed: Task | None = None
+    for copy in copies(ctx, task_id):
+        moved = _move(copy, state, **kwargs)
+        if moved is not None and (landed is None or (landed.worktree and not copy.worktree)):
+            landed = moved
+    return landed
+
+
 def _git(args: list[str], cwd: Path) -> tuple[int, str]:
     """Run one git command in a tree, answering with its status and output.
 
@@ -769,7 +834,7 @@ def pause(ctx: GitContext, task_id: str, blocker: str) -> tuple[Task | None, str
         return None, f"no task {task_id}"
     if task.state == DONE:
         return None, f"task {task.id} is already done"
-    return _move(task, PAUSED, blocker=blocker.strip()), ""
+    return _move_every(ctx, task_id, PAUSED, blocker=blocker.strip()) or task, ""
 
 
 def resume(ctx: GitContext, task_id: str) -> tuple[Task | None, str]:
@@ -779,7 +844,7 @@ def resume(ctx: GitContext, task_id: str) -> tuple[Task | None, str]:
         return None, f"no task {task_id}"
     if task.state != PAUSED:
         return None, f"task {task.id} is not paused"
-    return _move(task, NEXT, blocker=""), ""
+    return _move_every(ctx, task_id, NEXT, blocker="") or task, ""
 
 
 def amend(ctx: GitContext, task_id: str, note: str = "", paths: list[str] | None = None,
@@ -794,18 +859,41 @@ def amend(ctx: GitContext, task_id: str, note: str = "", paths: list[str] | None
     task = find(ctx, task_id)
     if task is None:
         return None, f"no task {task_id}"
+    # Written into every copy for the same reason a transition moves every copy: a note
+    # that reaches one worktree is a note the next reader does not get, and the copy it
+    # did not reach is the one that survives `git worktree remove` (#210).
+    amended: Task | None = None
+    for copy in copies(ctx, task_id) or [task]:
+        store.atomic_write(copy.path, _amended(copy, note, paths, done_when, title), mode=0o644)
+        reloaded = _load(copy.path, copy.state)
+        if reloaded is None:
+            continue
+        reloaded.worktree = copy.worktree
+        if amended is None or (amended.worktree and not copy.worktree):
+            amended = reloaded
+    return amended, ""
+
+
+def _amended(task: Task, note: str, paths: list[str] | None, done_when: str, title: str) -> str:
+    """One task file rewritten with what it has just learned, and nothing else changed.
+
+    Everything absent from the amendment is carried, `after` and `with` included — they
+    were dropped by omission here, so a note on an ordered task silently cut it loose from
+    the order it was written to respect.
+    """
     meta, body = _frontmatter(task.path.read_text(encoding="utf-8"))
-    updated = _render(
-        task.id, title.strip() or meta.get("title", task.title), task.state, task.owner, task.branch,
+    return _render(
+        task.id, title.strip() or meta.get("title", task.title), task.state, task.owner,
+        task.branch,
         note.strip() or body,
         paths if paths is not None else task.paths,
         meta.get("source", ""),
         done_when.strip() or task.done_when,
         task.blocker,
         meta.get("created_at", ""),
+        task.after,
+        task.together,
     )
-    store.atomic_write(task.path, updated, mode=0o644)
-    return _load(task.path, task.state), ""
 
 
 def _unplanned(task: Task) -> str:
@@ -877,7 +965,8 @@ def complete(ctx: GitContext, task_id: str) -> tuple[Task | None, str]:
     task = find(ctx, task_id)
     if task is None:
         return None, f"no task {task_id}"
-    landed = _move(task, DONE)
+    # Every copy, not the one this directory happens to hold: see `_move_every`.
+    landed = _move_every(ctx, task_id, DONE) or _move(task, DONE)
 
     # Whoever was waiting on this is waiting right now, in a session that will not be
     # restarted for hours. `startable` already answers "what can begin"; nobody reads it

@@ -669,6 +669,20 @@ def _restage_ledger_moves_git_lost(ctx: GitContext) -> str:
     return f"{restaged} ledger move(s) git had recorded as deletions restaged" if restaged else ""
 
 
+def _reconcile_scattered_ledger_copies(ctx: GitContext) -> str:
+    """Copies of one task that older transitions left behind in sibling worktrees.
+
+    Until 1.62.0 a transition moved the copy the command could see and no other, so a task
+    closed from a worktree stayed `next` or `paused` in every sibling — and `done` reported
+    success over a task that went on showing as waiting (#212). Where the tree that held
+    the only closure was later removed, the closure went with it (#210).
+    """
+    from . import plan
+
+    moved = plan.reconcile_copies(ctx)
+    return f"{moved} stale ledger copy(ies) brought up to the state the board shows" if moved else ""
+
+
 _REPAIRS = {
     "0001-task-paths": (1, _backfill_task_paths),
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
@@ -683,6 +697,7 @@ _REPAIRS = {
     "0011-close-shipped-cards": (1, _close_cards_whose_work_shipped),
     "0012-carry-worktree-tasks-home": (1, _carry_this_worktrees_tasks_home),
     "0013-restage-ledger-moves": (1, _restage_ledger_moves_git_lost),
+    "0014-reconcile-ledger-copies": (1, _reconcile_scattered_ledger_copies),
 }
 
 

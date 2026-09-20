@@ -763,6 +763,38 @@ def mine(ctx: GitContext, session_id: str) -> Path | None:
     return None
 
 
+def working_context(ctx: GitContext, session_id: str) -> GitContext:
+    """The context of the tree this session actually works in, from wherever it is asked.
+
+    A hook is handed the harness's working directory, and the harness's working directory
+    is the one the chat started in — the main checkout, in every session this plugin sends
+    into a worktree, because `cd` inside a Bash call moves the shell and not the harness.
+    So the Stop gate ran the suite, counted the diff and read the scope in a checkout the
+    session had been forbidden to write in, and which in a repository with three to eight
+    sessions is shared by all of them: it reported a failing test from somebody else's
+    stale tree and 335 changed files belonging to nobody present, and the only way to
+    clear it was to commit or update a tree this plugin's own rule says not to touch (#213).
+
+    Only ever redirects to a tree THIS PLUGIN provisioned for THIS session and that git
+    still has registered. A tree that is gone, or one nobody recorded, leaves the context
+    exactly where it was — a gate that guesses which checkout to judge is worse than one
+    that judges the wrong one loudly.
+    """
+    from .gitctx import GitError, resolve, worktree_paths
+
+    tree = mine(ctx, session_id)
+    if tree is None:
+        return ctx
+    try:
+        if tree.resolve() == ctx.worktree_root.resolve():
+            return ctx
+        if tree.resolve() not in {p.resolve() for p in worktree_paths(ctx)}:
+            return ctx
+        return resolve(tree)
+    except (GitError, OSError):
+        return ctx
+
+
 def provision(ctx: GitContext, task: str = "", session_id: str = "") -> Path | None:
     """Create the worktree this session should be working in, or None if git refused.
 
