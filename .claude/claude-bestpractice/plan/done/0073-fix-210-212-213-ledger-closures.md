@@ -1,8 +1,8 @@
 ---
 id: 0073
 title: Fix #210/#212/#213: ledger closures span worktrees, Stop gate measures the session's tree
-state: doing
-owner: fa3debe1-9338-41ed-aef5-edd0ca9e5fbd-540300b0
+state: done
+owner: 
 branch: claude/jolly-euler-gpxttb
 paths: plugin/lib/claude_bestpractice/plan.py, plugin/lib/claude_bestpractice/worktree.py, plugin/bin/evidence-gate, plugin/lib/claude_bestpractice/migrate.py
 source: 
@@ -11,7 +11,7 @@ blocker:
 after: 
 with: 
 created_at: 2026-09-20T09:37:46Z
-updated_at: 2026-09-20T09:37:51Z
+updated_at: 2026-09-20T09:56:58Z
 ---
 
 (no detail)
