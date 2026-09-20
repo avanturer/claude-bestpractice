@@ -1052,3 +1052,92 @@ class TestATransitionIsARenameInGitToo(PlanCase):
         plan.pause(self.ctx(), task.id, "waiting on the API key")
 
         self.assertEqual("", git(["diff", "--cached", "--name-only"], self.repo))
+
+
+class TestATransitionReachesEveryCopy(RepoCase):
+    """Issues #210 and #212. A transition moved the copy the command could see and no
+    other, so a card closed from one tree stayed `next` or `paused` in every sibling: the
+    board read the advanced copy and looked right, `done` printed success, and the moment
+    the tree holding that copy was removed the task came back from the dead.
+
+    #212 is the same defect with a different slug on the stale copy — dedup is by filename,
+    so a copy amended in another tree is not deduplicated away and `list` went on showing
+    the task as waiting after `done` reported it closed.
+    """
+
+    def a_task_copied_into_a_sibling(self, state: str, title: str = ""):
+        from claude_bestpractice import plan, store
+
+        task = plan.add(self.ctx(), "починить импортер", paths=["src/app.py"], done_when="stated")
+        tree = self.add_worktree("sibling")
+        stale = tree / store.TIER_A_DIRNAME / plan.PLAN_DIR / state
+        stale.mkdir(parents=True)
+        text = task.path.read_text(encoding="utf-8")
+        name = task.path.name
+        if title:
+            text = text.replace("title: починить импортер", f"title: {title}")
+            name = f"{task.id}-{plan.slug(title)}.md"
+        (stale / name).write_text(text, encoding="utf-8")
+        return task, tree
+
+    def test_done_closes_the_copy_in_every_tree(self):
+        from claude_bestpractice import plan
+
+        task, tree = self.a_task_copied_into_a_sibling(plan.PAUSED)
+        plan.complete(self.ctx(), task.id)
+        self.assertEqual(
+            [plan.DONE], sorted({c.state for c in plan.copies(self.ctx(), task.id)}),
+            "a copy was left behind in a sibling worktree",
+        )
+
+    def test_a_closed_task_stops_being_listed_as_waiting(self):
+        """The report verbatim: `done` printed success and `list` showed the task still
+        paused, because the stale copy carried a different slug and survived the dedup."""
+        from claude_bestpractice import plan
+
+        task, tree = self.a_task_copied_into_a_sibling(plan.PAUSED, title="importer, renamed")
+        plan.complete(self.ctx(), task.id)
+        self.assertEqual([], plan.load_all(self.ctx(), plan.PAUSED))
+        self.assertEqual(0, plan.summary(self.ctx())[plan.PAUSED])
+
+    def test_the_closure_outlives_the_tree_it_was_made_from(self):
+        from claude_bestpractice import plan
+        from claude_bestpractice.gitctx import resolve
+        from helpers import git
+
+        task, tree = self.a_task_copied_into_a_sibling(plan.NEXT)
+        plan.complete(resolve(tree), task.id)
+        git(["worktree", "remove", "--force", str(tree)], self.repo)
+        self.assertEqual(
+            [plan.DONE], [t.state for t in plan.load_all(self.ctx())],
+            "the closure died with the worktree that made it",
+        )
+
+    def test_a_note_reaches_every_copy(self):
+        from claude_bestpractice import plan
+
+        task, tree = self.a_task_copied_into_a_sibling(plan.NEXT)
+        plan.amend(self.ctx(), task.id, note="the importer needs the new schema first")
+        for copy in plan.copies(self.ctx(), task.id):
+            self.assertIn("new schema", copy.body, f"{copy.path} never heard the note")
+
+    def test_a_note_keeps_the_order_the_task_was_written_in(self):
+        from claude_bestpractice import plan
+
+        first = plan.add(self.ctx(), "schema", paths=["src/app.py"], done_when="stated")
+        second = plan.add(self.ctx(), "importer", paths=["src/app.py"], done_when="stated",
+                          after=[first.id])
+        amended, _ = plan.amend(self.ctx(), second.id, note="needs the new schema first")
+        self.assertEqual([first.id], amended.after, "the amendment cut the task loose")
+
+    def test_reconcile_brings_an_older_ledger_up_to_the_board(self):
+        """The repair for ledgers the old transitions scattered."""
+        from claude_bestpractice import plan
+
+        task, tree = self.a_task_copied_into_a_sibling(plan.NEXT)
+        plan.reconcile_copies(self.ctx())
+        self.assertEqual([plan.NEXT], sorted({c.state for c in plan.copies(self.ctx(), task.id)}))
+
+        plan.claim(self.ctx(), task.id, "s1", "main")
+        self.assertEqual(1, plan.reconcile_copies(self.ctx()))
+        self.assertEqual([plan.DOING], sorted({c.state for c in plan.copies(self.ctx(), task.id)}))
