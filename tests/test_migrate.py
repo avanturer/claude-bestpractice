@@ -1130,3 +1130,67 @@ class TestRenamesGitWasNeverToldAbout(RepoCase):
 
         migrate.repair(self.ctx())
         self.assertEqual("", git(["diff", "--cached", "--name-only"], self.repo))
+
+
+class TestCarryingATaskHomeIsAMoveInBothIndexes(RepoCase):
+    """The carry-home repair recreated the defect the repair after it exists to undo.
+
+    `_carry_this_worktrees_tasks_home` moves a task file out of the worktree and into the
+    main checkout. Two worktrees of one clone have two indexes, so that move cannot be one
+    rename however git is asked: the deletion belongs to the tree the file left and the
+    addition to the tree it arrived in. Staging neither left a committed file gone from a
+    tracked path with nothing anywhere to say where it went — a bare `D` and an untracked
+    copy, which is #208 dealt out by the code that cleans up after #208.
+    """
+
+    def a_committed_card_in_a_worktree(self):
+        """A task file git tracks, sitting in a tree that is not the ledger's."""
+        from claude_bestpractice.gitctx import resolve
+
+        tree = self.add_worktree("worker")
+        elsewhere = resolve(tree)
+        card = tree / store.TIER_A_DIRNAME / plan.PLAN_DIR / plan.NEXT / "0009-carry-me.md"
+        card.parent.mkdir(parents=True, exist_ok=True)
+        card.write_text(
+            "---\nid: 0009\ntitle: carry me\nstate: next\npaths: src/app.py\n"
+            "done_when: stated\n---\n\nbody\n",
+            encoding="utf-8",
+        )
+        git(["add", "-f", "--", str(card)], tree)
+        git(["commit", "-qm", "ledger"], tree)
+        return elsewhere, tree, card
+
+    def test_the_tree_it_left_has_the_deletion_staged(self):
+        elsewhere, tree, card = self.a_committed_card_in_a_worktree()
+        migrate.repair(elsewhere)
+
+        self.assertFalse(card.exists(), "the card was never carried home")
+        staged = git(["diff", "--cached", "--name-status"], tree)
+        self.assertIn("D\t", staged)
+        self.assertIn(card.name, staged)
+
+    def test_the_tree_it_arrived_in_has_the_addition_staged(self):
+        elsewhere, _tree, card = self.a_committed_card_in_a_worktree()
+        migrate.repair(elsewhere)
+
+        self.assertTrue((plan.plan_dir(self.ctx(), plan.NEXT) / card.name).is_file())
+        self.assertIn(card.name, git(["diff", "--cached", "--name-only"], self.repo))
+
+    def test_a_card_the_founder_never_committed_stages_nothing(self):
+        """Decision 0008: where the ledger is not in their history, this adds it to no
+        index. A repair that commits files for them is the plugin granting itself a place
+        in their history."""
+        from claude_bestpractice.gitctx import resolve
+
+        tree = self.add_worktree("worker")
+        card = tree / store.TIER_A_DIRNAME / plan.PLAN_DIR / plan.NEXT / "0009-untracked.md"
+        card.parent.mkdir(parents=True, exist_ok=True)
+        card.write_text(
+            "---\nid: 0009\ntitle: untracked\nstate: next\npaths: src/app.py\n"
+            "done_when: stated\n---\n\nbody\n",
+            encoding="utf-8",
+        )
+
+        migrate.repair(resolve(tree))
+        self.assertEqual("", git(["diff", "--cached", "--name-only"], tree).strip())
+        self.assertEqual("", git(["diff", "--cached", "--name-only"], self.repo).strip())

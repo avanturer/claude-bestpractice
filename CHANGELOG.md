@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.62.0
+## v1.63.0
 
 Six changes: two standing rules the founder had been enforcing by hand, and four gates
 that refused the wrong thing.
@@ -52,25 +52,6 @@ Asked at `PreToolUse`, because that is the only place it can be asked: `Subagent
 documented as unable to block a spawn and is handed neither the model nor the prompt.
 Decision 0015.
 
-### A transition lands in the one ledger (#210)
-
-`done` and `update` wrote the ledger copy belonging to whichever tree called them. With
-several worktrees that is not one board: the main checkout ended a session holding 0028 and
-0075 closed, one worktree held 0045 and 0092, another held 0044 and 0092 — and closures made
-in a tree that was later removed went with it. `list` afterwards showed the closed cards as
-`next` again.
-
-Every write now lands in the main checkout, where `add` has landed since #200, and the copy
-it came from is dealt with rather than left: unlinked when it is untracked — that copy exists
-on disk and nowhere else — and left exactly as it is when git tracks it, because it is that
-branch's content and deleting it would put an unexplained `D` in a tree this session does not
-own. The reader ranks the ledger's own copy above a stale one on a tie, so the closure is
-what every tree sees.
-
-`claude-bp-plan --version` printed nothing and exited 2, which is how the report about all of
-this could not say which version it was against. Every `claude-bp` command answers `--version`
-now.
-
 ### A merged pull request is not an open one (#205)
 
 Nothing here watches GitHub: the obligation is discharged by the merge this plugin performs,
@@ -102,6 +83,71 @@ to get their file written, and the issue reporting it was refused for quoting th
 An unquoted value containing brackets is code, and a secret worth rotating is a literal — no
 service accepts `useMemo(()`. Quoting stays the discriminator it is everywhere else in that
 module: `password = "hunter2(correct)battery"` is still a credential.
+
+### A repair that dealt out the defect it cleans up after (#208)
+
+`_carry_this_worktrees_tasks_home` moves a task file out of a worktree and into the main
+checkout on the next session start there. Two worktrees of one clone have two indexes, so
+that move cannot be one rename however git is asked — the deletion belongs to the tree the
+file left and the addition to the tree it arrived in — and it staged neither. A committed
+card carried home therefore left a bare `D` in the worktree with no counterpart anywhere,
+which is the exact shape of the fifty stranded files #208 was about, produced by the repair
+that exists to undo them. Both sides are staged now, and where the founder does not commit
+the ledger neither index is touched (decision 0008).
+
+`claude-bp-plan --version` printed nothing and exited 2, which is how a report about all of
+this could not say which version it was against. Every `claude-bp` command answers
+`--version` now.
+
+## v1.62.0
+
+Reports from three sessions, one shape: the plugin was judging a directory instead of a
+session.
+
+### The Stop gate ran the suite in somebody else's checkout (#213)
+
+A session works in its own worktree, as this plugin's own rule requires. A hook does not:
+`cd` inside a Bash call moves the shell, not the harness, so every gate went on being handed
+the directory the chat started in — the main checkout, which in the scene this product is
+built for is shared by three to eight sessions at once.
+
+So the Stop gate ran pytest there, on a tree four commits behind `origin/main` carrying
+another session's staged edits, and refused the finish over a test that had been renamed and
+fixed in `main` weeks earlier. It counted 335 changed files belonging to nobody present and
+demanded a card for them. The only way to clear it was to commit or update a shared tree the
+worktree rule forbids touching: a gate demanding what the same plugin refuses.
+
+Two halves, both fixed. The gate now resolves its context in the tree this plugin
+provisioned for this session — and only there: a tree git no longer has registered, or one
+nobody recorded, leaves the context exactly where it was, because a gate that guesses which
+checkout to judge is worse than one that judges the wrong one loudly.
+
+And the diff is now what this session changed. `changed_files` scanned the whole working
+tree for uncommitted work on top of the baseline diff, so a file another session had left
+mid-edit before this one started counted as this session's for the rest of its life. The
+baseline commit already captures the tree as it stood at session start, so the diff is taken
+against it.
+
+### A closure reached one worktree and died there (#210, #212)
+
+`done` moved the copy of the card the command could see and no other. Reading has unioned
+the siblings since #123, so the board looked right — it keeps the most advanced copy — right
+up until the tree holding that copy was removed, and the task came back from the dead as
+`next`. Closures scattered across three trees in one reported session.
+
+The same defect with a different slug on the stale copy is #212: dedup is by filename, so a
+copy amended in another tree is never deduplicated away. `claude-bp-plan done` printed
+success, the file moved to `plan/done/`, and `list` went on showing the task as waiting —
+a command reporting success over unchanged state, which is the one thing a ledger may never
+do.
+
+A transition now moves every copy of the card in the clone, and `update --note` writes into
+every copy for the same reason. Ledgers older versions scattered are reconciled on the next
+session start: every copy is brought up to the state the board already shows it in, which is
+forward-only and cannot undo a closure.
+
+`update --note` also stopped dropping `after` and `with`. They were lost by omission, so a
+note on an ordered card silently cut it loose from the order it was written to respect.
 
 ## v1.61.1
 

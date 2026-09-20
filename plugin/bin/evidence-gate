@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import attempts, board, config, discipline, drafts, evidence, hookio, inbox, options, pullrequest, sessions, stage, store, suites  # noqa: E402
+from claude_bestpractice import attempts, board, config, discipline, drafts, evidence, hookio, inbox, options, pullrequest, sessions, stage, store, suites, worktree  # noqa: E402
 from claude_bestpractice.gitctx import changed_files, resolve  # noqa: E402
 
 BLOCK_COUNTER = "_consecutive_blocks"
@@ -259,7 +259,13 @@ def _refuse_to_end_on_an_unanswered_block(ctx, rec, pending: dict) -> None:
 
 def main() -> None:
     event = hookio.read_event()
-    ctx = hookio.repo(event.cwd or os.getcwd())
+    # The tree this session works in, which is not always the directory the harness hands
+    # us: `cd` inside a Bash call moves the shell and not the harness, so a session sent
+    # into a worktree goes on reporting the main checkout. Judging a turn there means
+    # judging a checkout this session was forbidden to write in and every sibling shares
+    # (#213). `working_context` only ever redirects to a tree this plugin provisioned for
+    # this session and git still has registered.
+    ctx = worktree.working_context(hookio.repo(event.cwd or os.getcwd()), event.session_id)
     cfg = config.load(ctx)
     rec = sessions.get(ctx, event.session_id)
     if rec is None:

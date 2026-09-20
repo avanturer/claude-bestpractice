@@ -1054,74 +1054,90 @@ class TestATransitionIsARenameInGitToo(PlanCase):
         self.assertEqual("", git(["diff", "--cached", "--name-only"], self.repo))
 
 
-class TestATransitionLandsInTheOneLedger(PlanCase):
-    """Issue #210. `done` and `update` wrote the ledger copy of whichever tree called
-    them, so one card sat in three worktrees in three different states: the main checkout
-    held 0028 and 0075 closed, one worktree held 0045 and 0092, another held 0044 and
-    0092 — and the closures made in a tree that was later removed went with it. `list`
-    from the main checkout showed the closed cards as `next` again.
+class TestATransitionReachesEveryCopy(RepoCase):
+    """Issues #210 and #212. A transition moved the copy the command could see and no
+    other, so a card closed from one tree stayed `next` or `paused` in every sibling: the
+    board read the advanced copy and looked right, `done` printed success, and the moment
+    the tree holding that copy was removed the task came back from the dead.
+
+    #212 is the same defect with a different slug on the stale copy — dedup is by filename,
+    so a copy amended in another tree is not deduplicated away and `list` went on showing
+    the task as waiting after `done` reported it closed.
     """
 
-    def a_card_checked_out_in_two_trees(self):
-        """The ordinary case: the ledger is committed, so every tree has a copy of it."""
-        from claude_bestpractice.gitctx import resolve
+    def a_task_copied_into_a_sibling(self, state: str, title: str = ""):
+        from claude_bestpractice import plan, store
 
-        task = plan.add(self.ctx(), "export the CSV", done_when="stated", paths=["src/app.py"])
-        self.commit("ledger")
-        return task, resolve(self.add_worktree("worker"))
+        task = plan.add(self.ctx(), "починить импортер", paths=["src/app.py"], done_when="stated")
+        tree = self.add_worktree("sibling")
+        stale = tree / store.TIER_A_DIRNAME / plan.PLAN_DIR / state
+        stale.mkdir(parents=True)
+        text = task.path.read_text(encoding="utf-8")
+        name = task.path.name
+        if title:
+            text = text.replace("title: починить импортер", f"title: {title}")
+            name = f"{task.id}-{plan.slug(title)}.md"
+        (stale / name).write_text(text, encoding="utf-8")
+        return task, tree
 
-    def test_closing_from_a_worktree_writes_the_main_checkouts_copy(self):
-        task, elsewhere = self.a_card_checked_out_in_two_trees()
-        plan.complete(elsewhere, task.id)
+    def test_done_closes_the_copy_in_every_tree(self):
+        from claude_bestpractice import plan
 
-        self.assertTrue(
-            (plan.plan_dir(self.ctx(), plan.DONE) / task.path.name).is_file(),
-            "the closure was written somewhere other than the ledger",
+        task, tree = self.a_task_copied_into_a_sibling(plan.PAUSED)
+        plan.complete(self.ctx(), task.id)
+        self.assertEqual(
+            [plan.DONE], sorted({c.state for c in plan.copies(self.ctx(), task.id)}),
+            "a copy was left behind in a sibling worktree",
         )
 
-    def test_the_closure_survives_the_worktree_being_removed(self):
-        task, elsewhere = self.a_card_checked_out_in_two_trees()
-        plan.complete(elsewhere, task.id)
-        git(["worktree", "remove", "--force", str(elsewhere.worktree_root)], self.repo)
+    def test_a_closed_task_stops_being_listed_as_waiting(self):
+        """The report verbatim: `done` printed success and `list` showed the task still
+        paused, because the stale copy carried a different slug and survived the dedup."""
+        from claude_bestpractice import plan
 
-        closed = {t.id: t.state for t in plan.load_all(self.ctx())}
-        self.assertEqual(plan.DONE, closed.get(task.id),
-                         "the closure died with the tree that typed it")
+        task, tree = self.a_task_copied_into_a_sibling(plan.PAUSED, title="importer, renamed")
+        plan.complete(self.ctx(), task.id)
+        self.assertEqual([], plan.load_all(self.ctx(), plan.PAUSED))
+        self.assertEqual(0, plan.summary(self.ctx())[plan.PAUSED])
 
-    def test_a_note_added_from_a_worktree_is_visible_from_that_worktree(self):
-        """The copy in the ledger outranks a stale one on a tie, or an amendment made
-        here is invisible here: the local copy won a tie it was no longer the truth of."""
-        task, elsewhere = self.a_card_checked_out_in_two_trees()
-        plan.amend(elsewhere, task.id, note="the API returns cents, not dollars")
-
-        seen = plan.find(elsewhere, task.id)
-        self.assertIn("cents", seen.body)
-
-    def test_the_stale_copy_a_branch_carries_is_left_alone(self):
-        """It is that branch's content. Deleting it would put an unexplained `D` in a
-        tree this session does not own, which is #208 inflicted on somebody else."""
-        task, elsewhere = self.a_card_checked_out_in_two_trees()
-        plan.complete(elsewhere, task.id)
-
-        self.assertEqual("", git(["status", "--short"], elsewhere.worktree_root).strip())
-
-    def test_an_untracked_copy_in_another_tree_is_taken_with_it(self):
-        """The one this issue is about: that copy exists on disk and nowhere else, so
-        leaving it behind is how a card comes to be in two states at once."""
-        from claude_bestpractice import store
+    def test_the_closure_outlives_the_tree_it_was_made_from(self):
+        from claude_bestpractice import plan
         from claude_bestpractice.gitctx import resolve
+        from helpers import git
 
-        tree = self.add_worktree("worker")
-        elsewhere = resolve(tree)
-        stray = tree / store.TIER_A_DIRNAME / plan.PLAN_DIR / plan.NEXT
-        stray.mkdir(parents=True, exist_ok=True)
-        (stray / "0009-stranded.md").write_text(
-            "---\nid: 0009\ntitle: stranded\nstate: next\npaths: src/app.py\n"
-            "done_when: stated\n---\n\nbody\n",
-            encoding="utf-8",
+        task, tree = self.a_task_copied_into_a_sibling(plan.NEXT)
+        plan.complete(resolve(tree), task.id)
+        git(["worktree", "remove", "--force", str(tree)], self.repo)
+        self.assertEqual(
+            [plan.DONE], [t.state for t in plan.load_all(self.ctx())],
+            "the closure died with the worktree that made it",
         )
 
-        plan.complete(elsewhere, "0009")
-        self.assertFalse((stray / "0009-stranded.md").exists(),
-                         "the open copy was left behind in the worktree")
-        self.assertTrue((plan.plan_dir(self.ctx(), plan.DONE) / "0009-stranded.md").is_file())
+    def test_a_note_reaches_every_copy(self):
+        from claude_bestpractice import plan
+
+        task, tree = self.a_task_copied_into_a_sibling(plan.NEXT)
+        plan.amend(self.ctx(), task.id, note="the importer needs the new schema first")
+        for copy in plan.copies(self.ctx(), task.id):
+            self.assertIn("new schema", copy.body, f"{copy.path} never heard the note")
+
+    def test_a_note_keeps_the_order_the_task_was_written_in(self):
+        from claude_bestpractice import plan
+
+        first = plan.add(self.ctx(), "schema", paths=["src/app.py"], done_when="stated")
+        second = plan.add(self.ctx(), "importer", paths=["src/app.py"], done_when="stated",
+                          after=[first.id])
+        amended, _ = plan.amend(self.ctx(), second.id, note="needs the new schema first")
+        self.assertEqual([first.id], amended.after, "the amendment cut the task loose")
+
+    def test_reconcile_brings_an_older_ledger_up_to_the_board(self):
+        """The repair for ledgers the old transitions scattered."""
+        from claude_bestpractice import plan
+
+        task, tree = self.a_task_copied_into_a_sibling(plan.NEXT)
+        plan.reconcile_copies(self.ctx())
+        self.assertEqual([plan.NEXT], sorted({c.state for c in plan.copies(self.ctx(), task.id)}))
+
+        plan.claim(self.ctx(), task.id, "s1", "main")
+        self.assertEqual(1, plan.reconcile_copies(self.ctx()))
+        self.assertEqual([plan.DOING], sorted({c.state for c in plan.copies(self.ctx(), task.id)}))

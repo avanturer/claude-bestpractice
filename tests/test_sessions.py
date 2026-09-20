@@ -568,3 +568,94 @@ class TestALeaseSurvivesItsHooksExiting(RepoCase):
         """The TTL is the half that was always load-bearing; it must keep working."""
         self.held_by_a_sibling(ttl=-10)
         self.assertIsNone(sessions.acquire_lease(self.ctx(), "me", "src/x.py"))
+
+
+class TestTheGateJudgesTheTreeTheSessionWorksIn(RepoCase):
+    """Issue #213. A hook is handed the harness's working directory, and `cd` inside a
+    Bash call moves the shell and not the harness — so a session sent into a worktree goes
+    on reporting the main checkout, and the Stop gate ran the suite, counted the diff and
+    read the scope in a checkout the session was forbidden to write in and every sibling
+    shares. It reported a failing test from somebody else's stale tree and 335 changed
+    files belonging to nobody present, and the only way to clear it was to touch a tree
+    this plugin's own rule says not to touch.
+    """
+
+    def a_session_with_a_tree(self):
+        from claude_bestpractice import worktree
+
+        tree = self.add_worktree("work")
+        worktree.record(self.ctx(), "work", str(tree), "work", True, session_id="s1")
+        return tree
+
+    def test_the_context_follows_the_session_into_its_tree(self):
+        from claude_bestpractice import worktree
+
+        tree = self.a_session_with_a_tree()
+        moved = worktree.working_context(self.ctx(), "s1")
+        self.assertEqual(tree.resolve(), moved.worktree_root)
+
+    def test_a_session_with_no_tree_is_judged_where_it_stands(self):
+        from claude_bestpractice import worktree
+
+        self.a_session_with_a_tree()
+        self.assertEqual(
+            self.repo.resolve(),
+            worktree.working_context(self.ctx(), "somebody-else").worktree_root,
+        )
+
+    def test_a_tree_git_no_longer_has_is_not_followed(self):
+        """A guess about which checkout to judge is worse than judging the wrong one
+        loudly: a removed tree leaves the context exactly where it was."""
+        from claude_bestpractice import worktree
+        from helpers import git
+
+        tree = self.a_session_with_a_tree()
+        git(["worktree", "remove", "--force", str(tree)], self.repo)
+        self.assertEqual(
+            self.repo.resolve(), worktree.working_context(self.ctx(), "s1").worktree_root
+        )
+
+
+class TestTheDiffIsWhatThisSessionChanged(RepoCase):
+    """The other half of #213: every uncommitted change in the tree was counted as this
+    session's, including files another session had left mid-edit before it started. In a
+    main checkout shared by three to eight sessions that is somebody else's work — and it
+    arrived as a scope-drift refusal and a demand for a card over 335 files the session
+    had never opened.
+    """
+
+    def a_neighbour_mid_edit(self) -> str:
+        """A tracked file another session is part-way through, and our baseline over it."""
+        from claude_bestpractice.gitctx import stash_baseline
+
+        self.write("README.md", "seed\n# another session was mid-edit here\n")
+        return stash_baseline(self.ctx())
+
+    def test_state_that_was_already_dirty_at_the_baseline_is_not_this_session_s(self):
+        from claude_bestpractice.gitctx import changed_files
+
+        self.assertEqual([], changed_files(self.ctx(), self.a_neighbour_mid_edit()))
+
+    def test_what_the_session_does_change_is_still_counted(self):
+        from claude_bestpractice.gitctx import changed_files
+
+        baseline = self.a_neighbour_mid_edit()
+        self.write("src/mine.py", "print('mine')\n")
+        self.assertEqual(["src/mine.py"], changed_files(self.ctx(), baseline))
+
+    def test_a_file_the_session_edits_further_is_counted(self):
+        """The line between the two: it was dirty before, and this session moved it
+        again."""
+        from claude_bestpractice.gitctx import changed_files
+
+        baseline = self.a_neighbour_mid_edit()
+        self.write("README.md", "seed\n# and then this session\n")
+        self.assertEqual(["README.md"], changed_files(self.ctx(), baseline))
+
+    def test_a_commit_this_session_made_is_counted(self):
+        from claude_bestpractice.gitctx import changed_files
+
+        baseline = self.a_neighbour_mid_edit()
+        self.write("src/mine.py", "print('mine')\n")
+        self.commit("this session's work")
+        self.assertIn("src/mine.py", changed_files(self.ctx(), baseline))

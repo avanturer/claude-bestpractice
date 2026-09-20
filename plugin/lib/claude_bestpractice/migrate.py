@@ -514,9 +514,12 @@ def _carry_this_worktrees_tasks_home(ctx: GitContext) -> str:
     the reader ranks copies by how far the lifecycle has carried them, and clobbering a
     `done/` copy with a stale `next/` one is exactly the reversal #123 fixed.
     """
-    from . import plan
+    from . import plan, worktree
 
-    home = plan.ledger_root(ctx).resolve()
+    try:
+        home = worktree.main_checkout(ctx).resolve()
+    except Exception:  # noqa: BLE001 - an unlistable clone has nowhere to carry them to
+        return ""
     # Which is also how "run from the main checkout" ends: `main_checkout` returns the
     # tree we are standing in, and there is nothing to carry anywhere. An `is_worktree`
     # test above this said the same thing twice, and no mutation could tell them apart.
@@ -627,6 +630,20 @@ def _close_cards_whose_work_shipped(ctx: GitContext) -> str:
     return f"{closed} in-flight card(s) closed over work already on the trunk" if closed else ""
 
 
+def _ledger_root(ctx: GitContext) -> Path:
+    """The checkout the ledger lives in, whichever tree is asking.
+
+    The same answer `plan.plan_dir` gives, and for the same reason: the main checkout is
+    the one tree in a clone that outlives every other.
+    """
+    from . import worktree
+
+    try:
+        return worktree.main_checkout(ctx)
+    except Exception:  # noqa: BLE001 - an unlistable clone still has a tree to repair
+        return ctx.worktree_root
+
+
 def _restage_ledger_moves_git_lost(ctx: GitContext) -> str:
     """Renames earlier versions made on disk only, which git still reads as deletions.
 
@@ -642,7 +659,7 @@ def _restage_ledger_moves_git_lost(ctx: GitContext) -> str:
     """
     from . import plan
 
-    root = plan.ledger_root(ctx)
+    root = _ledger_root(ctx)
     base = root.joinpath(store.TIER_A_DIRNAME, plan.PLAN_DIR)
     gone_paths = plan.stranded_deletions(root, base)
     if not gone_paths:
@@ -661,6 +678,20 @@ def _restage_ledger_moves_git_lost(ctx: GitContext) -> str:
     return f"{restaged} ledger move(s) git had recorded as deletions restaged" if restaged else ""
 
 
+def _reconcile_scattered_ledger_copies(ctx: GitContext) -> str:
+    """Copies of one task that older transitions left behind in sibling worktrees.
+
+    Until 1.62.0 a transition moved the copy the command could see and no other, so a task
+    closed from a worktree stayed `next` or `paused` in every sibling — and `done` reported
+    success over a task that went on showing as waiting (#212). Where the tree that held
+    the only closure was later removed, the closure went with it (#210).
+    """
+    from . import plan
+
+    moved = plan.reconcile_copies(ctx)
+    return f"{moved} stale ledger copy(ies) brought up to the state the board shows" if moved else ""
+
+
 _REPAIRS = {
     "0001-task-paths": (1, _backfill_task_paths),
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
@@ -675,6 +706,7 @@ _REPAIRS = {
     "0011-close-shipped-cards": (1, _close_cards_whose_work_shipped),
     "0012-carry-worktree-tasks-home": (1, _carry_this_worktrees_tasks_home),
     "0013-restage-ledger-moves": (1, _restage_ledger_moves_git_lost),
+    "0014-reconcile-ledger-copies": (1, _reconcile_scattered_ledger_copies),
 }
 
 
