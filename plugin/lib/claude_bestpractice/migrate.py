@@ -549,12 +549,21 @@ def _already_home(home: Path, name: str, states: tuple) -> bool:
 
 
 def _carry_one(path: Path, target: Path) -> int:
-    """Move one task file, or leave it where it is. Returns how many moved, for the sum."""
+    """Move one task file, or leave it where it is. Returns how many moved, for the sum.
+
+    The move is carried into both indexes when git was tracking the file. Without that
+    this repair RECREATED the defect the one after it exists to undo: a tracked file
+    leaving a worktree with git never told is a bare `D` in that tree and an untracked
+    copy in another (#208).
+    """
+    from . import plan
+
     try:
         store.ensure_dir(target.parent)
         path.replace(target)
     except OSError:
         return 0
+    plan.follow_across_trees(path, target)
     return 1
 
 

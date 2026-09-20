@@ -16,13 +16,14 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
 import re  # noqa: E402
 
-from claude_bestpractice import ci, config, evidence, gitpolicy, hookio, inbox, pullrequest, redact, sessions, shellcmd, stage, store, vouch, worktree  # noqa: E402
+from claude_bestpractice import ci, config, evidence, gitpolicy, hookio, inbox, pullrequest, redact, sessions, shellcmd, stage, store, subagents, vouch, worktree  # noqa: E402
 from claude_bestpractice.gitctx import resolve  # noqa: E402
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
@@ -121,17 +122,31 @@ def signature(event: hookio.HookEvent) -> str:
     And a Bash command is hashed WHOLE. Truncating at 160 characters made four heredocs
     writing four different files identical, because the boilerplate that opens them is —
     so probing for the cause of one block was itself blocked.
+
+    A SPAWN names none of those fields, so every subagent call in a session hashed to the
+    same thing and the fourth one was refused as a loop — for asking a different agent a
+    different question. Its target is what makes it distinct: the agent and the task.
     """
     import hashlib
 
     ti = event.tool_input
-    target = ti.get("file_path") or ti.get("path") or ti.get("command") or ""
+    target = (ti.get("file_path") or ti.get("path") or ti.get("command")
+              or _spawn_target(event) or "")
     anchors = [str(ti.get("old_string") or ti.get("old_str") or "")]
     edits = ti.get("edits")
     if isinstance(edits, list):
         anchors.extend(str(e.get("old_string", "")) for e in edits if isinstance(e, dict))
     seed = "\u0000".join([str(target), *(a for a in anchors if a)])
     return f"{event.tool_name}:{hashlib.sha256(seed.encode('utf-8', 'surrogateescape')).hexdigest()[:24]}"
+
+
+def _spawn_target(event: hookio.HookEvent) -> str:
+    """What makes one subagent call different from the next: which agent, and what for."""
+    if event.tool_name not in subagents.SPAWN_TOOLS:
+        return ""
+    ti = event.tool_input
+    return "\u0000".join(str(ti.get(key) or "") for key in
+                         ("subagent_type", "description", "prompt"))
 
 
 def _within_dir(target, root) -> bool:
@@ -183,6 +198,61 @@ def _ledger_covers(ctx, session_id: str, touched: list[str]) -> bool:
     return _holds_a_card(ctx, session_id)
 
 
+# What a session is to do with a block from this plugin, said at the block itself
+# because that is the only place it is certainly read. The failure this closes was
+# watched repeatedly: a gate refuses, the session stops and tells the founder a plugin
+# is in its way, and the founder — who installed this so they would not have to read
+# any of it — is handed a question about a hook instead of the work they asked for.
+#
+# Both branches are real and the session is the one that can tell them apart. It has the
+# refusal, the call it was making and the repository in front of it; the founder has a
+# sentence in a chat window. So it decides, and it keeps working either way.
+REFUSAL_IS_YOURS = (
+    "\n--\n"
+    "  A GATE refused this, not the founder. Work out which it is before anything else: "
+    "if the gate is right, do what it names and carry on; if it is wrong, "
+    '`claude-bp-report defect "<what it refused and why that is wrong>"` files it '
+    "without costing this turn, and the work still goes on by another route.\n"
+    "  Do not stop to ask the founder what to do about a block."
+)
+
+
+def deny(ctx, rec, reason: str) -> None:
+    """Refuse this call, and record that the refusal is now owed an answer.
+
+    Every refusal this file makes about something the SESSION can fix goes through here
+    rather than through `hookio.deny_tool`, so the standing instruction is attached in
+    one place and the Stop gate can tell a turn that resolved a block from a turn that
+    ended on one.
+    """
+    sessions.touch(ctx, rec.session_id, refusal={
+        "at": time.time(),
+        # What the session had done when it was refused. The Stop gate compares it
+        # against the count then: equal means nothing was tried afterwards.
+        "calls": rec.tool_calls,
+        # The first line only. The whole reason is already in front of the model; this
+        # is so the Stop gate can name what it is asking about.
+        "said": reason.strip().splitlines()[0][:160],
+    })
+    hookio.deny_tool(reason + REFUSAL_IS_YOURS)
+
+
+def deny_for_founder(ctx, rec, reason: str) -> None:
+    """Refuse a call that genuinely waits on a person, and say nothing about resolving it.
+
+    An unapproved merge, a production deploy, a switch that is the founder's to set
+    (decision 0006). A session told to stop and report IS doing as it was told, so these
+    carry no standing instruction and leave no refusal for the Stop gate to ask about —
+    the one case where "tell the founder and stop" is the finish.
+
+    `ctx` and `rec` are taken and unused on purpose: every refusal in this file reads the
+    same at the call site, and the difference between the two kinds is the NAME rather
+    than an argument list a reader has to compare.
+    """
+    del ctx, rec
+    hookio.deny_tool(reason)
+
+
 def proposed_content(event: hookio.HookEvent) -> str:
     ti = event.tool_input
     parts = [str(ti.get(k, "")) for k in ("content", "new_string", "new_str", "command")]
@@ -197,7 +267,19 @@ def proposed_content(event: hookio.HookEvent) -> str:
 # nobody else wanted.
 _QUOTED = re.compile(r"""'[^']*'|"[^"]*\"""", re.S)
 
-BASH_WRITE_TARGETS = re.compile(r"(?:>>?\s*|\btee\s+(?:-a\s+)?)(?P<path>[\"']?[\w./@+~-]+[\"']?)")
+# A `>` that is half of an OPERATOR is not a redirect, and reading it as one invented a
+# write target out of a query. `select … where data @> '{"k":1}'` sent to psql was read as
+# a redirect and the board gate refused the call for "working on @" — a path nobody named,
+# in a command that writes no file at all (#205). Every language this founder ships has
+# one: `@>` and `<@` in SQL, `->` and `->>` in jsonb and C, `=>` in JS, `<>` in SQL, `|>`
+# in pipelines, `%>%` in R.
+#
+# `&>` is deliberately NOT in the exclusion: it is a real bash redirect of both streams.
+# The cost, stated: `--flag>out.txt` and `path/>out.txt` stop being read as writes. Both
+# are forms nobody writes, against a false target that blocked a real command.
+BASH_WRITE_TARGETS = re.compile(
+    r"(?:(?<![@<>=!~^|+:*%/-])>>?\s*|\btee\s+(?:-a\s+)?)(?P<path>[\"']?[\w./@+~-]+[\"']?)"
+)
 
 # `sed -i` writes its LAST argument; everything before it is the script, which looks
 # path-shaped enough (`s/x/y/`) to fool a single pattern.
@@ -441,6 +523,12 @@ def bash_write_targets(command: str, cwd: Path) -> list[Path]:
             # `2>&1`, `> 0`, `>1`: file descriptors and comparisons, never filenames.
             if not token or token.startswith("/dev/") or token.isdigit():
                 continue
+            # A token with no name in it is not a file. The arg pattern accepts `@`, `~`,
+            # `+` and `-` so that real names carrying them survive, and on their own they
+            # are what is left of an operator some scan read through — the refusal that
+            # named `@` as the file this session was working on came out here (#205).
+            if not token.strip("@+~-."):
+                continue
             resolved = _resolve(here, raw)
             if resolved is not None and resolved not in out:
                 out.append(resolved)
@@ -534,7 +622,8 @@ def main() -> None:
     over_ceiling = cfg.max_tool_calls > 0 and rec.tool_calls >= cfg.max_tool_calls
     escaping = event.tool_name == "Bash" and vouch.own_command(str(ti.get("command", "")))
     if over_ceiling and not escaping:
-        hookio.deny_tool(
+        deny_for_founder(
+            ctx, rec,
             f"claude-bestpractice: this session has made {rec.tool_calls} tool calls, past the "
             f"ceiling of {cfg.max_tool_calls}. Calls this gate refused are not counted, so "
             "that is work that actually happened.\n"
@@ -544,6 +633,25 @@ def main() -> None:
             f"  claude-bp set max_tool_calls {cfg.max_tool_calls * 2}\n"
             "  Otherwise: stop and summarise what is done and what remains."
         )
+
+    # A subagent is the one call whose cost is set by a field nobody has to fill in, and
+    # the harness resolves an unset one to the PARENT's model. Asked here rather than at
+    # SubagentStart, which is documented as unable to block a spawn and is handed neither
+    # the model nor the prompt — by then the choice has been made and paid for.
+    if event.tool_name in subagents.SPAWN_TOOLS:
+        named = str(ti.get("model") or "")
+        if not subagents.names_a_tier(named):
+            pinned = subagents.pinned_tier(ctx, str(ti.get("subagent_type") or ""))
+            if not subagents.names_a_tier(pinned):
+                deny(ctx, rec, subagents.tier_refusal(str(ti.get("subagent_type") or ""), pinned))
+        spawned = rec.spawns_this_turn
+        if cfg.subagent_fanout > 0 and spawned >= cfg.subagent_fanout:
+            deny(ctx, rec, subagents.fanout_refusal(spawned, cfg.subagent_fanout))
+        # Counted on the way through, because a PreToolUse hook never sees the result and
+        # a spawn that is allowed is a spawn that is running. Refused ones are not
+        # counted, for the same reason refused tool calls are not: a call this gate
+        # stopped is not work the session did.
+        sessions.touch(ctx, event.session_id, spawns_this_turn=spawned + 1)
 
     # CONSECUTIVE repeats, never a lifetime total. The lifetime count made the fourth
     # `npm test` of a session a permanent refusal — and `npm test` is the command the
@@ -561,7 +669,8 @@ def main() -> None:
             break
         streak += 1
     if streak > cfg.max_repeat_signature:
-        hookio.deny_tool(
+        deny(
+            ctx, rec,
             f"claude-bestpractice: `{sig}` has now been run {streak} times in a row with nothing in "
             "between. Repeating it unchanged is not making progress — change the input, "
             "change the approach, or say plainly that you are stuck.\n"
@@ -571,7 +680,8 @@ def main() -> None:
     if cfg.loop_detect:
         loop = evidence.detect_loop(history)
         if loop:
-            hookio.deny_tool(
+            deny(
+                ctx, rec,
                 f"claude-bestpractice: detected a repeating cycle: {loop}. Break out of it — try a "
                 "different approach or report the blocker."
             )
@@ -594,7 +704,8 @@ def main() -> None:
                 # merge waits for their word — and once it is given, the assistant opens,
                 # checks and merges on its own, which is the arrangement they asked for.
                 if not config.approved(ctx, config.APPROVE_MERGE):
-                    hookio.deny_tool(
+                    deny_for_founder(
+                        ctx, rec,
                         "claude-bestpractice: this pull request has not been accepted by the founder "
                         "yet. Passing checks mean the code works, not that the work is "
                         "wanted — and main deploys, so merging is a step towards shipping "
@@ -612,7 +723,7 @@ def main() -> None:
                 # The pull request's own head, not the tree this session is standing in.
                 problems = pullrequest.blockers(ctx, base, str(gated.get("branch") or ""))
                 if problems:
-                    hookio.deny_tool(pullrequest.merge_refusal(gated, problems))
+                    deny_for_founder(ctx, rec, pullrequest.merge_refusal(gated, problems))
                 # Judged, and nothing found. Carried to the vouch at the end of this file
                 # rather than allowed here, because `allow_tool` ends the permission
                 # pipeline and every gate below this line still has its say.
@@ -706,7 +817,8 @@ def main() -> None:
         if message:
             complaint = gitpolicy.message_complaint(message)
             if complaint:
-                hookio.deny_tool(
+                deny(
+                    ctx, rec,
                     f"claude-bestpractice: {complaint}\n"
                     "The reader is not a reviewer — there is none. It is the next session, "
                     "running `git log` on this file to work out why it looks the way it does.\n"
@@ -716,7 +828,7 @@ def main() -> None:
     if event.tool_name in WRITE_TOOLS or event.tool_name == "Bash":
         conflicted = gitpolicy.conflict_complaint(proposed_content(event))
         if conflicted:
-            hookio.deny_tool(f"claude-bestpractice: {conflicted}")
+            deny(ctx, rec, f"claude-bestpractice: {conflicted}")
 
     if gates["migration_gate"]:
         if event.tool_name == "Bash":
@@ -740,7 +852,8 @@ def main() -> None:
                 # it gates. Decision 0006 closed exactly that hole for config switches and
                 # this was left behind. The founder's own word now, consumed on use, so it
                 # can never become a standing grant.
-                hookio.deny_tool(
+                deny_for_founder(
+                    ctx, rec,
                     "claude-bestpractice: promoting to production is the one action that cannot be "
                     "undone by re-running it, and it has not been approved.\n"
                     "  Deploy to a preview environment instead, or show the founder what "
@@ -765,7 +878,8 @@ def main() -> None:
                     # gates — the same hole decision 0006 closed for config switches and
                     # v1.28.0 closed for merges and promotions. This was the last one.
                     if not config.approved(ctx, config.APPROVE_MIGRATION):
-                        hookio.deny_tool(
+                        deny_for_founder(
+                            ctx, rec,
                             "claude-bestpractice: destructive DDL in a migration. This is irreversible "
                             "and data-shaped — the tests pass either way and corruption surfaces "
                             "only under production concurrency.\n"
@@ -805,7 +919,7 @@ def main() -> None:
             # (issue #37); the write path, which is what the founder actually hits, was
             # never given the same exemption.
             if owner is not None and not gitpolicy.provisioned_for(ctx, event.session_id, owner):
-                hookio.deny_tool(gitpolicy.foreign_refusal(path, owner, ctx))
+                deny(ctx, rec, gitpolicy.foreign_refusal(path, owner, ctx))
 
     # Before the shell takes a step it cannot take back. Claude Code refuses every Bash
     # call whose working directory is inside the protected checkout — judged before the
@@ -816,7 +930,8 @@ def main() -> None:
     if cfg.require_worktree and event.tool_name == "Bash":
         stranded = gitpolicy.strands_the_shell(str(ti.get("command", "")), session_cwd, ctx)
         if stranded is not None:
-            hookio.deny_tool(
+            deny(
+                ctx, rec,
                 f"claude-bestpractice: this would leave the shell in {stranded}, which is the "
                 f"shared checkout, and this session is isolated in {ctx.worktree_root}.\n"
                 "  Claude Code then refuses EVERY later Bash call from there — including the "
@@ -840,7 +955,7 @@ def main() -> None:
             # checkout is told it belongs to another session, and a worktree cannot remove
             # itself from the inside.
             if owner is not None and not gitpolicy.provisioned_for(ctx, rec.session_id, path):
-                hookio.deny_tool(gitpolicy.foreign_git_refusal(owner, ctx))
+                deny(ctx, rec, gitpolicy.foreign_git_refusal(owner, ctx))
 
     # Outside every working tree of this repository there is no rule to apply: a scratch
     # file in /tmp is not somebody else's work, and refusing it only taught the agent that
@@ -866,7 +981,7 @@ def main() -> None:
         if not cfg.protect_trunk:
             breaches = [b for b in breaches if "is the trunk" not in b]
         if breaches:
-            hookio.deny_tool(breaches[0])
+            deny(ctx, rec, breaches[0])
 
     if event.tool_name in WRITE_TOOLS or event.tool_name == "Bash":
         # A gate whose settings the gated party may rewrite is a suggestion. `config.json`
@@ -883,7 +998,8 @@ def main() -> None:
         for guarded in _protected_absolute(ctx):
             for path in absolute:
                 if path == guarded or guarded in path.parents or path in guarded.parents:
-                    hookio.deny_tool(
+                    deny_for_founder(
+                        ctx, rec,
                         f"claude-bestpractice: {path} is the plugin's own enforcement state — "
                         "session records, the baseline the diff is measured from, and the "
                         "block counter the Stop gate reads.\n"
@@ -896,7 +1012,8 @@ def main() -> None:
 
         protected = [rel for rel in writing_now if _protected_state(rel)]
         if protected:
-            hookio.deny_tool(
+            deny_for_founder(
+                ctx, rec,
                 f"claude-bestpractice: {protected[0]} is the plugin's own enforcement state, and the "
                 "session being enforced does not get to edit it — pointing `test_command` at "
                 "`true` would buy a green finish and erase the record of the real failure.\n"
@@ -925,7 +1042,8 @@ def main() -> None:
                 f"  line {number}: {excerpt}  [{name}]"
                 for name, number, excerpt in redact.locate(content)[:5]
             )
-            hookio.deny_tool(
+            deny(
+                ctx, rec,
                 f"claude-bestpractice: refusing this write — it contains what looks like a credential "
                 f"({', '.join(hits)}).\n{where}\n"
                 "Put it in an environment variable and reference it. Post-hoc cleanup does "
@@ -958,7 +1076,8 @@ def main() -> None:
             from claude_bestpractice import plan
 
             if not _ledger_covers(ctx, event.session_id, writing_now):
-                hookio.deny_tool(
+                deny(
+                    ctx, rec,
                     f"claude-bestpractice: nothing on the board says this session is working "
                     f"on {writing_now[0]}.\n"
                     "  Every sibling session reads the board to decide what is safe to "
@@ -984,7 +1103,8 @@ def main() -> None:
         if cfg.require_task and event.tool_name == "Bash":
             doing = gitpolicy.changes_the_repository(str(ti.get("command", "")))
             if doing and not _holds_a_card(ctx, event.session_id):
-                hookio.deny_tool(
+                deny(
+                    ctx, rec,
                     f"claude-bestpractice: `git {doing}` changes this repository and nothing "
                     "on the board says this session is working.\n"
                     "  It writes no file, so no other rule here sees it — and every "
@@ -1006,7 +1126,7 @@ def main() -> None:
 
             duplicate = migrate.second_ledger(ctx, absolute[0], content)
             if duplicate:
-                hookio.deny_tool(duplicate)
+                deny(ctx, rec, duplicate)
 
         # One database per session, checked at the first write because that is where the
         # session commits to doing work here. Worktrees isolate files and nothing else:
@@ -1026,7 +1146,8 @@ def main() -> None:
         if cfg.isolate_databases and touched and ctx.is_worktree:
             clash = worktree.session_on_this_database(ctx, event.session_id)
             if clash:
-                hookio.deny_tool(
+                deny(
+                    ctx, rec,
                     f"claude-bestpractice: session {clash[0][:8]} is already using the database "
                     f"`{clash[1]}`, and this tree points at the same one.\n"
                     "  Worktrees isolate files and nothing else — one open transaction "
@@ -1078,7 +1199,8 @@ def main() -> None:
                     "Are you still in it, or can they take it?",
                     sender=event.session_id,
                 )
-                hookio.deny_tool(
+                deny(
+                    ctx, rec,
                     f"claude-bestpractice: session {owner[:8]}{where} is editing {touched[0]} "
                     "right now, in this same worktree. Work on something else, or coordinate "
                     "before touching this file — whoever writes second wins silently and "

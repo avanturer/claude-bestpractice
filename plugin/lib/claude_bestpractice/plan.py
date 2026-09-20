@@ -586,12 +586,40 @@ def follow_in_git(source: Path, target: Path) -> bool:
     the founder cannot pause.
     """
     tree = target.parent
-    code, out = _git(["ls-files", "--error-unmatch", "--", str(source)], tree)
-    if code != 0 or not out:
+    if not _tracked(source, tree):
         return False
     if _git(["add", "-f", "--", str(target)], tree)[0] != 0:
         return False
     return _git(["add", "-A", "--", str(source)], tree)[0] == 0
+
+
+def _tracked(path: Path, tree: Path | None = None) -> bool:
+    """Is git holding this file in the index of the checkout it sits in?
+
+    Asked in the file's OWN directory unless the caller names a tree, because a worktree
+    has its own index and asking the wrong one about a file answers no for a file that is
+    tracked.
+    """
+    code, out = _git(["ls-files", "--error-unmatch", "--", str(path)], tree or path.parent)
+    return code == 0 and bool(out)
+
+
+def follow_across_trees(source: Path, target: Path) -> bool:
+    """Carry a tracked ledger file's move into both indexes when it changes CHECKOUT.
+
+    Two worktrees of one clone have two indexes, so a move between them cannot be one
+    rename however git is asked: the deletion belongs to the tree the file left and the
+    addition to the tree it arrived in. Staging both is what keeps the move from reading
+    as the loss it is not — the bare `D` with no counterpart that fifty stranded files
+    taught this repository to recognise (#208).
+
+    Same rule as `follow_in_git`: only for a file git ALREADY tracks. Where the founder
+    does not commit the ledger, neither index is touched and nothing is granted (0008).
+    """
+    if not _tracked(source):
+        return False
+    staged = _git(["add", "-f", "--", str(target)], target.parent)[0] == 0
+    return _git(["add", "-A", "--", str(source)], source.parent)[0] == 0 and staged
 
 
 def stranded_deletions(root: Path, base: Path) -> list[Path]:

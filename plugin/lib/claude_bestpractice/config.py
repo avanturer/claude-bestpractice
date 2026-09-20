@@ -106,6 +106,11 @@ class Config:
     # enforces again.
     max_tool_calls: int = 0
     max_repeat_signature: int = 3
+    # How many subagents one turn may start. Three, because that is the point past which
+    # a fan-out stops being delegation and starts being the same question asked in
+    # parallel: each agent pays for its own context of the repository before it reads a
+    # line of the answer, and the founder pays for all of them. Zero switches it off.
+    subagent_fanout: int = 3
     require_worktree: bool = True
     # Hours a claimed task may sit untouched before it goes back to the queue. The board's
     # whole claim is that it says what is in flight; a row nobody is working on is that
@@ -159,6 +164,7 @@ class Config:
             "lease_ttl_seconds": self.lease_ttl_seconds,
             "max_tool_calls": self.max_tool_calls,
             "max_repeat_signature": self.max_repeat_signature,
+            "subagent_fanout": self.subagent_fanout,
             "require_worktree": self.require_worktree,
             "task_idle_hours": self.task_idle_hours,
             "task_queue_stale_days": self.task_queue_stale_days,
@@ -260,6 +266,7 @@ _EXPECTED: dict[str, type] = {
     "commit_conventions": bool,
     "autonomy": str,
     "protect_trunk": bool,
+    "subagent_fanout": int,
     "manage_pull_requests": bool,
     "report_defects": str,
     "stage_override": str,

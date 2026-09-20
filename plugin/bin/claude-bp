@@ -91,6 +91,11 @@ def cmd_status(ctx) -> int:
         heading("PLUGIN")
         print(f"  {captured}")
 
+    # A status line that lists a merged pull request as waiting is the surface teaching
+    # the founder to stop reading it. Settled here, where the list is about to be shown,
+    # for the branch this checkout is on — the only one whose content this tree can speak
+    # for (#205).
+    pullrequest.reconcile(ctx, ctx.branch)
     waiting = pullrequest.outstanding(ctx)
     if waiting:
         heading("PULL REQUESTS")
@@ -464,6 +469,10 @@ def cmd_database(ctx) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="claude-bp", description="claude-bestpractice control plane")
+    # The version the founder is actually running, from the one place that holds it.
+    # `claude-bp-plan --version` printed nothing and exited 2, so a bug report
+    # against this plugin could not state which version it was against (#210).
+    parser.add_argument("--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("status", help="what is known, in flight, planned and enforced (default)")
     init = sub.add_parser("init", help="derive the knowledge layer from this repository")

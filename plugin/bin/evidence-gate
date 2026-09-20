@@ -206,6 +206,57 @@ def _work_the_siblings_cannot_see(ctx) -> bool:
     return bool(delivery.commits_since(ctx, base)) or delivery.dirty(ctx)
 
 
+def _take_refusal(ctx, rec) -> dict:
+    """The block this session was last given, cleared from the record as it is read.
+
+    Cleared on EVERY Stop, whatever the gate goes on to decide. The question is about the
+    turn that just ended, so carrying the marker into the next turn would hold an
+    answered block against work that has nothing to do with it — which is what happened
+    across the lifecycle fixture: refused in one phase, still being asked about it three
+    phases and two suite runs later.
+    """
+    pending = rec.refusal if isinstance(rec.refusal, dict) else {}
+    if pending:
+        sessions.touch(ctx, rec.session_id, refusal={})
+    return pending
+
+
+def _refuse_to_end_on_an_unanswered_block(ctx, rec, pending: dict) -> None:
+    """Refuse, once, a turn that ends on a block from this plugin nothing was done about.
+
+    Asked LAST, where the turn would otherwise be allowed to end. Everything above is
+    about the tree and answers first; this is about the shape of the turn, and putting it
+    earlier would have it speak over the evidence demand that is the whole point of the
+    gate.
+
+    What it refuses is not the refusal — that one already happened and may well have been
+    right. It is what the founder keeps being handed instead of their work: a gate says
+    no, the session stops and reports that a plugin is in its way, and the person who
+    installed this so they would not have to read hooks is asked what to do about a hook.
+    The session is the one that can tell a right gate from a wrong one; it has the
+    refusal, the call and the repository, and the founder has a sentence in a chat window.
+
+    Raised at most ONCE per refusal — `_take_refusal` clears it before this can fire,
+    exactly like the pull-request hand-off — and never for the refusals that genuinely
+    wait on a person: `deny_for_founder` records nothing, so an unapproved merge still
+    ends the turn (decision 0006).
+    """
+    if not pending or rec.tool_calls > int(pending.get("calls") or 0):
+        return
+    unresolved = pending
+    hookio.block(
+        "claude-bestpractice: this turn is ending on a block nothing was done about:\n"
+        f"  {unresolved.get('said') or 'a gate refused a call'}\n"
+        "  That block is this session's to resolve. Either the gate is right — in which "
+        "case what it asked for is still owed and the work is unfinished — or it is "
+        "wrong, and "
+        '`claude-bp-report defect "<what it refused and why that is wrong>"` records it '
+        "against the plugin without costing this turn.\n"
+        "  Pick one, then finish the work by the shortest correct route. Reporting a "
+        "gate to the founder is not a finish, and this is asked once."
+    )
+
+
 def main() -> None:
     event = hookio.read_event()
     # The tree this session works in, which is not always the directory the harness hands
@@ -221,6 +272,9 @@ def main() -> None:
         # Re-register rather than allow. A missing record used to mean "finish freely",
         # which made the whole evidence requirement removable with `rm`.
         rec = sessions.adopt(ctx, event.session_id)
+
+    # Read and cleared here, at the top, so it can only ever be about THIS turn.
+    pending_refusal = _take_refusal(ctx, rec)
 
     resolved_stage, _ = stage.current(ctx, cfg.stage_override)
     gates = stage.gates_for(resolved_stage)
@@ -265,6 +319,12 @@ def main() -> None:
     # entire budget. Past that the board carries it, which is what stops it being
     # forgotten across sessions without wedging the one in front of us.
     if cfg.manage_pull_requests:
+        # Asked before the record is read, because a merge this gate did not perform is
+        # never recorded: merging from the website, from another clone, or with a shell
+        # line the tokeniser declined leaves the obligation OPEN forever, and the founder
+        # is then told to report a pull request that was merged and deleted days ago
+        # (#205). The trunk is the authority; nothing here calls the network.
+        pullrequest.reconcile(ctx, ctx.branch)
         waiting = pullrequest.unhanded(ctx, ctx.branch)
         if waiting is not None:
             blocking = pullrequest.blockers(ctx, str(waiting.get("base") or "main"))
@@ -334,6 +394,11 @@ def main() -> None:
             changed = by_path
 
     if not changed:
+        # A turn that wrote nothing is the commonest way to end on a block: the write was
+        # refused, so there is nothing to verify and nothing above this has anything to
+        # say. Asked here as well as at the verified exit, and nowhere earlier — the
+        # checks between the two are about the tree and answer first.
+        _refuse_to_end_on_an_unanswered_block(ctx, rec, pending_refusal)
         _allow(ctx, rec)
 
     # Which suites answer for these files. In a single-project repository this is the one
@@ -504,6 +569,7 @@ def main() -> None:
                     break
 
     if not problems:
+        _refuse_to_end_on_an_unanswered_block(ctx, rec, pending_refusal)
         if unverified_reason:
             _give_up(ctx, rec, unverified_reason, changed)
             sys.stderr.write(f"claude-bestpractice: finishing UNVERIFIED — {unverified_reason}\n")

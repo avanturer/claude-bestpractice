@@ -127,6 +127,25 @@ def _is_reference(value: str) -> bool:
     return bool(_REFERENCE.match(value.strip()))
 
 
+# Brackets are code, and code is not a credential. A secret worth rotating is a LITERAL:
+# a run of characters a service will accept verbatim, and no service accepts `useMemo(()`.
+# `const tokens = useMemo(...)` was refused as an assigned secret — the name matched, the
+# value was eight characters of an ordinary React expression — so the founder renamed a
+# variable to get their file written, and the issue reporting it was refused for quoting
+# the line (#205).
+#
+# UNQUOTED only, like `_is_reference`, because that is the whole discriminator: a quoted
+# value is a literal whatever punctuation it carries. Residual cost, stated: an unquoted
+# password containing a bracket in a `.env` file is missed. It joins the unquoted dotted
+# one already documented below, and the direction is the same — a scanner that makes
+# ordinary code un-editable is a scanner that gets worked around.
+_BRACKETED = re.compile(r"[()\[\]{}]")
+
+
+def _is_expression(value: str) -> bool:
+    return bool(_BRACKETED.search(value))
+
+
 def _is_not_a_secret(match: "re.Match") -> bool:
     """Values the assignment form matches that cannot be credentials.
 
@@ -142,7 +161,9 @@ def _is_not_a_secret(match: "re.Match") -> bool:
     value = match.group("value")
     if _is_indirection(value) or _is_measurement(value):
         return True
-    return not match.group("quote") and _is_reference(value)
+    if match.group("quote"):
+        return False
+    return _is_reference(value) or _is_expression(value)
 
 
 def scrub(text: str) -> str:

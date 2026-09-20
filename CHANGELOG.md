@@ -1,5 +1,104 @@
 # Changelog
 
+## v1.63.0
+
+Six changes: two standing rules the founder had been enforcing by hand, and four gates
+that refused the wrong thing.
+
+### A block is the session's to resolve, not the founder's to hear about
+
+The shape, watched often enough to name: a gate refuses, the session stops, and the person
+who installed this plugin so they would not have to read hooks is handed a paragraph about
+a path scanner. Three of the defects fixed below sat open for exactly that reason — hitting
+one cost a conversation, and reporting it cost another.
+
+Every refusal about something the session can act on now carries one standing instruction:
+work out whether the gate is right and do what it names, or decide it is wrong and file it
+with `claude-bp-report defect "<what it refused and why that is wrong>"`. The Stop gate
+refuses, once, a turn that ends on such a block with nothing done about it.
+
+`claude-bp-report defect` is the other half, and it is what keeps the rule honest rather
+than a demand for obedience. A crash files itself; a gate that runs exactly as written and
+refuses the wrong call cannot, because nothing failed. It costs the turn nothing, it sends
+nothing without `claude-bp-report send`, and the founder reads a count on a surface they
+already look at.
+
+The refusals that genuinely wait on a person carry none of it and leave nothing for the
+Stop gate to ask — an unapproved merge, a production deploy, a switch that is theirs to set.
+For those, "tell the founder and stop" IS the finish, and decision 0006 says why. Decision
+0014 records the rest.
+
+### A spawn names the tier it runs as, and the count is the founder's number
+
+Claude Code resolves a subagent's model from the call, then the agent's definition, then
+`CLAUDE_CODE_SUBAGENT_MODEL`, then the parent session — so a spawn that names nothing runs
+on the parent's model, which here is the most expensive one available. The three agents a
+session reaches for without thinking (Explore, Plan, general-purpose) have no definition to
+pin anything, so a search for a filename ran on the model chosen for architecture, several
+times over, and nothing recorded a choice because none was made.
+
+An `Agent` call is now refused unless a model is named on the call or pinned in that agent's
+own definition, and the refusal says what each tier is for. `inherit` counts from a
+definition and not from a call: in a file it is a decision somebody wrote down, on a call it
+is the default spelled out.
+
+The count is bounded with it. `subagent_fanout`, three by default, is how many subagents one
+turn may start; the budget starts again at the founder's next message, and `0` switches it
+off. Each agent pays for its own context of the repository before it reads a line of the
+answer, so a fan-out is the costliest way there is to go slightly faster — and four agents
+searching one tree return one answer four times.
+
+Asked at `PreToolUse`, because that is the only place it can be asked: `SubagentStart` is
+documented as unable to block a spawn and is handed neither the model nor the prompt.
+Decision 0015.
+
+### A merged pull request is not an open one (#205)
+
+Nothing here watches GitHub: the obligation is discharged by the merge this plugin performs,
+so one merged from the website, from another clone, or with a `gh pr merge --squash
+--delete-branch` the tokeniser declined stayed OPEN forever. A founder was told to report and
+merge a pull request that had been merged days earlier and whose branch no longer existed.
+
+The Stop gate and the status line now settle a record whose work is already on the trunk,
+asked of git and never of the network. An ancestor test answers an ordinary merge — including
+one the trunk has since moved past — and a content test answers a squash, where the branch tip
+is an ancestor of nothing: every file the branch delivers is byte-identical to what the trunk
+holds. A partial match settles nothing, because settling one that is really open costs the
+founder the single reminder they get.
+
+### An SQL operator is not a redirect (#205)
+
+`select … where data @> '{"k":1}'` sent to psql was read as a redirect, and the board gate
+refused the call for "working on @" — a path nobody named, in a command that writes no file.
+A `>` that is half of an operator is no longer a redirect: `@>` and `<@` in SQL, `->` and
+`->>` in jsonb and C, `=>`, `<>`, `|>`, `%>%`. `&>` stays a redirect, because it is one. A
+target with no name left in it — a bare `@` — is not a file.
+
+### An expression is not a credential (#205)
+
+`const tokens = useMemo(() => parse(raw), [raw])` was refused as an assigned secret: the name
+matched, and the value was eight characters of ordinary React. The founder renamed a variable
+to get their file written, and the issue reporting it was refused for quoting the line.
+
+An unquoted value containing brackets is code, and a secret worth rotating is a literal — no
+service accepts `useMemo(()`. Quoting stays the discriminator it is everywhere else in that
+module: `password = "hunter2(correct)battery"` is still a credential.
+
+### A repair that dealt out the defect it cleans up after (#208)
+
+`_carry_this_worktrees_tasks_home` moves a task file out of a worktree and into the main
+checkout on the next session start there. Two worktrees of one clone have two indexes, so
+that move cannot be one rename however git is asked — the deletion belongs to the tree the
+file left and the addition to the tree it arrived in — and it staged neither. A committed
+card carried home therefore left a bare `D` in the worktree with no counterpart anywhere,
+which is the exact shape of the fifty stranded files #208 was about, produced by the repair
+that exists to undo them. Both sides are staged now, and where the founder does not commit
+the ledger neither index is touched (decision 0008).
+
+`claude-bp-plan --version` printed nothing and exited 2, which is how a report about all of
+this could not say which version it was against. Every `claude-bp` command answers
+`--version` now.
+
 ## v1.62.0
 
 Reports from three sessions, one shape: the plugin was judging a directory instead of a
