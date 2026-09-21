@@ -82,14 +82,11 @@ eight**, 130s at sixteen.
 the sharded suite, **131s against 350s**. It says in its own output that `make check` is
 still what decides, because one process is what catches state leaking between tests.
 
-**Six tests passed only where pytest is absent.** The notes-at-Stop fixture from v1.67.0
-declared its suite as `unittest discover -p check_*.py` — but the gate prefers to DRIVE a
-runner over reading the project's command, and on any machine with pytest installed it
-drives pytest, which collects `test_*.py` and nothing else. Zero tests collected is a
-refusal, so the whole class failed for every developer who has pytest and passed in CI,
-which installs none. The fixture now names its file `test_smoke.py`, so both paths see the
-same suite; pinning the gate to the declared command would have been testing a gate nobody
-runs.
+**Six tests passed only where pytest is absent.** Found here independently and fixed in
+#227 while this branch was in flight, so the fix in the tree is that one: the notes-at-Stop
+fixture named its file `check_smoke.py`, the gate drives pytest where pytest is installed,
+pytest collects `test_*.py` and nothing else, and a suite that collected nothing is
+correctly refused. Green in CI, red on every developer machine with pytest.
 
 
 ## v1.67.0
