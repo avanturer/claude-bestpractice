@@ -617,6 +617,40 @@ def commit_message(command: str) -> str:
     return match.group("message") if match else ""
 
 
+# How many recent subjects decide whether this repository has a convention, and how many
+# of them must carry it. A majority rather than any, so one `fix: …` in a hundred plain
+# subjects does not impose a convention on a repository that plainly has none.
+_HISTORY_READ = 20
+_CONVENTION_SHARE = 0.5
+
+
+def uses_conventional_commits(ctx: GitContext) -> bool:
+    """Does this repository's own history use conventional commits?
+
+    Asked because the gate was imposing one on repositories that had never had one: a
+    scratch repository with a single commit was refused `git commit -m "add the parser"`
+    over a convention nobody in it had ever used and the founder had not asked for (#215).
+
+    A convention is a fact about a project, and this repository writes it down in the one
+    place that cannot be wrong about it — its own log. An empty or unreadable history reads
+    as "no convention", which is the direction that refuses less.
+    """
+    from .gitctx import _run
+
+    try:
+        listing = _run(
+            ["log", f"-{_HISTORY_READ}", "--no-merges", "--format=%s"],
+            ctx.worktree_root, check=False,
+        )
+    except Exception:  # noqa: BLE001 - an unreadable log is not a convention
+        return False
+    subjects = [line.strip() for line in listing.splitlines() if line.strip()]
+    if not subjects:
+        return False
+    carried = sum(1 for subject in subjects if CONVENTIONAL.match(subject))
+    return carried >= max(1, int(len(subjects) * _CONVENTION_SHARE))
+
+
 def message_complaint(message: str, conventional: bool = True) -> str:
     """Why this message fails a reader six months from now. Empty when it is fine.
 

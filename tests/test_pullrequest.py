@@ -37,19 +37,12 @@ class PRCase(RepoCase):
             "tool_name": name, "tool_input": tool_input,
         })
 
-    def decision(self, proc) -> str | None:
-        try:
-            payload = json.loads(proc.stdout or "{}")
-        except json.JSONDecodeError:
-            return None
-        return payload.get("hookSpecificOutput", {}).get("permissionDecision")
+    def decision(self, proc) -> str:
+        """Kept under the name this file already reads by; the reader is shared."""
+        return self.hook_decision(proc)
 
     def reason(self, proc) -> str:
-        try:
-            payload = json.loads(proc.stdout or "{}")
-        except json.JSONDecodeError:
-            return ""
-        return payload.get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
+        return self.hook_reason(proc)
 
     # The pull request a case opens is the pull request it then merges. Two matching
     # literals in different classes is not that relationship, it is a coincidence — and

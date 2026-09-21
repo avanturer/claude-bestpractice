@@ -267,6 +267,16 @@ def main() -> None:
     # this session and git still has registered.
     ctx = worktree.working_context(hookio.repo(event.cwd or os.getcwd()), event.session_id)
     cfg = config.load(ctx)
+
+    # Off means off, and it has to mean it in the gate that refuses a FINISH as much as in
+    # the one that refuses a write — a plugin switched off that still holds the turn open
+    # is not switched off (#215). Before the session record is touched, so a founder who
+    # has stood the plugin down gets nothing written on their behalf either.
+    standing_down, why = config.enforcing(ctx)
+    if not standing_down:
+        sys.stderr.write(f"claude-bestpractice: standing down — {why}.\n")
+        hookio.emit_silent()
+
     rec = sessions.get(ctx, event.session_id)
     if rec is None:
         # Re-register rather than allow. A missing record used to mean "finish freely",

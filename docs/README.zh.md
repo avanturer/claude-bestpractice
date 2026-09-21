@@ -4,9 +4,9 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-1.63.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-1568%20passing-2ea44f)](#已验证)
-[![doctor](https://img.shields.io/badge/doctor-33%20checks-2ea44f)](#已验证)
+[![version](https://img.shields.io/badge/version-1.64.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-1596%20passing-2ea44f)](#已验证)
+[![doctor](https://img.shields.io/badge/doctor-34%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#运行要求)
 [![context](https://img.shields.io/badge/常驻上下文-332%20tokens-blue)](#运行要求)
@@ -325,7 +325,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 ## 已验证
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 1534 个测试 · 33 项 doctor 检查 · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 1596 个测试 · 34 项 doctor 检查 · budget
 ```
 
 doctor 通过**真的去做那件坏事**来证明 gate 有效，而不是把配置读回来对一遍——
@@ -419,6 +419,24 @@ claude-bestpractice 的常驻上下文为 **约 332 tokens**，分布在四个�
 是反事实的、看不见的——这笔交易理应由创始人自己来审。
 
 ---
+
+## 如何关掉
+
+每个 gate 都会在自己的拒绝里写出对应的开关，而一行就能让整个插件停下来——在下一次工具调用
+时生效，不需要重启：
+
+```
+enabled off          # 然后：claude-bp set enabled off
+```
+
+或者在项目的 `.claude/settings.json` 里，用 harness 自己的那条记录：
+
+```json
+{"enabledPlugins": {"claude-bestpractice@claude-bestpractice": false}}
+```
+
+两者都只属于创始人：会话自己去动会被拒绝，并被告知去请他们说出那一行。一个没有门的 gate
+会连插件一起被卸掉，而被卸掉的 gate 什么都保障不了。
 
 ## 它刻意不是什么
 

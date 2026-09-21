@@ -58,6 +58,19 @@ AUTONOMY = ("vibecode", "pair")
 
 @dataclass
 class Config:
+    # Whether this plugin enforces anything at all here. Off and every gate stands down —
+    # the blocking ones silently, on the same turn, without waiting for a restart.
+    #
+    # It exists because "off" has to mean off. A founder who had asked for the plugin to be
+    # switched off for a project watched the worktree gate keep refusing writes and keep
+    # provisioning trees for the rest of the session, with `claude-bp set require_worktree
+    # off` refusing them from inside the session that was being blocked (#215). A gate with
+    # no reachable door is one that gets uninstalled, and an uninstalled gate enforces
+    # nothing at all — which is strictly worse than one the founder can silence in a line.
+    #
+    # Their word, never the session's: this file is on `PROTECTED_STATE`, so the party being
+    # gated cannot write it, and `claude-bp set` refuses until they have said the line.
+    enabled: bool = True
     test_command: list[str] = field(default_factory=list)
     # One suite per PATH, for the repositories that have more than one. A mobile app and a
     # backend in one tree are two suites, and the backend's says nothing about the app: a
@@ -150,6 +163,7 @@ class Config:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "enabled": self.enabled,
             "test_command": self.test_command,
             "test_commands": self.test_commands,
             "detect_suites": self.detect_suites,
@@ -243,6 +257,7 @@ def _make_has_test(root: Path) -> bool:
 # 3.9 with postponed evaluation, and a schema that only works on new Pythons is worse
 # than one written out.
 _EXPECTED: dict[str, type] = {
+    "enabled": bool,
     "test_command": list,
     "test_commands": dict,
     "detect_suites": bool,
@@ -679,6 +694,47 @@ def load_checked(ctx: GitContext) -> tuple[Config, list[str]]:
     if not cfg.test_command:
         cfg.test_command = detect_test_command(ctx.worktree_root)
     return cfg, complaints
+
+
+# What the harness calls this plugin where enablement is recorded. The marketplace name
+# and the plugin name, which is the spelling `enabledPlugins` uses.
+PLUGIN_KEY = "claude-bestpractice@claude-bestpractice"
+
+# Where a project records which plugins it wants. Read and never written: this is the
+# founder's file and the harness's schema, and a gate that edits the settings deciding
+# whether it runs is a gate that decides for itself.
+PROJECT_SETTINGS = (".claude/settings.json", ".claude/settings.local.json")
+
+
+def disabled_for_project(ctx: GitContext) -> str:
+    """The project settings file that switches this plugin off, or "" when none does.
+
+    The harness reads `enabledPlugins` when a session starts and keeps running the hooks it
+    already loaded, so a founder who switches the plugin off mid-session is refused by it
+    for the rest of that session — worktrees provisioned, writes blocked, and the switch
+    they just threw having no effect until they restart (#215). Nothing here can unload a
+    hook; what it can do is stand down when the answer is written down.
+    """
+    for rel in PROJECT_SETTINGS:
+        raw = store.read_json(ctx.worktree_root / rel, default={})
+        wanted = raw.get("enabledPlugins") if isinstance(raw, dict) else None
+        if isinstance(wanted, dict) and wanted.get(PLUGIN_KEY) is False:
+            return rel
+    return ""
+
+
+def enforcing(ctx: GitContext) -> tuple[bool, str]:
+    """Whether the gates run here at all, and what switched them off when they do not.
+
+    One answer for every gate, because "off" meaning off in three gates and not in the
+    fourth is the shape this is fixing rather than a smaller version of it.
+    """
+    if not load(ctx).enabled:
+        return False, "`enabled off` in .claude/claude-bestpractice/config.json"
+    off = disabled_for_project(ctx)
+    if off:
+        return False, f"{off} switches this plugin off for this project"
+    return True, ""
 
 
 def save(ctx: GitContext, cfg: Config) -> Path:

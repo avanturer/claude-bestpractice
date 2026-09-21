@@ -1,5 +1,117 @@
 # Changelog
 
+## v1.64.0
+
+Gates that held the door shut from both sides, and two that asked for opposite things.
+
+### What happened
+
+Four reports in one day, and two sentences answer all of them: a gate must not refuse the act
+that resolves it, and two gates must not ask for opposite things. A switch the founder throws
+has to actually throw, and tidying up after finished work is not an intrusion into anybody.
+
+A founder asked, mid-session, for this plugin to be switched off for a project. The flag went
+into `.claude/settings.json`, the harness had already loaded the hooks — it reads
+`enabledPlugins` when a session starts — and the worktree gate went on refusing every write
+and provisioning trees nobody asked for until the session ended. `claude-bp set
+require_worktree off` refused them from inside the session that was being blocked (#215).
+
+And in a worktree whose `.env` named a neighbour's database, the isolation gate refused every
+write with "set DATABASE_URL in .env to a database name nobody else holds, then `claude-bp
+database`" — including the write to `.env`. Doing exactly what the message said was refused by
+the same message; the prescribed command answered "there is no psql on this machine" on a
+repository whose backend talks to Postgres through `psycopg`; and deleting the copy of `.env`
+after the merge was refused too, so a file holding an API key could not be cleaned up. The
+only thing that worked was running the write from a directory outside the tree, which is a
+hole rather than a remedy (#216).
+
+### Off means off, on the next tool call (#215)
+
+Two switches now stand the whole plugin down, and either is honoured immediately rather than
+after a restart:
+
+```
+enabled off                                   # config.json, or `claude-bp set enabled off`
+"enabledPlugins": {"claude-bestpractice@claude-bestpractice": false}   # .claude/settings.json
+```
+
+`pre-tool` returns SILENTLY on every call and `evidence-gate` lets the turn end saying once
+what stood it down. Silently rather than approving: approving would still suppress the
+permission prompt the founder would otherwise be shown, and a switched-off gate has no
+business having an opinion either way.
+
+Only the founder throws it. `config.json` is on `PROTECTED_STATE` already. The settings file
+cannot be — a session edits permissions, hooks and env in it for them all day — so exactly one
+key is guarded there, in exactly the direction that switches enforcement off, and the refusal
+names their line. `claude-bp-doctor` proves both halves now: a known-bad write is allowed with
+the plugin switched off, and the session that tries to throw that switch is refused.
+
+Not changed: when the worktree rule fires. Its whole value is that it holds BEFORE the second
+session exists, and v1.62.0 is a fresh account of what a shared checkout costs once it does
+(#213). A switch the founder can reach beats a heuristic about their intentions.
+
+### A gate never refuses the act that resolves it (#216)
+
+Writing this tree's `.env` is exempt from the isolation refusal, and so is deleting it: a tree
+with no `.env` has stopped claiming anybody's database, and after a merge the copy is rubbish
+the founder has every reason to remove. One command that writes `.env` AND source is not a
+cure and is still refused.
+
+`claude-bp database` — the second half of that same refusal — now runs the project's own
+`worktree_setup` when the machine has no `psql`. The message had said where to look ("let the
+project do it, which is what `worktree_setup` is for") and then did not use the line the
+founder had already written there.
+
+### Two gates asking for opposite things (#217)
+
+A tree lagging `origin/main` runs old code, so the suite was red for a reason that had
+nothing to do with the session. It brought exactly the merged files across — `git checkout
+origin/main -- <paths>` — and the suite went green. Scope drift then called those files a
+change the task never mentioned; reverting turned the suite red again; and the drift refusal
+says in so many words that prose cannot answer it, so only a person could break the circle.
+
+`landed` was already the answer to this and was asking the wrong revision. It compared the
+blob at HEAD — the content the session had NOT touched — rather than what the tree holds now,
+which is what drift is about. Content that is already on the trunk is not this session's
+unreviewed change whether it arrived by a merge or by a checkout, and it is forgiven now.
+
+The re-assertion from v1.61.0 made the circle airtight and is unchanged: after the revert the
+tree hashes to what was already judged, so the same verdict comes back in a second instead of
+in a re-run. That is the truth about an identical tree; what was wrong was the other gate.
+
+### Tidying up is not an intrusion (#218)
+
+A session that had finished, merged and was removing its own worktree was refused: "this git
+command operates on the main checkout … Run it in your own tree." It moves no HEAD there,
+touches no index and discards nobody's uncommitted work — it deletes another directory, the
+one belonging to the session asking — and git will not remove a tree from inside it, so the
+advice named the one place the command cannot be run.
+
+`git worktree remove <path>` now counts only the tree it removes; `-C <checkout>` is where the
+command runs, not what it changes. `git worktree prune` joins `worktree list` as a read: it
+deletes no tree, it forgets the records of trees already gone. Everything else keeps every
+rule it had — a `reset --hard` aimed at the main checkout is refused exactly as before, and so
+is one hiding behind a `worktree list` in the same line.
+
+### A convention is a fact about a project, not a default (#215)
+
+`commit_conventions` demanded `type(scope): summary` in a scratch repository whose single
+commit was prose, over a convention nobody in it had ever used. The gate now reads the
+repository's own log: a convention is enforced where a majority of the last twenty subjects
+carry one, and an empty or unreadable history reads as "no convention". Everything else this
+gate asks — not empty, not "wip", long enough to say something — is about the message being
+readable at all and still holds everywhere.
+
+This repository's own log is prose, so the gate no longer demands a convention here either,
+which is the right answer and was not the behaviour before.
+
+### Left open deliberately
+
+The premise note in #216 — a repository whose `conftest` makes its own database per run cannot
+collide, so the gate fires where there is nothing to collide over — is real and is not fixed
+here. Inferring it means reading somebody's test setup to decide the most consequential
+question this gate asks. `isolate_databases off` is the honest answer and the refusal names it.
+
 ## v1.63.0
 
 Six changes: two standing rules the founder had been enforcing by hand, and four gates
