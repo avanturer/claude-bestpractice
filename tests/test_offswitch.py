@@ -288,5 +288,93 @@ class TestTheDatabaseCommandUsesTheProjectsOwnWay(RepoCase):
         self.assertIn("worktree_setup", proc.stderr)
 
 
+class TestTidyingUpIsNotAnIntrusion(RepoCase):
+    """#218. A session that had finished, merged and was removing its own tree was refused:
+    "this git command operates on the main checkout … Run it in your own tree." It moves no
+    HEAD there, touches no index and discards nobody's work — it deletes another directory —
+    and git will not remove a tree from inside it, so the advice named the one place the
+    command cannot be run.
+    """
+
+    # The rule under test is gated on `require_worktree`, so this class keeps it on.
+    relax_git_policy = False
+
+    def git_call(self, command: str, cwd=None):
+        return self.run_hook(
+            "pre-tool",
+            {"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+             "tool_input": {"command": command}},
+            cwd=cwd,
+        )
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.write("seed.py", "x = 0\n")
+        self.commit("seed a history")
+        self.mine = self.repo.parent / "repo-mine"
+        git(["worktree", "add", "-q", "-b", "fix/mine", str(self.mine)], self.repo)
+        self.addCleanup(
+            lambda: git(["worktree", "remove", "--force", str(self.mine)], self.repo)
+        )
+
+    def test_removing_a_tree_from_the_main_checkout_is_not_an_operation_on_it(self):
+        """`-C <main checkout>` is where the command runs, not what it changes."""
+        proc = self.git_call(
+            f"git -C {self.repo} worktree remove --force {self.mine}", cwd=self.mine
+        )
+        self.assertNotEqual("deny", self.hook_decision(proc))
+
+    def test_pruning_is_not_destructive_either(self):
+        proc = self.git_call(f"git -C {self.repo} worktree prune", cwd=self.mine)
+        self.assertNotEqual("deny", self.hook_decision(proc))
+
+    def test_a_real_reset_in_the_main_checkout_is_still_refused(self):
+        """The rule this narrows is still the rule: nothing else moved."""
+        proc = self.git_call(f"git -C {self.repo} reset --hard HEAD~1", cwd=self.mine)
+        self.assertEqual("deny", self.hook_decision(proc))
+
+    def test_a_reset_hiding_behind_a_worktree_read_is_still_refused(self):
+        proc = self.git_call(
+            f"git -C {self.repo} worktree list && git -C {self.repo} reset --hard", cwd=self.mine
+        )
+        self.assertEqual("deny", self.hook_decision(proc))
+
+
+class TestTheTrunksOwnContentIsNotDrift(RepoCase):
+    """#217. The suite was red because the tree lagged `origin/main`; the session brought
+    exactly the merged files across, which greened it; scope drift called those files a
+    change the task never mentioned; reverting turned the suite red again. Two gates asking
+    for opposite things, and the drift refusal says in so many words that prose cannot
+    answer it — so only a person could break the circle.
+
+    `landed` was already the answer and was asking the wrong revision: HEAD, which is the
+    content the session had NOT touched.
+    """
+
+    def test_content_taken_from_the_trunk_is_forgiven(self):
+        from claude_bestpractice import evidence
+
+        self.write("shared.py", "x = 1\n")
+        self.commit("the trunk's content")
+        git(["branch", "-f", "origin/main", "HEAD"], self.repo)  # a stand-in for the remote
+        self.write("shared.py", "x = 2\n")
+        self.commit("move on locally")
+        # The session brings the file back to what the trunk holds, which is what greened
+        # the suite in the report.
+        (self.repo / "shared.py").write_text("x = 1\n", encoding="utf-8")
+
+        self.assertEqual(["shared.py"], evidence.landed(self.ctx(), ["shared.py"]))
+
+    def test_the_sessions_own_new_content_is_still_drift(self):
+        from claude_bestpractice import evidence
+
+        self.write("shared.py", "x = 1\n")
+        self.commit("the trunk's content")
+        git(["branch", "-f", "origin/main", "HEAD"], self.repo)
+        (self.repo / "shared.py").write_text("x = 99  # this session's own\n", encoding="utf-8")
+
+        self.assertEqual([], evidence.landed(self.ctx(), ["shared.py"]))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -11,7 +11,9 @@ what its own message prescribes, and `claude-bp database` — the second half of
 message — falls back to the project's own `worktree_setup` when the machine has no `psql`.
 
 Entering a state and leaving it are different questions. A gate may hold the entrance; it may
-never hold the exit.
+never hold the exit. So removing one's own finished worktree is not an operation on the
+checkout the command runs from (#218), and no two gates may ask for opposite things: content
+already on the trunk is not drift, whether it arrived by a merge or by a checkout (#217).
 
 ## Why
 The isolation gate refused every write in a worktree whose `.env` named a neighbour's
@@ -31,12 +33,10 @@ around it, and the route it teaches is the hole.
 - **Exempting any write that merely mentions `DATABASE_URL`.** The text of a write is the
   gated party's; the path is a fact.
 - **Issuing DDL without `psql`.** A plugin that reaches for a driver it inferred is one that
-  will one day infer it about production. The project's own line runs instead, and only when
-  the founder has written one.
-- **Reading the project's test setup to decide whether a collision is real.** A `conftest`
-  that makes its own database per run means no collision — but inferring that from somebody's
-  test code is a guess about the most consequential thing here. `isolate_databases off` is
-  the honest answer and the refusal names it.
+  will one day infer it about production. The project's own line runs instead.
+- **Reading the project's test setup to decide whether a collision is real.** Inferring it
+  from somebody's test code is a guess about the most consequential thing here;
+  `isolate_databases off` is the honest answer and the refusal names it.
 
 ## Cost accepted
 A session can write `.env` in a colliding tree without resolving the collision. It changes

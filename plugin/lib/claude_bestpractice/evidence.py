@@ -1236,11 +1236,18 @@ def landed(ctx, changed: list[str]) -> list[str]:
     describing the past. Compared by content rather than by name, because a file that
     exists on the trunk with different content is exactly the case drift is FOR.
     """
-    from .gitctx import _run
+    from .gitctx import blob_sha
 
     settled = []
     for rel in changed:
-        here = _blob(ctx, "HEAD", rel)
+        # The WORKING TREE's content, not HEAD's. Drift is about what the tree holds now,
+        # and a session that brought a file to the trunk's content — `git checkout
+        # origin/main -- <path>`, the one move that greened a suite red only because the
+        # tree lagged — had that write judged against a blob it had not touched. So the
+        # content already on the trunk was called drift, reverting it turned the suite red
+        # again, and the two gates asked for opposite things until a person intervened
+        # (#217). HEAD answers for a file that is gone from the tree.
+        here = blob_sha(ctx, rel) or _blob(ctx, "HEAD", rel)
         if not here:
             continue
         for trunk in ("origin/HEAD", "origin/main", "origin/master"):

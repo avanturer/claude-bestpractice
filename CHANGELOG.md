@@ -2,12 +2,13 @@
 
 ## v1.64.0
 
-A pair of gates that held the door shut from both sides.
+Gates that held the door shut from both sides, and two that asked for opposite things.
 
 ### What happened
 
-Two reports in one day, and the same sentence answers both: a gate must not refuse the act
-that resolves it, and a switch the founder throws has to actually throw.
+Four reports in one day, and two sentences answer all of them: a gate must not refuse the act
+that resolves it, and two gates must not ask for opposite things. A switch the founder throws
+has to actually throw, and tidying up after finished work is not an intrusion into anybody.
 
 A founder asked, mid-session, for this plugin to be switched off for a project. The flag went
 into `.claude/settings.json`, the harness had already loaded the hooks — it reads
@@ -60,6 +61,37 @@ cure and is still refused.
 `worktree_setup` when the machine has no `psql`. The message had said where to look ("let the
 project do it, which is what `worktree_setup` is for") and then did not use the line the
 founder had already written there.
+
+### Two gates asking for opposite things (#217)
+
+A tree lagging `origin/main` runs old code, so the suite was red for a reason that had
+nothing to do with the session. It brought exactly the merged files across — `git checkout
+origin/main -- <paths>` — and the suite went green. Scope drift then called those files a
+change the task never mentioned; reverting turned the suite red again; and the drift refusal
+says in so many words that prose cannot answer it, so only a person could break the circle.
+
+`landed` was already the answer to this and was asking the wrong revision. It compared the
+blob at HEAD — the content the session had NOT touched — rather than what the tree holds now,
+which is what drift is about. Content that is already on the trunk is not this session's
+unreviewed change whether it arrived by a merge or by a checkout, and it is forgiven now.
+
+The re-assertion from v1.61.0 made the circle airtight and is unchanged: after the revert the
+tree hashes to what was already judged, so the same verdict comes back in a second instead of
+in a re-run. That is the truth about an identical tree; what was wrong was the other gate.
+
+### Tidying up is not an intrusion (#218)
+
+A session that had finished, merged and was removing its own worktree was refused: "this git
+command operates on the main checkout … Run it in your own tree." It moves no HEAD there,
+touches no index and discards nobody's uncommitted work — it deletes another directory, the
+one belonging to the session asking — and git will not remove a tree from inside it, so the
+advice named the one place the command cannot be run.
+
+`git worktree remove <path>` now counts only the tree it removes; `-C <checkout>` is where the
+command runs, not what it changes. `git worktree prune` joins `worktree list` as a read: it
+deletes no tree, it forgets the records of trees already gone. Everything else keeps every
+rule it had — a `reset --hard` aimed at the main checkout is refused exactly as before, and so
+is one hiding behind a `worktree list` in the same line.
 
 ### A convention is a fact about a project, not a default (#215)
 
