@@ -1,4 +1,4 @@
-.PHONY: check test test-fast doctor lint budget docs knowledge slop ratchet shipped clean help
+.PHONY: check check-fast test test-fast doctor lint budget docs knowledge slop ratchet shipped clean help
 
 PY := python3
 
@@ -6,6 +6,7 @@ help:
 	@echo "make check   - everything CI runs: lint, tests, doctor, budget"
 	@echo "make test    - unit and end-to-end tests, one process (this is the gate)"
 	@echo "make test-fast - the same tests across shards, for the edit loop only"
+	@echo "make check-fast - every cheap check plus the sharded suite (~2 min, not the gate)"
 	@echo "make doctor  - prove each gate fires by attempting a known-bad action"
 	@echo "make lint    - syntax check and the stdlib-only constraint"
 	@echo "make docs    - the LLM-first documentation gate"
@@ -57,6 +58,12 @@ test:
 # the serial run and this exists to shorten the loop before you get there.
 test-fast:
 	@$(PY) tools/run_tests.py
+
+# The edit loop's whole gate: every cheap check (2s together) plus the sharded suite.
+# `check` stays what decides — this is what you run twenty times before you get there.
+check-fast: lint docs slop polyglot knowledge shipped test-fast
+	@echo ""
+	@echo "check-fast: green — 'make check' is still what decides"
 
 doctor:
 	@$(PY) plugin/bin/claude-bp-doctor

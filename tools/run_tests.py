@@ -7,7 +7,8 @@ what lets it catch state leaking between tests — which is the class of defect 
 project is written about. Splitting across processes hides exactly that, so the fast run
 is for iterating and the serial run is for deciding.
 
-Measured on this repository: 173s serial, 77s across four shards, same 896 tests.
+Measured on this repository: 332s serial against 121s across eight shards, same 1697
+tests.
 
 Standard library only, like everything else here — a test runner that needs installing is
 one more thing between a change and knowing whether it broke something.
@@ -57,22 +58,55 @@ def shards(modules: list[tuple[str, int]], count: int) -> list[list[str]]:
     return [b for b in buckets if b]
 
 
-def run(bucket: list[str]) -> subprocess.Popen:
+def shard_env() -> dict:
+    """The environment one shard runs in. Split out so a test can ask what it contains.
+
+    A shard that cannot import is a red run whatever the code under test does, and this
+    file is not the gate, so nothing else would notice.
+    """
     env = dict(os.environ)
     # `unittest <module>` does not put the tests directory on the path the way `discover
     # -t tests` does, so every shard failed to import `helpers` before this line existed.
-    env["PYTHONPATH"] = os.pathsep.join([str(TESTS), env.get("PYTHONPATH", "")]).rstrip(os.pathsep)
+    #
+    # `plugin/lib` for the same reason, one layer along: `helpers` is what puts it on
+    # `sys.path`, so a module importing `claude_bestpractice` at import time worked only
+    # while some EARLIER module in the same process had already imported `helpers`. The
+    # serial run always has one; a shard that opens with `test_gitpolicy` does not, and
+    # died on `ModuleNotFoundError: claude_bestpractice`. So the fast runner was red
+    # whatever the code did, which is why nobody used it and every decision waited on the
+    # six-minute serial run.
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(TESTS), str(ROOT / "plugin" / "lib"), env.get("PYTHONPATH", "")]
+    ).rstrip(os.pathsep)
+    return env
+
+
+def default_shards() -> int:
+    """How many shards to run at once.
+
+    Twice the cores, capped at eight. These shards spend most of their wall clock inside
+    `git` and hook subprocesses rather than on a CPU, so one shard per core leaves the
+    machine waiting on them: measured on a four-core box, 158s at four shards against 121s
+    at eight, for the same forty-eight modules. Past that it gets worse again — 130s at
+    sixteen — which is where the heaviest single module is the wall clock and the rest is
+    contention.
+    """
+    return min(8, (os.cpu_count() or 4) * 2)
+
+
+def run(bucket: list[str]) -> subprocess.Popen:
     return subprocess.Popen(
         [sys.executable, "-m", "unittest", *bucket, "-q"],
-        cwd=str(ROOT), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        cwd=str(ROOT), env=shard_env(), stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, text=True,
     )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "-j", type=int, default=min(8, os.cpu_count() or 4),
-        help="shards to run at once (default: cores, capped at 8)",
+        "-j", type=int, default=default_shards(),
+        help="shards to run at once (default: twice the cores, capped at 8)",
     )
     args = parser.parse_args()
 

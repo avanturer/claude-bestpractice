@@ -439,6 +439,63 @@ class TestReindexKeepsWhatItCannotRebuild(RepoCase):
         self.assertIn("unverified.jsonl", proc.stdout)
 
 
+class TestTheFastRunnerIsUsable(unittest.TestCase):
+    """The edit loop's runner, checked because it was red for reasons no test could see.
+
+    `tools/run_tests.py` is not the gate, so nothing ran it and nothing asserted anything
+    about it — and it spent releases failing on every shard that opened with a module
+    importing `claude_bestpractice` at import time, since `helpers` is what puts the
+    library on `sys.path` and a shard need not contain it first. The suite stayed green,
+    the fast loop was dead, and every decision waited on the serial run instead: 350s a
+    time, three times in one change, measured in the session that wrote this.
+    """
+
+    def runner(self):
+        """`tools/run_tests.py` loaded by path — `tools/` is not a package."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "claude_bp_run_tests", REPO_ROOT / "tools" / "run_tests.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_a_shard_can_import_the_library_and_the_helpers(self):
+        import os
+
+        paths = self.runner().shard_env()["PYTHONPATH"].split(os.pathsep)
+        self.assertIn(str(REPO_ROOT / "tests"), paths)
+        self.assertIn(str(REPO_ROOT / "plugin" / "lib"), paths)
+
+    def test_a_module_importing_the_library_first_still_runs(self):
+        """The failure as it happened: `test_gitpolicy` imports `claude_bestpractice` at
+        module scope, and alone in a shard it died on `ModuleNotFoundError`."""
+        import subprocess as sp
+        import sys as _sys
+
+        proc = sp.run(
+            [_sys.executable, "-c",
+             "import test_gitpolicy; print(test_gitpolicy.__name__)"],
+            cwd=str(REPO_ROOT), env=self.runner().shard_env(),
+            capture_output=True, text=True, timeout=120,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+
+    def test_it_oversubscribes_because_these_shards_wait_on_git(self):
+        """One shard per core leaves the machine idle inside `git`: measured 158s at four
+        shards against 121s at eight, on four cores, for the same modules."""
+        import os
+
+        self.assertEqual(min(8, (os.cpu_count() or 4) * 2), self.runner().default_shards())
+
+    def test_the_makefile_offers_the_fast_gate_and_still_names_the_real_one(self):
+        """The fast loop is only safe while it says what it is not. `make check` keeps the
+        serial run because one process is what catches state leaking between tests."""
+        makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+        self.assertIn("check-fast:", makefile)
+        self.assertIn("'make check' is still what decides", makefile)
+
+
 class TestWindowsShims(unittest.TestCase):
     """`bin/` is twenty extensionless Python scripts with a `#!/usr/bin/env python3` line.
 

@@ -785,14 +785,23 @@ class TestTheNotesAreAskedForOnceAtStop(GateCase):
         to the standard library so the fixture needs no third-party runner, and kept under
         `tests/`, which the gate exempts — so the material change stays `feature.py` alone
         and the drift check has nothing to say about the fixture's own scaffolding.
+
+        Named `test_smoke.py` and discovered by the default pattern, which is not
+        cosmetic. The gate prefers to DRIVE a runner rather than read the project's
+        command, and on any machine with pytest installed it drives pytest — which
+        collects `test_*.py` and nothing else. Under `check_*.py` that run found zero
+        tests, so every test in this class failed for anyone who has pytest, and passed in
+        CI only because CI installs no third-party runner. One fixture that satisfies both
+        paths is the fix; pinning the gate to the declared command would be testing a
+        gate that is not the one shipped.
         """
         from claude_bestpractice import sessions
 
         self.configure(test_command=[
-            sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "check_*.py",
+            sys.executable, "-m", "unittest", "discover", "-s", "tests",
         ])
         self.write(
-            "tests/check_smoke.py",
+            "tests/test_smoke.py",
             "import unittest\n\n\nclass Smoke(unittest.TestCase):\n"
             "    def test_it_runs(self):\n        self.assertTrue(True)\n",
         )

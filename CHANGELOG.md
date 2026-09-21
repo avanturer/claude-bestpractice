@@ -64,6 +64,34 @@ runs nothing.
 
 Decision 0022.
 
+### The edit loop was dead, and two gates lied about why
+
+Found while measuring this release rather than by a report, and both are about the signal a
+session works from.
+
+**The sharded runner never ran.** `tools/run_tests.py` put `tests/` on `PYTHONPATH` and not
+`plugin/lib`, so any shard that opened with a module importing `claude_bestpractice` before
+`helpers` died on `ModuleNotFoundError`. It is not the gate, so nothing ran it and nothing
+tested it, and `make test-fast` had been red for releases — which is why every decision
+waited on the 350s serial `make check` instead. Fixed, tested (`TestTheFastRunnerIsUsable`),
+and the shard count is now twice the cores rather than one per core: these shards wait on
+`git`, not on a CPU. Measured on four cores, same 48 modules: 158s at four shards, **121s at
+eight**, 130s at sixteen.
+
+`make check-fast` is the new edit loop — every cheap check (about two seconds together) plus
+the sharded suite, **131s against 350s**. It says in its own output that `make check` is
+still what decides, because one process is what catches state leaking between tests.
+
+**Six tests passed only where pytest is absent.** The notes-at-Stop fixture from v1.67.0
+declared its suite as `unittest discover -p check_*.py` — but the gate prefers to DRIVE a
+runner over reading the project's command, and on any machine with pytest installed it
+drives pytest, which collects `test_*.py` and nothing else. Zero tests collected is a
+refusal, so the whole class failed for every developer who has pytest and passed in CI,
+which installs none. The fixture now names its file `test_smoke.py`, so both paths see the
+same suite; pinning the gate to the declared command would have been testing a gate nobody
+runs.
+
+
 ## v1.67.0
 
 The one interruption a session gets was being spent at an event where nobody could answer it.
