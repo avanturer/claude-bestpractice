@@ -564,6 +564,61 @@ def check_switch_needs_the_founder(repo: Path) -> Result:
     )
 
 
+def check_off_means_off(repo: Path) -> Result:
+    """And the door the founder is given must actually open.
+
+    The mirror of the check above, and a claim that needs proving as much as any refusal:
+    a founder who had asked for this plugin to be switched off for a project went on being
+    refused by it for the rest of the session, worktrees provisioned they never asked for
+    (#215). Proved by attempting a known-bad write with the plugin switched off, and then
+    by attempting to throw that switch as the session, which must still be refused.
+    """
+    start_session(repo, "doctor-off")
+    secret = {
+        "session_id": "doctor-off", "hook_event_name": "PreToolUse", "cwd": str(repo),
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(repo / "cfg.py"),
+                       "content": 'AWS_SECRET_ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE"\n'},
+    }
+    settings = repo / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(
+        json.dumps({"enabledPlugins": {"claude-bestpractice@claude-bestpractice": False}}),
+        encoding="utf-8",
+    )
+    stood_down = run_gate("pre-tool", secret, repo)
+    settings.unlink()
+    thrown = run_gate(
+        "pre-tool",
+        {**secret, "tool_input": {
+            "file_path": str(settings),
+            "content": json.dumps(
+                {"enabledPlugins": {"claude-bestpractice@claude-bestpractice": False}}
+            ),
+        }},
+        repo,
+    )
+
+    def said(proc: subprocess.CompletedProcess) -> str:
+        try:
+            return json.loads(proc.stdout or "{}").get(
+                "hookSpecificOutput", {}
+            ).get("permissionDecision", "")
+        except json.JSONDecodeError:
+            return ""
+
+    silent = said(stood_down) != "deny"
+    guarded = said(thrown) == "deny"
+    ok = silent and guarded
+    return Result(
+        "off means off, and only the founder says it",
+        ok,
+        "stood down when switched off, refused the session that tried to switch it" if ok
+        else f"stood_down={said(stood_down)!r} session_switch={said(thrown)!r} — "
+             "A SWITCHED-OFF GATE STILL REFUSED, OR THE SESSION COULD SWITCH IT",
+    )
+
+
 def check_evidence_gate_accepts(repo: Path) -> Result:
     """And a fresh passing artifact must be accepted, or the gate is unusable."""
     start_session(repo, "doctor-accept")
@@ -1432,6 +1487,7 @@ def main() -> int:
             check_evidence_gate_accepts,
             check_ledger_demand,
             check_switch_needs_the_founder,
+            check_off_means_off,
             check_policy_reaches_the_settings,
             check_stale_artifact_rejected,
             check_checkpoint,

@@ -138,6 +138,34 @@ class RepoCase(unittest.TestCase):
         """A session record for this case's repository."""
         return session_record_for(self.ctx(), session_id, pid)
 
+    def hook_decision(self, proc):
+        """What a PreToolUse gate decided, or None when it expressed no opinion.
+
+        None and "deny" are different facts and the tests turn on the difference: a gate
+        that says nothing leaves the permission layer to decide, which is the correct
+        outcome for everything outside the boundaries this plugin publishes.
+
+        Here rather than in each test module because three of them ask the same question of
+        the same JSON shape, and the slop gate counts a fourth copy as what it is.
+        """
+        import json
+
+        try:
+            payload = json.loads(proc.stdout or "{}")
+        except json.JSONDecodeError:
+            return None
+        return payload.get("hookSpecificOutput", {}).get("permissionDecision")
+
+    def hook_reason(self, proc) -> str:
+        """The text that decision carried, for the assertions that are about the message."""
+        import json
+
+        try:
+            payload = json.loads(proc.stdout or "{}")
+        except json.JSONDecodeError:
+            return ""
+        return payload.get("hookSpecificOutput", {}).get("permissionDecisionReason") or ""
+
     def run_hook(self, name: str, event: dict, env: dict | None = None, cwd=None):
         """Invoke a gate exactly as the harness does: executable, event JSON on stdin.
 

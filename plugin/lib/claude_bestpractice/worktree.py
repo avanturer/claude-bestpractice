@@ -442,7 +442,12 @@ def note_database(ctx: GitContext, tree: Path, url: str) -> bool | None:
     """
     present = database_present(url)
     path, body = record_for(ctx, tree)
-    if not str(path) or not isinstance(body, dict):
+    # `Path("")` stringifies to `"."`, which is truthy AND is a directory — so the guard
+    # read "there is a record" for every tree this plugin never made, and the write landed
+    # on `os.replace(tmp, ".")`: `Device or resource busy`, out of `claude-bp database`,
+    # after the database had already been created. Asked of the NAME, which is empty
+    # exactly when there is no record (#216).
+    if not path.name or not isinstance(body, dict):
         return present
     if present is False:
         body[DATABASE_MISSING] = True

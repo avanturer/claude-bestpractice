@@ -1041,10 +1041,32 @@ class TestCommitMessages(PolicyCase):
         )
         self.assertEqual(decision, "allow")
 
+    def a_conventional_history(self) -> None:
+        """Make this repository one that plainly uses the convention."""
+        for subject in ("feat(api): add the parser", "fix(api): reject an empty body",
+                        "docs: say what the parser accepts"):
+            self.write("noted.txt", subject)
+            git(["add", "-A"], self.repo)
+            git(["commit", "-qm", subject], self.repo)
+
     def test_a_prose_message_is_pointed_at_the_convention(self):
+        """In a repository whose own log uses it. That is where the convention exists."""
+        self.a_conventional_history()
         decision, reason = self.commit('git commit -m "made some changes to the thing"')
         self.assertEqual(decision, "deny")
         self.assertIn("conventional commit", reason)
+
+    def test_a_repository_with_no_convention_is_not_given_one(self):
+        """#215. A scratch repository with one prose commit was refused `git commit -m "add
+        the parser"` over a convention nobody in it had ever used and nobody had asked for.
+
+        A convention is a fact about a project, and the project writes it down in its own
+        log. Everything else this gate asks — not empty, not "wip", long enough to say
+        something — is about the message being readable at all, and still holds here.
+        """
+        decision, _ = self.commit('git commit -m "add the parser for the config file"')
+        self.assertEqual(decision, "allow")
+        self.assertEqual(self.commit('git commit -m "wip"')[0], "deny")
 
     def test_it_can_be_switched_off(self):
         self.configure(commit_conventions=False)

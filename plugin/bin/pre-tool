@@ -21,6 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
+import json  # noqa: E402
 import re  # noqa: E402
 
 from claude_bestpractice import ci, config, evidence, gitpolicy, hookio, inbox, pullrequest, redact, sessions, shellcmd, stage, store, subagents, vouch, worktree  # noqa: E402
@@ -87,6 +88,72 @@ def _protected_state(relpath: str) -> bool:
     # protected file nor a protected directory, and takes every one of them with it —
     # a rule that guards the leaves and not the branch guards nothing.
     return any(p.startswith(rel.rstrip("/") + "/") for p in PROTECTED_STATE)
+
+
+# `"claude-bestpractice@claude-bestpractice": false`, as it reads in a file a session is
+# part-way through writing. The JSON parse below is the real reader; this catches the
+# fragment an `Edit` or a heredoc carries, where there is no whole document to parse.
+_SWITCHED_OFF = re.compile(
+    r'"' + re.escape(config.PLUGIN_KEY) + r'"\s*:\s*false', re.I
+)
+
+
+# `.env`, `.env.local`, `.env.production` — the files whose entire purpose is to hold what
+# this scan refuses. Anything with another name is judged as source, which is what it is.
+def _is_env_file(name: str) -> bool:
+    """Whether this file name is an environment file rather than source."""
+    return name == worktree.ENV_FILE or name.startswith(worktree.ENV_FILE + ".")
+
+
+def _a_credential_belongs_here(ctx, targets: list) -> bool:
+    """An env file git ignores, which is where the scan's own advice sends a credential.
+
+    The scan exists to stop a secret reaching a file a commit will carry. An ignored `.env`
+    is the one place it cannot: the refusal says "put it in an environment variable and
+    reference it", and this is that file. Refusing it made the third grain of one circle —
+    the isolation gate sends the session to write `DATABASE_URL` there, every DSN worth
+    writing carries a password, and this gate then refused the write the other one ordered
+    (#216).
+
+    Both halves required, and the second is what keeps this from being a hole: a `.env`
+    that is TRACKED is a file a commit does carry, and that is the leak this gate is for.
+    """
+    if not targets:
+        return False
+    return all(
+        _is_env_file(path.name) and gitpolicy.ignored_by_git(ctx.worktree_root, path)
+        for path in targets
+    )
+
+
+def _turns_it_off(content: str) -> bool:
+    """Whether this text switches this plugin off in a settings file."""
+    try:
+        parsed = json.loads(content)
+    except (TypeError, ValueError):
+        parsed = None
+    if isinstance(parsed, dict):
+        wanted = parsed.get("enabledPlugins")
+        return isinstance(wanted, dict) and wanted.get(config.PLUGIN_KEY) is False
+    return bool(_SWITCHED_OFF.search(content or ""))
+
+
+def _disables_the_plugin(ctx, path: Path, content: str) -> bool:
+    """Whether this write is the founder's switch being thrown by somebody else.
+
+    Narrow on purpose, in three directions: the project's own settings files only, the one
+    key that decides whether this plugin enforces anything, and only the direction that
+    switches it off. A session edits permissions, hooks and env in that file for the
+    founder all day, and refusing the file wholesale would be this plugin taking a file
+    that is not its own.
+    """
+    try:
+        rel = path.resolve().relative_to(ctx.worktree_root.resolve()).as_posix()
+    except (OSError, ValueError):
+        return False
+    if rel not in config.PROJECT_SETTINGS or config.disabled_for_project(ctx):
+        return False
+    return _turns_it_off(content)
 
 
 MIGRATION_DIRS = ("migrations/", "db/migrate/", "prisma/migrations/", "alembic/versions/")
@@ -540,6 +607,23 @@ def main() -> None:
     ctx = hookio.repo(event.cwd or os.getcwd())
     cfg = config.load(ctx)
 
+    # Off means off, on this call rather than after a restart. The harness reads
+    # `enabledPlugins` when a session starts and keeps running the hooks it loaded, so a
+    # founder who switched this plugin off mid-session went on being refused by it —
+    # worktrees provisioned they never asked for, `Write` and heredocs blocked, and
+    # `claude-bp set require_worktree off` refusing them from inside the session that was
+    # being blocked (#215). Nothing here can unload a hook; standing down is what it can do.
+    #
+    # Before every rule in this file, including the protected-state refusal. A gate that
+    # keeps enforcing one thing after being switched off is not switched off, and the two
+    # doors are the founder's either way: `config.json` is refused to sessions, and the
+    # project settings write that flips the other one is refused below while this is still on.
+    if not config.enforcing(ctx)[0]:
+        # SILENT, not approved. Approving would still be this plugin deciding something —
+        # it suppresses the permission prompt the founder would otherwise have seen — and a
+        # switched-off gate has no business having an opinion either way.
+        hookio.emit_silent()
+
     rec = sessions.get(ctx, event.session_id)
     if rec is None:
         # No record means SessionStart never ran, or something deleted it. Re-register
@@ -815,7 +899,9 @@ def main() -> None:
     if event.tool_name == "Bash" and cfg.commit_conventions:
         message = gitpolicy.commit_message(str(ti.get("command", "")))
         if message:
-            complaint = gitpolicy.message_complaint(message)
+            complaint = gitpolicy.message_complaint(
+                message, conventional=gitpolicy.uses_conventional_commits(ctx)
+            )
             if complaint:
                 deny(
                     ctx, rec,
@@ -983,6 +1069,26 @@ def main() -> None:
         if breaches:
             deny(ctx, rec, breaches[0])
 
+    # The switch above, and who is allowed to throw it. `config.json` is refused to
+    # sessions outright; the project settings file is not, and must not be — it carries
+    # permissions, hooks and env that a session edits for the founder all day. So only the
+    # ONE key that decides whether this plugin enforces anything is guarded, and only in
+    # the direction that switches it off.
+    if writing and absolute:
+        asking = config.asked_for(ctx, "enabled")
+        for path in absolute:
+            if _disables_the_plugin(ctx, path, proposed_content(event)) and asking != "off":
+                deny(
+                    ctx, rec,
+                    "claude-bestpractice: that write switches this plugin off for the project, "
+                    "and a gate the gated party can switch off is a suggestion.\n"
+                    "  It is the founder's to throw, and they have two ways: this same edit "
+                    "made by them rather than by a session, or one line from them — "
+                    "`enabled off` — and then: claude-bp set enabled off\n"
+                    "  Either one stands the whole plugin down on the next tool call, with no "
+                    "restart. Do not work around this by editing the file another way."
+                )
+
     if event.tool_name in WRITE_TOOLS or event.tool_name == "Bash":
         # A gate whose settings the gated party may rewrite is a suggestion. `config.json`
         # names the command the Stop gate runs as its evidence, and it lives in committed
@@ -1031,7 +1137,7 @@ def main() -> None:
         # written: `cat > .env <<EOF` carried a live key straight past a gate whose
         # whole purpose is to stop that, silently, while the doctor reported 23/23.
         content = proposed_content(event)
-        hits = redact.find(content)
+        hits = [] if _a_credential_belongs_here(ctx, absolute) else redact.find(content)
         if hits:
             # WHERE, not just what. Naming the detector alone left a founder deleting
             # lines they suspected, being refused again, and having no way to learn what
@@ -1143,7 +1249,17 @@ def main() -> None:
         # commits behind, `make test` failed there for everyone who entered it, and the
         # gate demanding a passing suite kept re-running it in exactly that tree (#181).
         # The tree that can move is the one that gets told to, and it still is.
-        if cfg.isolate_databases and touched and ctx.is_worktree:
+        # `.env` in this tree is THE WAY OUT, and the refusal below is the thing that
+        # names it: "set DATABASE_URL in .env, then `claude-bp database`". Writing that
+        # file, and deleting it, were refused by the same message — so the state could be
+        # entered and never left, and the only thing that worked was running the write
+        # from a directory outside the tree, which is a hole rather than a remedy. Removing
+        # the file is an exit too: a tree with no `.env` is a tree that has stopped
+        # claiming anybody's database (#216).
+        # `writing_now`, never `touched`: the second carries the session's recent history,
+        # so an `.env` written ten calls ago would have exempted every write after it.
+        remedy = writing_now and all(_is_env_file(Path(rel).name) for rel in writing_now)
+        if cfg.isolate_databases and touched and ctx.is_worktree and not remedy:
             clash = worktree.session_on_this_database(ctx, event.session_id)
             if clash:
                 deny(

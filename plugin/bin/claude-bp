@@ -461,6 +461,20 @@ def cmd_database(ctx) -> int:
         return 1
 
     done, said = worktree.create_database(url)
+
+    # The project's own way, when this machine has no `psql`. The refusal already named
+    # `worktree_setup` — "let the project do it, which is what worktree_setup is for" —
+    # and then did not use the line the founder had already written, so a repository whose
+    # backend talks to Postgres through `psycopg` was told to install a client it does not
+    # need, by the one command the isolation gate sends you to (#216).
+    setup = config.load(ctx).worktree_setup
+    if not done and setup and not worktree.has_client():
+        if worktree.run_setup(ctx.worktree_root, list(setup)):
+            done, said = True, f"created by this project's own `worktree_setup`: {' '.join(setup)}"
+        else:
+            said = (f"{said}. `worktree_setup` ({' '.join(setup)}) was run instead and "
+                    "did not succeed either")
+
     print(said if done else f"could not: {said}", file=sys.stdout if done else sys.stderr)
     if done:
         worktree.note_database(ctx, ctx.worktree_root, url)
