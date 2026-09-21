@@ -125,6 +125,23 @@ class Config:
     # line of the answer, and the founder pays for all of them. Zero switches it off.
     subagent_fanout: int = 3
     require_worktree: bool = True
+    # A tree whose work is in the trunk and whose cards are all closed removes itself, on
+    # the turn that finishes it. On, because the founder asked for it in those terms — "так
+    # ничего мы не теряем и меня не будет тыркать она с разрешением" — and because the rule
+    # that said to do it by hand was already written and still left fifteen of thirty-eight
+    # trees standing over a merged pull request (#220). Off leaves the tree and the naming
+    # line that reports it.
+    remove_finished_trees: bool = True
+    # Hours a branch may carry commits with no pull request before the board names it. Half
+    # a day: long enough that work in progress is not nagged about, short enough that it is
+    # still the same day somebody could say what the branch was for. A branch found at 126
+    # commits behind the trunk, fixing something that had since been fixed twice, is what
+    # this exists to prevent (#220). Zero switches the line off.
+    branch_without_pr_hours: float = 12.0
+    # Days an open pull request may go without movement before the board names it. Seven,
+    # because three sat for a month on the reporting repository and nothing anywhere said
+    # so. Zero switches it off.
+    pull_request_idle_days: float = 7.0
     # Hours a claimed task may sit untouched before it goes back to the queue. The board's
     # whole claim is that it says what is in flight; a row nobody is working on is that
     # claim being false. Zero switches the sweep off.
@@ -180,6 +197,9 @@ class Config:
             "max_repeat_signature": self.max_repeat_signature,
             "subagent_fanout": self.subagent_fanout,
             "require_worktree": self.require_worktree,
+            "remove_finished_trees": self.remove_finished_trees,
+            "branch_without_pr_hours": self.branch_without_pr_hours,
+            "pull_request_idle_days": self.pull_request_idle_days,
             "task_idle_hours": self.task_idle_hours,
             "task_queue_stale_days": self.task_queue_stale_days,
             "require_task": self.require_task,
@@ -273,6 +293,9 @@ _EXPECTED: dict[str, type] = {
     "max_tool_calls": int,
     "max_repeat_signature": int,
     "require_worktree": bool,
+    "remove_finished_trees": bool,
+    "branch_without_pr_hours": float,
+    "pull_request_idle_days": float,
     "task_idle_hours": float,
     "task_queue_stale_days": float,
     "require_task": bool,

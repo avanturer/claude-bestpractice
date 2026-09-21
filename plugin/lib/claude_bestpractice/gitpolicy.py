@@ -611,6 +611,108 @@ def _subcommand_of(argv: list[str]) -> tuple[str, list[str]]:
     return (argv[index], argv[index + 1:]) if index < len(argv) else ("", [])
 
 
+# Pathspecs that mean "whatever is in the tree" rather than "what I worked on". `-u`
+# belongs here too: it updates every tracked file anywhere in the checkout, which is the
+# same accident with a narrower blast radius.
+_EVERYTHING = {"-A", "--all", "--no-ignore-removal", "-u", "--update", "."}
+
+
+def stages_everything(command: str) -> bool:
+    """Does this line stage the whole tree instead of the paths the session names?
+
+    Decided on the PROGRAM and its subcommand, never on the text: `echo "git add -A"` is a
+    sentence about staging, and a gate that matched the string refused the tool being used
+    to investigate it (#76).
+    """
+    from . import shellcmd
+
+    return any(_stages_all(argv) for argv in shellcmd.acting(command or ""))
+
+
+def _stages_all(argv: list[str]) -> bool:
+    """Does this one command stage the whole tree? False for anything that is not git."""
+    if not argv or argv[0].rsplit("/", 1)[-1] != "git":
+        return False
+    sub, args = _subcommand_of(argv)
+    if sub == "add":
+        return any(arg in _EVERYTHING for arg in args)
+    return sub == "commit" and any(_is_commit_all(arg) for arg in args)
+
+
+def _is_commit_all(arg: str) -> bool:
+    """`git commit -a`, `--all`, or an `a` bundled into a short group like `-am`."""
+    if arg == "--all":
+        return True
+    return arg.startswith("-") and not arg.startswith("--") and "a" in arg[1:]
+
+
+# The ledger, whoever wrote it. Its files belong to every session in the clone and to none
+# of them, which is why they are out of git since v1.65.0 — and why a clone still carrying
+# them tracked must not have them swept into somebody's feature commit.
+_LEDGER_PREFIX = ".claude/claude-bestpractice/plan/"
+
+
+def whose_work_is_in_the_way(ctx: GitContext, session_id: str) -> tuple[list[str], list[str]]:
+    """Dirty paths in this tree that are NOT this session's, and the ones that are.
+
+    The accident this exists to stop was caught by hand, on a hair, and reported as it
+    happened: "при обычном `git add -A` в коммит затянуло ~50 файлов
+    .claude/claude-bestpractice/plan/ от чужих веток — пришлось делать reset --soft"
+    (#220). A shared checkout makes that the DEFAULT outcome of the commonest staging
+    command there is.
+
+    Somebody else's is read from what the coordination layer already knows — a lease a live
+    sibling holds, a path a live sibling's card names — plus the ledger, which belongs to
+    everybody. Everything else is this session's, because a gate that has to guess whose a
+    file is should be deciding in the session's favour.
+    """
+    from . import sessions
+
+    dirty = _dirty_paths(ctx)
+    if not dirty:
+        return [], []
+    claimed: set[str] = set()
+    try:
+        for record in sessions.live_sessions(ctx, exclude=session_id):
+            claimed.update(sessions.leases_held_by(ctx, record.session_id))
+            claimed.update(path for path in record.task_paths if path)
+    except Exception:  # noqa: BLE001 - a refusal must never come out of a crashed read
+        return [], []
+    foreign = [
+        path for path in dirty
+        if path.startswith(_LEDGER_PREFIX) or any(_under(path, claim) for claim in claimed)
+    ]
+    return sorted(foreign), sorted(path for path in dirty if path not in set(foreign))
+
+
+def _under(path: str, claim: str) -> bool:
+    """Is `path` the claimed path, or inside it when the claim names a directory?"""
+    claim = claim.strip().rstrip("/")
+    if not claim or claim == ".":
+        return False
+    return path == claim or path.startswith(claim + "/")
+
+
+def _dirty_paths(ctx: GitContext) -> list[str]:
+    """Every path `git add -A` would pick up here, as git reports them.
+
+    Parsed by `evidence._porcelain_path`, which already gets the two things wrong with
+    slicing a fixed column: `_run` strips its output, so the first line loses the leading
+    space of a ` M` status, and a rename has to be read as its destination.
+    """
+    from .evidence import _porcelain_path
+    from .gitctx import _run
+
+    try:
+        raw = _run(
+            ["-c", "core.quotePath=false", "status", "--porcelain", "--untracked-files=all"],
+            ctx.worktree_root, check=False,
+        )
+    except Exception:  # noqa: BLE001 - see above
+        return []
+    return [path for path in (_porcelain_path(line) for line in raw.splitlines()) if path]
+
+
 def commit_message(command: str) -> str:
     """The message out of a `git commit -m` command line, or empty if there is none."""
     match = COMMIT_MESSAGE.search(command)

@@ -677,7 +677,14 @@ def reap_unused(ctx: GitContext, live: set) -> list[str]:
 
     for path in records:
         tree = _abandoned(ctx, store.read_json(path, default={}) or {}, live)
-        if tree and _release(ctx, tree, path):
+        if not tree:
+            continue
+        # Whether the branch is in by CONTENT as well as by ancestry, which is the
+        # difference between `git branch -d` working and leaving a branch behind on every
+        # squash merge there ever was — thirty-one of the hundred and thirty-five local
+        # branches on the reporting repository were merged and undeleted (#220).
+        landed = _in_the_trunk(Path(tree[0]))
+        if _release(ctx, tree, path, squashed=bool(landed and landed[2])):
             removed.append(tree[0])
     return removed
 
@@ -714,6 +721,61 @@ def stranded(ctx: GitContext) -> list[str]:
     return out
 
 
+def needs_a_decision(ctx: GitContext) -> list[tuple[str, str]]:
+    """Trees nobody is in that somebody has to decide about: (path, branch), as git lists them.
+
+    Two kinds, and the empty branch is the second: a tree whose branch is already in the
+    trunk, which can simply go, and a tree on a DETACHED HEAD, whose commits are on no
+    branch at all and disappear with the directory. Three of the thirty-eight were the
+    second kind (#220).
+
+    The sweep and the self-removal only ever touch trees THIS PLUGIN provisioned, and most
+    of those thirty-eight were not ours — a session that ran its own `git worktree add`
+    leaves nothing in the registry to find, and deleting another tool's directory on a guess
+    is not a thing a plugin gets to do.
+
+    So they are named instead, which is what the founder asked for as the alternative:
+    "на SessionStart печатать поимённо «эти деревья принадлежат влитым веткам, их можно
+    снять»". Empty in a clone whose trees are all occupied or all still being worked on,
+    which is the steady state once the plugin is putting its own away.
+    """
+    from . import sessions
+    from .gitctx import is_ancestor, trunk_ref, worktree_paths
+
+    try:
+        trunk = trunk_ref(ctx)
+        trees = worktree_paths(ctx) if trunk else []
+        occupied = {Path(rec.worktree).resolve() for rec in sessions.live_sessions(ctx)}
+    except Exception:  # noqa: BLE001 - a naming line must never be what fails a session start
+        return []
+    main = main_checkout(ctx)
+    out: list[tuple[str, str]] = []
+    for tree in trees:
+        try:
+            if tree.resolve() in occupied or tree.resolve() == main.resolve():
+                continue
+        except OSError:
+            continue
+        branch = _branch_in(tree)
+        if not branch or is_ancestor(ctx, branch, trunk):
+            out.append((str(tree), branch))
+    return out
+
+
+def _branch_in(tree: Path) -> str:
+    """The branch a tree stands on, or "" for a detached HEAD or a tree that is gone."""
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(tree), capture_output=True,
+            encoding="utf-8", errors="surrogateescape", timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    name = proc.stdout.strip() if proc.returncode == 0 else ""
+    return "" if name in ("", "HEAD") else name
+
+
 def _holds_work(tree: Path) -> bool:
     """Is there anything in this tree a `git worktree remove` would refuse to lose?"""
     from . import delivery
@@ -738,11 +800,22 @@ def _abandoned(ctx: GitContext, body: dict, live: set) -> tuple | None:
     return tree, str(body.get("branch") or "")
 
 
-def _release(ctx: GitContext, tree: tuple, record_path: Path) -> bool:
+def _release(ctx: GitContext, tree: tuple, record_path: Path, squashed: bool = False) -> bool:
+    """Hand a tree back to git, and its branch with it. False if git refused any of it.
+
+    Run from the MAIN checkout, never from `ctx.worktree_root`: a session removing its own
+    tree is removing the directory this process is standing in, and git obliges — it
+    deletes the tree and leaves the caller with a working directory that no longer exists,
+    after which every later command in that process fails on `getcwd`. Measured, not
+    feared: `git worktree remove .` from inside returns 0 and the next `pwd` errors.
+    """
     path, branch = tree
+    where = main_checkout(ctx)
+    if Path(path).resolve() == where.resolve():
+        return False
     gone = subprocess.run(
         ["git", "worktree", "remove", path],
-        cwd=str(ctx.worktree_root), capture_output=True,
+        cwd=str(where), capture_output=True,
         encoding="utf-8", errors="surrogateescape", timeout=60,
     )
     if gone.returncode != 0:
@@ -751,14 +824,147 @@ def _release(ctx: GitContext, tree: tuple, record_path: Path) -> bool:
     if branch:
         # -d, never -D: an unmerged branch is work somebody did, and the fact that its
         # session died does not make it disposable.
-        subprocess.run(
+        deleted = subprocess.run(
             ["git", "branch", "-d", branch],
-            cwd=str(ctx.worktree_root), capture_output=True,
+            cwd=str(where), capture_output=True,
             encoding="utf-8", errors="surrogateescape", timeout=60,
         )
-    with contextlib.suppress(OSError):
-        record_path.unlink()
+        if deleted.returncode != 0 and squashed:
+            # The one place a refusal is overridden, and only on a proof git does not
+            # have: `-d` asks whether the branch TIP is an ancestor of the trunk, and a
+            # squash merge makes it an ancestor of nothing — which is what this
+            # repository's own merges are. `squashed` is set only when every file the
+            # branch delivers is already byte-identical to the trunk's, so what `-D`
+            # deletes here is a label over content that is in, exactly what
+            # `gh pr merge --squash --delete-branch` deletes on the remote.
+            subprocess.run(
+                ["git", "branch", "-D", branch],
+                cwd=str(where), capture_output=True,
+                encoding="utf-8", errors="surrogateescape", timeout=60,
+            )
+    if record_path.name:
+        with contextlib.suppress(OSError):
+            record_path.unlink()
     return True
+
+
+def _nothing_left_in(tree: Path) -> bool:
+    """git's own answer to "would removing this lose a byte?", asked the way git asks it.
+
+    `git status --porcelain -uall` and not `delivery.dirty`, which exempts `.claude/`: that
+    exemption is right for judging whether a session delivered something and wrong here,
+    where the question is whether a directory can be deleted. Ignored files are invisible
+    to both this and to `git worktree remove` — verified, including the `.env` this plugin
+    writes into every tree it provisions.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=str(tree), capture_output=True,
+            encoding="utf-8", errors="surrogateescape", timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0 and not proc.stdout.strip()
+
+
+def _board_is_clear(ctx: GitContext, session_id: str, branch: str) -> bool:
+    """Has this session closed every card it holds, and closed at least one?
+
+    At least one, because that is the difference between finished and not yet started: a
+    session whose board is empty has an empty branch too, and removing the tree it is
+    about to work in would be this plugin taking away what it had just provisioned.
+
+    A paused card is read by BRANCH rather than by owner. Pausing hands the work back and
+    clears the owner by design, so "nothing is mine" is true of a card whose blocker this
+    session wrote ten seconds ago — and the tree it was written in is the tree that work
+    is in.
+    """
+    from . import plan
+
+    if plan.held_by(ctx, session_id):
+        return False
+    if branch and any(task.branch == branch for task in plan.load_all(ctx, plan.PAUSED)):
+        return False
+    return any(task.owner == session_id for task in plan.load_all(ctx, plan.DONE))
+
+
+def _in_the_trunk(tree: Path) -> tuple[str, str, bool] | None:
+    """(path, branch, squashed) when this tree's branch is already in the trunk, else None.
+
+    Asked of `pullrequest.landed`, which is where this repository's one definition of
+    "the work is in" lives — ancestry for an ordinary merge, content identity for a squash.
+    `squashed` is the second case, and it is carried out because it decides whether
+    `git branch -d` can be taken at its word.
+    """
+    from . import gitpolicy, pullrequest
+    from .gitctx import GitError, is_ancestor, resolve
+
+    try:
+        here = resolve(tree)
+    except (GitError, OSError):
+        return None
+    branch = here.branch
+    if not branch or branch in gitpolicy.TRUNK_NAMES:
+        return None
+    base = gitpolicy.default_branch(here) or "main"
+    if any(is_ancestor(here, branch, trunk) for trunk in (f"origin/{base}", "origin/HEAD")):
+        return str(tree), branch, False
+    if pullrequest.landed(here, {"branch": branch, "base": base}):
+        return str(tree), branch, True
+    return None
+
+
+def finished(ctx: GitContext, session_id: str) -> tuple[str, str, bool] | None:
+    """This session's own tree, when there is nothing left in it and nothing left to do.
+
+    The founder's standing instruction, in their words: "когда из ворктри уже все
+    замерджили и модель даже ВСЕ свои задачи закрыла — то она сама его удаляла, так ничего
+    мы не теряем". Fifteen of thirty-eight trees on the reporting repository stood over a
+    merged pull request, and the rule that said to remove them was written in that
+    project's own instructions — an instruction is not a mechanism (#220).
+
+    Four conditions, every one of them a fact rather than a judgement:
+      - the plugin provisioned this tree for THIS session, and it is not the main checkout,
+      - this session has closed every card it holds and closed at least one,
+      - `git status` in the tree is empty, untracked files included,
+      - the branch's work has reached the trunk, by ancestry or by content.
+
+    The act that follows still goes through commands that REFUSE — `git worktree remove`
+    without `--force` — so losing a race against a write that lands between the check and
+    the removal costs the tree nothing.
+    """
+    tree = mine(ctx, session_id)
+    if tree is None:
+        return None
+    try:
+        if tree.resolve() == main_checkout(ctx).resolve():
+            return None
+    except OSError:
+        return None
+    found = _in_the_trunk(tree)
+    if not found or not _board_is_clear(ctx, session_id, found[1]):
+        return None
+    return found if _nothing_left_in(tree) else None
+
+
+def release_mine(ctx: GitContext, session_id: str) -> tuple[str, str] | None:
+    """Remove this session's finished tree and the branch whose work is already in.
+
+    (path, branch) when the tree is gone, None when there was nothing to do or git said no.
+    Called from the Stop gate on the turn that finishes the work, rather than left to the
+    sweep that runs when the session is already dead: the founder's complaint is not that
+    the trees are never collected, it is that they pile up while they are being worked in
+    — and asking them first, every time, is the other half of what they asked to stop.
+    """
+    found = finished(ctx, session_id)
+    if not found:
+        return None
+    path, branch, squashed = found
+    record_path, _body = record_for(ctx, Path(path))
+    if _release(ctx, (path, branch), record_path, squashed=squashed):
+        return path, branch
+    return None
 
 
 def mine(ctx: GitContext, session_id: str) -> Path | None:

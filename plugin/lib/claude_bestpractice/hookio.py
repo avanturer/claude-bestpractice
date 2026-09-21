@@ -250,9 +250,18 @@ def emit_context(event_name: str, body: str, limit: int = MAX_ADDITIONAL_CONTEXT
     raise SystemExit(OK)
 
 
-def emit_silent() -> NoReturn:
-    """Do nothing, visibly to nobody. The default for a gate with nothing to say."""
-    sys.stdout.write(json.dumps({"continue": True, "suppressOutput": True}))
+def emit_silent(note: str = "") -> NoReturn:
+    """Do nothing, visibly to nobody. The default for a gate with nothing to say.
+
+    `note` is for the one thing a silent gate still owes: an account of something it DID,
+    rather than something it refused. It travels as `systemMessage`, which the harness
+    shows the human and not the model — so it is never where an instruction goes. A gate
+    with an instruction blocks and says it.
+    """
+    payload: dict[str, Any] = {"continue": True, "suppressOutput": True}
+    if note:
+        payload["systemMessage"] = note
+    sys.stdout.write(json.dumps(payload))
     sys.stdout.flush()
     raise SystemExit(OK)
 

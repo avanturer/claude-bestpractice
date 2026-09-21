@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -616,6 +618,120 @@ def check_off_means_off(repo: Path) -> Result:
         "stood down when switched off, refused the session that tried to switch it" if ok
         else f"stood_down={said(stood_down)!r} session_switch={said(thrown)!r} — "
              "A SWITCHED-OFF GATE STILL REFUSED, OR THE SESSION COULD SWITCH IT",
+    )
+
+
+# A refusal's way out, as it is written: in backticks, or indented under the sentence that
+# explains it. Both forms are used across this plugin's gates, so both are read — and read
+# SEPARATELY, because one alternation swallowed the indented line whole and the backticked
+# command inside it never got a match of its own. That made this check's first run report a
+# dead end where there was an exit, which is the direction a checker must not fail in.
+_BACKTICKED = re.compile(r"`([^`\n]+)`")
+_INDENTED = re.compile(r"^ {2,}(\S[^\n]*)$", re.M)
+
+# Tools the session calls instead of a shell. An exit like any other — and the reason the
+# worktree refusal is not a dead end even though no shell command moves the harness.
+_HARNESS_TOOLS = ("EnterWorktree", "Task", "Agent")
+
+
+def _runnable_in(text: str) -> list[str]:
+    """The commands a refusal names whose program actually exists on this machine.
+
+    What makes a way out real. #216 named `claude-bp database`, whose own command died on a
+    missing `psql`; #218 named a `git worktree remove` that git refuses from inside the
+    tree; a refusal naming nothing at all is the same defect with the excuse removed.
+    """
+    candidates = _BACKTICKED.findall(text or "")
+    candidates += [line for line in _INDENTED.findall(text or "") if "`" not in line]
+    out: list[str] = []
+    for candidate in candidates:
+        line = candidate.strip().lstrip("$").strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            program = shlex.split(line)[0]
+        except ValueError:
+            continue
+        if program in _HARNESS_TOOLS or (BIN / program).exists() or shutil.which(program):
+            out.append(line)
+    return out
+
+
+def _denied_reason(proc: subprocess.CompletedProcess) -> str:
+    """The text a PreToolUse refusal carried, or "" when it did not refuse."""
+    try:
+        out = json.loads(proc.stdout)["hookSpecificOutput"]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return ""
+    return out.get("permissionDecisionReason", "") if out.get("permissionDecision") == "deny" else ""
+
+
+def _refused_a_secret(repo: Path) -> str:
+    return _denied_reason(run_gate("pre-tool", {
+        "session_id": "doctor-exit", "hook_event_name": "PreToolUse", "cwd": str(repo),
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(repo / "cfg.py"),
+                       "content": 'AWS_SECRET_ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE"\n'},
+    }, repo))
+
+
+def _refused_a_sweep(repo: Path) -> str:
+    """`git add -A` in a checkout where a live sibling holds one of the dirty paths."""
+    from claude_bestpractice import hookio, sessions
+    from claude_bestpractice.gitctx import resolve
+
+    ctx = resolve(repo)
+    sibling = hookio.compose_session_id("doctor-sibling", str(repo))
+    sessions.register(ctx, sessions.SessionRecord(
+        session_id=sibling, pid=os.getpid(), worktree=repo.as_posix(), branch=ctx.branch,
+        baseline_commit="", started_at=time.time(), heartbeat_at=time.time(),
+    ))
+    sessions.acquire_lease(ctx, sibling, "theirs.py")
+    (repo / "theirs.py").write_text("y = 2\n")
+    (repo / "mine.py").write_text("x = 2\n")
+    return _denied_reason(run_gate("pre-tool", {
+        "session_id": "doctor-exit", "hook_event_name": "PreToolUse", "cwd": str(repo),
+        "tool_name": "Bash", "tool_input": {"command": "git add -A"},
+    }, repo))
+
+
+def _refused_a_finish(repo: Path) -> str:
+    """The Stop gate, which refuses through stderr rather than through a decision."""
+    (repo / "unlisted.py").write_text("def h():\n    return 3\n")
+    proc = run_gate("evidence-gate", {
+        "session_id": "doctor-exit", "hook_event_name": "Stop", "cwd": str(repo),
+        "stop_hook_active": False,
+    }, repo)
+    (repo / "unlisted.py").unlink(missing_ok=True)
+    return proc.stderr if proc.returncode == 2 else ""
+
+
+def check_every_refusal_leaves_a_command(repo: Path) -> Result:
+    """The founder's invariant, proven by provoking refusals rather than by reading strings.
+
+    "У каждого отказа обязана существовать хотя бы одна команда, которую сессия может
+    выполнить прямо сейчас. Если её нет — это не гейт, а тупик." Three of them in one day:
+    a remedy that the same gate blocked, a remedy git refuses from where it was ordered,
+    and two gates requiring opposite things (#216, #217, #218, #220).
+
+    Both funnels are covered: a `deny` the model reads as a decision, and the Stop gate's
+    block, which arrives as stderr. A refusal whose only named command is not installed
+    here counts as a dead end, which is exactly how #216 got out the door.
+    """
+    start_session(repo, "doctor-exit")
+    provoked = [
+        ("a credential write", _refused_a_secret(repo)),
+        ("staging a sibling's work", _refused_a_sweep(repo)),
+        ("an unverified finish", _refused_a_finish(repo)),
+    ]
+    missing = [label for label, text in provoked if not text]
+    dead_ends = [label for label, text in provoked if text and not _runnable_in(text)]
+    ok = not missing and not dead_ends
+    return Result(
+        "every refusal leaves a command that runs",
+        ok,
+        f"{len(provoked)} refusals, each naming a command that exists here" if ok
+        else f"not provoked: {missing}; DEAD ENDS: {dead_ends}",
     )
 
 
@@ -1509,6 +1625,7 @@ def main() -> int:
             check_sessions_see_each_other,
             check_a_pull_request_is_merged_or_reported,
             check_a_hidden_ledger_is_reported,
+            check_every_refusal_leaves_a_command,
         ):
             repo = make_repo(Path(tempfile.mkdtemp(prefix="claude-bestpractice-case-", dir=tmp)))
             try:

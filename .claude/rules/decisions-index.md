@@ -1,7 +1,5 @@
 # Decisions
 
-- [0008] The plugin holds the pen on facts about this repository, never on grants — `decisions/0008-the-plugin-writes-facts-never-grants.md`
-- [0009] Sessions talk through the inbox a hook writes — `decisions/0009-sessions-talk-through-the-inbox.md`
 - [0010] The founder accepts the work, the session does the rest — `decisions/0010-the-founder-accepts-the-work.md`
 - [0011] A delivery closes the card it delivered — `decisions/0011-a-delivery-closes-the-card.md`
 - [0012] A suite is a path, and a turn is judged by the suites its diff reaches — `decisions/0012-a-suite-is-a-path.md`
@@ -11,4 +9,6 @@
 - [0016] Off means off, on the next tool call, and only the founder says it — `decisions/0016-off-means-off.md`
 - [0017] A gate never refuses the act that resolves it — `decisions/0017-a-gate-does-not-block-its-own-remedy.md`
 - [0018] The ledger lives in the main checkout and out of git — `decisions/0018-the-ledger-is-out-of-git.md`
-- ... 7 older, see `decisions/`
+- [0019] A finished tree removes itself, and what the plugin may not remove it names — `decisions/0019-a-finished-tree-removes-itself.md`
+- [0020] Every refusal leaves at least one command that runs on this machine — `decisions/0020-a-refusal-leaves-a-runnable-command.md`
+- ... 9 older, see `decisions/`

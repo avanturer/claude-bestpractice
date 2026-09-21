@@ -317,6 +317,26 @@ def blob_sha(ctx: GitContext, relpath: str) -> str | None:
     return out or None
 
 
+# What "the trunk" resolves to, in the order a clone is likely to have it. `origin/HEAD`
+# first because it is the only one that is right in a repository whose default branch is
+# neither `main` nor `master`.
+TRUNK_REFS = ("origin/HEAD", "origin/main", "origin/master")
+
+
+def trunk_ref(ctx: GitContext) -> str:
+    """The first trunk ref this clone actually has, or "" for a clone with no remote.
+
+    Asked here rather than by each caller looping over the three names: a loop that treats
+    "this ref does not exist" and "there is nothing to report" as the same answer stops at
+    the first name and reports nothing — which is how the branch-naming line found no
+    branches in a repository that had one (caught by its own test).
+    """
+    for ref in TRUNK_REFS:
+        if _run(["rev-parse", "--verify", "--quiet", ref], ctx.worktree_root, check=False).strip():
+            return ref
+    return ""
+
+
 def is_ancestor(ctx: GitContext, maybe_ancestor: str, descendant: str = "HEAD") -> bool:
     proc = subprocess.run(
         ["git", "merge-base", "--is-ancestor", maybe_ancestor, descendant],

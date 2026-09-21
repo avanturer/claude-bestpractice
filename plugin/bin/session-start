@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import board, ci, config, hookio, knowledge, limits, migrate, onboard, plan, policy, sessions, stage, store, upgrade, worktree  # noqa: E402
+from claude_bestpractice import board, ci, config, hookio, knowledge, limits, migrate, onboard, plan, policy, pullrequest, sessions, stage, store, upgrade, worktree  # noqa: E402
 from claude_bestpractice.gitctx import GitContext, resolve, stash_baseline  # noqa: E402
 
 
@@ -275,6 +275,77 @@ def _stranded_line(ctx: GitContext) -> str:
     )
 
 
+def _removable_line(ctx: GitContext) -> str:
+    """Trees standing over a branch that is already in, that this plugin may not remove.
+
+    It removes its OWN the moment the work in them lands (`worktree.release_mine`), and it
+    will not touch a directory another tool made — so what is left is named. Fifteen of the
+    thirty-eight trees on the reporting repository were in exactly this state, with a
+    project rule that said to remove them and nothing that did (#220).
+
+    Empty once the trees are the plugin's own, which is the steady state it is now driving
+    towards, and empty in any clone with one checkout.
+    """
+    left = worktree.needs_a_decision(ctx)
+    if not left:
+        return ""
+    merged = [(path, branch) for path, branch in left if branch]
+    adrift = [path for path, branch in left if not branch]
+    shown = ", ".join(f"{Path(path).name} ({branch})" for path, branch in merged[:3])
+    more = f" (+{len(merged) - 3} more)" if len(merged) > 3 else ""
+    said = (
+        f"\nTREES NOBODY IS IN: {len(merged)} whose branch is already in the trunk — "
+        f"{shown}{more}; nothing in them is unmerged, so "
+        f"`git -C {worktree.main_checkout(ctx)} worktree remove <path>` and "
+        "`git branch -d <branch>` lose nothing. This plugin removes the trees IT made and "
+        "leaves these."
+    ) if merged else "\nTREES NOBODY IS IN:"
+    if adrift:
+        # A detached HEAD is worse than a stale tree and reads the same from outside: the
+        # commits in it are on no branch, so removing the directory is what loses them.
+        said += (
+            f" {len(adrift)} on a DETACHED HEAD ({', '.join(Path(p).name for p in adrift[:3])})"
+            " — whatever was committed there is on no branch and goes with the directory. "
+            "`git -C <path> log --oneline -3` says what is in one; `git -C <path> branch "
+            "<name>` keeps it."
+        )
+    return said
+
+
+def _unfinished_line(ctx: GitContext, cfg) -> str:
+    """Work that will never arrive on its own: a branch with no pull request, a PR nobody
+    has touched.
+
+    Both were invisible from inside a session. A branch with one commit and no pull request
+    was found a hundred and twenty-six commits behind the trunk, fixing a problem that had
+    since been reported twice more; three open pull requests had sat for a month. The board
+    showed neither, and neither did anything else a session reads (#220).
+
+    One line for both, because they are one subject, and two names of each: this is a prompt
+    to finish something, not a report to work through. Empty in a repository whose branches
+    all have pull requests and whose pull requests are all moving.
+    """
+    branches = pullrequest.branches_without_one(ctx, cfg.branch_without_pr_hours)
+    stale = pullrequest.idle(ctx, cfg.pull_request_idle_days)
+    if not branches and not stale:
+        return ""
+    items = [f"{name} ({age / 24:.0f}d, no pull request this clone has seen)"
+             if age >= 48 else f"{name} ({age:.0f}h, no pull request this clone has seen)"
+             for name, age in branches[:2]]
+    # A number of 0 means the obligation was recorded before anything learned the number —
+    # `gh pr create` in a shell this gate could not parse. "PR #0" is a lie the branch is not.
+    items += [f"{f'PR #{number}' if number else 'a pull request'} on {branch} "
+              f"({days:.0f}d, no movement)" for number, branch, days in stale[:2]]
+    over = len(branches) + len(stale) - len(items)
+    return (
+        f"\nNOBODY IS COMING BACK TO THESE: {'; '.join(items)}"
+        + (f" (+{over} more)" if over > 0 else "")
+        + ". A branch nothing points at is work that never arrives. Check with "
+        "`gh pr list --head <branch>`, open one with `claude-bp-ship --pr`, or delete the "
+        "branch — and tell the founder before deleting anything that was not merged."
+    )
+
+
 def _knowledge_line(ctx: GitContext) -> str:
     """Say so when this repository has no knowledge layer. Once, and then never.
 
@@ -447,6 +518,11 @@ def main() -> None:
     body += _swept_line(swept)
     body += _reclaimed_line(returned)
     body += _stranded_line(ctx)
+    # Both empty in the steady state, and the steady state is what the removal above
+    # produces: a tree whose work is in and whose cards are closed is gone before this
+    # line could name it.
+    body += _removable_line(ctx)
+    body += _unfinished_line(ctx, cfg)
     body += _denied_line(ctx)
     # Silent until a status line has run once, and silent again when the numbers go stale.
     body += limits.line(ctx)

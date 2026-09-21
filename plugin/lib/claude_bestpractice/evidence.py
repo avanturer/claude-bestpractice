@@ -67,6 +67,10 @@ class Artifact:
     detail: str
     skipped: int = 0
     bound: bool = False
+    # The source files the failing tests live in, when the report says. A count answers
+    # "is it red"; this answers "red about what", which is what decides whether the
+    # failure is the session's change or the tree it is standing in (#220).
+    failures: tuple[str, ...] = ()
 
 
 @dataclass
@@ -124,7 +128,26 @@ def _parse_junit(path: Path, mtime: float) -> Artifact | None:
     executed = max(total - skipped, 0)
     passed = executed > 0 and failed == 0
     detail = _detail(executed, failed, skipped)
-    return Artifact(path, mtime, passed, total, failed, detail, skipped)
+    return Artifact(path, mtime, passed, total, failed, detail, skipped,
+                    failures=_junit_failures(root))
+
+
+def _junit_failures(root: "ET.Element") -> tuple[str, ...]:
+    """The files of the failing test cases, from the `file` attribute JUnit writers set.
+
+    Absent in some writers, and then this is empty rather than guessed: a classname is a
+    module path in Python, a suite name in Go and a describe block in Jest, and turning one
+    into a filename is the kind of inference this plugin does not make about somebody's
+    repository.
+    """
+    out: list[str] = []
+    for case in root.iter("testcase"):
+        if not any(case.iter("failure")) and not any(case.iter("error")):
+            continue
+        where = (case.get("file") or "").strip()
+        if where and where not in out:
+            out.append(where)
+    return tuple(out[:8])
 
 
 def _detail(executed: int, failed: int, skipped: int) -> str:
@@ -149,7 +172,23 @@ def _parse_pytest_json(path: Path, mtime: float) -> Artifact | None:
     skipped = int(summary.get("skipped", 0)) + int(summary.get("deselected", 0))
     executed = max(total - skipped, 0)
     passed = executed > 0 and failed == 0 and data.get("exitcode", 0) == 0
-    return Artifact(path, mtime, passed, total, failed, _detail(executed, failed, skipped), skipped)
+    return Artifact(path, mtime, passed, total, failed, _detail(executed, failed, skipped), skipped,
+                    failures=_json_failures(data))
+
+
+def _json_failures(data: dict) -> tuple[str, ...]:
+    """The files of the failing tests in a pytest JSON report: the node id up to its `::`."""
+    rows = data.get("tests")
+    if not isinstance(rows, list):
+        return ()
+    out: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict) or row.get("outcome") not in ("failed", "error"):
+            continue
+        where = str(row.get("nodeid") or "").split("::")[0].strip()
+        if where and where not in out:
+            out.append(where)
+    return tuple(out[:8])
 
 
 # A gate that tells a Node project to run pytest is a gate the agent learns to ignore.
@@ -450,6 +489,112 @@ def _verify_one(ctx: GitContext, globs: list[str], changed: list[str], suite,
     return _verify_by_declared_command(ctx, globs, suite, tree, seconds)
 
 
+# Paths in a failing run's output, by extension. Matched loosely and then checked against
+# the filesystem, because the check is what makes it safe: a sentence that happens to read
+# like a path is not one if no such file exists.
+_SOURCE_PATH = re.compile(
+    r"(?<![\w/.-])((?:[\w.-]+/)*[\w.-]+\.(?:py|js|jsx|mjs|cjs|ts|tsx|go|rb|rs|java|kt|php|cs))"
+)
+
+
+def failing_files(ctx: GitContext, verdict: "Verdict") -> list[str]:
+    """The source files a failing verdict is about, repository-relative. Empty if unknown.
+
+    From the report when it said — pytest's JUnit writes `file=` on every case — and
+    otherwise from the text of the refusal, which is where a failing run prints them.
+    Every candidate has to exist in the tree, so prose is never read as a path.
+    """
+    found = list(verdict.artifact.failures if verdict.artifact else ())
+    found += _SOURCE_PATH.findall(verdict.reason or "")
+    out: list[str] = []
+    for candidate in dict.fromkeys(found):
+        rel = candidate.lstrip("./")
+        if rel not in out and (ctx.worktree_root / rel).is_file():
+            out.append(rel)
+    return out[:8]
+
+
+def not_this_trees_code(ctx: GitContext, failing: list[str], changed: list[str]) -> str:
+    """Why a red suite may be nothing to do with this session's change. "" when it is.
+
+    The founder's ask: "прежде чем винить сессию, сверять — падают ли те же тесты на
+    origin/main. Если на main они зелёные, это отставание дерева, и говорить надо об этом, а
+    не о коде." A shared checkout three commits behind failed four tests that did not exist
+    on the trunk, and the gate told a session whose work was already merged that its suite
+    was red — which put it in the loop of #217 (#220).
+
+    Answered by comparing the CODE rather than by running the trunk's suite: a second full
+    run inside the longest-lived hook in this plugin costs the founder minutes on every
+    refusal, and a run in a throwaway checkout of somebody else's commit has none of the
+    dependencies installed. So this says what it knows — these files fail, they are not in
+    your diff, and here is how they stand against the trunk — and never says the trunk is
+    green, which it has not observed.
+
+    Silent whenever any failing file IS in the session's diff. A session's own change is
+    its own business, and excusing one failure in a set that includes theirs would be this
+    gate helping to ship a break.
+    """
+    from .gitctx import trunk_ref
+
+    trunk = trunk_ref(ctx)
+    files = _none_of_them_mine(failing, changed)
+    if not trunk or not files:
+        return ""
+    differs = _differing_from(ctx, trunk, files)
+    moved = [path for path in files if path in differs]
+    behind = _behind(ctx, trunk)
+    if moved and behind:
+        return (
+            f"\n  This may not be this session's change: {', '.join(moved[:3])} fails here, is "
+            f"not in this session's diff, and differs from {trunk} — and this tree is {behind} "
+            f"commit(s) behind it. Bring the tree level before treating the failure as the "
+            f"code's: `git merge --ff-only {trunk}` (`git rebase {trunk}` if that is refused), "
+            "then run the suite again."
+        )
+    same = [path for path in files if path not in differs]
+    if not same:
+        return ""
+    return (
+        f"\n  This may not be this session's change either: {', '.join(same[:3])} fails on code "
+        f"identical to {trunk} and is not in this session's diff, so the trunk is red here too. "
+        f"Report that rather than chasing it — `git log -1 {trunk} -- {same[0]}` names what last "
+        "touched it."
+    )
+
+
+def _none_of_them_mine(failing: list[str], changed: list[str]) -> list[str]:
+    """The failing files, or nothing at all when any one of them is the session's own change.
+
+    All or nothing on purpose: excusing one failure out of a set that includes the session's
+    would be this gate helping to ship a break.
+    """
+    mine = {path.replace("\\", "/") for path in changed}
+    files = [path for path in dict.fromkeys(failing) if path]
+    return [] if any(path in mine for path in files) else files
+
+
+def _differing_from(ctx: GitContext, trunk: str, files: list[str]) -> set[str]:
+    """Which of these files this tree holds differently from the trunk. Empty if unaskable."""
+    from .gitctx import _run
+
+    try:
+        return set(_run(["diff", "--name-only", trunk, "--", *files],
+                        ctx.worktree_root, check=False).split())
+    except Exception:  # noqa: BLE001 - a diagnostic line must never fail a verdict
+        return set()
+
+
+def _behind(ctx: GitContext, trunk: str) -> int:
+    """Commits the trunk has that this tree does not. 0 when it cannot be asked."""
+    from .gitctx import _run
+
+    try:
+        count = _run(["rev-list", "--count", f"HEAD..{trunk}"], ctx.worktree_root, check=False)
+    except Exception:  # noqa: BLE001 - see above
+        return 0
+    return int(count.strip()) if count.strip().isdigit() else 0
+
+
 def behind_the_trunk(ctx: GitContext) -> str:
     """How far this tree lags the trunk, as a line to add to a failure. "" when it is level.
 
@@ -462,25 +607,18 @@ def behind_the_trunk(ctx: GitContext) -> str:
     run inside the longest-lived hook in this plugin, and merging the trunk in is a decision
     about somebody's working tree.
     """
-    from .gitctx import _run
+    from .gitctx import trunk_ref
 
-    for trunk in ("origin/HEAD", "origin/main", "origin/master"):
-        try:
-            count = _run(["rev-list", "--count", f"HEAD..{trunk}"], ctx.worktree_root, check=False)
-        except Exception:  # noqa: BLE001 - a diagnostic line must never fail a verdict
-            return ""
-        if not count.strip().isdigit():
-            continue
-        behind = int(count.strip())
-        if behind <= 0:
-            return ""
-        return (
-            f"\n  This tree is {behind} commit(s) behind {trunk}, so some of what just ran is "
-            "code the trunk has already replaced. If these tests pass there, the tree is what "
-            f"is stale: `git merge --ff-only {trunk}` and run it again before treating the "
-            "failure as this session's."
-        )
-    return ""
+    trunk = trunk_ref(ctx)
+    behind = _behind(ctx, trunk) if trunk else 0
+    if not behind:
+        return ""
+    return (
+        f"\n  This tree is {behind} commit(s) behind {trunk}, so some of what just ran is code "
+        "the trunk has already replaced. If these tests pass there, the tree is what is stale: "
+        f"`git merge --ff-only {trunk}` and run it again before treating the failure as this "
+        "session's."
+    )
 
 
 REASSERT_SECONDS = 3600.0
