@@ -4,8 +4,8 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-1.65.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-1615%20passing-2ea44f)](#verified)
+[![version](https://img.shields.io/badge/version-1.66.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-1669%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-34%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
@@ -264,6 +264,27 @@ It interrupts **once** per pull request and then carries it on the board, so ign
 crashing, or hitting the escalation ceiling cannot turn a reminder into a wedge. Off with
 `{"manage_pull_requests": false}`.
 
+### Closing the work, not just doing it
+
+Isolation is the half that works: one tree per session, and in sixty days of three to eight
+parallel sessions, zero commits mixing the board with code and zero confused HEADs. The
+other half is putting it away, and it had nothing behind it — thirty-eight worktrees on one
+clone, fifteen of them over a branch already merged, with a project rule that said to remove
+them.
+
+So a tree this plugin provisioned **removes itself** on the turn that finishes the work: its
+branch in the trunk (by ancestry or by content, which is what a squash leaves), every card
+this session holds closed and at least one of them closed, `git status` in it empty including
+untracked files, and it is not the main checkout. The act is `git worktree remove` with no
+`--force`, so git refuses over anything at all in the tree; the branch goes with `-d`, or
+`-D` on one proof and no other — every file it delivers already byte-identical to the trunk.
+You are not asked, which is the point. `{"remove_finished_trees": false}` turns it off.
+
+A tree another tool created is never removed, because that is not a plugin's call. It is
+**named** instead, with the command — as is a branch carrying commits that no pull request
+here has seen, and a pull request nothing has moved in a week. All three lines are empty in
+the steady state, which is the state the removal produces.
+
 ### The three things that wait for your word
 
 Some actions cannot be undone by re-running them, and no amount of green says you wanted
@@ -402,7 +423,7 @@ In a session: `/claude-bestpractice:status` · `/claude-bestpractice:plan` · `/
 | `worktree-create` | WorktreeCreate | fails open | Names it, seeds trust, derives a private port and database |
 | `subagent-brief` | SubagentStart | fails open | Non-goals, entities and a query-biased map to agents that inherit no rules |
 | `checkpoint` | PreCompact | fails open | Extractive checkpoint, zero model calls, secrets scrubbed |
-| `evidence-gate` | Stop | **fails closed** | Scope drift, test evidence, clean re-run, a turn ending on an unanswered block; harvests decision drafts |
+| `evidence-gate` | Stop | **fails closed** | Scope drift, test evidence, clean re-run, a turn ending on an unanswered block; harvests decision drafts; puts a finished worktree away |
 
 Nine entries against a self-imposed budget of twelve. Always-on context **~332 tokens**
 against a cap of 400 — roughly 0.1 % of a 200k window.
@@ -412,7 +433,7 @@ against a cap of 400 — roughly 0.1 % of a 200k window.
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 1615 tests · 34 doctor checks · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 1669 tests · 35 doctor checks · budget
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration
@@ -486,7 +507,10 @@ quiet rather than loud, which is why they are written down:
 
 Two directories, and the difference matters:
 
-**`.claude/claude-bestpractice/` — commit this.** Tasks, decisions, dead ends, the stage marker.
+**`.claude/claude-bestpractice/` — commit this.** Decisions, dead ends, the stage marker, the
+config the gates read. The task ledger lives here too and is deliberately NOT tracked — its
+cards are written by every session in the clone, and tracking them put a dozen branches'
+board files in one shared `git status` (decision 0018).
 It is deliberately inside your repository because it must travel with the branch: a
 decision taken on `feat/billing` is about `feat/billing`, and a task list that does not
 follow a branch switch is worse than none. One file per item, so five worktrees produce

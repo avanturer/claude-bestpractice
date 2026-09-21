@@ -1,5 +1,115 @@
 # Changelog
 
+## v1.66.0
+
+Closing the work — putting the tree away, getting the branch to a pull request, leaving
+nothing behind — stops being the phase nothing supports.
+
+### What happened
+
+#220 measured a repository where three to eight sessions run on one clone all day. Isolation,
+the half this plugin got right, holds: zero commits mixing the board with code and zero
+confused HEADs in sixty days. What the same measurement found on the other side:
+
+```
+worktrees besides the main checkout:                             38
+  branch already merged into main (the tree should have gone):   15
+  no commit in 7+ days:                                          28
+local branches:                                                 135
+  already merged into main (should have been deleted):           31
+```
+
+"Remove your tree after the merge" was written in that project's own instructions the whole
+time, and fifteen trees stood anyway. That is what an instruction is worth without a mechanism
+— and the founder's answer was to give it one: *"когда из ворктри уже все замерджили и модель
+даже ВСЕ свои задачи закрыла то она сама его удаляла, так ничего мы не теряем и меня не будет
+тыркать она с разрешением"*.
+
+### A finished tree removes itself, and its branch with it (#220)
+
+On the turn the Stop gate allows, a tree this plugin provisioned for this session is removed
+when all four hold — and every one of them is a fact rather than a judgement:
+
+- the branch's work is in the trunk, by ancestry or by content identity (a squash),
+- this session has closed every card it holds, and closed at least one,
+- `git status` in the tree is empty, untracked files included,
+- it is not the main checkout, which outlives every session by design.
+
+The act is `git worktree remove` with no `--force`, so git refuses over anything at all in
+the tree and the conditions above only decide whether to ask it. The branch goes with `-d`,
+or `-D` on one proof and no other: every file it delivers already byte-identical to the
+trunk, which is what a squash merge leaves behind and why thirty-one merged branches were
+still there. The sweep that clears a dead session's tree learned the same proof.
+
+Verified by its own test, which caught the way this could have gone wrong: asking for the
+main checkout's path AFTER removing the tree raised `FileNotFoundError` inside a gate that
+fails closed, so the session that had just finished its work would have been blocked by the
+housekeeping that followed it.
+
+No migration step ships with this, and that is not an omission: the sweep and the naming
+line reach an upgraded clone on its next session start, and the trees already standing over a
+merged branch are exactly what they are about.
+
+What it does NOT take is the tree's own Postgres database. Dropping a database is the class
+of act this plugin holds for the founder's word, and an orphan database costs disk where an
+orphan directory costs a fast-forward — so it is left, and a new tree gets a new one.
+
+`remove_finished_trees: false` turns it off. The cost it accepts, stated plainly: a session
+that finishes one task and starts another gets a NEW tree and pays for its setup again —
+against which that tree is cut from a trunk that has moved on, rather than being the stale
+one that made a suite red on code nobody present wrote.
+
+### What the plugin may not remove, it names (#220)
+
+Deleting a directory another tool created is not a plugin's call, and most of those
+thirty-eight trees were not this plugin's. So the board names them, with the command:
+`MERGED TREES STANDING` for a tree standing over a merged branch that nobody is in, and
+`NOBODY IS COMING BACK TO THESE` for a branch carrying commits no pull request here has seen
+(`branch_without_pr_hours`, twelve) and a pull request nothing has moved (`pull_request_idle_days`,
+seven). The live example: a branch with one commit, no pull request ever opened, 126 commits
+behind the trunk, fixing the very problem two later issues were about — invisible to the
+board, to `gh pr list` and to everything else a session reads.
+
+Both lines are empty in the steady state, which is the state the removal above produces, so
+the always-on context cost is unchanged at ~332 of 400 tokens. Nothing here calls the
+network: the line says "no pull request this clone has seen" and names `gh pr list --head`
+rather than asserting there is none.
+
+### `git add -A` stops carrying a sibling's work (#220)
+
+Reported as it happened: *"при обычном `git add -A` в коммит затянуло ~50 файлов ledger от
+чужих веток — пришлось делать `reset --soft`"*. In a shared checkout that is the DEFAULT
+outcome of the commonest staging command there is. `git add -A`, `add .`, `add -u` and
+`commit -a` are now refused when the tree holds paths the coordination layer can name as
+somebody else's — a live sibling's lease, a live sibling's card, or the ledger, which belongs
+to everybody — and the refusal names `git add --` with this session's own paths filled in. In
+a tree of one session's own, which is where this plugin sends every session, it never fires.
+
+### A red suite is measured against the trunk before it is blamed on the session (#220)
+
+A checkout three commits behind failed four tests that were green on the trunk, and the gate
+called the suite red on work that was already merged. A failing verdict now says which files
+failed, whether they are in this session's diff at all, and how they stand against the trunk:
+different from it while the tree is behind → the tree is stale, with `git merge --ff-only`;
+byte-identical to it → the trunk is red here too, and that is what to report. It still
+blocks, and it never claims the trunk's suite is green, because nothing here ran it.
+
+### Also
+
+The README said `.claude/claude-bestpractice/` holds "tasks, decisions, dead ends" and to commit
+it. v1.65.0 took the ledger out of git and did not say so there — corrected, in all three
+languages, along with the gate table and the counts.
+
+### Every refusal leaves a command that runs (#220)
+
+Three defects in one day where the prescribed action was impossible, so the founder proposed
+an invariant: *"у каждого отказа обязана существовать хотя бы одна команда, которую сессия
+может выполнить прямо сейчас. Если её нет — это не гейт, а тупик."* Doctor check 35 provokes
+refusals through both funnels — a `deny` and the Stop gate's block — reads every command each
+one names, and fails when a named program does not exist on this machine, which is exactly
+how #216 got out the door. Its own first run reported a dead end where there was an exit; the
+bug was in the checker, and the test for it is in the suite.
+
 ## v1.65.0
 
 The plugin's own bookkeeping stops being the founder's dirty tree.
