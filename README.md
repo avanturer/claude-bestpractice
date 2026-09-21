@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-1.67.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-1.68.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-1669%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-34%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -431,8 +431,8 @@ In a session: `/claude-bestpractice:status` · `/claude-bestpractice:plan` · `/
 | `review-commit` | `if: Bash(git commit:*)` | async rewake | Reviews this turn's diff; wakes you only when there is something to say |
 | `worktree-create` | WorktreeCreate | fails open | Names it, seeds trust, derives a private port and database |
 | `subagent-brief` | SubagentStart | fails open | Non-goals, entities and a query-biased map to agents that inherit no rules |
-| `checkpoint` | PreCompact | fails open | Extractive checkpoint, zero model calls, secrets scrubbed |
-| `evidence-gate` | Stop | **fails closed** | Scope drift, test evidence, clean re-run, a turn ending on an unanswered block; harvests decision drafts; puts a finished worktree away |
+| `checkpoint` | PreCompact | fails open | Extractive checkpoint, zero model calls, secrets scrubbed. **Never refuses a compaction** — a refusal there reaches the founder, never the model (decision 0021) |
+| `evidence-gate` | Stop | **fails closed** | Scope drift, test evidence, clean re-run, a turn ending on an unanswered block; harvests decision drafts; asks once for what only this window knows; puts a finished worktree away |
 
 Nine entries against a self-imposed budget of twelve. Always-on context **~332 tokens**
 against a cap of 400 — roughly 0.1 % of a 200k window.

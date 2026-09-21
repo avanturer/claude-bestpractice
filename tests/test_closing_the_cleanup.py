@@ -259,10 +259,10 @@ class TestFinishingWhatWasLeftBehind(CleanupCase):
 
         changed = migrate.repair(self.ctx())
 
-        self.assertTrue(any("0016-finish-removals-done-by-hand" in line for line in changed),
+        self.assertTrue(any("0017-finish-removals-done-by-hand" in line for line in changed),
                         changed)
         self.assertEqual([], [line for line in migrate.repair(self.ctx())
-                              if "0016-finish-removals" in line])
+                              if "0017-finish-removals" in line])
 
 
 if __name__ == "__main__":

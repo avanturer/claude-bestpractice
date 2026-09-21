@@ -230,6 +230,109 @@ def _give_up(ctx, rec: sessions.SessionRecord, reason: str, changed: list) -> No
     )
 
 
+# The one thing a window holds that nothing on disk does: the finding reasoned out and
+# never filed, the approach tried and abandoned. Asked from HERE and not from the
+# `PreCompact` checkpoint where it used to live — that event can refuse a compaction but
+# cannot produce a model call, so its refusal was read by the founder alone and cost them
+# the `/compact` they had just typed. The note at the top of `plugin/bin/checkpoint`
+# carries the measurement.
+#
+# Marked with an INT, and that is load-bearing rather than incidental: `pre-tool` rewrites
+# `tool_signatures` on every allowed call and keeps only the integer-valued keys, so a
+# marker stored as a string or a bool is dropped by the session's next tool call — and a
+# once-per-session ask whose mark evaporates is an ask every turn.
+NOTES_ASKED = "_notes_asked"
+
+
+def _nothing_written_down(ctx, rec: sessions.SessionRecord) -> bool:
+    """Has this session put nothing on disk that its own diff does not already say?
+
+    Two places count, because two places are read back: an attempt, which `board.render`
+    surfaces to the next session that touches the same paths, and the body of a card this
+    session owns, which `checkpoint` carries into the restore after a compaction. A
+    session that has written either has already answered what the demand asks for.
+
+    An unreadable ledger answers "something was written". A gate that invents an
+    interruption out of its own failure to read is worse than one that misses a note.
+    """
+    from claude_bestpractice import plan
+
+    try:
+        if any(a.session_id == rec.session_id for a in attempts.load_all(ctx)):
+            return False
+        mine = [t for t in plan.load_all(ctx) if t.owner == rec.session_id]
+        # `plan.NO_DETAIL` is what `add` writes when the card was filed without one, so it
+        # is the absence of a body rather than a body. Compared against the constant and
+        # not against its spelling: every card this session ever filed reads as written
+        # down the moment those two drift apart.
+        return not any(t.body.strip() not in ("", plan.NO_DETAIL) for t in mine)
+    except Exception:  # noqa: BLE001 - unreadable is not the same as empty; see above
+        return False
+
+
+def _notes_demand(ctx, rec: sessions.SessionRecord, changed: list) -> str:
+    """The ask itself, naming the command that writes each field in THIS session's state.
+
+    Commands that exist, and only those: the version of this demand that lived in the
+    compaction hook spent the session's single interruption on `claude-bp-attempt record`
+    (the verb is `add`), on `claim` to write a body it cannot write, and on
+    `claude-bp-decide`, which offers a model no way to file anything at all — its drafts
+    are harvested from the FOUNDER's corrections, so "say it plainly and it will be
+    caught" was simply untrue. Two fields now, each with a command the session can run.
+    """
+    from claude_bestpractice import plan
+
+    mine = [t for t in plan.load_all(ctx, plan.DOING) if t.owner == rec.session_id]
+    if mine:
+        learned = (f'claude-bp-plan update {mine[0].id} --note "<what this window learned '
+                   'that the code does not say>"\n              (REPLACES the card body, '
+                   'so keep what is still true)')
+    else:
+        learned = ('claude-bp-plan park "<what is left to do>" --paths '
+                   f'{",".join(changed[:3])} --note "<what is known and where it stands>"')
+    return (
+        "claude-bestpractice: this turn is verified and may end. Before it does — and "
+        "before a compaction, after which you will be nearly new — put on disk what is "
+        "only in this conversation. Asked once per session, and not again.\n"
+        f"  LEARNED   — {learned}\n"
+        '  RULED OUT — claude-bp-attempt add "<approach>" --why "<why it failed>" '
+        f"--paths {' '.join(changed[:3])}\n"
+        "              (an approach abandoned and not written down is one the next "
+        "window tries again)\n"
+        "Write what is true, skip the field that is not, then finish. Nothing else is owed."
+    )
+
+
+def _ask_for_the_notes_once(ctx, rec: sessions.SessionRecord, cfg, changed: list) -> None:
+    """Ask, once in a session's life, for the material a new window cannot recover.
+
+    Three conditions, and each one is the cost of getting it wrong. ENOUGH WORK first:
+    `notes_after_calls` tool calls, counted on our own session record rather than
+    estimated from a transcript whose format is documented as internal — a session eight
+    calls in has nothing to hand forward, and being asked anyway is what teaches an agent
+    that this plugin is noise. NOTHING FILED second, so a session that has been writing
+    its card and its dead ends as it went is never interrupted for doing the right thing.
+    And ONCE, marked before the ask is raised exactly like the pull-request hand-off, so a
+    session that ignores it, crashes, or reaches this line again three turns later does
+    not meet it twice.
+
+    `hookio.ask` and not `hookio.block`, and the difference is not cosmetic: a block is
+    counted by the escalation above, and four of them end the turn UNVERIFIED and file a
+    permanent failed attempt against work that passed its suite. Notes are worth one
+    turn; they are not worth a false failure on the record.
+    """
+    if cfg.notes_after_calls <= 0 or rec.tool_calls < cfg.notes_after_calls:
+        return
+    if rec.tool_signatures.get(NOTES_ASKED):
+        return
+    if not _nothing_written_down(ctx, rec):
+        return
+    payload = dict(rec.tool_signatures)
+    payload[NOTES_ASKED] = 1
+    sessions.touch(ctx, rec.session_id, tool_signatures=payload)
+    hookio.ask(_notes_demand(ctx, rec, changed))
+
+
 def _work_the_siblings_cannot_see(ctx) -> bool:
     """Is there anything left for the board to warn the other sessions about?
 
@@ -642,6 +745,11 @@ def main() -> None:
         if unverified_reason:
             _give_up(ctx, rec, unverified_reason, changed)
             sys.stderr.write(f"claude-bestpractice: finishing UNVERIFIED — {unverified_reason}\n")
+        else:
+            # Last, and only where the work stands up. A turn being refused has something
+            # more urgent to say, and one finishing UNVERIFIED is already on the record as
+            # a failure — asking either of them for notes is the gate talking over itself.
+            _ask_for_the_notes_once(ctx, rec, cfg, changed)
         _allow(ctx, rec, cfg)
 
     reason = "\n\n".join(problems)

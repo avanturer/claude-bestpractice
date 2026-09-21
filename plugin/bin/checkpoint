@@ -17,6 +17,21 @@ TRANSCRIPT HANDLING: the transcript format is documented as internal and changin
 between releases, so it is used only as optional enrichment. Everything load-bearing
 comes from our own session record. If the transcript cannot be read or its shape
 changed, the checkpoint is still written — just thinner.
+
+AND IT NEVER BLOCKS, WHICH IS NOT A JUDGEMENT ABOUT STRICTNESS. `PreCompact` is listed as
+an event that can refuse, and for three releases this hook refused once per session to
+make the window write down what only it knew. That refusal could never be answered.
+Measured against the CLI (2.1.278) rather than read off the table: both `exit 2` and
+`{"decision": "block"}` end the turn with `num_turns: 0`, zero input and output tokens,
+and the text delivered as a `<synthetic>` assistant message. No model call happens at all
+— so the instruction reached nobody but the founder, whose `/compact` had just been
+cancelled along with the custom instructions they typed into it, and who then had to run
+it a second time to get the compaction they asked for the first time.
+
+The demand lives in the Stop gate now (`evidence-gate`, `_ask_for_the_notes_once`), which
+is the one event whose refusal both reaches the model and gives it a turn to act. Nothing
+here may block again: `claude-bp-doctor` runs the compaction this file used to refuse and
+fails if it is refused.
 """
 
 from __future__ import annotations
@@ -76,104 +91,6 @@ def read_user_turns(transcript_path: str) -> list[str]:
     return turns
 
 
-DEMANDED = "compaction-notes-demanded.json"
-
-
-def _demand_the_notes_once(ctx, event, rec, changed) -> None:
-    """Block the compaction once, so what only this window knows gets written down first.
-
-    Everything else in this file is a flush: it copies what is already on disk. The gap it
-    cannot close is the substance that never left the conversation — the finding reasoned
-    out and never filed, the approach abandoned and never recorded. After compaction the
-    model is nearly new, and that material is simply gone.
-
-    `PreCompact` is the one event that can block, and this is the one thing worth blocking
-    for. It replaces the founder having to say "prepare for the compaction" by hand, which
-    is what they were doing — at the right moment, with the window still holding the
-    context, and without them present.
-
-    ONCE per session, and marked BEFORE the block is raised: a session that ignores this,
-    crashes, or hits it again on the next compaction must not meet it twice. One
-    unignorable interruption is the whole budget. And only when work actually happened —
-    a session that changed nothing has nothing to write down.
-    """
-    if not changed:
-        return
-    # NEVER on a compaction the session did not choose. `trigger` is "auto" when the
-    # harness compacts because the window is full — the session is already at the wall,
-    # and blocking there costs it a turn it has no room for: it cannot compact, because
-    # we refused, and it cannot proceed, because the context is spent. A gate that wedges
-    # a session at its worst moment is worse than the notes it was protecting.
-    #
-    # "Block unless auto" rather than "block only when manual": if the field is ever
-    # absent the behaviour is today's, and the change costs nothing where it is not needed.
-    if str(event.raw.get("trigger", "")).strip().lower() == "auto":
-        return
-    path = store.tier_b(ctx, DEMANDED)
-    seen = store.read_json(path, default=[])
-    if not isinstance(seen, list):
-        seen = []
-    if event.session_id in seen:
-        return
-    store.write_json(path, (seen + [event.session_id])[-40:])
-
-    task = ""
-    if rec and rec.task_statement:
-        task = f"\nThis session was asked: {rec.task_statement[:200]}\n"
-
-    # Name the card and the command that writes it, not the field in the abstract. The
-    # previous wording named three commands and got all three wrong: `claude-bp-attempt
-    # record` is not a subcommand at all (the verb is `add`), `claim` cannot write a body,
-    # and `add` files a SECOND card for a session that already holds one. This is the only
-    # interruption the whole session is allowed, and it was spending it on instructions
-    # that error out.
-    learned = (
-        '`claude-bp-plan add "<what this window was for>" '
-        '--body "<what you learned that is not in the code>"`'
-    )
-    from claude_bestpractice import plan
-
-    try:
-        # OWNERSHIP IS REQUIRED HERE, unlike in `_carried`. Without a record `_carried`
-        # carries every in-flight card, which over-reports into this window's own restore
-        # and costs nothing. Naming one in the demand is different: it hands out a WRITE
-        # command, and the first card in `doing` may belong to a live sibling.
-        mine = [] if rec is None else [
-            t for t in plan.load_all(ctx, plan.DOING) if t.owner == rec.session_id
-        ]
-    except Exception:  # noqa: BLE001 - the demand must survive an unreadable ledger
-        mine = []
-    if mine:
-        card = mine[0]
-        task += f"The card it holds is {card.id} {card.title}.\n"
-        # `--note` REPLACES the handoff (`plan.amend`: `note.strip() or body`), so a demand
-        # that called this "add what you learned" would have the window silently delete the
-        # plan a `park` left behind. Say what the command does.
-        learned = (f'`claude-bp-plan update {card.id} --note "<the handoff, rewritten to '
-                   'carry what you learned>"` — this REPLACES the card body, so keep what '
-                   'is still true')
-
-    hookio.block(
-        "claude-bestpractice: this window is about to be compacted, and after it you will be "
-        "nearly new. What is on disk survives; what is only in this conversation does not.\n"
-        f"{task}"
-        "Write down now, before anything else — this is the last moment the material still "
-        "exists. Three fields, three commands:\n"
-        f"  LEARNED   — not in the code yet: {learned}\n"
-        "              (this is the field a restored window is handed back; the board "
-        "renders the title alone.)\n"
-        '  RULED OUT — tried and abandoned: `claude-bp-attempt add "<approach>" '
-        '--why "<why it failed>" --paths <files>`\n'
-        "              (an approach ruled out and not written down is one the next window "
-        "tries again.)\n"
-        "  DECIDED   — outlives this task: say it plainly in this turn. It is harvested "
-        "when the turn ends; `claude-bp-decide list` shows what was caught and "
-        "`claude-bp-decide accept <n>` promotes it.\n"
-        "Then let the compaction proceed. This will not be raised again in this session, so "
-        "if you skip it the material is gone."
-    )
-
-
 # One claimed card, its body and its paths. The section is bounded because the restore
 # that reads it is head-sliced: an unbounded section here would evict the opening request
 # instead of the file list, which is the same defect pointing the other way.
@@ -216,9 +133,9 @@ def _carried(ctx, rec) -> list:
     head, so whatever sits last is what disappears.
 
     What is genuinely unrecoverable is this: `plan.render_for_board` prints `id` and
-    `title[:80]` and never the body, and the body is exactly where `_demand_the_notes_once`
-    blocks the compaction to make the session write what it learned. Measured before this
-    changed: past ~21 changed files the restore contained neither.
+    `title[:80]` and never the body, and the body is exactly what the Stop gate's notes
+    demand asks the session to write. Measured before this changed: past ~21 changed files
+    the restore contained neither.
     """
     from claude_bestpractice import plan
 
@@ -313,7 +230,6 @@ def main() -> None:
     path = store.tier_a(ctx, "checkpoints", name)
     store.atomic_write(path, "\n".join(lines) + "\n", mode=0o644)
 
-    _demand_the_notes_once(ctx, event, rec, changed)
     hookio.emit_silent()
 
 
