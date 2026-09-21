@@ -609,29 +609,46 @@ def target_for(ctx: GitContext, slug: str) -> Path:
 # decision 0001 puts Tier B in the common dir.
 _EXCLUDE_LINE = "/.claude/worktrees/"
 
+# The ledger, for the same reason and a louder one. Its files are written by EVERY session
+# in the clone, into the one checkout they all share, so tracking them meant the founder's
+# shared tree carried 67 modified cards belonging to a dozen branches — which refuses
+# `git merge --ff-only`, which leaves that tree lagging `origin/main`, which makes its suite
+# red on code nobody present wrote, which is #216, #217 and #218 in one chain (#219).
+#
+# Untracked is the founder's own answer to it: "если журнал всё же в репозитории — он обязан
+# быть untracked". The cards stay exactly where v1.60.0 put them — in the main checkout, the
+# one tree that outlives the others — so nothing about their durability changes, and
+# `git worktree remove` still cannot take them.
+_LEDGER_EXCLUDE = "/.claude/claude-bestpractice/plan/"
+
+_EXCLUDED = (
+    (_EXCLUDE_LINE, "worktrees this plugin provisions"),
+    (_LEDGER_EXCLUDE, "the task ledger, written by every session and committed by none"),
+)
+
 
 def hide(ctx: GitContext) -> bool:
-    """Keep provisioned trees out of `git status`, once per clone.
+    """Keep this plugin's own files out of `git status`, once per clone.
 
-    Without this every session start reports the plugin's own scratch trees as untracked
-    work in the founder's repository — which is the exact complaint that put them outside
-    the repository in the first place.
+    Without it every session start reports the plugin's own scratch trees as untracked work
+    in the founder's repository — which is the exact complaint that put them outside the
+    repository in the first place — and every card any session writes lands in the shared
+    checkout's `git status` (#219).
     """
     exclude = ctx.common_dir / "info" / "exclude"
     try:
         current = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
     except OSError:
         return False
-    if any(line.strip() == _EXCLUDE_LINE for line in current.splitlines()):
+    present = {line.strip() for line in current.splitlines()}
+    missing = [(rule, why) for rule, why in _EXCLUDED if rule not in present]
+    if not missing:
         return True
     body = current if not current or current.endswith("\n") else current + "\n"
+    added = "".join(f"# claude-bestpractice: {why}\n{rule}\n" for rule, why in missing)
     try:
         exclude.parent.mkdir(parents=True, exist_ok=True)
-        store.atomic_write(
-            exclude,
-            f"{body}# claude-bestpractice: worktrees this plugin provisions\n{_EXCLUDE_LINE}\n",
-            mode=0o644,
-        )
+        store.atomic_write(exclude, body + added, mode=0o644)
     except OSError:
         return False
     return True

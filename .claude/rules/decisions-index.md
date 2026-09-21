@@ -1,6 +1,5 @@
 # Decisions
 
-- [0007] Read what is in the repository before reporting that it is not there — `decisions/0007-read-the-layer-before-declaring-it-absent.md`
 - [0008] The plugin holds the pen on facts about this repository, never on grants — `decisions/0008-the-plugin-writes-facts-never-grants.md`
 - [0009] Sessions talk through the inbox a hook writes — `decisions/0009-sessions-talk-through-the-inbox.md`
 - [0010] The founder accepts the work, the session does the rest — `decisions/0010-the-founder-accepts-the-work.md`
@@ -11,4 +10,5 @@
 - [0015] A spawn names the tier it runs as, and the count is the founder's number — `decisions/0015-a-spawn-names-its-tier.md`
 - [0016] Off means off, on the next tool call, and only the founder says it — `decisions/0016-off-means-off.md`
 - [0017] A gate never refuses the act that resolves it — `decisions/0017-a-gate-does-not-block-its-own-remedy.md`
-- ... 6 older, see `decisions/`
+- [0018] The ledger lives in the main checkout and out of git — `decisions/0018-the-ledger-is-out-of-git.md`
+- ... 7 older, see `decisions/`

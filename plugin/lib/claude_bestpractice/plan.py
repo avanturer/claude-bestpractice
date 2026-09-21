@@ -659,7 +659,15 @@ def _move(task: Task, state: str, owner: str = "", branch: str = "",
         task.id,
         meta.get("title", task.title),
         state,
-        owner if owner or state == DOING else "",
+        # The owner survives a CLOSURE, and only a closure. `done` used to clear it, so a
+        # card carried no trace of who finished it — and the gates ask exactly that: a
+        # session that added a card with the right paths, claimed it, did the work and
+        # closed it was then told "nothing on the board says this session is working", with
+        # `claim` answering "task is already done". The only way to keep the gate quiet was
+        # to leave the card open until the session ended, which is the opposite of what
+        # closing means (#220). `pause` and `next` still release it: those hand the work
+        # back, and an unclaimed card is the point of them.
+        owner or (meta.get("owner", "") if state in (DOING, DONE) else ""),
         branch or meta.get("branch", ""),
         body,
         # Carried, not dropped. A transition that forgets the files and the finish

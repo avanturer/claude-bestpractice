@@ -450,6 +450,39 @@ def _verify_one(ctx: GitContext, globs: list[str], changed: list[str], suite,
     return _verify_by_declared_command(ctx, globs, suite, tree, seconds)
 
 
+def behind_the_trunk(ctx: GitContext) -> str:
+    """How far this tree lags the trunk, as a line to add to a failure. "" when it is level.
+
+    A red suite is a claim about the code in front of the session, and a tree that lags the
+    trunk runs code the trunk has already replaced: four tests failed in a shared checkout
+    three commits behind, none of them failing on the trunk, and the gate told a session whose
+    work was merged that its suite was red (#217, #219, #220).
+
+    Named rather than acted on. Running the suite again at the trunk would be a second full
+    run inside the longest-lived hook in this plugin, and merging the trunk in is a decision
+    about somebody's working tree.
+    """
+    from .gitctx import _run
+
+    for trunk in ("origin/HEAD", "origin/main", "origin/master"):
+        try:
+            count = _run(["rev-list", "--count", f"HEAD..{trunk}"], ctx.worktree_root, check=False)
+        except Exception:  # noqa: BLE001 - a diagnostic line must never fail a verdict
+            return ""
+        if not count.strip().isdigit():
+            continue
+        behind = int(count.strip())
+        if behind <= 0:
+            return ""
+        return (
+            f"\n  This tree is {behind} commit(s) behind {trunk}, so some of what just ran is "
+            "code the trunk has already replaced. If these tests pass there, the tree is what "
+            f"is stale: `git merge --ff-only {trunk}` and run it again before treating the "
+            "failure as this session's."
+        )
+    return ""
+
+
 REASSERT_SECONDS = 3600.0
 
 
@@ -632,7 +665,7 @@ def _verify_by_declared_command(
         return Verdict(
             False,
             f"The suite FAILS on the code as it stands{'' if not suite.path else f' in {suite.path}'}."
-            f"\n$ {' '.join(command)}\n{tail}",
+            f"\n$ {' '.join(command)}\n{tail}" + behind_the_trunk(ctx),
         )
     # Judge FIRST, record after. Exit 0 is not the verdict — a suite where every test
     # skipped, or one whose runner printed "1 failed" behind a swallowed status, both
@@ -665,7 +698,8 @@ def _judge_witnessed(ctx: GitContext, seen: witness.Witnessed, suite=None, tree:
         return Verdict(
             False,
             f"The suite FAILS on the code as it stands — {seen.failed} failing of "
-            f"{seen.executed} run by the gate itself with {seen.runner}.\n{seen.tail}",
+            f"{seen.executed} run by the gate itself with {seen.runner}.\n{seen.tail}"
+            + behind_the_trunk(ctx),
         )
     if seen.executed == 0:
         return Verdict(

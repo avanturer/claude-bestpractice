@@ -1115,8 +1115,12 @@ class TestRenamesGitWasNeverToldAbout(RepoCase):
         return task, target
 
     def test_the_deletion_becomes_the_rename_it_always_was(self):
+        """This repair on its own. The chain it sits in now ends with the ledger out of
+        git altogether (#219), which is the end state the test below asserts — but a repair
+        is worth testing for what IT does, or a later change to a neighbour silently retires
+        it."""
         _task, target = self.stranded()
-        migrate.repair(self.ctx())
+        migrate._restage_ledger_moves_git_lost(self.ctx())
 
         staged = git(["diff", "--cached", "--name-status", "-M"], self.repo)
         self.assertTrue(staged.startswith("R"), staged)
@@ -1128,8 +1132,19 @@ class TestRenamesGitWasNeverToldAbout(RepoCase):
         self.commit("ledger")
         task.path.unlink()
 
-        migrate.repair(self.ctx())
+        migrate._restage_ledger_moves_git_lost(self.ctx())
         self.assertEqual("", git(["diff", "--cached", "--name-only"], self.repo))
+
+    def test_the_whole_chain_takes_the_ledger_out_of_git(self):
+        """#219, end to end: whatever shape the index was in, the upgrade leaves the cards
+        on disk and out of git — one staged deletion for the founder to commit, and nothing
+        of the ledger tracked anywhere."""
+        _task, target = self.stranded()
+        migrate.repair(self.ctx())
+
+        self.assertTrue(target.is_file(), "the card left the disk")
+        self.assertEqual("", git(["ls-files", store.TIER_A_DIRNAME + "/plan"], self.repo))
+        self.assertIn("D", git(["diff", "--cached", "--name-status"], self.repo))
 
 
 class TestCarryingATaskHomeIsAMoveInBothIndexes(RepoCase):
@@ -1170,11 +1185,22 @@ class TestCarryingATaskHomeIsAMoveInBothIndexes(RepoCase):
         self.assertIn(card.name, staged)
 
     def test_the_tree_it_arrived_in_has_the_addition_staged(self):
+        """This repair on its own: both sides of the move were staged, which is what kept a
+        carried-home card from reading as the loss it is not. The chain now ends by taking
+        the ledger out of git entirely (#219), so the addition does not survive the upgrade
+        — the file does, which is the part that was ever at risk."""
+        elsewhere, _tree, card = self.a_committed_card_in_a_worktree()
+        migrate._carry_this_worktrees_tasks_home(elsewhere)
+
+        self.assertTrue((plan.plan_dir(self.ctx(), plan.NEXT) / card.name).is_file())
+        self.assertIn(card.name, git(["diff", "--cached", "--name-only"], self.repo))
+
+    def test_after_the_whole_upgrade_the_card_is_home_and_untracked(self):
         elsewhere, _tree, card = self.a_committed_card_in_a_worktree()
         migrate.repair(elsewhere)
 
         self.assertTrue((plan.plan_dir(self.ctx(), plan.NEXT) / card.name).is_file())
-        self.assertIn(card.name, git(["diff", "--cached", "--name-only"], self.repo))
+        self.assertEqual("", git(["ls-files", store.TIER_A_DIRNAME + "/plan"], self.repo))
 
     def test_a_card_the_founder_never_committed_stages_nothing(self):
         """Decision 0008: where the ledger is not in their history, this adds it to no

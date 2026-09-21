@@ -249,7 +249,14 @@ def _holds_a_card(ctx, session_id: str) -> bool:
     """
     from claude_bestpractice import plan
 
-    return any(t.owner == session_id for t in plan.load_all(ctx, plan.DOING))
+    # A card this session CLOSED counts. Closing is what the ledger asks for, and a gate
+    # that then says "nothing on the board says this session is working" punishes the
+    # session for doing it — the only way to stay quiet was to leave the card open until
+    # the session ended (#220).
+    return any(
+        t.owner == session_id
+        for t in plan.load_all(ctx, plan.DOING) + plan.load_all(ctx, plan.DONE)
+    )
 
 
 def _ledger_covers(ctx, session_id: str, touched: list[str]) -> bool:
