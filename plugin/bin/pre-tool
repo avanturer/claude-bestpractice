@@ -934,6 +934,31 @@ def main() -> None:
                     + config.switch_advice("commit_conventions", False)
                 )
 
+    # A shared checkout turns `git add -A` into one session committing another's
+    # half-finished work. Only ever raised over paths the coordination layer can NAME as
+    # somebody else's, so the ordinary `git add -A` in a tree of one session's own — which
+    # is what this plugin sends every session into — never meets it (#220).
+    if event.tool_name == "Bash" and gitpolicy.stages_everything(str(ti.get("command", ""))):
+        # Asked of the tree the COMMAND will run in, which is the tree this plugin sent the
+        # session into — not the harness's working directory, which is the shared checkout in
+        # every session it sends anywhere. Judged there, a session staging its own clean tree
+        # would be refused over fifty files it cannot even see.
+        foreign, mine = gitpolicy.whose_work_is_in_the_way(
+            worktree.working_context(ctx, event.session_id), rec.session_id)
+        if foreign:
+            shown = ", ".join(foreign[:4]) + (f" (+{len(foreign) - 4} more)" if len(foreign) > 4 else "")
+            yours = " ".join(mine[:8]) if mine else ""
+            deny(ctx, rec, (
+                f"claude-bestpractice: this stages the whole tree, and {len(foreign)} path(s) in "
+                f"it are not this session's: {shown}. In a checkout several sessions share, that "
+                "is how one commit carries somebody else's unfinished work — it happened in this "
+                "repository and was caught by hand, one `reset --soft` from being merged.\n"
+                + (f"  git add -- {yours}\n" if yours
+                   else "  git status --short   # then `git add --` the paths that are yours\n")
+                + "Name your paths and this gate stays out of the way; a path in that list that "
+                "IS yours is one you may add explicitly."
+            ))
+
     if event.tool_name in WRITE_TOOLS or event.tool_name == "Bash":
         conflicted = gitpolicy.conflict_complaint(proposed_content(event))
         if conflicted:

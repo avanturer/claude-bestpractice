@@ -4,8 +4,8 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-1.65.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-1615%20passing-2ea44f)](#已验证)
+[![version](https://img.shields.io/badge/version-1.66.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-1669%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-34%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#运行要求)
@@ -315,7 +315,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 | `worktree-create` | WorktreeCreate | 失败放行 | 命名、播种信任、推导私有端口与数据库 |
 | `subagent-brief` | SubagentStart | 失败放行 | 把非目标、实体和按查询偏置的代码图交给不继承任何规则的子智能体 |
 | `checkpoint` | PreCompact | 失败放行 | 抽取式检查点，零模型调用，密钥已清洗 |
-| `evidence-gate` | Stop | **失败拦截** | 范围漂移、测试证据、干净重跑、以未处理的拦截收场的一轮；顺带收割决策草稿 |
+| `evidence-gate` | Stop | **失败拦截** | 范围漂移、测试证据、干净重跑、以未处理的拦截收场的一轮；顺带收割决策草稿；收走已完成的 worktree |
 
 九个条目，自设上限是十二个。常驻上下文 **约 332 tokens**，上限 400 ——
 大约是 200k 窗口的 0.1 %。
@@ -325,7 +325,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 ## 已验证
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 1615 个测试 · 34 项 doctor 检查 · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 1669 个测试 · 35 项 doctor 检查 · budget
 ```
 
 doctor 通过**真的去做那件坏事**来证明 gate 有效，而不是把配置读回来对一遍——
@@ -391,7 +391,7 @@ Claude Code 2.1.247 上通过。
 
 两个目录，区别很重要：
 
-**`.claude/claude-bestpractice/` —— 提交它。** 任务、决策、走过的死路、阶段标记。它被有意放在
+**`.claude/claude-bestpractice/` —— 提交它。** 决策、走过的死路、阶段标记、各道闸门读取的配置。任务看板也放在这里，并且有意**不**被 git 跟踪——它的卡片由这个克隆里的每个会话写入，跟踪它们会把十几个分支的看板文件塞进同一个 `git status`（决策 0018）。它被有意放在
 仓库内部，因为它必须跟着分支走：在 `feat/billing` 上做出的决策就是关于 `feat/billing`
 的，而一个切分支就丢失的任务清单比没有更糟。每个条目一个文件，所以五个 worktree 产生
 五次干净的 add，而不是同一个 JSON 大对象里五段互相冲突的改动。里面没有任何逐次变化的

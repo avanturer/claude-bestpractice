@@ -15,6 +15,7 @@ Fails CLOSED: a crash blocks. If verification cannot run, "done" has not been ea
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 import time
@@ -112,7 +113,53 @@ def _remembered_block(rec: sessions.SessionRecord) -> tuple:
     return f"continuation ceiling reached after: {reason}", list(paths)
 
 
-def _allow(ctx, rec: sessions.SessionRecord) -> None:
+def _closed_the_tree(ctx, rec: sessions.SessionRecord, cfg) -> str:
+    """Remove this session's own worktree when the work in it is finished. Its line, or "".
+
+    The phase nothing supported. Isolation works — zero mixed commits and zero confused
+    HEADs in sixty days of three-to-eight parallel sessions — and CLOSING the work did not:
+    fifteen of thirty-eight trees stood over a merged pull request, with a project rule
+    that said to remove them and no mechanism that did (#220).
+
+    Here rather than in the sweep that runs when a session is already dead, because the
+    founder asked for it in exactly those terms: the session that finished the work is the
+    one that should put the tree away, without asking. `worktree.finished` carries the
+    conditions and every one of them is a fact; the removal itself is a `git worktree
+    remove` with no `--force`, so a write that lands between the check and the act keeps
+    the tree.
+
+    Never allowed to cost a turn: a failure here is a tree left standing, which the board
+    names on the next session start.
+    """
+    if not cfg.remove_finished_trees:
+        return ""
+    try:
+        # Before the removal, never after: `ctx` is the tree itself on every session this
+        # plugin sends into one, and every git call takes it as a working directory. Asked
+        # afterwards, this raised FileNotFoundError inside a gate that fails CLOSED — so
+        # the session that had just finished its work was blocked by the housekeeping that
+        # followed it. Caught by the test below, which is why it is written down here.
+        where = worktree.main_checkout(ctx)
+        gone = worktree.release_mine(ctx, rec.session_id)
+    except Exception:  # noqa: BLE001 - housekeeping must never be what ends a turn badly
+        return ""
+    if not gone:
+        return ""
+    path, branch = gone
+    said = (
+        f"claude-bestpractice removed the worktree {path} and its branch {branch}: the work "
+        f"is in the trunk, the board is clear and git reported nothing left in the tree. "
+        f"The shell is now in a directory that no longer exists — `cd {where}`."
+    )
+    # The founder sees the line above; the model sees this, at its next tool call, which is
+    # the one place it matters — a shell standing in a directory that is gone otherwise
+    # spends a call finding out the hard way.
+    with contextlib.suppress(Exception):
+        inbox.post(ctx, rec.session_id, said, sender="claude-bestpractice")
+    return said
+
+
+def _allow(ctx, rec: sessions.SessionRecord, cfg) -> None:
     """Let the turn end: reset the escalation counter and hand back the leases.
 
     Releasing matters on every allow path, including the nothing-changed one. A
@@ -121,7 +168,7 @@ def _allow(ctx, rec: sessions.SessionRecord) -> None:
     """
     _bump_blocks(ctx, rec, 0)
     sessions.release_all(ctx, rec.session_id)
-    hookio.emit_silent()
+    hookio.emit_silent(_closed_the_tree(ctx, rec, cfg))
 
 
 def _give_up(ctx, rec: sessions.SessionRecord, reason: str, changed: list) -> None:
@@ -318,7 +365,7 @@ def main() -> None:
         evidence.settle_drift(ctx, rec.session_id, ceiling_paths)
         _bump_blocks(ctx, rec, 0)
         sys.stderr.write("claude-bestpractice: finishing UNVERIFIED — continuation ceiling reached.\n")
-        _allow(ctx, rec)
+        _allow(ctx, rec, cfg)
     # A pull request this session opened and then walked away from. Checked before the
     # change list, because the whole failure is a turn that ends with nothing left to do
     # and a PR still sitting there — `changed` is empty in exactly that turn.
@@ -409,7 +456,7 @@ def main() -> None:
         # say. Asked here as well as at the verified exit, and nowhere earlier — the
         # checks between the two are about the tree and answer first.
         _refuse_to_end_on_an_unanswered_block(ctx, rec, pending_refusal)
-        _allow(ctx, rec)
+        _allow(ctx, rec, cfg)
 
     # Which suites answer for these files. In a single-project repository this is the one
     # command the repository has always had; in a repository with two projects it is only
@@ -541,7 +588,13 @@ def main() -> None:
                 "Check .claude/claude-bestpractice/config.json.",
             )
         if not verdict.ok:
-            problems.append(verdict.reason)
+            # Before blaming the session, ask whether the failure is even about its change:
+            # a shared checkout three commits behind failed four tests that were green on
+            # the trunk, and the gate called the suite red on work that was already merged
+            # (#217, #220). Appended to the refusal rather than replacing it — nothing here
+            # has observed the trunk's suite, so this says what it knows and blocks anyway.
+            problems.append(verdict.reason + evidence.not_this_trees_code(
+                ctx, evidence.failing_files(ctx, verdict), changed))
             # A red suite is everyone's problem: the board tells them "fix it before new
             # work", but the board is injected once at session start, so a session already
             # running builds on top of the break for hours without ever being told.
@@ -587,7 +640,7 @@ def main() -> None:
         if unverified_reason:
             _give_up(ctx, rec, unverified_reason, changed)
             sys.stderr.write(f"claude-bestpractice: finishing UNVERIFIED — {unverified_reason}\n")
-        _allow(ctx, rec)
+        _allow(ctx, rec, cfg)
 
     reason = "\n\n".join(problems)
     tree = evidence.tree_hash(ctx)

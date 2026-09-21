@@ -229,6 +229,88 @@ def outstanding(ctx: GitContext) -> list[dict[str, Any]]:
     return live
 
 
+def branches_without_one(ctx: GitContext, hours: float) -> list[tuple[str, float]]:
+    """Branches carrying unmerged commits that no pull request here has ever been about.
+
+    (branch, age in hours of its last commit), oldest first. The live example from the
+    reporting repository: `chore/untrack-ledger-plan-files`, one commit, no pull request
+    ever opened, a hundred and twenty-six commits behind the trunk by the time anybody
+    noticed — and it was fixing the very problem that three later issues were about.
+    Nothing showed it: not the board, not `gh pr list`, only `git branch` (#220).
+
+    ONE git call, whatever the branch count. `--no-merged` is what makes that possible, and
+    at a hundred and thirty-five local branches the alternative — asking git about each one
+    — is a hundred and thirty-five processes on every session start.
+
+    What it cannot know is a pull request opened on the website: nothing here calls the
+    network. So the line that reports this says "no pull request this clone has seen" and
+    names the command that asks GitHub, rather than asserting there is none.
+
+    A branch a live session is standing on is never named, whatever its age. This line is
+    about work nobody is coming back to, and somebody is on that one right now.
+    """
+    if hours <= 0:
+        return []
+    from . import sessions
+    from .gitctx import trunk_ref
+    from .gitpolicy import TRUNK_NAMES
+
+    trunk = trunk_ref(ctx)
+    if not trunk:
+        return []
+    known = set(_records(ctx))
+    try:
+        known.update(record.branch for record in sessions.live_sessions(ctx) if record.branch)
+    except Exception:  # noqa: BLE001 - a naming line must never fail a session start
+        return []
+    now = time.time()
+    out = [
+        (branch, (now - committed) / 3600.0)
+        for branch, committed in _unmerged_branches(ctx, trunk)
+        if branch not in known and branch not in TRUNK_NAMES
+        and (now - committed) / 3600.0 >= hours
+    ]
+    return sorted(out, key=lambda row: row[1], reverse=True)
+
+
+def _unmerged_branches(ctx: GitContext, trunk: str) -> list[tuple[str, float]]:
+    """Local branches not merged into `trunk`, with the unix time of their last commit."""
+    from .gitctx import _run
+
+    try:
+        raw = _run(
+            ["for-each-ref", f"--no-merged={trunk}",
+             "--format=%(refname:short)%09%(committerdate:unix)", "refs/heads/"],
+            ctx.worktree_root, check=False,
+        )
+    except Exception:  # noqa: BLE001 - a naming line must never fail a session start
+        return []
+    rows: list[tuple[str, float]] = []
+    for line in raw.splitlines():
+        name, _, when = line.partition("\t")
+        if name.strip() and when.strip().isdigit():
+            rows.append((name.strip(), float(when.strip())))
+    return rows
+
+
+def idle(ctx: GitContext, days: float) -> list[tuple[int, str, float]]:
+    """Open pull requests nothing has moved: (number, branch, age in days), oldest first.
+
+    Three of them sat for a month on the reporting repository — 21.08, 29.08, 31.08 — and
+    the only surface that knew was GitHub's own list, which nobody was reading. Read from
+    the obligations this clone already records, so it costs no network call and no process.
+    """
+    if days <= 0:
+        return []
+    now = time.time()
+    out = [
+        (int(row.get("number") or 0), str(row.get("branch") or ""),
+         (now - float(row.get("opened_at") or now)) / 86400.0)
+        for row in outstanding(ctx)
+    ]
+    return sorted([row for row in out if row[2] >= days], key=lambda row: row[2], reverse=True)
+
+
 def unhanded(ctx: GitContext, branch: str) -> dict[str, Any] | None:
     """This branch's open pull request, if the founder has not been told about it yet."""
     record = _records(ctx).get(branch)
