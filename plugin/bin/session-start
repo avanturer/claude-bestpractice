@@ -384,10 +384,12 @@ def _hidden_line(ctx: GitContext) -> str:
     lost = store.ignored_tier_a(ctx)
     cost = f"{len(lost)} record(s) not in git" if lost else "nothing lost yet"
     return (
-        f"\nGIT CANNOT SEE `{store.TIER_A_DIRNAME}/` — hidden by {where}; {cost}. Parked "
-        "tasks, attempts and decisions are being written where nothing will ever commit "
-        f"them, so they die with this clone. Fix the rule in {source}; the plugin does not "
-        "edit it, because it did not write it."
+        f"\nGIT CANNOT SEE `{store.TIER_A_DIRNAME}/` — hidden by {where}; {cost}. The config "
+        "the gates read, the stage ratchet and the attempts a later session must not blindly "
+        f"redo are being written where nothing will ever commit them. Fix the rule in {source}; "
+        "the plugin does not edit it, because it did not write it. (The task ledger is "
+        "deliberately out of git and is not counted here — its files live in the main "
+        "checkout and outlive every worktree.)"
     )
 
 

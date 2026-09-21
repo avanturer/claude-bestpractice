@@ -54,7 +54,19 @@ def tier_a(ctx: GitContext, *parts: str) -> Path:
 # any real task file, therefore answers "visible" the moment one file inside has been
 # committed — a false all-clear in exactly the case that matters most, a repository that was
 # healthy once and has been hidden since. Checked against git rather than reasoned about.
-_VISIBILITY_PROBE = ("plan", "next", ".visibility-probe")
+#
+# At the ROOT of Tier A rather than inside the ledger. The ledger is deliberately kept out of
+# git now — `worktree.hide` writes that rule itself, because every session writes cards into
+# the one checkout they all share and tracking them refused the founder's `merge --ff-only`
+# (#219) — so a probe inside it would report the plugin's own design as a fault, on every
+# session start. What this asks is whether the COMMITTED half is reachable: the config the
+# gates read, the stage ratchet, the attempts a later session must not blindly redo.
+_VISIBILITY_PROBE = (".visibility-probe",)
+
+# The ledger, which is expected to be invisible and is not a record anybody loses: the files
+# stay in the main checkout and outlive every worktree. Excluded from the COUNT so the health
+# line does not report the plugin's own rule as eleven records dying with the clone.
+_LEDGER_PREFIX = "plan/"
 
 
 def newest_checkpoint(ctx: GitContext, session_id: str) -> str:
@@ -126,7 +138,11 @@ def ignored_tier_a(ctx: GitContext) -> list[str]:
         )
     except Exception:  # noqa: BLE001 - a count is a diagnostic; never fail a session over one
         return []
-    return [line for line in (out or "").splitlines() if line.strip()]
+    prefix = f"{TIER_A_DIRNAME}/{_LEDGER_PREFIX}"
+    return [
+        line for line in (out or "").splitlines()
+        if line.strip() and not line.strip().startswith(prefix)
+    ]
 
 
 def tier_b(ctx: GitContext, *parts: str) -> Path:

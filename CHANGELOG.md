@@ -1,5 +1,86 @@
 # Changelog
 
+## v1.65.0
+
+The plugin's own bookkeeping stops being the founder's dirty tree.
+
+### What happened
+
+#219 is the cause the three dead-ends of v1.64.0 were the symptoms of, and it was measured
+rather than guessed. The ledger keeps one file per card in `.claude/claude-bestpractice/plan/`
+inside the founder's repository, git TRACKED them, and every session in the clone writes
+there. In a repository with three to five sessions running:
+
+```
+$ git status --porcelain | wc -l
+67                      # all of it board files, from a dozen different branches
+$ git merge --ff-only origin/main
+error: Your local changes to the following files would be overwritten by merge:
+        .claude/claude-bestpractice/plan/paused/0147-inci.md
+Aborting
+```
+
+From there the chain is mechanical: the shared checkout cannot fast-forward, so it lags
+`origin/main`, so `make test` there fails on four tests that pass on the trunk, so the Stop
+gate calls the suite red and refuses a session whose work is already merged. A quarter of the
+repository's commits over sixty days touched nothing but this plugin's bookkeeping, and one
+session came within a `reset --soft` of committing fifty of another branch's cards.
+
+### The ledger is out of git, and stays where it is (#219)
+
+Untracked, which is the founder's own answer to it, and not moved: the cards stay in the main
+checkout — the one tree that outlives every other, which is why v1.60.0 put them there — so
+`git worktree remove` still cannot take them and the board is still one board per clone.
+
+- `worktree.hide` writes `/.claude/claude-bestpractice/plan/` into `.git/info/exclude`
+  alongside the rule it already wrote for provisioned trees. That file and not the founder's
+  `.gitignore`: this is a fact about one clone, not about the project.
+- The upgrade takes the cards already in the index out of it (`migrate` step `0015`), with
+  `git rm --cached` — every file stays on disk, and the only thing that happens in git is a
+  staged deletion to commit alongside whatever comes next. `git restore --staged` puts the
+  index back for anybody who disagrees, which is why it is `--cached` and not `rm`.
+- The health line that reports a Tier A git cannot see no longer fires on this plugin's own
+  rule, and no longer counts the cards as records dying with the clone. It now asks what it
+  should always have asked: whether the COMMITTED half — the config the gates read, the stage
+  ratchet, the attempts a later session must not blindly redo — is reachable. A rule over the
+  whole directory is still reported, because there it is right.
+
+What this gives up is stated rather than discovered later: a card can no longer be read in a
+diff or carried to another machine through git. The board's job is coordinating the sessions
+live in this clone, and nobody was reading it in a diff.
+
+### A card this session closed is evidence that it was working (#220)
+
+`done` cleared the card's owner, so a closed card carried no trace of who finished it — and
+the gates ask exactly that. A session that added a card with the right paths, claimed it, did
+the work and closed it was then told "nothing on the board says this session is working", with
+`claim` answering "task is already done". The only way to keep the gate quiet was to leave the
+card open until the session ended, which is the opposite of what closing means.
+
+The owner now survives a closure, and only a closure: `pause` and `next` still release it,
+because handing the work back is the whole point of them. Both gates that ask — the Stop
+demand and the one at the first write — count a card this session closed.
+
+### A tree behind the trunk says so, in the failure (#217, #220)
+
+A red suite is a claim about the code in front of the session, and a tree that lags the trunk
+runs code the trunk has already replaced. Every red verdict now carries how far behind it is
+and what to do about it, when it is behind at all.
+
+Named rather than acted on. Running the suite again at the trunk would be a second full run
+inside the longest-lived hook there is, and merging the trunk in is a decision about somebody
+else's tree.
+
+### Still open from #220
+
+The SessionStart lines it asks for — trees whose branches are merged, branches with commits
+and no pull request, pull requests nobody has touched for a month — are worth having and are
+not here: always-on context is capped at 400 tokens and currently measures 332, so they need
+their own measurement rather than a guess. The plugin removing a worktree by itself after a
+merge is not here either, and that one is a choice rather than a cost: a tool that deletes
+directories unasked will one day delete the wrong one. With #218 fixed the manual removal
+finally works, which was the actual blocker.
+
 ## v1.64.0
 
 Gates that held the door shut from both sides, and two that asked for opposite things.

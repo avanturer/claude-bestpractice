@@ -32,10 +32,10 @@ def _durability_warning(ctx, what: str = "task") -> str:
         return ""
     return (
         f"\nWARNING: git cannot see {store.TIER_A_DIRNAME}/ — hidden by {where}.\n"
-        f"This {what} exists on disk and nowhere else: no commit will pick it up and\n"
-        "`git worktree remove` deletes it. Nothing was lost yet — fix that rule, then\n"
-        "commit the ledger. Tell the founder; the plugin will not edit an ignore file\n"
-        "it did not write."
+        f"The ledger is meant to be out of git, and this {what} is safe where it is: the\n"
+        "main checkout outlives every worktree. What that rule also hides is the config\n"
+        "the gates read, the stage ratchet and the attempts a later session reads back.\n"
+        "Tell the founder; the plugin will not edit an ignore file it did not write."
     )
 
 

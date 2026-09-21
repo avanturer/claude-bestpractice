@@ -692,6 +692,76 @@ def _reconcile_scattered_ledger_copies(ctx: GitContext) -> str:
     return f"{moved} stale ledger copy(ies) brought up to the state the board shows" if moved else ""
 
 
+def _untrack_the_ledger(ctx: GitContext) -> str:
+    """Take the task ledger out of git's index, in every tree of this clone.
+
+    Every session in the clone writes cards into the one checkout they all share, and while
+    those files were TRACKED that shared tree carried 67 modified cards belonging to a dozen
+    branches. `git merge --ff-only` refuses over them, so the tree lags `origin/main`, so its
+    suite is red on code nobody present wrote, so the Stop gate refuses a session whose work
+    is already merged — #216, #217 and #218 in one chain, and #219 is the chain itself.
+
+    The cards do not move. They stay in the main checkout, which is the tree that outlives
+    every other and is why v1.60.0 put them there; what changes is that git stops carrying
+    them. `hide` writes the exclude rule so new ones are invisible from birth, and this takes
+    the ones already in the index out of it.
+
+    `--cached`: the files stay on disk, every one of them, and the only thing that happens in
+    git is a staged deletion the founder commits with whatever they commit next. Nothing is
+    lost and nothing needs to be restored — `git restore --staged` puts the index back if
+    they disagree. Reversibility is the whole reason this is `--cached` and not `rm`.
+    """
+    from . import worktree
+
+    worktree.hide(ctx)
+    untracked = 0
+    for tree in _trees_of(ctx):
+        listed = _git_out(tree, ["ls-files", "-z", "--", _LEDGER_PATH])
+        names = [name for name in listed.split("\0") if name.strip()]
+        if not names:
+            continue
+        # `-z` on the READ, never on the removal: `git rm` accepts it only with
+        # `--pathspec-from-file`, so passing it there failed the whole call and the repair
+        # reported nothing while nothing had happened. Found by running it, not by reading.
+        done = subprocess.run(
+            ["git", "rm", "--cached", "--quiet", "--", *names],
+            cwd=str(tree), capture_output=True,
+            encoding="utf-8", errors="surrogateescape", timeout=120,
+        )
+        if done.returncode == 0:
+            untracked += len(names)
+    if not untracked:
+        return ""
+    return (f"{untracked} ledger file(s) taken out of git's index and left on disk; "
+            "commit the staged deletion when you next commit")
+
+
+_LEDGER_PATH = ".claude/claude-bestpractice/plan"
+
+
+def _trees_of(ctx: GitContext) -> list[Path]:
+    """Every working tree of this clone, or just this one when git cannot say."""
+    from . import gitpolicy
+
+    try:
+        found = [t for t in gitpolicy.working_trees(ctx) if t.is_dir()]
+    except Exception:  # noqa: BLE001 - a repair must not fail on an unlistable clone
+        found = []
+    return found or [ctx.worktree_root]
+
+
+def _git_out(tree: Path, args: list[str]) -> str:
+    """One read-only git call in one tree. Empty on any failure, which repairs treat as none."""
+    try:
+        done = subprocess.run(
+            ["git", *args], cwd=str(tree), capture_output=True,
+            encoding="utf-8", errors="surrogateescape", timeout=60,
+        )
+    except OSError:
+        return ""
+    return done.stdout if done.returncode == 0 else ""
+
+
 _REPAIRS = {
     "0001-task-paths": (1, _backfill_task_paths),
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
@@ -707,6 +777,7 @@ _REPAIRS = {
     "0012-carry-worktree-tasks-home": (1, _carry_this_worktrees_tasks_home),
     "0013-restage-ledger-moves": (1, _restage_ledger_moves_git_lost),
     "0014-reconcile-ledger-copies": (1, _reconcile_scattered_ledger_copies),
+    "0015-untrack-the-ledger": (1, _untrack_the_ledger),
 }
 
 

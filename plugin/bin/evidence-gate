@@ -492,6 +492,10 @@ def main() -> None:
             plan.settle_delivered(ctx, rec.session_id, everything, "the base branch")
 
         mine = [t for t in plan.load_all(ctx, plan.DOING) if t.owner == rec.session_id]
+        # And the ones it has already closed. The demand below is "say what you are doing";
+        # a card this session added, claimed, did and closed answers it, and refusing on it
+        # made closing the card the thing that triggered the refusal (#220).
+        closed = [t for t in plan.load_all(ctx, plan.DONE) if t.owner == rec.session_id]
         if mine and delivered:
             # What the closure above could not account for: a card whose named files are
             # not in this session's diff at all. Refused rather than noted, because a note
@@ -499,7 +503,7 @@ def main() -> None:
             # `pause`, never a question put to the founder, who accepted this work when
             # they accepted the merge (decision 0010).
             problems.append(plan.closure_demand(mine))
-        if not mine and not delivered:
+        if not mine and not closed and not delivered:
             problems.append(
                 f"Nothing on the board says this session is working: {len(changed)} file(s) "
                 "changed and no task in the ledger is claimed by it.\n"
