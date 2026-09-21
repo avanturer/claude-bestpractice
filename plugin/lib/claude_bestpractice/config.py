@@ -150,6 +150,15 @@ class Config:
     # Work that changed files while the ledger says nothing is in flight. Same shape as
     # every other Stop demand: satisfied once per session, then never seen again.
     require_task: bool = True
+    # Tool calls a session may make before the Stop gate asks it, once, for what only
+    # this window knows — the dead end it ruled out, the thing it learned that the diff
+    # does not say. Counted on our own record rather than estimated from the transcript,
+    # whose format is documented as internal. Forty is a judgement and says so: below it
+    # a session has nothing to hand forward and being asked anyway teaches it that this
+    # plugin is noise; far above it the ask arrives after the compaction it exists to
+    # beat. The cost of the wrong number is one turn, once, and never a failed record —
+    # the ask is feedback, not a refusal. Zero switches it off.
+    notes_after_calls: int = 40
     block_unfinished_work: bool = True
     compare_dependencies: bool = True
     commit_conventions: bool = True
@@ -203,6 +212,7 @@ class Config:
             "task_idle_hours": self.task_idle_hours,
             "task_queue_stale_days": self.task_queue_stale_days,
             "require_task": self.require_task,
+            "notes_after_calls": self.notes_after_calls,
             "block_unfinished_work": self.block_unfinished_work,
             "compare_dependencies": self.compare_dependencies,
             "commit_conventions": self.commit_conventions,
@@ -299,6 +309,7 @@ _EXPECTED: dict[str, type] = {
     "task_idle_hours": float,
     "task_queue_stale_days": float,
     "require_task": bool,
+    "notes_after_calls": int,
     "block_unfinished_work": bool,
     "compare_dependencies": bool,
     "commit_conventions": bool,

@@ -4,7 +4,7 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-1.66.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-1.67.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-1669%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-34%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
@@ -314,8 +314,8 @@ claude-bp-ci off        # 移除 pre-push 钩子
 | `review-commit` | `if: Bash(git commit:*)` | 异步唤醒 | 审查本轮的 diff；只在确实有话要说时才叫醒你 |
 | `worktree-create` | WorktreeCreate | 失败放行 | 命名、播种信任、推导私有端口与数据库 |
 | `subagent-brief` | SubagentStart | 失败放行 | 把非目标、实体和按查询偏置的代码图交给不继承任何规则的子智能体 |
-| `checkpoint` | PreCompact | 失败放行 | 抽取式检查点，零模型调用，密钥已清洗 |
-| `evidence-gate` | Stop | **失败拦截** | 范围漂移、测试证据、干净重跑、以未处理的拦截收场的一轮；顺带收割决策草稿；收走已完成的 worktree |
+| `checkpoint` | PreCompact | 失败放行 | 抽取式检查点，零模型调用，密钥已清洗。**从不拒绝压缩** —— 该事件上的拒绝只有创始人看得到，模型看不到（决策 0021） |
+| `evidence-gate` | Stop | **失败拦截** | 范围漂移、测试证据、干净重跑、以未处理的拦截收场的一轮；顺带收割决策草稿；就只有这个上下文窗口知道的东西索要一次记录；收走已完成的 worktree |
 
 九个条目，自设上限是十二个。常驻上下文 **约 332 tokens**，上限 400 ——
 大约是 200k 窗口的 0.1 %。

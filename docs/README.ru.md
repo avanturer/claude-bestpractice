@@ -4,7 +4,7 @@
 
 **Память, координация и принуждение для разработки продукта в нескольких параллельных сессиях Claude Code.**
 
-[![version](https://img.shields.io/badge/version-1.66.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-1.67.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-1669%20passing-2ea44f)](#проверено)
 [![doctor](https://img.shields.io/badge/doctor-34%20checks-2ea44f)](#проверено)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#требования)
@@ -370,8 +370,8 @@ claude-bp-ci off        # снять pre-push хук
 | `review-commit` | `if: Bash(git commit:*)` | async rewake | Ревьюит дифф этого хода; будит только когда есть что сказать |
 | `worktree-create` | WorktreeCreate | fails open | Именует, засевает доверие, выводит приватный порт и БД |
 | `subagent-brief` | SubagentStart | fails open | Non-goals, сущности и карта под запрос — агентам, которые не наследуют правил |
-| `checkpoint` | PreCompact | fails open | Экстрактивный чекпойнт, ноль вызовов модели, секреты вычищены |
-| `evidence-gate` | Stop | **fails closed** | Дрейф скоупа, тестовое доказательство, чистый повторный прогон, ход, заканчивающийся неотвеченным отказом; собирает черновики решений; убирает законченное дерево |
+| `checkpoint` | PreCompact | fails open | Экстрактивный чекпойнт, ноль вызовов модели, секреты вычищены. **Компактизацию не отменяет** — отказ на этом событии читает фаундер, а не модель (решение 0021) |
+| `evidence-gate` | Stop | **fails closed** | Дрейф скоупа, тестовое доказательство, чистый повторный прогон, ход, заканчивающийся неотвеченным отказом; собирает черновики решений; один раз просит записать то, что знает только это окно; убирает законченное дерево |
 
 Девять записей против самоограничения в двенадцать. Постоянный контекст **~332 токена**
 против потолка в 400 — примерно 0.1 % окна на 200k.

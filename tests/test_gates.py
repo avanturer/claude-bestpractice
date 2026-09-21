@@ -649,25 +649,6 @@ class TestWhatCompactionDestroysIsHandedBack(GateCase):
         self.assertIn("more in the ledger", listed[0],
                       "it trimmed the list without saying anything was left behind")
 
-    def test_the_demand_never_names_a_card_it_cannot_prove_is_ours(self):
-        """Without a session record the checkpoint carries every in-flight card into its own
-        restore, which over-reports and costs nothing. The demand is different: it hands out
-        a WRITE command, and the first card in `doing` may belong to a live sibling.
-        """
-        from claude_bestpractice import plan
-
-        ctx = self.ctx()
-        task = plan.add(ctx, "a sibling's work", body="theirs", paths=["their.py"],
-                        done_when="stated")
-        plan.claim(ctx, task.id, "some-other-session", "feat/theirs")
-        self.write("mine.py", "x = 1\n")
-        proc = self.gate("checkpoint", {"session_id": "no-record-for-this-one",
-                                        "hook_event_name": "PreCompact",
-                                        "trigger": "manual", "cwd": str(self.repo)})
-        self.assertEqual(2, proc.returncode, proc.stdout)
-        self.assertNotIn(task.id, proc.stderr, "it named a card this session does not hold")
-        self.assertNotIn("The card it holds", proc.stderr)
-
     def test_a_compaction_with_nothing_captured_says_nothing(self):
         self.start()
         self.assertNotIn("RESTORED AFTER COMPACTION", self.context(self.compacted()))
@@ -718,45 +699,231 @@ class TestEverySourceThatStartsASessionReachesTheGate(GateCase):
         self.assertIn("hookSpecificOutput", json.loads(proc.stdout))
 
 
-class TestTheCompactionIsBlockedOnceForTheNotes(GateCase):
-    """Everything else the checkpoint does is a flush of what is already on disk. The gap
-    it cannot close is the substance that never left the conversation — the finding
-    reasoned out and never filed, the approach abandoned and never recorded. After
-    compaction the model is nearly new and that material is gone.
+class TestTheCompactionIsNeverBlocked(GateCase):
+    """`PreCompact` is listed as an event that can refuse, and this hook refused once per
+    session to make the window write down what only it knew. The refusal could never be
+    answered. Measured on the CLI (2.1.278) rather than read off the table: both `exit 2`
+    and `{"decision": "block"}` end the turn with `num_turns: 0`, zero tokens in and out,
+    and the text delivered as a `<synthetic>` assistant message. No model call happens.
 
-    `PreCompact` is the one event that can block, and this is the one thing worth blocking
-    for: it replaces the founder saying "prepare for the compaction" by hand."""
+    So what the founder got was an instruction addressed to the model, their `/compact`
+    cancelled, and the custom instructions they had typed into it gone with it — and then
+    they typed the whole thing again. The demand moved to the Stop gate below, where a
+    refusal reaches the model and gives it a turn. What is left here is the flush, and
+    these tests are the guarantee that it stays one."""
 
-    def compact(self, session: str = "s1", trigger: str = "manual"):
-        """`manual` by default: that is the compaction a session CHOSE, and the only one
-        this gate may stop. An automatic one means the window is already full."""
+    def compact(self, session: str = "s1", trigger: str = "manual", **extra):
         return self.gate("checkpoint", {"session_id": session, "hook_event_name": "PreCompact",
-                                        "trigger": trigger, "cwd": str(self.repo)})
+                                        "trigger": trigger, "cwd": str(self.repo), **extra})
 
-    def test_a_session_that_did_work_is_stopped_once(self):
+    def checkpoints(self) -> list:
+        return list((self.repo / ".claude" / "claude-bestpractice" / "checkpoints").iterdir())
+
+    def test_a_session_that_did_work_still_gets_its_compaction(self):
         self.start()
         self.write("pipeline.py", "run = True\n")
         proc = self.compact()
-        self.assertEqual(2, proc.returncode, proc.stdout)
-        for field in ("LEARNED", "RULED OUT", "DECIDED"):
-            self.assertIn(field, proc.stderr)
+        self.assertEqual(0, proc.returncode,
+                         f"the founder's /compact was cancelled: {proc.stderr[:300]}")
+
+    def test_it_stays_allowed_however_often_it_is_asked(self):
+        """The old gate refused the FIRST manual compaction of a session and let the second
+        through, which is what made it read as a glitch rather than as a rule."""
+        self.start()
+        self.write("pipeline.py", "run = True\n")
+        self.assertEqual([0, 0, 0], [self.compact().returncode for _ in range(3)])
+
+    def test_custom_instructions_do_not_change_the_answer(self):
+        """What the founder loses when the command is cancelled: `/compact <instructions>`
+        carries them in the event, and a refusal throws them away with the command."""
+        self.start()
+        self.write("pipeline.py", "run = True\n")
+        proc = self.compact(custom_instructions="carry on with the design work")
+        self.assertEqual(0, proc.returncode, proc.stderr)
+
+    def test_an_automatic_compaction_is_allowed_too(self):
+        """`auto` means the harness is compacting because the window is FULL. The session
+        is already at the wall and has no turn to spend on anything."""
+        self.start()
+        self.write("pipeline.py", "run = True\n")
+        self.assertEqual(0, self.compact(trigger="auto").returncode)
+
+    def test_the_checkpoint_is_written_on_either_trigger(self):
+        """Not blocking is not the same as doing nothing: the snapshot is the half that
+        survives the window, and writing it is this hook's whole job."""
+        for trigger in ("manual", "auto"):
+            with self.subTest(trigger=trigger):
+                self.setUp()
+                self.start()
+                self.write("pipeline.py", "run = True\n")
+                self.compact(trigger=trigger)
+                self.assertTrue(self.checkpoints())
+
+    def test_a_session_that_changed_nothing_compacts_too(self):
+        self.start()
+        self.assertEqual(0, self.compact().returncode)
+
+
+class TestTheNotesAreAskedForOnceAtStop(GateCase):
+    """The substance that never left the conversation — the finding reasoned out and never
+    filed, the approach abandoned and never recorded. Nothing on disk carries it, and after
+    a compaction the model is nearly new.
+
+    Asked here because this is the only event whose word reaches the model: a Stop hook's
+    feedback continues the conversation and the model acts on it, which was verified
+    against the CLI before this was written. Asked as FEEDBACK and not as a refusal,
+    because a refusal is counted by the escalation above and four of them end the turn
+    UNVERIFIED — a false failure on work that passed its suite is a worse outcome than a
+    note nobody wrote."""
+
+    def a_long_verified_turn(self, calls: int = 99, session: str = "s1"):
+        """A session past the threshold, with a card, a WITNESSED green suite, and a clean
+        finish.
+
+        The suite has to be witnessed rather than read: an artifact on its own is an
+        UNVERIFIED finish, which is a recorded failure and never reaches the ask. Pinned
+        to the standard library so the fixture needs no third-party runner, and kept under
+        `tests/`, which the gate exempts — so the material change stays `feature.py` alone
+        and the drift check has nothing to say about the fixture's own scaffolding.
+        """
+        from claude_bestpractice import sessions
+
+        self.configure(test_command=[
+            sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "check_*.py",
+        ])
+        self.write(
+            "tests/check_smoke.py",
+            "import unittest\n\n\nclass Smoke(unittest.TestCase):\n"
+            "    def test_it_runs(self):\n        self.assertTrue(True)\n",
+        )
+        self.start(session)
+        task = self.claim_a_task(session, "feature.py")
+        self.write("feature.py", "x = 1\n")
+        time.sleep(0.02)
+        self.write("junit.xml", JUNIT_PASS)
+        sessions.touch(self.ctx(), sid(self.repo, session), tool_calls=calls)
+        return task
+
+    def asked(self, proc) -> str:
+        """The demand this Stop carried, or "" when it carried none."""
+        try:
+            payload = json.loads(proc.stdout or "{}")
+        except json.JSONDecodeError:
+            return ""
+        return payload.get("hookSpecificOutput", {}).get("additionalContext", "")
+
+    def test_a_long_session_that_filed_nothing_is_asked(self):
+        task = self.a_long_verified_turn()
+        said = self.asked(self.stop())
+        self.assertIn("LEARNED", said)
+        self.assertIn("RULED OUT", said)
+        self.assertIn(task.id, said, "the ask named no card, so it named no writable target")
+
+    def test_the_ask_is_feedback_and_never_a_failed_record(self):
+        """The whole reason it is not a `block`. A blocked Stop is counted, and the fourth
+        one files a permanent failed attempt and an UNVERIFIED finish against work that
+        passed — which would make asking for notes more expensive than never asking."""
+        from claude_bestpractice import sessions, store
+
+        self.a_long_verified_turn()
+        proc = self.stop()
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertFalse(store.tier_b(self.ctx(), "unverified.jsonl").exists())
+        record = sessions.get(self.ctx(), sid(self.repo, "s1"))
+        self.assertFalse(record.tool_signatures.get("_consecutive_blocks"))
+
+    def test_it_is_asked_once_and_never_again(self):
+        """One unignorable interruption is the entire budget, and the mark is written
+        before the ask — so a session that ignores it or dies does not meet it twice."""
+        self.a_long_verified_turn()
+        self.assertTrue(self.asked(self.stop()))
+        self.assertEqual("", self.asked(self.stop()))
+
+    def test_it_never_names_a_card_that_belongs_to_a_sibling(self):
+        """`checkpoint._carried` may over-report into this session's own restore and it
+        costs nothing. An ask is different: it hands out a WRITE command, and the first
+        card in `doing` may belong to a live sibling that is still working on it."""
+        theirs = plan.add(self.ctx(), "a sibling's work", body="theirs",
+                          paths=["their.py"], done_when="stated")
+        plan.claim(self.ctx(), theirs.id, "some-other-session", "feat/theirs")
+
+        ours = self.a_long_verified_turn()
+        said = self.asked(self.stop())
+        self.assertIn(ours.id, said)
+        self.assertNotIn(theirs.id, said, "it named a card this session does not hold")
+
+    def test_the_mark_survives_the_session_s_next_tool_call(self):
+        """`pre-tool` rewrites `tool_signatures` on every allowed call and keeps only the
+        integer-valued keys. A mark stored as anything else is dropped by the next Write,
+        and a once-per-session ask whose mark evaporates is an ask on every turn."""
+        self.a_long_verified_turn()
+        self.assertTrue(self.asked(self.stop()))
+        self.gate("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Edit",
+            "tool_input": {"file_path": str(self.repo / "feature.py"), "new_string": "x = 2"},
+        })
+        self.assertEqual("", self.asked(self.stop()))
+
+    def test_a_session_that_wrote_its_dead_ends_down_is_left_alone(self):
+        from claude_bestpractice import attempts
+
+        self.a_long_verified_turn()
+        attempts.record(self.ctx(), title="the fast path", why="it deadlocked on the lease",
+                        paths=["feature.py"], outcome=attempts.FAILED,
+                        session_id=sid(self.repo, "s1"))
+        self.assertEqual("", self.asked(self.stop()))
+
+    def test_a_session_whose_card_carries_a_body_is_left_alone(self):
+        task = self.a_long_verified_turn()
+        plan.amend(self.ctx(), task.id, note="what this window learned, already written")
+        self.assertEqual("", self.asked(self.stop()))
+
+    def test_a_short_session_is_not_asked(self):
+        """Eight calls in there is nothing to hand forward, and being asked anyway is what
+        teaches an agent that this plugin is noise."""
+        self.a_long_verified_turn(calls=8)
+        self.assertEqual("", self.asked(self.stop()))
+
+    def test_zero_switches_it_off(self):
+        self.configure(notes_after_calls=0)
+        self.a_long_verified_turn()
+        self.assertEqual("", self.asked(self.stop()))
+
+    def test_a_refused_turn_is_not_asked(self):
+        """A turn being refused has something more urgent to say, and the ask would be
+        speaking over the evidence demand that is the point of the gate."""
+        self.start()
+        self.claim_a_task("s1", "feature.py")
+        self.write("feature.py", "x = 1\n")
+        from claude_bestpractice import sessions
+
+        sessions.touch(self.ctx(), sid(self.repo, "s1"), tool_calls=99)
+        proc = self.stop()
+        self.assertEqual(2, proc.returncode, "precondition: no evidence, so a refusal")
+        self.assertEqual("", self.asked(proc))
+
+    def test_it_fits_the_per_turn_budget(self):
+        """Per-turn injection is paid for again on every later turn of the session."""
+        from claude_bestpractice import hookio
+
+        self.a_long_verified_turn()
+        self.assertLessEqual(len(self.asked(self.stop())), hookio.MAX_PER_TURN_CHARS)
 
     def test_every_command_it_names_is_one_that_exists(self):
-        """This block is the only interruption the whole session is allowed, and it spent
-        it handing out `claude-bp-attempt record`, which is not a subcommand — the verb is
-        `add`. `claim` was named for writing a task body it cannot write, and `add` files a
-        SECOND card for a session that already holds one.
+        """The version of this demand that lived in the compaction hook spent the session's
+        one interruption on `claude-bp-attempt record` — not a subcommand, the verb is
+        `add` — on `claim` to write a body it cannot write, and on `claude-bp-decide`,
+        which gives a model no way to file anything at all.
 
-        Asserted by invoking each named command rather than by matching its text, because a
-        string assertion is what let the wrong one live here: the previous test pinned the
-        broken spelling in place.
+        Asserted by invoking each command rather than by matching its text, because a
+        string assertion is what let the wrong spelling live: the test that guarded this
+        pinned the broken one in place.
         """
         import re
         import subprocess
 
-        self.start()
-        self.write("pipeline.py", "run = True\n")
-        said = self.compact().stderr
+        self.a_long_verified_turn()
+        said = self.asked(self.stop())
 
         named = set(re.findall(r"claude-bp-[a-z]+(?:\s+[a-z]+)?", said))
         self.assertTrue(named, "the demand named no command at all")
@@ -770,51 +937,6 @@ class TestTheCompactionIsBlockedOnceForTheNotes(GateCase):
                 self.assertEqual(0, proc.returncode,
                                  f"`{phrase}` is named in the demand and does not exist:\n"
                                  f"{proc.stderr}")
-
-    def test_it_is_never_raised_twice(self):
-        """A session that ignores this, crashes, or meets the next compaction must not be
-        stopped again. One unignorable interruption is the whole budget."""
-        self.start()
-        self.write("pipeline.py", "run = True\n")
-        self.assertEqual(2, self.compact().returncode)
-        self.assertEqual(0, self.compact().returncode)
-
-    def test_a_session_that_changed_nothing_is_not_stopped(self):
-        self.start()
-        self.assertEqual(0, self.compact().returncode)
-
-    def test_the_checkpoint_is_written_even_when_it_blocks(self):
-        """The block is on top of the flush, never instead of it."""
-        self.start()
-        self.write("pipeline.py", "run = True\n")
-        self.compact()
-        found = list((self.repo / ".claude" / "claude-bestpractice" / "checkpoints").iterdir())
-        self.assertTrue(found)
-
-    def test_an_automatic_compaction_is_never_blocked(self):
-        """`auto` means the harness is compacting because the window is FULL. The session
-        is already at the wall, and blocking there costs it a turn it has no room for: it
-        cannot compact, because this refused, and it cannot proceed, because the context
-        is spent. A gate that wedges a session at its worst moment is worse than the notes
-        it was protecting."""
-        self.start()
-        self.write("pipeline.py", "run = True\n")
-        self.assertEqual(0, self.compact(trigger="auto").returncode)
-
-    def test_the_checkpoint_is_still_written_on_an_automatic_one(self):
-        """Not blocking is not the same as doing nothing: the snapshot is the half that
-        survives, and it is the half that matters when the window is about to close."""
-        self.start()
-        self.write("pipeline.py", "run = True\n")
-        self.compact(trigger="auto")
-        found = list((self.repo / ".claude" / "claude-bestpractice" / "checkpoints").iterdir())
-        self.assertTrue(found)
-
-    def test_a_manual_compaction_is_still_stopped_once(self):
-        """The case the founder is present for, and where the notes are cheap to write."""
-        self.start()
-        self.write("pipeline.py", "run = True\n")
-        self.assertEqual(2, self.compact(trigger="manual").returncode)
 
 
 class TestAutoModeDenialsAreVisible(GateCase):

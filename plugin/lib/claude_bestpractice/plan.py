@@ -45,6 +45,12 @@ STATES = (NEXT, DOING, PAUSED, DONE)
 MAX_TITLE_CHARS = 120
 MAX_BODY_CHARS = 2_000
 
+# What a card says when nobody said anything. Named rather than spelled out twice, because
+# a reader that asks "has this card been written to?" has to compare against it — and a
+# literal in two files drifts the moment one of them is reworded, leaving that reader
+# quietly answering yes for every card ever filed.
+NO_DETAIL = "(no detail)"
+
 
 @dataclass
 class Task:
@@ -324,7 +330,7 @@ def _render(task_id: str, title: str, state: str, owner: str, branch: str, body:
         f"updated_at: {now}",
         "---",
         "",
-        body[:MAX_BODY_CHARS].strip() or "(no detail)",
+        body[:MAX_BODY_CHARS].strip() or NO_DETAIL,
         "",
     ]
     return "\n".join(lines)
@@ -468,7 +474,7 @@ def show(task: Task) -> str:
     lines += _labelled("WAITING ON:", [f"  {task.blocker}"] if task.blocker else [])
     lines += _labelled("ORDER:", _order_lines(task))
     lines.append("HANDOFF:")
-    lines += [f"  {line}" for line in (task.body or "(no detail)").splitlines()]
+    lines += [f"  {line}" for line in (task.body or NO_DETAIL).splitlines()]
     if task.branch:
         lines += ["", f"parked from branch {task.branch}"]
     return "\n".join(lines)
