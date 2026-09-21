@@ -1,6 +1,5 @@
 # Decisions
 
-- [0010] The founder accepts the work, the session does the rest — `decisions/0010-the-founder-accepts-the-work.md`
 - [0011] A delivery closes the card it delivered — `decisions/0011-a-delivery-closes-the-card.md`
 - [0012] A suite is a path, and a turn is judged by the suites its diff reaches — `decisions/0012-a-suite-is-a-path.md`
 - [0013] A failure may be remembered; a pass may never be — `decisions/0013-a-failure-may-be-remembered.md`
@@ -11,4 +10,5 @@
 - [0018] The ledger lives in the main checkout and out of git — `decisions/0018-the-ledger-is-out-of-git.md`
 - [0019] A finished tree removes itself, and what the plugin may not remove it names — `decisions/0019-a-finished-tree-removes-itself.md`
 - [0020] Every refusal leaves at least one command that runs on this machine — `decisions/0020-a-refusal-leaves-a-runnable-command.md`
-- ... 9 older, see `decisions/`
+- [0021] A gate refuses only where the refusal reaches the model — `decisions/0021-a-gate-refuses-where-the-refusal-reaches-the-model.md`
+- ... 10 older, see `decisions/`

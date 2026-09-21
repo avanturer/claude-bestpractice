@@ -108,6 +108,13 @@ Do not rely on the pre-compaction hook as a veto: blocking it leaves the session
 while context keeps growing. Use it to **flush**, never to refuse. And design so that losing any
 prior tool output is a non-event — **persist at write time, never at compaction time**.
 
+The stronger form, measured on 2.1.278 rather than inferred: a blocked `PreCompact` reaches nobody.
+Both `exit 2` and `{"decision": "block"}` end the turn with `num_turns: 0` and the refusal delivered
+as a `<synthetic>` assistant message — no model call happens, so the text is read by the founder
+alone, and the `/compact` they typed is cancelled along with the instructions they passed to it. A
+demand that needs the model has exactly one home: the Stop hook, whose feedback continues the
+conversation and gets a turn (also measured). See decision 0021.
+
 ## 4. Subagent inheritance
 
 Non-fork subagents inherit the full `CLAUDE.md` hierarchy — **but the built-in Explore and Plan

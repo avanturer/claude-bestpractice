@@ -762,6 +762,24 @@ def _git_out(tree: Path, args: list[str]) -> str:
     return done.stdout if done.returncode == 0 else ""
 
 
+def _drop_the_compaction_demand_marker(ctx: GitContext) -> str:
+    """The roll of sessions a `PreCompact` block had already interrupted.
+
+    That block is gone. It could not be answered — the event refuses a compaction without
+    ever calling the model, so the instruction reached the founder alone and cancelled the
+    `/compact` they had just typed. The file it kept is now read by nothing, and state
+    nothing reads is state the next reader has to work out the meaning of.
+
+    The founder upgrades on top of a clone that ran the old hook, so the file is sitting
+    in every one of them.
+    """
+    path = store.tier_b(ctx, "compaction-notes-demanded.json")
+    if not path.exists():
+        return ""
+    path.unlink()
+    return "dropped the compaction demand's marker; a manual /compact is no longer blocked"
+
+
 _REPAIRS = {
     "0001-task-paths": (1, _backfill_task_paths),
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
@@ -778,6 +796,7 @@ _REPAIRS = {
     "0013-restage-ledger-moves": (1, _restage_ledger_moves_git_lost),
     "0014-reconcile-ledger-copies": (1, _reconcile_scattered_ledger_copies),
     "0015-untrack-the-ledger": (1, _untrack_the_ledger),
+    "0016-drop-the-compaction-marker": (1, _drop_the_compaction_demand_marker),
 }
 
 

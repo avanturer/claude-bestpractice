@@ -811,6 +811,38 @@ def check_checkpoint(repo: Path) -> Result:
     )
 
 
+def check_compaction_is_never_blocked(repo: Path) -> Result:
+    """The known-bad action is the one this plugin used to take itself.
+
+    A manual `/compact`, in a session that has done work — the exact shape the checkpoint
+    hook refused for three releases to make the window write its notes down first. The
+    refusal was unanswerable: `PreCompact` never calls the model, so it only cancelled the
+    founder's command and lost the instructions they had typed into it. Proving it stays
+    gone belongs here rather than in a comment, because this is the file that proves a
+    gate by attempting the act rather than by reading the code back.
+    """
+    start_session(repo, "doctor-compact")
+    (repo / "worked_on.py").write_text("x = 1\n", encoding="utf-8")
+    proc = run_gate(
+        "checkpoint",
+        {
+            "session_id": "doctor-compact",
+            "hook_event_name": "PreCompact",
+            "cwd": str(repo),
+            "trigger": "manual",
+            "custom_instructions": "carry on with the design",
+            "transcript_path": "",
+        },
+        repo,
+    )
+    return Result(
+        "a manual compaction is never refused",
+        proc.returncode == 0,
+        "allowed" if proc.returncode == 0
+        else f"exit {proc.returncode}: {proc.stderr[:160]} — THE FOUNDER'S /compact WAS CANCELLED",
+    )
+
+
 def check_knowledge_anchor(repo: Path) -> Result:
     """A renamed symbol must break its entity anchor rather than describe a ghost."""
     sys.path.insert(0, str(BIN.parent / "lib"))
@@ -1607,6 +1639,7 @@ def main() -> int:
             check_policy_reaches_the_settings,
             check_stale_artifact_rejected,
             check_checkpoint,
+            check_compaction_is_never_blocked,
             check_knowledge_anchor,
             check_provenance_suppression,
             check_stage_gated_rules,

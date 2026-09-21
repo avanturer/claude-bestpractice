@@ -1,5 +1,65 @@
 # Changelog
 
+## v1.67.0
+
+The one interruption a session gets was being spent at an event where nobody could answer it.
+
+### What happened
+
+A founder typed `/compact подготовься к дальнейшей работе над дизайном в этой ветке` and
+got a wall of instructions on screen, no compaction, and a session sitting idle —
+*"что не так, почему не компактит"*.
+
+The instructions were this plugin's. `checkpoint` blocked one compaction per session to
+make the window write down what only it knew, and the block was written for the model:
+three fields, three commands, "then let the compaction proceed". Measured against the CLI
+(2.1.278) rather than against the documentation that says the event can block:
+
+```
+exit 2               → compact_result: failed, num_turns: 0, model: <synthetic>, 0 tokens
+{"decision":"block"} → compact_result: failed, num_turns: 0, model: <synthetic>, 0 tokens
+```
+
+No model call happens on a blocked `PreCompact`, on either route. So the reader of that
+demand was only ever the founder — whose command had just been cancelled, custom
+instructions and all, and who had to type it again to get the compaction they asked for
+the first time. Three releases went into fixing the wording of a message nobody it was
+addressed to could receive.
+
+### The compaction is never refused again
+
+`checkpoint` is what its own docstring always said it was: a flush, zero model calls, no
+opinion about whether the compaction should happen. `claude-bp-doctor` now performs the
+act that used to be refused — a manual `/compact` in a session that has done work — and
+fails if anything cancels it. Decision 0021 states the general rule the defect belonged
+to: a gate refuses only where the refusal reaches the model, and which events those are is
+measured rather than read off a table.
+
+### The demand moved to the only event that can carry it
+
+A Stop hook's feedback continues the conversation and the model acts on it — verified the
+same way, by running it. So the ask lives there now, and it is better placed than it was:
+it fires while the material is still alive rather than as the window hits the wall, and it
+covers an automatic compaction, which the old gate deliberately never touched.
+
+It asks once per session, at a clean finish, past `notes_after_calls` tool calls (40; zero
+switches it off), and only from a session that has filed nothing — no attempt, no card
+body. It asks as feedback rather than as a refusal, which is not cosmetic: a refusal is
+counted by the escalation above it, and the fourth one ends a turn UNVERIFIED and files a
+permanent failed attempt against work that passed its suite.
+
+Two fields, and each names a command that exists and writes something. The third is gone:
+`claude-bp-decide` has no way for a model to file anything — its drafts are harvested from
+the FOUNDER's corrections — so "say it plainly and it will be caught" was never true.
+
+### The state it left behind, and one string that lied
+
+`migrate._REPAIRS` gains `0016-drop-the-compaction-marker`: the roll of sessions the old
+block had already interrupted is read by nothing now. And `plan.NO_DETAIL` gives the body
+a card carries when nobody wrote one a name, because the gate that asks "has this session
+written anything down?" has to compare against it — spelled out in two files, it answers
+yes for every card ever filed the moment one of them is reworded.
+
 ## v1.66.0
 
 Closing the work — putting the tree away, getting the branch to a pull request, leaving

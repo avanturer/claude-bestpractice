@@ -214,6 +214,17 @@ class TestRepairsRunThemselvesAndRunOnce(RepoCase):
         migrate.repair(self.ctx())
         self.assertIn("paths:", task.path.read_text(encoding="utf-8"))
 
+    def test_the_compaction_demand_s_marker_is_dropped(self):
+        """The roll of sessions the old `PreCompact` block had already interrupted. That
+        block is gone — it cancelled the founder's `/compact` and reached the model never
+        — and the founder upgrades on top of the clone that ran it."""
+        stale = store.tier_b(self.ctx(), "compaction-notes-demanded.json")
+        stale.parent.mkdir(parents=True, exist_ok=True)
+        stale.write_text(json.dumps(["s1-abcd1234"]), encoding="utf-8")
+
+        migrate.repair(self.ctx())
+        self.assertFalse(stale.exists())
+
     def test_a_failing_repair_does_not_brick_the_session(self):
         """An upgrade that dies halfway leaves the repository worse than the defect."""
         with only_repair("9999-explodes", 1, lambda ctx: 1 / 0):
