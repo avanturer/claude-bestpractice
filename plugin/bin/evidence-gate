@@ -145,10 +145,12 @@ def _closed_the_tree(ctx, rec: sessions.SessionRecord, cfg) -> str:
         return ""
     if not gone:
         return ""
-    path, branch = gone
+    path, branch, also = gone
+    carried = f" With it: {'; '.join(also)}." if also else ""
     said = (
         f"claude-bestpractice removed the worktree {path} and its branch {branch}: the work "
-        f"is in the trunk, the board is clear and git reported nothing left in the tree. "
+        f"is in the trunk, the board is clear and git reported nothing left in the tree."
+        f"{carried} "
         f"The shell is now in a directory that no longer exists — `cd {where}`."
     )
     # The founder sees the line above; the model sees this, at its next tool call, which is

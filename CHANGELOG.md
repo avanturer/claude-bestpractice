@@ -1,5 +1,69 @@
 # Changelog
 
+## v1.67.0
+
+The removal that #220 introduced finishes what it starts, and a session never removes the
+tree it is standing in.
+
+### What happened
+
+#224, from the same repository, one release later. The tree goes — and the session that owns
+the rest of the cleanup loses the ability to do any of it:
+
+```
+$ git worktree remove /home/hedge/dev/startups/fuddy-ugc-card
+$ pwd
+pwd: error retrieving current directory: getcwd: cannot access parent directories
+$ git status
+This session is isolated in the worktree /home/hedge/dev/startups/fuddy-ugc-card,
+but this command redirects git to the shared checkout via -C. Refusing to run it
+```
+
+git deletes the directory the shell is standing in and Claude Code then refuses every git
+call in the session, because the worktree it is isolated in no longer exists. Non-git
+commands still work, so this is not #174 — but the branch, the database and the sibling
+branches are all git. What stayed behind on that machine, per finished task: three local
+branches already merged and deleted on GitHub, and a sixteen-megabyte database
+`claude-bp database` had created for the tree.
+
+### A removal carries its own cleanup (#224)
+
+`release_mine` and the sweep that clears a dead session's tree now take, in the same act:
+
+- the branch the tree stood on, as before;
+- **the database this plugin gave the tree**, when it is the name this plugin derived for it
+  and no other working tree of the clone points at it. `drop database` with no FORCE, so a
+  dev server still connected keeps it;
+- **the local branches beside it whose work is in the trunk** — the `fix/` and `docs/`
+  branches a session makes over one afternoon, which belong to no tree and so could never be
+  reached by a sweep shaped around trees. `git branch -d`, and `-D` only on decision 0019's
+  one proof: every file the branch delivers is already byte-identical to the trunk, which is
+  what a squash merge leaves.
+
+A branch any working tree is standing on, and any branch git refuses without that proof, are
+untouched. The Stop gate's line says what went besides the tree.
+
+### The removal happens where the session survives it (#224)
+
+`git worktree remove <this session's own tree>` through Bash is no longer run by the shell.
+The gate performs the identical act from the main checkout, where nothing is standing in the
+tree, does the cleanup above, and denies the call as already done — with `cd <main checkout>`
+for the shell that is now in a directory that is gone. `--force` is carried through only when
+the session typed it; without it git's refusal over a modified or untracked file is still
+what protects the work, and that refusal comes back with `git -C <tree> status` to answer it.
+
+Removing another session's tree is untouched: that is the cross-tree rule's business and it
+reaches it unchanged.
+
+### The repositories this already happened in
+
+`0016-finish-removals-done-by-hand` runs on the next session start: for every record this
+plugin wrote for a tree that is no longer on disk, it prunes the registration, drops that
+tree's database, deletes the branches whose work is in, and forgets the record. The founder
+runs nothing.
+
+Decision 0021.
+
 ## v1.66.0
 
 Closing the work — putting the tree away, getting the branch to a pull request, leaving

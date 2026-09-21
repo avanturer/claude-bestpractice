@@ -736,6 +736,28 @@ def _untrack_the_ledger(ctx: GitContext) -> str:
             "commit the staged deletion when you next commit")
 
 
+def _finish_removals_done_by_hand(ctx: GitContext) -> str:
+    """Trees a session removed itself and could not clean up after.
+
+    The removal succeeds and strands the session: the shell is left in a directory that is
+    gone, and Claude Code refuses every git command from there because the session is
+    isolated in that worktree. So the registration, the branch and the database stay, and
+    the session that made all three can do nothing about any of it (#224).
+
+    The state is already on the founder's machine — this repair is how it leaves, on the
+    next session start, without anybody being asked. It only ever touches records this
+    plugin wrote for trees that are no longer on disk.
+    """
+    from . import worktree
+
+    cleaned = worktree.finish_removals(ctx)
+    if not cleaned:
+        return ""
+    shown = ", ".join(cleaned[:3])
+    more = f" (+{len(cleaned) - 3} more)" if len(cleaned) > 3 else ""
+    return f"finished the cleanup of {len(cleaned)} item(s) left by a removed worktree: {shown}{more}"
+
+
 _LEDGER_PATH = ".claude/claude-bestpractice/plan"
 
 
@@ -778,6 +800,7 @@ _REPAIRS = {
     "0013-restage-ledger-moves": (1, _restage_ledger_moves_git_lost),
     "0014-reconcile-ledger-copies": (1, _reconcile_scattered_ledger_copies),
     "0015-untrack-the-ledger": (1, _untrack_the_ledger),
+    "0016-finish-removals-done-by-hand": (1, _finish_removals_done_by_hand),
 }
 
 

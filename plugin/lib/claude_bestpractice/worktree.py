@@ -27,7 +27,7 @@ import subprocess
 from pathlib import Path
 
 from . import store
-from .gitctx import GitContext
+from .gitctx import TRUNK_REFS, GitContext
 
 PORT_BASE = 41000
 PORT_RANGE = 900
@@ -800,8 +800,162 @@ def _abandoned(ctx: GitContext, body: dict, live: set) -> tuple | None:
     return tree, str(body.get("branch") or "")
 
 
-def _release(ctx: GitContext, tree: tuple, record_path: Path, squashed: bool = False) -> bool:
-    """Hand a tree back to git, and its branch with it. False if git refused any of it.
+def drop_database(url: str, database: str) -> str:
+    """Give back the database this plugin made for a tree it is removing. Its name, or "".
+
+    The tree goes and the database it pointed at stays, sixteen megabytes at a time, one
+    per finished task — the second half of the pile #224 reports, and invisible where the
+    first half is not: nothing lists it, `git worktree list` does not know about it, and
+    the session that made it is gone.
+
+    Two conditions here and one at every caller, all three about never dropping a database
+    this plugin did not create: the URL has to be Postgres, the database it names has to be
+    the name this plugin derived for that tree (`derive_db_name`, written into the record at
+    provisioning) — and the callers ask `_points_at` first, so a database another working
+    tree also names is never touched. That last one is what keeps `isolate_databases: false`
+    safe, where every tree shares the main checkout's database and none of them owns it.
+
+    `drop database` with no FORCE, which is the same argument the rest of this file makes:
+    the server refuses while anything is connected, so a dev server still holding it keeps
+    it. Nothing here overrides that.
+    """
+    if not database or not is_postgres(url):
+        return ""
+    head, name, query = split_dsn(url)
+    if not name or name != database:
+        return ""
+    reached, _out = _psql(f"{head}/{_MAINTENANCE}{query}",
+                          f"drop database {_identifier(name)}")
+    return name if reached else ""
+
+
+def _points_at(ctx: GitContext, url: str, exclude: Path) -> bool:
+    """Does any other working tree of this clone name this database?"""
+    from . import gitpolicy
+
+    try:
+        skip = exclude.resolve()
+    except OSError:
+        return True
+    for tree in gitpolicy.working_trees(ctx):
+        if tree == skip:
+            continue
+        if database_of(tree) == url:
+            return True
+    return False
+
+
+def _delivers_the_same_bytes(where: Path, branch: str, trunk: str) -> bool:
+    """Is every file this branch delivers already byte-identical to the trunk's?
+
+    The proof decision 0019 accepts for `-D`, asked here of a branch NOBODY is standing on
+    — `pullrequest.landed` can only answer for the tree it is called in, and the branches
+    a finished tree leaves behind (`fix/…`, `docs/…` from the same session) are branches no
+    tree holds at all. Same question, asked of two revisions instead of a revision and a
+    working tree.
+
+    A branch that delivers no file proves nothing and is never claimed: that is a branch
+    with commits git can still see and this cannot read, which is the case for `-d`.
+    """
+    files = _git_lines(where, ["diff", "--name-only", f"{trunk}...{branch}"])
+    if not files:
+        return False
+    for rel in files:
+        here = _git_lines(where, ["rev-parse", "--verify", "--quiet", f"{branch}:{rel}"])
+        there = _git_lines(where, ["rev-parse", "--verify", "--quiet", f"{trunk}:{rel}"])
+        if not here or here != there:
+            return False
+    return True
+
+
+def _trees_under(where: Path) -> list[Path]:
+    """Every working tree of the clone `where` belongs to, asked from `where`."""
+    out: list[Path] = []
+    for line in _git_lines(where, ["worktree", "list", "--porcelain"]):
+        if not line.startswith("worktree "):
+            continue
+        with contextlib.suppress(OSError):
+            out.append(Path(line.split(" ", 1)[1]).resolve())
+    return out
+
+
+def _git_lines(where: Path, args: list[str]) -> list[str]:
+    """git's stdout as lines, or [] for anything that was not a clean answer.
+
+    Lines and not tokens: a path with a space in it is one answer, and splitting on
+    whitespace turns it into two that name nothing.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", *args], cwd=str(where), capture_output=True,
+            encoding="utf-8", errors="surrogateescape", timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [line for line in proc.stdout.splitlines() if line.strip()] if proc.returncode == 0 else []
+
+
+def _sweepable(branch: str, held: set, trunk: str) -> bool:
+    """Is this a branch the sweep may even ask git about?
+
+    Not the trunk under any of its names, and not one a working tree is standing on — git
+    would refuse that anyway, and a refusal is not how a rule should be expressed.
+    """
+    from . import gitpolicy
+
+    return bool(branch) and branch not in held and branch != trunk \
+        and branch not in gitpolicy.TRUNK_NAMES
+
+
+def reap_merged_branches(ctx: GitContext, where: Path | None = None) -> list[str]:
+    """Delete local branches whose work is in the trunk and that no working tree holds.
+
+    A session does not make one branch. It makes the one its tree stands on and then, over
+    the same afternoon, the small ones beside it — the reporting repository finished with
+    `feat/card-corrections` removed and `fix/correct-sheet-one-layer` and
+    `docs/one-layer-close-semantics` left behind, all three merged and deleted on GitHub
+    (#224). Thirty-one of a hundred and thirty-five were in that state when #220 measured
+    it, and the tree-shaped half of the sweep could never have reached them: they belong to
+    no tree.
+
+    So it is asked of the BRANCHES, once, when a tree is released. The proof is decision
+    0019's and unchanged — `git branch -d`, which refuses anything that is not in by
+    ancestry, and `-D` only where every file the branch delivers is already byte-identical
+    to the trunk, which is what a squash merge leaves. A branch any working tree is
+    standing on is never touched, and git would refuse it anyway.
+    """
+    # Every git call here runs in `where` and every path it needs comes from `where`.
+    # `ctx` is the tree being removed on the caller that matters, and by the time this runs
+    # that directory is gone — anything asked of it dies on `getcwd` inside a gate that
+    # then reports nothing at all (the shape evidence-gate already carries a comment about).
+    where = where or main_checkout(ctx)
+    trunk = next((ref for ref in TRUNK_REFS
+                  if _git_lines(where, ["rev-parse", "--verify", "--quiet", ref])), "")
+    if not trunk:
+        return []
+    held = {_branch_in(tree) for tree in _trees_under(where)}
+    candidates = [
+        branch for branch in _git_lines(where, ["branch", "--format=%(refname:short)"])
+        if _sweepable(branch, held, trunk)
+    ]
+    # `-d` first and the content test only where it refuses: the test is a `git diff` plus
+    # one `rev-parse` per file, and a hundred and thirty-five branches is a number this
+    # repository has actually seen.
+    return [
+        branch for branch in candidates
+        if _delete_branch(where, branch)
+        or (_delivers_the_same_bytes(where, branch, trunk)
+            and _delete_branch(where, branch, forced=True))
+    ]
+
+
+def _release(ctx: GitContext, tree: tuple, record_path: Path, squashed: bool = False,
+             notes: list[str] | None = None, force: bool = False) -> bool:
+    """Hand a tree back to git, and its branch, its database and its siblings with it.
+
+    False if git refused the removal. `notes` collects what went besides the tree, for the
+    one line the founder reads — the removal used to end at the directory, and everything
+    it had created around that directory stayed (#224).
 
     Run from the MAIN checkout, never from `ctx.worktree_root`: a session removing its own
     tree is removing the directory this process is standing in, and git obliges — it
@@ -813,8 +967,12 @@ def _release(ctx: GitContext, tree: tuple, record_path: Path, squashed: bool = F
     where = main_checkout(ctx)
     if Path(path).resolve() == where.resolve():
         return False
+    ours = _database_of_ours(ctx, Path(path))
+    # `--force` is never this plugin's idea: it is passed only where the session typed it
+    # itself, and every path that decides on its own to remove a tree leaves it off, so
+    # git's refusal over a modified or untracked file stays the thing protecting the work.
     gone = subprocess.run(
-        ["git", "worktree", "remove", path],
+        ["git", "worktree", "remove", *(["--force"] if force else []), path],
         cwd=str(where), capture_output=True,
         encoding="utf-8", errors="surrogateescape", timeout=60,
     )
@@ -822,30 +980,59 @@ def _release(ctx: GitContext, tree: tuple, record_path: Path, squashed: bool = F
         return False
 
     if branch:
-        # -d, never -D: an unmerged branch is work somebody did, and the fact that its
-        # session died does not make it disposable.
-        deleted = subprocess.run(
-            ["git", "branch", "-d", branch],
-            cwd=str(where), capture_output=True,
-            encoding="utf-8", errors="surrogateescape", timeout=60,
-        )
-        if deleted.returncode != 0 and squashed:
-            # The one place a refusal is overridden, and only on a proof git does not
-            # have: `-d` asks whether the branch TIP is an ancestor of the trunk, and a
-            # squash merge makes it an ancestor of nothing — which is what this
-            # repository's own merges are. `squashed` is set only when every file the
-            # branch delivers is already byte-identical to the trunk's, so what `-D`
-            # deletes here is a label over content that is in, exactly what
-            # `gh pr merge --squash --delete-branch` deletes on the remote.
-            subprocess.run(
-                ["git", "branch", "-D", branch],
-                cwd=str(where), capture_output=True,
-                encoding="utf-8", errors="surrogateescape", timeout=60,
-            )
+        _delete_branch(where, branch, forced=squashed)
     if record_path.name:
         with contextlib.suppress(OSError):
             record_path.unlink()
+
+    _carry_the_rest(ctx, where, branch, ours, notes if notes is not None else [])
     return True
+
+
+def _carry_the_rest(ctx: GitContext, where: Path, branch: str,
+                    ours: tuple | None, notes: list[str]) -> None:
+    """Everything the tree was given that is not the tree: the database, and the siblings."""
+    dropped = drop_database(*ours) if ours else ""
+    if dropped:
+        notes.append(f"the database {dropped}")
+    others = [name for name in reap_merged_branches(ctx, where) if name != branch]
+    if others:
+        notes.append(f"{len(others)} merged branch(es): {', '.join(others[:5])}")
+
+
+def _database_of_ours(ctx: GitContext, tree: Path) -> tuple[str, str] | None:
+    """(url, name) when this tree's database is this plugin's to give back, else None.
+
+    Asked BEFORE the removal, always: the tree's `.env` is the only place its DATABASE_URL
+    is written down, and `git worktree remove` deletes it with everything else.
+    """
+    url = database_of(tree)
+    _record, body = record_for(ctx, tree)
+    owned = str(body.get("database") or "") if isinstance(body, dict) else ""
+    if not url or not owned or _points_at(ctx, url, tree):
+        return None
+    return url, owned
+
+
+def _delete_branch(where: Path, branch: str, forced: bool = False) -> bool:
+    """Take the branch with the tree. False when git kept it, which it is entitled to do.
+
+    `-d`, never `-D` on its own: an unmerged branch is work somebody did, and the fact that
+    its session died does not make it disposable. `forced` is the one proof that overrides
+    a `-d` refusal — `-d` asks whether the branch TIP is an ancestor of the trunk, and a
+    squash merge makes it an ancestor of nothing, which is what this repository's own merges
+    are. It is set only where every file the branch delivers is already byte-identical to
+    the trunk, so what `-D` removes is a label over content that is in — exactly what
+    `gh pr merge --squash --delete-branch` removes on the remote.
+    """
+    for flag in ("-d", "-D") if forced else ("-d",):
+        done = subprocess.run(
+            ["git", "branch", flag, branch], cwd=str(where), capture_output=True,
+            encoding="utf-8", errors="surrogateescape", timeout=60,
+        )
+        if done.returncode == 0:
+            return True
+    return False
 
 
 def _nothing_left_in(tree: Path) -> bool:
@@ -948,10 +1135,11 @@ def finished(ctx: GitContext, session_id: str) -> tuple[str, str, bool] | None:
     return found if _nothing_left_in(tree) else None
 
 
-def release_mine(ctx: GitContext, session_id: str) -> tuple[str, str] | None:
-    """Remove this session's finished tree and the branch whose work is already in.
+def release_mine(ctx: GitContext, session_id: str) -> tuple[str, str, list[str]] | None:
+    """Remove this session's finished tree and everything it was given along with it.
 
-    (path, branch) when the tree is gone, None when there was nothing to do or git said no.
+    (path, branch, what else went) when the tree is gone, None when there was nothing to do
+    or git said no.
     Called from the Stop gate on the turn that finishes the work, rather than left to the
     sweep that runs when the session is already dead: the founder's complaint is not that
     the trees are never collected, it is that they pile up while they are being worked in
@@ -962,9 +1150,108 @@ def release_mine(ctx: GitContext, session_id: str) -> tuple[str, str] | None:
         return None
     path, branch, squashed = found
     record_path, _body = record_for(ctx, Path(path))
-    if _release(ctx, (path, branch), record_path, squashed=squashed):
-        return path, branch
+    notes: list[str] = []
+    if _release(ctx, (path, branch), record_path, squashed=squashed, notes=notes):
+        return path, branch, notes
     return None
+
+
+def release_now(ctx: GitContext, session_id: str, force: bool = False) -> tuple[str, str, list[str]] | None:
+    """Remove this session's own tree because the session asked to, not because it is finished.
+
+    The act is identical to `release_mine`'s and it is run from the main checkout, which is
+    the whole point: `git worktree remove` on your own tree succeeds and leaves the shell
+    standing in a directory that is gone, after which Claude Code refuses every git command
+    the cleanup still needs — the branch, the database, the siblings — because the session
+    is isolated in a worktree that no longer exists (#224).
+
+    So the removal the session asked for happens HERE, in a hook, where nothing is standing
+    in the tree and nothing is left to run afterwards. None when there is no such tree or
+    when git refused it — `git worktree remove` without `--force` refuses a tree with
+    anything in it, and that refusal is still the only thing deciding whether work is lost.
+    """
+    tree = mine(ctx, session_id)
+    if tree is None:
+        return None
+    landed = _in_the_trunk(tree)
+    branch = landed[1] if landed else _branch_in(tree)
+    record_path, _body = record_for(ctx, tree)
+    notes: list[str] = []
+    if _release(ctx, (str(tree), branch), record_path,
+                squashed=bool(landed and landed[2]), notes=notes, force=force):
+        return str(tree), branch, notes
+    return None
+
+
+def finish_removals(ctx: GitContext) -> list[str]:
+    """Finish the cleanups a tree removed by hand left half-done. What was cleaned up.
+
+    A session that removed its own tree with plain `git worktree remove` got the directory
+    and nothing else: git still holds the registration until something prunes it, the branch
+    stays, the database stays, and the session could not do any of it — every git command it
+    tried was refused for being isolated in a tree that no longer existed (#224). The state
+    is already on the founder's machine, so the fix has to reach backwards as well as
+    forwards.
+
+    Only records THIS plugin wrote, and only for trees that are already gone from disk.
+    Everything it then does is a command that refuses: `branch -d`, and `drop database`
+    without FORCE.
+    """
+    cleaned: list[str] = []
+    where = main_checkout(ctx)
+    try:
+        records = sorted(store.tier_b(ctx, "worktrees").glob("*.json"))
+    except OSError:
+        return cleaned
+    for record_path in records:
+        cleaned.extend(_finish_one_removal(ctx, where, record_path))
+    if cleaned:
+        cleaned.extend(reap_merged_branches(ctx, where))
+    return cleaned
+
+
+def _finish_one_removal(ctx: GitContext, where: Path, record_path: Path) -> list[str]:
+    """What one record of an already-deleted tree still owns, given back. [] for the rest."""
+    body = store.read_json(record_path, default={}) or {}
+    path = _a_tree_that_is_gone(body)
+    if path is None:
+        return []
+    subprocess.run(
+        ["git", "worktree", "prune"], cwd=str(where), capture_output=True,
+        encoding="utf-8", errors="surrogateescape", timeout=60,
+    )
+    cleaned: list[str] = []
+    dropped = _give_back_recorded_database(ctx, str(body.get("database") or ""), path)
+    if dropped:
+        cleaned.append(dropped)
+    with contextlib.suppress(OSError):
+        record_path.unlink()
+    cleaned.append(str(path))
+    return cleaned
+
+
+def _a_tree_that_is_gone(body) -> Path | None:
+    """The path this record describes, when it is ours and no longer on disk."""
+    if not isinstance(body, dict) or not body.get("provisioned_by_plugin"):
+        return None
+    where = str(body.get("path") or "")
+    return None if not where or Path(where).is_dir() else Path(where)
+
+
+def _give_back_recorded_database(ctx: GitContext, database: str, tree: Path) -> str:
+    """The database a vanished tree left behind, dropped. Its name, or "".
+
+    Its `.env` went with the directory, so the name comes from the record and the rest of
+    the URL from the main checkout's own — which is where every tree's came from. The tree
+    is already gone, so the only trees that can still be pointing at it are the ones that
+    were never ours.
+    """
+    if not database:
+        return ""
+    url = dsn_for(ctx, database)
+    if _points_at(ctx, url, tree):
+        return ""
+    return drop_database(url, database)
 
 
 def mine(ctx: GitContext, session_id: str) -> Path | None:

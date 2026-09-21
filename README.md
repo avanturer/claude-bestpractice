@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-1.66.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-1.67.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-1669%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-34%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -279,6 +279,15 @@ untracked files, and it is not the main checkout. The act is `git worktree remov
 `--force`, so git refuses over anything at all in the tree; the branch goes with `-d`, or
 `-D` on one proof and no other — every file it delivers already byte-identical to the trunk.
 You are not asked, which is the point. `{"remove_finished_trees": false}` turns it off.
+
+The removal carries what the tree was given: the branch, the database this plugin derived for
+it when no other working tree points at it, and the local branches beside it whose work is
+already in the trunk — the `fix/` and `docs/` ones a session opens over an afternoon, which
+belong to no tree and so survived every tree-shaped sweep. And `git worktree remove` on the
+tree a session is standing in is performed by the gate from the main checkout instead of by
+the shell: run in the shell it deletes that shell's own directory, after which Claude Code
+refuses every git call in the session as isolated in a worktree that no longer exists, and
+none of the cleanup above can happen.
 
 A tree another tool created is never removed, because that is not a plugin's call. It is
 **named** instead, with the command — as is a branch carrying commits that no pull request

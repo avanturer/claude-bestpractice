@@ -273,7 +273,12 @@ class TestTheRuleIsAboutTheTargetNotTheSession(PolicyCase):
     def test_a_session_can_remove_the_worktree_its_own_hook_made(self):
         """The refusal that hands over a worktree also made it un-removable: the main
         checkout was told it belonged to another session, and a worktree cannot remove
-        itself from the inside. Every false-positive refusal left permanent litter."""
+        itself from the inside. Every false-positive refusal left permanent litter.
+
+        What #218 asked for is the TREE BEING GONE, and that is what is asserted. Since
+        #224 the removal is performed by the gate from the main checkout and the call is
+        denied as already done — because running it in the shell deletes the directory that
+        shell is standing in, and the session can then run no git at all."""
         from claude_bestpractice import worktree
 
         made = worktree.provision(self.ctx(), "abandoned", sid(self.repo, "s1"))
@@ -283,7 +288,8 @@ class TestTheRuleIsAboutTheTargetNotTheSession(PolicyCase):
              "tool_input": {"command": f"git worktree remove {made}"}, "cwd": str(self.repo)},
             cwd=self.repo,
         )
-        self.assertEqual(_verdict(proc)[0], "allow")
+        self.assertFalse(made.is_dir(), "the tree this session made is still there")
+        self.assertIn("is removed", _verdict(proc)[1])
 
     def test_but_not_a_tree_somebody_else_is_in(self):
         """Narrow on purpose — ours, for this session, and nothing else."""
