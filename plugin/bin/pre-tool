@@ -450,6 +450,10 @@ _WORKTREE_REMOVE = re.compile(r"\bworktree\s+remove\b(?P<args>(?:\s+(?:-\S+|[\w.
 # refused as a command that discards uncommitted work (#218).
 _WORKTREE_READ = re.compile(r"\bworktree\s+(?:list|prune)\b")
 
+# The session asking for the tree to go whatever is in it. Read rather than decided:
+# nothing in this plugin adds `--force` on its own.
+_WORKTREE_FORCE = re.compile(r"\bworktree\s+remove\b[^&|;\n]*\s(?:--force|-f)\b")
+
 # An interpreter is not statically analysable in general and this does not pretend to be.
 # It matches the literal one-liner form only — the shape actually used to reach around a
 # path rule — and misses anything computed, which is stated rather than implied.
@@ -508,6 +512,35 @@ def _resolve(base: Path, raw: str) -> Path | None:
         return None
 
 
+def _removal_targets(rest: str, here: Path) -> list[Path]:
+    """The trees `git worktree remove` would delete, as this segment names them."""
+    return [
+        _resolve(here, a)
+        for removal in _WORKTREE_REMOVE.finditer(rest)
+        for a in _ARG.findall(removal.group("args")) if not a.startswith("-")
+    ]
+
+
+def worktree_removals(command: str, cwd: Path) -> list[Path]:
+    """Every working tree this command would remove, resolved as the shell would resolve it.
+
+    Separate from `git_tree_targets`, which answers "whose tree does this touch" and folds
+    a removal in with a `reset --hard`. The question here is narrower and has its own
+    answer: a session removing its OWN tree is not doing anything forbidden, it is doing
+    something it cannot survive (#224).
+    """
+    scannable = _QUOTED.sub(lambda m: " " * len(m.group(0)), command)
+    out: list[Path] = []
+    for segment, _literal, here in _segments_with_cwd(scannable, cwd):
+        found = _GIT_VERB.search(segment)
+        if not found:
+            continue
+        for path in _removal_targets(found.group("rest"), here):
+            if path is not None and path not in out:
+                out.append(path)
+    return out
+
+
 def git_tree_targets(command: str, cwd: Path) -> list[Path]:
     """Working trees a git command would mutate, however it was pointed at them.
 
@@ -533,11 +566,7 @@ def git_tree_targets(command: str, cwd: Path) -> list[Path]:
         # reset --hard` is two commands in one segment and the second one still counts.
 
         # `git worktree remove <path>` destroys a tree named as a plain argument.
-        removals = [
-            _resolve(here, a)
-            for removal in _WORKTREE_REMOVE.finditer(rest)
-            for a in _ARG.findall(removal.group("args")) if not a.startswith("-")
-        ]
+        removals = _removal_targets(rest, here)
         if removals:
             # ONLY the tree being removed. `-C <main checkout>` is where the command RUNS,
             # and running it there mutates nothing there: `git worktree remove` moves no
@@ -1054,6 +1083,55 @@ def main() -> None:
             # never given the same exemption.
             if owner is not None and not gitpolicy.provisioned_for(ctx, event.session_id, owner):
                 deny(ctx, rec, gitpolicy.foreign_refusal(path, owner, ctx))
+
+    # The other step this session does not survive: removing the tree it is standing in.
+    # git obliges — the directory goes, and the shell is left with no working directory at
+    # all — and from there Claude Code refuses every git call as "isolated in the worktree
+    # <gone>", so the rest of the cleanup cannot be done by the session that owes it: the
+    # branch, the database this plugin gave the tree, and the merged branches beside it all
+    # stay (#224).
+    #
+    # Refusing it would be a gate standing between a session and the tidying-up this plugin
+    # asks for (decision 0017), so it is not refused: it is DONE, here, from the main
+    # checkout, where nothing is standing in the tree and nothing is left to run afterwards.
+    # What comes back to the session is the same outcome it asked for, plus the cleanup it
+    # could not have reached.
+    if event.tool_name == "Bash":
+        own = worktree.mine(ctx, rec.session_id)
+        removals = worktree_removals(str(ti.get("command", "")), session_cwd) if own else []
+        if own and any(path == own.resolve() for path in removals if path is not None):
+            released = None
+            try:
+                # `--force` only where the session typed it: it is the session's own act
+                # being carried out somewhere it survives, not a judgement this gate makes
+                # about whose work may be discarded.
+                forced = bool(_WORKTREE_FORCE.search(str(ti.get("command", ""))))
+                released = worktree.release_now(ctx, rec.session_id, force=forced)
+            except Exception:  # noqa: BLE001 - a refusal is better than a crashing gate
+                released = None
+            if released is not None:
+                path, branch, also = released
+                carried = f"\n  With it: {'; '.join(also)}." if also else ""
+                deny(
+                    ctx, rec,
+                    f"claude-bestpractice: done — {path} is removed and so is {branch}."
+                    f"{carried}\n"
+                    "  Run from the main checkout rather than from inside the tree, because "
+                    "removing the directory this shell stands in leaves Claude Code refusing "
+                    "every later git call as isolated in a worktree that no longer exists.\n"
+                    f"  The shell is now in a directory that is gone — `cd "
+                    f"{worktree.main_checkout(ctx)}`. There is nothing else to clean up."
+                )
+            deny(
+                ctx, rec,
+                f"claude-bestpractice: git refused to remove {own}, so it is still there and so "
+                "is this shell. `git worktree remove` without `--force` will not delete a tree "
+                "holding a modified or untracked file.\n"
+                f"  git -C {own} status --porcelain --untracked-files=all\n"
+                "  Commit what is worth keeping, remove what is not, then run this again — it "
+                "is performed from the main checkout, which is the only place it can be run "
+                "without stranding this session."
+            )
 
     # Before the shell takes a step it cannot take back. Claude Code refuses every Bash
     # call whose working directory is inside the protected checkout — judged before the

@@ -72,7 +72,7 @@ class TestAFinishedTreeRemovesItself(TreeCase):
 
         gone = worktree.release_mine(self.ctx(), self.session)
 
-        self.assertEqual((str(tree), branch), gone)
+        self.assertEqual((str(tree), branch), gone[:2])
         self.assertFalse(tree.is_dir(), "the tree is still on disk")
         self.assertNotIn(branch, git(["branch", "--format=%(refname:short)"], self.repo))
 
@@ -85,7 +85,8 @@ class TestAFinishedTreeRemovesItself(TreeCase):
         self.merge(branch, squash=True)
         self.a_closed_card()
 
-        self.assertEqual((str(tree), branch), worktree.release_mine(self.ctx(), self.session))
+        self.assertEqual((str(tree), branch),
+                         worktree.release_mine(self.ctx(), self.session)[:2])
         self.assertNotIn(branch, git(["branch", "--format=%(refname:short)"], self.repo))
 
     def test_the_registry_entry_goes_with_it(self):

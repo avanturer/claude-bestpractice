@@ -20,9 +20,18 @@ The version is the only thing `claude plugin update` compares. It is the whole c
 
 ## While working
 
-`make test-fast` runs the same tests across shards — 77s against 173s on four cores. Use it
-to iterate. It is not the gate and cannot be: one process is what lets this suite catch
-state leaking between tests, and sharding is what hides it. `make check` stays serial.
+`make check-fast` is the edit loop: every cheap check — lint, docs, slop, polyglot,
+knowledge, shipped, about two seconds together — plus the suite across shards. 131s against
+350s for the full `make check` on four cores, same 1697 tests. Use it while you work.
+
+It is not the gate and cannot be: one process is what lets this suite catch state leaking
+between tests, and sharding is what hides it. `make check` stays serial and is what
+decides, once, before the commit.
+
+Until v1.68.0 the sharded runner was simply broken — it put `tests/` on `PYTHONPATH` and
+not `plugin/lib`, so any shard opening with a module that imports `claude_bestpractice`
+before `helpers` died on the import. Nothing noticed, because the fast runner is not the
+gate and nothing tested it. It is tested now (`TestTheFastRunnerIsUsable`).
 
 Reach for a single module before either — `python3 -m pytest tests/test_gitpolicy.py` is
 twelve seconds, and most of a fix is answered by one file.
