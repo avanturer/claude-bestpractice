@@ -402,21 +402,59 @@ def get(ctx: GitContext, session_id: str) -> SessionRecord | None:
         return None
 
 
-def touch(ctx: GitContext, session_id: str, **updates: Any) -> SessionRecord | None:
-    """Refresh the heartbeat and apply field updates.
+def _rewrite(ctx: GitContext, session_id: str, change) -> SessionRecord | None:
+    """Read this session's record, apply `change`, stamp the heartbeat, write it back.
 
-    Each session owns its own file, so this needs no lock — the only writer is the
-    session itself.
+    Under the record's own lock, re-read inside it. Each session owns its file, and that
+    was taken to mean one writer — but parallel tool calls and every subagent of a session
+    run their hooks at the same instant against the same record, since a subagent's calls
+    arrive under its parent's session id. Each wrote back the record it had read, and the
+    others' updates vanished: eight parallel Bash calls moved `tool_calls` by two.
     """
-    rec = get(ctx, session_id)
-    if rec is None:
-        return None
+    path = _record_path(ctx, session_id)
+    with store.file_lock(path.with_name(path.name + ".lock")):
+        rec = get(ctx, session_id)
+        if rec is None:
+            return None
+        change(rec)
+        rec.heartbeat_at = time.time()
+        store.write_json(path, rec.to_dict())
+    return rec
+
+
+def _assign(rec: SessionRecord, updates: dict[str, Any]) -> None:
     for key, value in updates.items():
         if hasattr(rec, key):
             setattr(rec, key, value)
-    rec.heartbeat_at = time.time()
-    store.write_json(_record_path(ctx, session_id), rec.to_dict())
-    return rec
+
+
+def touch(ctx: GitContext, session_id: str, **updates: Any) -> SessionRecord | None:
+    """Refresh the heartbeat and apply field updates, without losing a concurrent hook's."""
+    return _rewrite(ctx, session_id, lambda rec: _assign(rec, updates))
+
+
+def count(ctx: GitContext, session_id: str, counter: str, ceiling: int = 0,
+          **updates: Any) -> int:
+    """Add one to a counter on this session's record, and return what it held before.
+
+    Read and added in one step under the lock, because a value read when the hook started
+    is stale by the time it is written: six subagents started in one message all read
+    `spawns_this_turn` as 0, and a fan-out ceiling of three let all six through — the
+    founder's number, failing in exactly the case it exists for (decision 0015).
+
+    With a `ceiling`, a counter already at it is left where it is: a call refused for it
+    is not work the session did. `updates` land in the same write. 0 for no record.
+    """
+    before: list[int] = []
+
+    def add_one(rec: SessionRecord) -> None:
+        before.append(int(getattr(rec, counter) or 0))
+        if ceiling <= 0 or before[0] < ceiling:
+            setattr(rec, counter, before[0] + 1)
+        _assign(rec, updates)
+
+    _rewrite(ctx, session_id, add_one)
+    return before[0] if before else 0
 
 
 def unregister(ctx: GitContext, session_id: str) -> None:

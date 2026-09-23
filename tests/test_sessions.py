@@ -847,3 +847,51 @@ class TestAResumeDuringAReapStillFindsItsBaseline(RepoCase):
             sessions.reap(ctx)
         self.assertIsNotNone(seen[0], "the record was gone before its baseline was logged")
         self.assertIsNone(sessions.get(ctx, "crashed"))
+
+
+class TestParallelHooksOfOneSessionAllCount(RepoCase):
+    """`touch` read the record, changed it, and wrote it back — unlocked, on the reading
+    that each session owns its file. But one session runs many hooks at once: parallel
+    tool calls, and every subagent, whose calls arrive under the parent's session id. Six
+    Agent calls in one message all read `spawns_this_turn` as 0 and a fan-out ceiling of
+    three allowed six (decision 0015); eight Bash calls moved `tool_calls` by two.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.run_hook("session-start", {"session_id": "fan", "hook_event_name": "SessionStart",
+                                        "source": "startup"})
+        self.me = sid(self.repo, "fan")
+
+    def at_once(self, calls: list) -> list[str]:
+        """Every call's gate started first and then handed its event in the same instant,
+        which is how the harness runs the hooks of one message's parallel calls."""
+        gates = [subprocess.Popen([sys.executable, str(BIN / "pre-tool")], cwd=str(self.repo),
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                  stderr=subprocess.DEVNULL, text=True) for _ in calls]
+        time.sleep(1.5)
+        for gate, (tool, tool_input) in zip(gates, calls):
+            gate.stdin.write(json.dumps({"session_id": "fan", "cwd": str(self.repo),
+                                         "hook_event_name": "PreToolUse", "tool_name": tool,
+                                         "tool_input": tool_input}))
+            gate.stdin.close()
+        said = []
+        for gate in gates:
+            with gate.stdout:
+                said.append(gate.stdout.read())
+            gate.wait()
+        return said
+
+    def test_six_parallel_spawns_meet_a_fan_out_of_three(self):
+        said = self.at_once([("Agent", {"subagent_type": "Explore", "model": "haiku",
+                                        "prompt": f"look at part {i}"}) for i in range(6)])
+
+        self.assertEqual(3, sum('"deny"' not in out for out in said), said)
+        self.assertEqual(3, sessions.get(self.ctx(), self.me).spawns_this_turn)
+
+    def test_eight_parallel_calls_are_eight_calls(self):
+        before = sessions.get(self.ctx(), self.me).tool_calls
+
+        self.at_once([("Bash", {"command": f"ls part{i}"}) for i in range(8)])
+
+        self.assertEqual(before + 8, sessions.get(self.ctx(), self.me).tool_calls)

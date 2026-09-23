@@ -1210,7 +1210,6 @@ def main() -> None:
 
     counts = {k: v for k, v in rec.tool_signatures.items() if k != "_history" and isinstance(v, int)}
     counts[sig] = counts.get(sig, 0) + 1
-    calls = rec.tool_calls + 1
 
     ti = event.tool_input
     target = ""
@@ -1295,14 +1294,15 @@ def main() -> None:
             pinned = subagents.pinned_tier(ctx, str(ti.get("subagent_type") or ""))
             if not subagents.names_a_tier(pinned):
                 deny(ctx, rec, subagents.tier_refusal(str(ti.get("subagent_type") or ""), pinned))
-        spawned = rec.spawns_this_turn
-        if cfg.subagent_fanout > 0 and spawned >= cfg.subagent_fanout:
-            deny(ctx, rec, subagents.fanout_refusal(spawned, cfg.subagent_fanout))
         # Counted on the way through, because a PreToolUse hook never sees the result and
         # a spawn that is allowed is a spawn that is running. Refused ones are not
         # counted, for the same reason refused tool calls are not: a call this gate
-        # stopped is not work the session did.
-        sessions.touch(ctx, event.session_id, spawns_this_turn=spawned + 1)
+        # stopped is not work the session did. Checked and counted in ONE locked step:
+        # read from `rec` and written back afterwards, six spawns in one message all
+        # read 0 and all six went through a ceiling of three.
+        spawned = sessions.count(ctx, event.session_id, "spawns_this_turn", cfg.subagent_fanout)
+        if cfg.subagent_fanout > 0 and spawned >= cfg.subagent_fanout:
+            deny(ctx, rec, subagents.fanout_refusal(spawned, cfg.subagent_fanout))
 
     # CONSECUTIVE repeats, never a lifetime total. The lifetime count made the fourth
     # `npm test` of a session a permanent refusal — and `npm test` is the command the
@@ -2024,11 +2024,12 @@ def main() -> None:
 
     # Reached only when every gate allowed the call, so this records what was actually
     # written rather than what was attempted — and, for the same reason, what was actually
-    # done rather than what was refused.
+    # done rather than what was refused. Added under the record's lock rather than written
+    # as the count read at the top plus one, which parallel calls overwrote in turn.
     if touched:
-        sessions.touch(ctx, event.session_id, tool_calls=calls, last_touched=touched)
+        sessions.count(ctx, event.session_id, "tool_calls", last_touched=touched)
     else:
-        sessions.touch(ctx, event.session_id, tool_calls=calls)
+        sessions.count(ctx, event.session_id, "tool_calls")
 
     # Last, and only here. `allow_tool` ends the permission pipeline, so a vouch placed any
     # earlier would walk past this gate's own refusals — the credential scan, the leases,
