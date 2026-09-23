@@ -240,8 +240,8 @@ def _sibling_of_repo(ctx, target) -> bool:
     return resolved.parent == root.parent and resolved.name.startswith(f"{root.name}-")
 
 
-def _holds_a_card(ctx, session_id: str) -> bool:
-    """Is a task on the board claimed by this session?
+def _holds_a_card(ctx, session_id: str, touched: list[str] | None = None) -> bool:
+    """Is a task on the board claimed by this session, for `touched` when paths are known?
 
     Split out because the answer is now wanted about a call that names no path at all —
     `_ledger_covers` reads `touched`, and `all()` over an empty list is True, so asking it
@@ -253,11 +253,21 @@ def _holds_a_card(ctx, session_id: str) -> bool:
     """
     from claude_bestpractice import plan
 
+    if plan.held_by(ctx, session_id):
+        return True
     # A card this session CLOSED counts. Closing is what the ledger asks for, and a gate
     # that then says "nothing on the board says this session is working" punishes the
     # session for doing it — the only way to stay quiet was to leave the card open until
     # the session ended (#220).
-    return bool(plan.held_by(ctx, session_id) or plan.closed_by(ctx, session_id))
+    #
+    # For the files it named and nothing else. Counted for any path, one closed card was a
+    # licence to write anything for the rest of the session without claiming another: the
+    # next card the founder filed was advertised as ready to start while this session was
+    # already writing it, which is the collision the board exists to prevent.
+    closed = plan.closed_by(ctx, session_id)
+    return bool(touched) and all(
+        any(plan.carried_by(card, [rel]) for card in closed) for rel in touched
+    )
 
 
 def _ledger_covers(ctx, session_id: str, touched: list[str]) -> bool:
@@ -270,7 +280,7 @@ def _ledger_covers(ctx, session_id: str, touched: list[str]) -> bool:
 
     if all(rel.startswith(store.TIER_A_DIRNAME) or rel.startswith(".claude/") for rel in touched):
         return True
-    return _holds_a_card(ctx, session_id)
+    return _holds_a_card(ctx, session_id, touched)
 
 
 # What a session is to do with a block from this plugin, said at the block itself

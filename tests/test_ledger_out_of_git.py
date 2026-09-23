@@ -136,6 +136,39 @@ class TestAClosedCardCountsAsHavingWorked(RepoCase):
         })
         self.assertNotIn("nothing on the board", (proc.stdout or "").lower())
 
+    def a_session_that_closed_its_card(self) -> None:
+        """Told what to do by the founder — which is what arms the demand at all — and done."""
+        self.write("src/app.py", "x = 1\n")
+        self.commit("a history to branch from")
+        self.run_hook("prompt-capture", {"session_id": "s1", "hook_event_name": "UserPromptSubmit",
+                                         "prompt": "add a csv export to src/app.py"})
+        self.a_card_done_by(sid(self.repo, "s1"))
+
+    def pre_tool(self, tool: str, tool_input: dict):
+        return self.run_hook("pre-tool", {"session_id": "s1", "hook_event_name": "PreToolUse",
+                                          "tool_name": tool, "tool_input": tool_input})
+
+    def test_a_closed_card_covers_its_own_files_and_nothing_else(self):
+        """Counted for any path, one closed card was a licence to write anything for the
+        rest of the session: the founder's next card was advertised as ready to start while
+        this session was already writing it, and no card said so."""
+        self.a_session_that_closed_its_card()
+        own = self.pre_tool("Write", {"file_path": str(self.repo / "src" / "app.py"),
+                                      "content": "x = 2\n"})
+        self.assertNotEqual("deny", self.hook_decision(own), self.hook_reason(own))
+        other = self.pre_tool("Write", {"file_path": str(self.repo / "src" / "unrelated.py"),
+                                        "content": "x = 2\n"})
+        self.assertEqual("deny", self.hook_decision(other))
+        self.assertIn("working on src/unrelated.py", self.hook_reason(other))
+
+    def test_a_closed_card_does_not_start_work_that_names_no_file(self):
+        """`git merge` writes no file, so there is nothing a closed card's files can cover:
+        taking a branch in after the card is closed is new work, and it needs a card."""
+        self.a_session_that_closed_its_card()
+        proc = self.pre_tool("Bash", {"command": "git merge feat/theirs"})
+        self.assertEqual("deny", self.hook_decision(proc))
+        self.assertIn("nothing on the board says this session is working", self.hook_reason(proc))
+
 
 class TestATreeBehindTheTrunkSaysSo(RepoCase):
     def test_it_names_the_distance_and_the_command(self):
