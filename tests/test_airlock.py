@@ -84,6 +84,25 @@ class TestIngest(RepoCase):
         self.ingest(self.full_signal(frames=[{"filename": "/build/src/app.py", "lineno": 9}]))
         self.assertIn("src/app.py:9", self.signals()[0].read_text())
 
+    def test_a_frame_outside_the_repository_is_kept_as_it_was(self):
+        """A standard-library frame exists on this machine and is not in the tree: it
+        raised out of `relative_to` and the whole batch was lost with it."""
+        outside = json.__file__
+        proc = self.ingest([self.full_signal(fingerprint="a", frames=[{"abs_path": outside, "lineno": 3}]),
+                            self.full_signal(fingerprint="b")])
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual(2, len(self.signals()))
+        self.assertIn(f"{outside}:3", self.signals()[0].read_text())
+
+    def test_a_missing_input_file_is_a_message_not_a_traceback(self):
+        proc = subprocess.run(
+            [sys.executable, str(BIN / "claude-bp-ingest"), "--file", "nope.json"],
+            capture_output=True, text=True, cwd=str(self.repo), timeout=60,
+        )
+        self.assertEqual(1, proc.returncode)
+        self.assertIn("cannot read nope.json", proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
+
     def test_control_characters_are_stripped(self):
         self.ingest(self.full_signal(message="hello​world"))
         self.assertIn("helloworld", self.signals()[0].read_text())

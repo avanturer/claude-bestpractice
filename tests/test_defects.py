@@ -162,6 +162,24 @@ class TestACrashIsCapturedNotNarrated(RepoCase):
         self.assertIn("evidence-gate", proc.stdout)
         self.assertIn(defects.REPORT_REPO, proc.stdout)
 
+    def test_every_report_that_would_be_filed_is_shown(self):
+        """`send` files every report, and the preview printed one body under "this is the
+        whole of what would be sent". A session's own report is free text, and its title
+        stops at eighty characters — so the rest of a second report went into a public
+        issue that nobody had been shown."""
+        tails = ("the tail of the first report, past the title", "the tail of the second one")
+        for n, tail in enumerate(tails):
+            said = f"report {n}: " + "a sentence long enough to run past the title's cut. " * 3 + tail
+            subprocess.run([sys.executable, str(BIN / "claude-bp-report"), "defect", said],
+                           capture_output=True, text=True, cwd=str(self.repo), timeout=60, check=True)
+        self.assertEqual(2, len(defects.unsent(self.ctx())))
+        proc = subprocess.run(
+            [sys.executable, str(BIN / "claude-bp-report")],
+            capture_output=True, text=True, cwd=str(self.repo), timeout=60,
+        )
+        for tail in tails:
+            self.assertIn(tail, proc.stdout)
+
 
 class TestAKnownBadReleaseSaysSo(unittest.TestCase):
     """A released version cannot be withdrawn, so the copy that is running has to say it.
