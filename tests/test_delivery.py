@@ -167,6 +167,35 @@ class TestWhatShipped(DeliveryCase):
         self.assertIn("UNRESOLVED", proc.stderr)
 
 
+class TestShipOpensAnObligation(DeliveryCase):
+    """`claude-bp-ship --pr` runs `gh` in its own process, where no hook sees it."""
+
+    def test_the_pull_request_it_opens_is_on_the_board(self):
+        from claude_bestpractice import evidence, pullrequest
+
+        bare = self.tmp / "origin.git"
+        git(["init", "-q", "--bare", str(bare)], self.tmp)
+        git(["remote", "add", "origin", str(bare)], self.repo)
+        git(["push", "-q", "origin", "main"], self.repo)
+        git(["switch", "-qc", "feat/export"], self.repo)
+        self.write("src/export.py", "x = 1\n")
+        self.commit("add the export module")
+        evidence.record_green(self.ctx(), ["pytest"])
+
+        stubs = self.tmp / "bin"
+        stubs.mkdir()
+        (stubs / "gh").write_text("#!/bin/sh\necho https://github.com/o/r/pull/77\n")
+        (stubs / "gh").chmod(0o755)
+        env = {**os.environ, "PATH": f"{stubs}{os.pathsep}{os.environ.get('PATH', '')}"}
+        proc = subprocess.run([sys.executable, str(BIN / "claude-bp-ship"), "--pr"],
+                              capture_output=True, text=True, cwd=str(self.repo), timeout=180, env=env)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+
+        records = {row["branch"]: row for row in pullrequest.outstanding(self.ctx())}
+        self.assertIn("feat/export", records, "the pull request never reached the board")
+        self.assertEqual(77, records["feat/export"]["number"])
+
+
 class TestPullRequestReadiness(DeliveryCase):
     def test_an_unfinished_merge_blocks_it(self):
         from claude_bestpractice import delivery
