@@ -153,18 +153,27 @@ def named_for(ctx: GitContext, path: Path) -> str:
         return str(path)
 
 
+# The closing delimiter is a LINE of three dashes and nothing else. The front matter was cut
+# at the first three dashes ANYWHERE, so a card titled "Split parser --- phase 2" read back
+# as "Split parser", every key after the title became its handoff note, and `claim` refused
+# it for want of the plan it carried. A founder's sentence with a dash run in it did the same
+# to the card their message opened: it lost `source`, and their next message filed another.
+_DELIMITER = re.compile(r"^---[ \t]*\r?$", re.M)
+
+
 def _frontmatter(text: str) -> tuple[dict[str, str], str]:
-    if not text.startswith("---"):
+    opening, newline, rest = text.partition("\n")
+    if opening.rstrip() != "---" or not newline:
         return {}, text
-    parts = text.split("---", 2)
-    if len(parts) < 3:
+    closing = _DELIMITER.search(rest)
+    if closing is None:
         return {}, text
     meta: dict[str, str] = {}
-    for line in parts[1].splitlines():
+    for line in rest[:closing.start()].splitlines():
         if ":" in line and not line.startswith((" ", "\t")):
             key, _, value = line.partition(":")
             meta[key.strip()] = value.strip()
-    return meta, parts[2].strip()
+    return meta, rest[closing.end():].strip()
 
 
 def _load(path: Path, state: str) -> Task | None:
@@ -324,6 +333,16 @@ def slug(text: str) -> str:
     return "-".join(words)[:MAX_SLUG_CHARS].rstrip("-") or "task"
 
 
+def _one_line(value: str) -> str:
+    """A front-matter value on the single line the reader takes it from.
+
+    The reader takes one key per line, so a newline inside a value ended the value there and
+    made the rest into keys of its own: a title reading "Third\\nstate: done" was filed as
+    "Third". Split exactly as the reader splits, so no separator it honours survives.
+    """
+    return " ".join(str(value).splitlines())
+
+
 def _render(task_id: str, title: str, state: str, owner: str, branch: str, body: str,
             paths: list[str] | None = None, source: str = "",
             done_when: str = "", blocker: str = "", created_at: str = "",
@@ -333,18 +352,18 @@ def _render(task_id: str, title: str, state: str, owner: str, branch: str, body:
     lines = [
         "---",
         f"id: {task_id}",
-        f"title: {title[:MAX_TITLE_CHARS]}",
+        f"title: {_one_line(title)[:MAX_TITLE_CHARS]}",
         f"state: {state}",
-        f"owner: {owner}",
-        f"branch: {branch}",
-        f"paths: {', '.join(paths or [])}",
-        f"source: {source}",
+        f"owner: {_one_line(owner)}",
+        f"branch: {_one_line(branch)}",
+        f"paths: {_one_line(', '.join(paths or []))}",
+        f"source: {_one_line(source)}",
         # Only on the cards it concerns, so every other card keeps the shape it has always had.
-        *([f"{OPENED_BY}: {opened_by}"] if opened_by else []),
-        f"done_when: {done_when[:MAX_TITLE_CHARS]}",
-        f"blocker: {blocker[:MAX_TITLE_CHARS]}",
-        f"after: {', '.join(after or [])}",
-        f"with: {', '.join(together or [])}",
+        *([f"{OPENED_BY}: {_one_line(opened_by)}"] if opened_by else []),
+        f"done_when: {_one_line(done_when)[:MAX_TITLE_CHARS]}",
+        f"blocker: {_one_line(blocker)[:MAX_TITLE_CHARS]}",
+        f"after: {_one_line(', '.join(after or []))}",
+        f"with: {_one_line(', '.join(together or []))}",
         # Preserved across a move. Rewriting it on every transition made every task look
         # created at the moment it was last touched, which is the one thing `created_at`
         # is for.

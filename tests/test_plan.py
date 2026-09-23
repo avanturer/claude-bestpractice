@@ -875,6 +875,57 @@ class TestTasksThatAreNotIndependent(PlanCase):
         self.assertTrue(any("no longer blocked" in text for text in told), told)
 
 
+class TestAValueStaysOnItsOwnLine(PlanCase):
+    """Three dashes inside a title, a finish condition or a blocker cut the card at them,
+    because the front matter ended at the first `---` anywhere: the title read back short,
+    the rest of the keys became the handoff note, and `claim` refused a planned card as
+    unplanned. A newline inside a value ended it the same way."""
+
+    def cli(self, *args: str) -> subprocess.CompletedProcess:
+        command = [sys.executable, str(BIN / "claude-bp-plan"), *args]
+        return subprocess.run(command, capture_output=True, text=True, cwd=str(self.repo),
+                              timeout=120)
+
+    def test_a_title_with_three_dashes_reads_back_whole_and_can_be_claimed(self):
+        self.cli("add", "Split parser --- phase 2", "--paths", "src/parser.py",
+                 "--done-when", "both phases pass --- including the empty file")
+
+        shown = self.cli("show", "1").stdout
+        self.assertIn("Split parser --- phase 2", shown)
+        self.assertIn("both phases pass --- including the empty file", shown)
+        self.assertNotIn("state:", shown, "the front matter leaked into the handoff")
+        claimed = self.cli("claim", "1", "--session", "s1")
+        self.assertEqual(0, claimed.returncode, claimed.stderr)
+
+    def test_a_blocker_with_three_dashes_is_not_the_handoff(self):
+        self.cli("add", "Wire the vendor feed", "--paths", "src/feed.py", "--done-when", "ok")
+        self.cli("pause", "1", "--blocker", "waiting on --- the vendor's API key")
+
+        card = plan.find(self.ctx(), "1")
+        self.assertEqual("waiting on --- the vendor's API key", card.blocker)
+        self.assertEqual(plan.NO_DETAIL, card.body)
+        self.assertEqual(["src/feed.py"], card.paths)
+
+    def test_a_newline_in_a_value_cannot_become_a_key(self):
+        task = plan.add(self.ctx(), "Third\nstate: done\nowner: somebody", paths=["src/a.py"],
+                        done_when="stated")
+
+        card = plan.find(self.ctx(), task.id)
+        self.assertEqual(plan.NEXT, card.state)
+        self.assertEqual("", card.owner, "a title wrote the owner")
+        self.assertEqual("Third state: done owner: somebody", card.title)
+
+    def test_the_founders_card_keeps_where_it_came_from(self):
+        """Their sentence carried the dashes, the card lost `source`, and the next message
+        filed a second card beside the orphan."""
+        plan.open_for(self.ctx(), "split the parser --- phase 2 first", "s1", "h1")
+        plan.open_for(self.ctx(), "and then the exporter", "s1", "h1")
+
+        cards = plan.load_all(self.ctx())
+        self.assertEqual(1, len(cards), [c.title for c in cards])
+        self.assertEqual(plan.FROM_THE_FOUNDER, cards[0].source)
+
+
 class TestTheOrderIsVisibleWithoutOpeningTheTask(PlanCase):
     def plan_cli(self, *args) -> subprocess.CompletedProcess:
         return subprocess.run(
