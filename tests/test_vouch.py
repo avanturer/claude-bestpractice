@@ -43,6 +43,14 @@ class VouchCase(RepoCase):
     def assertSilent(self, line: str, **kw):
         self.assertEqual("", self.vouches(line, **kw), f"vouched for: {line}")
 
+    def decided(self, line: str):
+        """What the real hook decides about this line, driven the way the harness drives it."""
+        proc = self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+            "tool_input": {"command": line}})
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        return self.hook_decision(proc)
+
 
 class TestReadsThatChangeNothing(VouchCase):
     def test_the_git_verbs_that_only_look(self):
@@ -151,18 +159,10 @@ class TestACommitIsNotVouchedWhereAWriteIsRefused(VouchCase):
         self.write("src/app.py", "x = ( 1,2 )\n")
         self.commit("add the app")
         self.write("src/app.py", "x = (1, 2)\n")
-
-        def decided(line: str):
-            proc = self.run_hook("pre-tool", {
-                "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
-                "tool_input": {"command": line}})
-            self.assertEqual(0, proc.returncode, proc.stderr)
-            return self.hook_decision(proc)
-
         for line in ("black src/", "ruff check --fix src/",
                      'git commit -am "Validate empty input in the parser"'):
-            self.assertIsNone(decided(line), line)
-        self.assertEqual("deny", decided("sed -i s/1/2/ src/app.py"),
+            self.assertIsNone(self.decided(line), line)
+        self.assertEqual("deny", self.decided("sed -i s/1/2/ src/app.py"),
                          "the fixture proves nothing: a write here is not refused")
 
 
@@ -232,6 +232,53 @@ class TestTheBoundaryDoesNotMove(VouchCase):
 
     def test_an_unparseable_line_vouches_for_nothing(self):
         self.assertSilent("git status 'unterminated")
+
+
+class TestAProgramsOwnOptionsAreDoors(VouchCase):
+    """`rg --pre=rm zzz .` was vouched as a read that "writes nothing", and ran `rm` on every
+    file it searched: the tracked tree was gone. `python3 -m pytest -q --basetemp=<outside>`
+    was vouched as this project's checks, and the run emptied that directory. A program on
+    the whitelist is not a line on the whitelist."""
+
+    def test_a_reader_told_to_run_or_write_something_is_not_a_read(self):
+        for line in ("rg --pre=rm zzz .", "rg --pre rm zzz .", "rg --pre-glob '*.py' x .",
+                     "rg --hostname-bin=sh x .", "git grep -Orm zzz", "git grep --open-files=rm x",
+                     "git grep --open-files-in-pager=rm x", "git diff --output=Makefile",
+                     "uniq Makefile README.md", "tree -o README.md"):
+            self.assertSilent(line)
+
+    def test_a_check_told_to_delete_or_run_something_is_not_a_check(self):
+        for line in ("python3 -m pytest -q --basetemp=src", "pytest --basetemp src",
+                     "pytest -o log_file=README.md", "pytest -q -cpytest.ini",
+                     "uv run pytest --basetemp=.", "tox -e py -- --basetemp=src",
+                     "tox exec -- rm -rf src", "tox -x 'testenv.commands=rm -rf src'",
+                     "pylint --init-hook='import shutil' src", "mypy --install-types src",
+                     "go test -exec=rm ./...", "cargo test --config=target.x.runner=rm",
+                     "make --eval='check: ; rm -rf src' check", "make -Echeck: check",
+                     "npm test -- --basetemp=src", "yarn test --basetemp=src"):
+            self.assertSilent(line)
+
+    def test_a_value_joined_to_its_option_is_a_path_like_any_other(self):
+        outside = self.repo.parent / "elsewhere"
+        for line in (f"pytest -q --junitxml={outside}/r.xml", f"grep --file={outside}/p x .",
+                     f"diff --from-file={outside}/x Makefile", f"wc --files0-from={outside}/list",
+                     "grep --file=.env TODO ."):
+            self.assertSilent(line)
+
+    def test_the_ordinary_spellings_still_need_no_prompt(self):
+        """The fix must not cost the founder the prompts this module exists to remove."""
+        for line in ("rg -n parse src/", "rg --type py TODO", "git grep -n TODO",
+                     "git log --format=%H -5", "git log -p -- Makefile", "uniq -c Makefile",
+                     "grep -rn --include=*.py x .", "pytest -q -x -k parse",
+                     "pytest --junitxml=junit.xml", "python3 -m pytest -q -p no:cacheprovider",
+                     "go test -count=1 -run=TestX ./...", "tox -e py311", "make -j4 test",
+                     "cargo test -- --nocapture", "npm test -- --coverage"):
+            self.assertVouched(line)
+
+    def test_the_real_hook_approves_neither_repro(self):
+        outside = self.repo.parent / "precious"
+        for line in ("rg --pre=rm zzz .", f"python3 -m pytest -q --basetemp={outside}"):
+            self.assertIsNone(self.decided(line), line)
 
 
 class TestALineTheShellCannotRunIsNotVouchedFor(VouchCase):

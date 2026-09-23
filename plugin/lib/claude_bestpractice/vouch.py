@@ -143,6 +143,41 @@ _CHECK_MODE = {
 # by prefix: `--fix-dry-run` and `--no-fix` are the reports they sound like.
 _FIXES = {"--fix", "--fix-only", "--add-noqa", "-u", "--update", "-update", "--updateSnapshot"}
 
+# Options that turn a program on the lists above into one that RUNS something, DELETES
+# something, or writes where it was asked to read. The program is whitelisted; these are the
+# doors its own flags open, named per program because the same letter is harmless anywhere
+# else — `-x` stops pytest at its first failure and hands tox a command to run. Read off each
+# program's own reference, and the first four run on a machine to see what they do:
+#
+#   rg --pre=rm zzz .               ran `rm` on every file it searched: the tracked tree, gone
+#   pytest --basetemp=DIR           emptied DIR the moment a test asked for `tmp_path`
+#   git grep --open-files=CMD       ran CMD on every matching file
+#   make --eval='check: ; CMD' check    ran CMD as the recipe of a target named `check`
+#
+# A long option matches by PREFIX, because git and make take any unambiguous abbreviation —
+# `--open-files` above is `--open-files-in-pager`. A single letter matches anywhere in a
+# cluster, because `-nOcmd` is `-n -Ocmd`. A bare word is a subcommand that runs whatever
+# follows it.
+_DOORS = {
+    "rg": ("--pre", "--pre-glob", "--hostname-bin"),
+    "git": ("--output", "--open-files-in-pager", "-O"),
+    "tree": ("-o",),
+    "file": ("-C", "--compile"),
+    "pytest": ("--basetemp", "--override-ini", "-o", "-c", "--pastebin"),
+    "pylint": ("--init-hook",),
+    "mypy": ("--install-types",),
+    "tox": ("--override", "-x", "exec", "e"),
+    "make": ("--eval", "-E", "--file", "--makefile", "-f", "--directory", "-C",
+             "--include-dir", "-I"),
+    "go": ("-exec", "-toolexec", "-vettool", "-ldflags"),
+    "cargo": ("--config", "-Z"),
+}
+# What follows a bare `--`, and whatever a script runner passes on, is read by a program this
+# cannot see: `tox -e py -- --basetemp=src` is pytest's door opened through tox. So those
+# words are held to every long door above, whoever's it was.
+_BLIND = tuple(sorted({door for doors in _DOORS.values() for door in doors
+                       if door.startswith("--")}))
+
 # What this plugin will not vouch for reading, whatever the program. The boundary names
 # these explicitly rather than trusting "it is inside the repository": a credential in the
 # tree is still a credential, and putting it in the transcript is the loss.
@@ -203,13 +238,23 @@ def _arguments(argv: list[str]) -> list[str]:
     return [t for t in argv[1:] if not t.startswith("-")]
 
 
+def _option_values(argv: list[str]) -> list[str]:
+    """`--basetemp=/elsewhere` names a path as surely as `/elsewhere` does.
+
+    Only the positional arguments used to be resolved, so a value joined to its option was
+    never looked at: `python3 -m pytest -q --basetemp=<a directory outside the repository>`
+    was vouched as this project's checks, and the run emptied that directory.
+    """
+    return [t.split("=", 1)[1] for t in argv[1:] if t.startswith("-") and "=" in t]
+
+
 def _paths_are_ours(root: Path, here: Path, argv: list[str]) -> bool:
     """Every path-shaped argument lands inside this tree, and none of them is a credential.
 
     An argument that is a pattern rather than a path — `grep TODO src/` — resolves under
     the segment's own directory and passes, which is correct: it names nothing outside.
     """
-    for token in _arguments(argv):
+    for token in _arguments(argv) + _option_values(argv):
         if _SECRETISH.search(token):
             return False
         resolved = _resolve(here, token)
@@ -243,11 +288,11 @@ def _reads(root: Path, here: Path, argv: list[str]) -> bool:
         arguments = _git_arguments(argv)
         if not arguments or arguments[0] not in _GIT_READS:
             return False
-        # `git diff --output f` writes a file; the rest of git's read verbs have no such
-        # flag, and one that grows one should not be discovered here.
-        return not any(a.startswith("--output") for a in arguments) and _paths_are_ours(
-            root, here, ["git", *arguments[1:]])
-    return program in _READ_ONLY and _paths_are_ours(root, here, argv)
+        return _paths_are_ours(root, here, ["git", *arguments[1:]]) and not _opens_a_door(argv)
+    # `uniq in out` WRITES `out`: the one reader here whose output is an operand.
+    if program == "uniq" and len(_arguments(argv)) > 1:
+        return False
+    return program in _READ_ONLY and _paths_are_ours(root, here, argv) and not _opens_a_door(argv)
 
 
 def _module_check(argv: list[str]) -> bool:
@@ -296,19 +341,48 @@ def _syntax_check(argv: list[str]) -> bool:
 def _checks(root: Path, here: Path, argv: list[str], test_command: list[str]) -> bool:
     if argv == list(test_command):
         return True
-    program = _program(argv)
-    if program in _DELEGATING:
+    if _program(argv) in _DELEGATING:
         return _delegated(root, here, argv, test_command)
-    named = (
+    # `make` included: `make --file=/elsewhere/Makefile test` and `--eval` are its doors.
+    if not (_names_a_check(argv) or _make_check(argv, test_command)):
+        return False
+    return _paths_are_ours(root, here, argv) and not _opens_a_door(argv) and not _rewrites(argv)
+
+
+def _names_a_check(argv: list[str]) -> bool:
+    """A check by its family — program, `-m` module, script name or subcommand."""
+    program = _program(argv)
+    return (
         program in _CHECKERS
         or _module_check(argv)
         or _script_check(argv)
         or (program in _CHECK_SUBCOMMANDS and _subcommand_check(argv))
         or _syntax_check(argv)
     )
-    if not named:
-        return _make_check(argv, test_command)
-    return _paths_are_ours(root, here, argv) and not _rewrites(argv)
+
+
+def _opens_a_door(argv: list[str]) -> bool:
+    """Does a word on this line make its program run, delete or write something?"""
+    name, args = _tool(argv)
+    doors = _BLIND if name in _SCRIPT_RUNNERS else _DOORS.get(name, ())
+    for index, token in enumerate(args):
+        if token == "--":
+            return any(_is_door(word, _BLIND) for word in args[index + 1:])
+        if _is_door(token, doors):
+            return True
+    return False
+
+
+def _is_door(token: str, doors: tuple[str, ...]) -> bool:
+    """Is this one word one of these doors, in any spelling its program accepts?"""
+    if not token.startswith("-"):
+        return token in doors
+    names = [door.lstrip("-") for door in doors if door.startswith("-")]
+    given = token.lstrip("-").partition("=")[0]
+    if token.startswith("--"):
+        return bool(given) and any(len(name) > 1 and name.startswith(given) for name in names)
+    # `-exec` is one option to go; `-Otouch` is `-O touch` to git.
+    return given in names or any(len(name) == 1 and name in token for name in names)
 
 
 def _tool(argv: list[str]) -> tuple[str, list[str]]:
@@ -601,5 +675,7 @@ def surface(ctx: GitContext, test_command: list[str]) -> list[str]:
         "this plugin's own commands, which are what its refusals tell you to run",
         "moving around inside this repository: cd, pwd, and doing nothing at all",
         "each segment of a compound command judged alone; one unvouched segment ends it",
-        "not: the network, production, git push, credentials, anything outside this tree",
+        "not: the network, production, git push, credentials, anything outside this tree "
+        "(an option's value included), or an option that makes a program run or delete "
+        "something (rg --pre, pytest --basetemp)",
     ]
