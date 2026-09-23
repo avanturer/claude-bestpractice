@@ -352,6 +352,12 @@ def cmd_statusline(_ctx, install: bool) -> int:
         return 0
 
     ok, found = limits.install(command)
+    if not ok and not found:
+        from claude_bestpractice import policy
+
+        print(f"  {policy.settings_path()} is not valid JSON, so nothing was written to it.")
+        print("  Fix the file (Claude Code names the error at its next start), then run this again.")
+        return 1
     if not ok:
         print(f"  a status line is already configured: {found}")
         print("  Left alone — it is your display, not this plugin's state.")

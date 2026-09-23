@@ -128,9 +128,7 @@ def install(command: str, home=None) -> tuple:
     this plugin write FACTS about the repository into that file; somebody's status bar is
     neither a fact nor a grant, and taking it over unasked is how a tool gets uninstalled.
     """
-    import json
-
-    from . import policy, store
+    from . import policy
 
     current = installed(home)
     if current and "claude-bp-statusline" not in current:
@@ -138,10 +136,12 @@ def install(command: str, home=None) -> tuple:
     if current:
         return True, current
 
-    settings = policy.read(home)
+    settings = policy.for_update(home)
+    if settings is None:
+        # Not ours to overwrite: see `policy.for_update`. Reported as not installed, with
+        # nothing in the way, so the caller says the file needs fixing rather than naming a
+        # status line that is not there.
+        return False, ""
     settings[SETTING] = {"type": "command", "command": command}
-    path = policy.settings_path(home)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    store.atomic_write(path, json.dumps(settings, indent=2, ensure_ascii=False),
-                       mode=0o600, follow_symlink=True)
+    policy.write(settings, home)
     return True, command
