@@ -397,7 +397,15 @@ BASH_WRITE_TARGETS = re.compile(
 
 # `sed -i` writes its LAST argument; everything before it is the script, which looks
 # path-shaped enough (`s/x/y/`) to fool a single pattern.
+#
+# Only for a line the tokeniser declines. Otherwise `-i` is read from sed's own arguments:
+# `" -i" in segment` fired on any `-i` in a pipeline that ran sed anywhere, so
+# `sed -n '1,20p' f | grep -in split` was a write — refused in the main checkout, where it
+# provisioned a worktree for every session that ran it, and a lease on a file it only read.
 SED_IN_PLACE = re.compile(r"\bsed\s+(?:-\S+\s+|'[^']*'\s+|\"[^\"]*\"\s+)*(?P<path>[\w./@+-]+)")
+
+# What stands in front of sed without changing which files it edits.
+_SED_LAUNCHERS = {"sudo", "doas", "xargs"}
 
 # A verb writes only when it is the command being RUN, and `\b` matched it as an ARGUMENT
 # too. `install` is a subcommand of nearly every package manager there is, so `pip install
@@ -688,6 +696,60 @@ def git_tree_targets(command: str, cwd: Path) -> list[Path]:
     return out
 
 
+def _edited_in_place(segment: str, literal: str) -> list[str]:
+    """The files a `sed -i` in this segment rewrites, as the segment names them."""
+    commands = _commands_in(literal)
+    if commands:
+        return [path for argv in commands for path in _sed_in_place(argv)]
+    # Declined by the tokeniser, so the text is all there is — and generous is the
+    # direction this whole scanner errs in.
+    if "sed" in segment and " -i" in segment:
+        return [m.group("path") for m in SED_IN_PLACE.finditer(segment)]
+    return []
+
+
+def _sed_in_place(argv: list[str]) -> list[str]:
+    """The files one `sed` rewrites in place, and nothing when it only reads them.
+
+    GNU and BSD spellings both: `-i`, `-i.bak`, `-i ''`, `--in-place[=.bak]`, and an `i`
+    inside a cluster such as `-ni`. The first operand is the script unless `-e` or `-f`
+    gave it, and every operand after that is a file sed rewrites.
+    """
+    names = [word.rsplit("/", 1)[-1] for word in argv]
+    if names[0] in _SED_LAUNCHERS and "sed" in names:
+        argv = argv[names.index("sed"):]
+    elif names[0] not in ("sed", "gsed"):
+        return []
+    in_place, scripted, operands = False, False, []
+    at = 1
+    while at < len(argv):
+        word, at = argv[at], at + 1
+        if word == "--":
+            operands += argv[at:]
+            break
+        if word == "-" or not word.startswith("-"):
+            operands.append(word)
+        elif word.startswith("--"):
+            in_place = in_place or word.startswith("--in-place")
+            scripted = scripted or word.split("=")[0] in ("--expression", "--file")
+            at += 1 if word in ("--expression", "--file", "--line-length") else 0
+        else:
+            for position, flag in enumerate(word[1:], start=2):
+                last = position == len(word)
+                if flag in "iI":
+                    # A backup suffix is glued on, or, in BSD's spelling, its own empty word.
+                    in_place = True
+                    at += 1 if last and at < len(argv) and argv[at] == "" else 0
+                    break
+                if flag in "efl":
+                    scripted = scripted or flag != "l"
+                    at += 1 if last else 0
+                    break
+    if not in_place:
+        return []
+    return operands if scripted else operands[1:]
+
+
 def bash_write_targets(command: str, cwd: Path) -> list[Path]:
     """Absolute paths a shell command appears to write, resolved as the shell would.
 
@@ -718,10 +780,8 @@ def bash_write_targets(command: str, cwd: Path) -> list[Path]:
             if resolved is not None and resolved not in out:
                 out.append(resolved)
 
-        matches = list(BASH_WRITE_TARGETS.finditer(segment))
-        if "sed" in segment and " -i" in segment:
-            matches += list(SED_IN_PLACE.finditer(segment))
-        raws = [m.group("path") for m in matches]
+        raws = [m.group("path") for m in BASH_WRITE_TARGETS.finditer(segment)]
+        raws += _edited_in_place(segment, literal)
 
         # ...and every path a destructive verb names. `rm` is not a redirect, so none of
         # these commands produced a target at all, and every rule keyed on "what does this

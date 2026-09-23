@@ -468,6 +468,34 @@ class TestAPackageNameIsNotAPath(PolicyCase):
                 self.assertEqual(_verdict(proc)[0], "allow", f"{command} -> {_verdict(proc)[1]}")
 
 
+class TestAnInPlaceEditIsReadFromSedsOwnArguments(PolicyCase):
+    """`" -i" in segment` fired on any `-i` in a pipeline that ran sed anywhere, so
+    `sed -n '1,20p' f | grep -in split` — a read — was refused in the main checkout, where
+    it provisioned a worktree for every session that ran it."""
+
+    def test_a_flag_of_the_next_program_is_not_seds(self):
+        command = "sed -n '1,20p' README.md | grep -in seed"
+        self.assertEqual([], write_targets(command, self.repo))
+        proc = self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+            "tool_input": {"command": command}, "cwd": str(self.repo),
+        })
+        self.assertNotEqual("deny", _verdict(proc)[0], _verdict(proc)[1])
+        self.assertFalse((self.repo / ".claude" / "worktrees").exists(), "a read provisioned a tree")
+
+    def test_every_spelling_of_in_place_still_writes(self):
+        for command, written in (
+            ("sed -i 's/a/b/' notes.txt", ["notes.txt"]),
+            ("sed -i '' 's/a/b/' notes.txt", ["notes.txt"]),
+            ("sed -i.bak -e 's/a/b/' -e 's/c/d/' a.txt b.txt", ["a.txt", "b.txt"]),
+            ("sed -ni 's/x/y/p' f.txt", ["f.txt"]),
+            ("sed --in-place=.orig --expression='s/a/b/' g.txt", ["g.txt"]),
+            ("sudo sed -i 's/a/b/' h.txt", ["h.txt"]),
+        ):
+            self.assertEqual([str(self.repo / name) for name in written],
+                             write_targets(command, self.repo), command)
+
+
 class TestTheScannerFollowsTheShellIntoEverySegment(PolicyCase):
     """A relative path means whatever the last `cd` says it means, everywhere.
 
