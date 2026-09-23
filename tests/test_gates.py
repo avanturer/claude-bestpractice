@@ -1327,6 +1327,24 @@ class TestEvidenceGate(GateCase):
         self.assertIn("Scope drift", proc.stderr)
         self.assertIn("src/billing.py", proc.stderr)
 
+    def test_drift_sees_a_new_directory_and_a_name_git_quotes(self):
+        """`git status` said `?? payments/` and `"src/caf\\303\\251.py"`, and neither names
+        the file that changed — so both read as already committed and were forgiven."""
+        self.write("src/auth.py", "x = 1\n")
+        self.write("src/café.py", "x = 1\n")
+        self.commit()
+        self.start()
+        self.gate("prompt-capture", {"session_id": "s1", "hook_event_name": "UserPromptSubmit",
+                                     "prompt": "update src/auth.py only"})
+        self.write("src/auth.py", "x = 2\n")
+        self.write("payments/stripe.py", "KEY = 'x'\n")
+        self.write("src/café.py", "x = 2\n")
+        proc = self.stop()
+        self.assertEqual(proc.returncode, 2)
+        drift = next((part for part in proc.stderr.split("\n\n") if "Scope drift" in part), "")
+        self.assertIn("payments/stripe.py", drift)
+        self.assertIn("src/café.py", drift)
+
     def test_gives_up_after_the_escalation_ceiling(self):
         """A gate that wedges the workflow forever gets uninstalled, and then enforces nothing."""
         self.start()

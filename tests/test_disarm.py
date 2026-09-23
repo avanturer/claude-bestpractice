@@ -745,12 +745,37 @@ class TestDriftMustNotWedgeTheSession(RepoCase):
         git(["mv", "before.py", "after.py"], self.repo)
         self.assertNotIn("after.py", evidence.committed(self.ctx(), ["after.py"]))
 
+    def test_a_file_in_a_directory_the_tree_never_had_is_still_loose(self):
+        """git reports a new directory as `payments/`, which is no file anybody changed."""
+        from claude_bestpractice import evidence
+
+        self.write("payments/stripe.py", "KEY = 'x'\n")
+        self.assertEqual(set(), evidence.committed(self.ctx(), ["payments/stripe.py"]))
+
+    def test_a_name_git_would_quote_is_still_loose(self):
+        """`src/café.py` came back as `"src/caf\\303\\251.py"`, which matches nothing."""
+        from claude_bestpractice import evidence
+
+        self.write("src/café.py", "x = 1\n")
+        self.write("src/my notes.py", "y = 1\n")
+        self.commit("names git quotes")
+        self.write("src/café.py", "x = 2\n")
+        self.write("src/my notes.py", "y = 2\n")
+        self.assertEqual(set(), evidence.committed(self.ctx(), ["src/café.py", "src/my notes.py"]))
+
     def test_an_unreadable_status_forgives_nothing(self):
         """Fails closed: a gate that cannot see the tree does not get to wave it through."""
+        from dataclasses import replace
+
         from claude_bestpractice import evidence
 
         self.write("loose.py", "x = 1\n")
         self.assertEqual(set(), evidence.committed(self.ctx(), []))
+        # A status git refuses to give — here, asked outside any repository — used to read
+        # as "nothing is uncommitted", which forgave every changed file as committed.
+        (self.tmp / "not-a-repository").mkdir()
+        blind = replace(self.ctx(), worktree_root=self.tmp / "not-a-repository")
+        self.assertEqual(set(), evidence.committed(blind, ["loose.py"]))
 
     def test_work_already_on_the_trunk_is_not_this_sessions_drift(self):
         """Merged work has been through whatever review the founder runs; a gate that

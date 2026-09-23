@@ -1449,30 +1449,47 @@ def committed(ctx: GitContext, changed: list[str]) -> set[str]:
     uncommitted. Committing something to escape it is not a bypass — it is the work
     entering the flow where the next gate reads it.
     """
-    dirty = _uncommitted(ctx)
+    entries = _status_entries(ctx)
+    if entries is None:
+        # Unreadable status is not permission to forgive everything.
+        return set()
+    dirty = {path for _, path in entries}
     return {path for path in changed if path not in dirty}
 
 
-def _uncommitted(ctx: GitContext) -> set[str]:
-    import subprocess
+def _status_entries(ctx: GitContext) -> list[tuple[str, str]] | None:
+    """Every entry `git status` reports, as (XY, path). None when it cannot be read.
 
+    Read the one way that names every file exactly as it is on disk. All untracked FILES,
+    because `normal` reports a new directory as the directory: `payments/stripe.py`, in a
+    directory the tree never had, came back as `payments/`, which is no changed file at
+    all — so the new module read as committed and drift never saw it. `-z` with
+    `core.quotePath=false`, because a name git would quote came back quoted and escaped:
+    `src/café.py` was `"src/caf\\303\\251.py"`, which matches nothing either. And forced
+    rather than left to the repository: `status.showUntrackedFiles=no` makes a bare
+    `--porcelain` answer "clean" over a tree full of untracked files.
+
+    A rename or copy is both of its paths. The destination is what a commit would carry,
+    and the source leaving the tree is a change as well.
+    """
     try:
-        listed = subprocess.run(
-            # Forced, not left to the repository: `status.showUntrackedFiles=no` makes a
-            # bare `--porcelain` answer "clean" over a tree full of untracked files.
-            ["git", "status", "--porcelain", "--untracked-files=normal"],
+        proc = subprocess.run(
+            ["git", "-c", "core.quotePath=false", "status", "--porcelain", "-z",
+             "--untracked-files=all"],
             cwd=str(ctx.worktree_root),
             capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=30,
-        ).stdout
+        )
     except (OSError, subprocess.SubprocessError):
-        # Unreadable status is not permission to forgive everything.
-        return set()
-    out = set()
-    for line in listed.splitlines():
-        path = line[3:].split(" -> ")[-1].strip().strip('"')
-        if path:
-            out.add(path)
-    return out
+        return None
+    if proc.returncode != 0:
+        return None
+    out: list[tuple[str, str]] = []
+    fields = iter(proc.stdout.split("\0"))
+    for field in fields:
+        out.append((field[:2], field[3:]))
+        if set(field[:2]) & {"R", "C"}:
+            out.append((field[:2], next(fields, "")))
+    return [(status, path) for status, path in out if path]
 
 
 def landed(ctx, changed: list[str]) -> list[str]:
