@@ -783,6 +783,67 @@ class TestASuiteSlowerThanTheCeiling(RepoCase):
                       "an addopts line narrowed the run the gate drives")
 
 
+class TestTheProjectsOwnCommandRunsOnTheSameClock(RepoCase):
+    """#158 put the witnessed run on the hook's budget and never reached the project's own
+    command: `make test` of five minutes and five seconds was killed at a fixed 300, the kill
+    came back as "No machine-readable test artifact found", and the service the suite had
+    started was still running after the gate returned.
+    """
+
+    def verdict(self, command: list[str], ceiling: float):
+        from unittest import mock
+
+        from claude_bestpractice import evidence, suites, witness
+
+        with mock.patch.object(witness, "timeout_for", return_value=ceiling):
+            return evidence.verify(self.ctx(), [], ["src/app.py"], command,
+                                   [suites.Suite("", tuple(command), True)])
+
+    def test_it_is_given_what_the_stop_has_left(self):
+        from unittest import mock
+
+        from claude_bestpractice import evidence, witness
+
+        given = []
+
+        def bounded(argv, _where, _env, limit):
+            given.append(limit)
+            return subprocess.CompletedProcess(argv, 0, "1 passed", "")
+
+        with mock.patch.object(witness, "run_bounded", bounded):
+            evidence.run_suite(self.ctx(), ["make", "test"], None, 700)
+        self.assertEqual([700], given, "the project's command was capped below the hook's time")
+
+    def test_running_out_is_said_as_running_out(self):
+        said = self.verdict(["sh", "-c", "sleep 30"], ceiling=1).reason
+        self.assertIn("stopped at", said, "a time limit was reported as a missing artifact")
+        self.assertIn("`sh -c sleep 30`", said)
+
+    def test_nothing_it_started_outlives_it(self):
+        from helpers import process_gone
+
+        pidfile = self.tmp / "service.pid"
+        self.verdict(["sh", "-c", f"sleep 300 & echo $! > '{pidfile}'; sleep 30"], ceiling=1)
+        self.assertTrue(pidfile.is_file(), "precondition: the suite started its service")
+        self.assertTrue(process_gone(int(pidfile.read_text())),
+                        "the service the suite started outlived the gate")
+
+    def test_a_process_it_leaves_behind_does_not_hold_the_gate(self):
+        """Still holding the suite's output, it kept the gate waiting until the limit, and a
+        run that had finished at once was reported as one that outran the hook."""
+        from claude_bestpractice import evidence
+        from helpers import process_gone
+
+        pidfile = self.tmp / "stray.pid"
+        began = time.time()
+        code, tail = evidence.run_suite(
+            self.ctx(), ["sh", "-c", f"sleep 300 & echo $! > '{pidfile}'; echo '1 passed'"],
+            None, 20)
+        self.assertLess(time.time() - began, 10, "the gate waited on a process it did not need")
+        self.assertEqual((0, "1 passed"), (code, tail))
+        self.assertTrue(process_gone(int(pidfile.read_text())))
+
+
 class TestARedRunInASharedTreeIsNotEverybodysProblemYet(RepoCase):
     """A red verdict reaches every session in the repository at once. It must not rest on
     a run whose environment other live sessions were free to perturb.

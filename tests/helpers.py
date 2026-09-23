@@ -275,6 +275,30 @@ def session_record_for(ctx, session_id: str, pid: int | None = None):
     )
 
 
+def process_gone(pid: int, within: float = 5.0) -> bool:
+    """Whether a process has exited within a few seconds. A zombie counts as exited.
+
+    Zombies count because who reaps an orphan is the machine's business, not the gate's:
+    in a container whose init never waits, a killed process stays in the table forever.
+    """
+    import os
+    import time
+
+    end = time.time() + within
+    while time.time() < end:
+        try:
+            with open(f"/proc/{pid}/stat", "rb") as handle:
+                if handle.read().rsplit(b")", 1)[1].split()[0] == b"Z":
+                    return True
+        except OSError:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return True
+        time.sleep(0.05)
+    return False
+
+
 def sid(cwd, session_id: str) -> str:
     """The identity a gate will actually register under, for a raw harness id.
 

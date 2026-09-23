@@ -23,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import attempts, board, config, discipline, drafts, evidence, hookio, inbox, options, pullrequest, sessions, stage, store, suites, worktree  # noqa: E402
+from claude_bestpractice import attempts, board, config, discipline, drafts, evidence, hookio, inbox, options, pullrequest, sessions, stage, store, suites, witness, worktree  # noqa: E402
 from claude_bestpractice.gitctx import changed_files, resolve  # noqa: E402
 
 BLOCK_COUNTER = "_consecutive_blocks"
@@ -696,9 +696,14 @@ def main() -> None:
             problems.append(discipline.render(unfinished))
 
     unverified_reason = ""
+    # ONE clock for every suite this Stop runs, the clean re-run included. Each tier used to
+    # bring its own, so their sum could pass the hook's budget, where the harness kills the
+    # gate and nobody is told anything.
+    deadline = time.time() + witness.timeout_for()
     if gates["evidence_gate"]:
         try:
-            verdict = evidence.verify(ctx, cfg.artifact_globs, changed, cfg.test_command, must_pass)
+            verdict = evidence.verify(ctx, cfg.artifact_globs, changed, cfg.test_command, must_pass,
+                                      deadline)
         except Exception as exc:  # noqa: BLE001 - deliberate: see below
             # A crash inside verification used to escape into hookio.guard, which blocks
             # WITHOUT touching the escalation counter — so one bad glob in config.json
@@ -754,7 +759,7 @@ def main() -> None:
             for suite in must_pass or [suites.Suite("", tuple(cfg.test_command), True)]:
                 if not suite.declared:
                     continue
-                clean = evidence.clean_rerun(ctx, list(suite.command), suite.path)
+                clean = evidence.clean_rerun(ctx, list(suite.command), suite.path, deadline)
                 if not clean.ok:
                     problems.append(clean.reason)
                     break

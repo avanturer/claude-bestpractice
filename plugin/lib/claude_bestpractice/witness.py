@@ -40,9 +40,11 @@ witness" rather than as a pass.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -219,20 +221,53 @@ def _spawn(ctx: GitContext, argv: list[str], env: dict[str, str] | None,
            where: Path | None = None, seconds: float | None = None) -> subprocess.CompletedProcess | None:
     limit = timeout_for() if seconds is None else max(FLOOR, seconds)
     try:
-        return subprocess.run(
-            argv,
-            cwd=str(where or ctx.worktree_root),
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=limit,
-            env={**os.environ, **(env or {})},
-            start_new_session=True,
-        )
-    except subprocess.TimeoutExpired as killed:
-        raise RanOutOfTime(killed.timeout or limit) from None
+        return run_bounded(argv, where or ctx.worktree_root, {**os.environ, **(env or {})}, limit)
     except OSError:
         return None
+
+
+def run_bounded(argv: list[str], where: Path, env: dict[str, str],
+                limit: float) -> subprocess.CompletedProcess:
+    """Run a suite this gate started, for at most `limit` seconds, and leave none of it running.
+
+    Every run the Stop gate makes goes through here, because every one of them had the same
+    two holes. A timeout killed only the process the gate started, never what IT started:
+    the database or dev server a suite brings up outlived the gate that was waiting on it,
+    once per Stop, with nothing left to stop it. And the output came back through pipes, so
+    one such process still holding the suite's stdout kept the gate waiting after the suite
+    itself had exited, until the limit — a run that finished in a second reported as one
+    that outran the hook.
+
+    So the run gets a session of its own, its output goes to files nothing else can hold
+    open, and when it ends — finished or killed at the limit — whatever is left of its
+    process group is killed with it. Raises `RanOutOfTime` at the limit and OSError when the
+    program cannot be started.
+    """
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        proc = subprocess.Popen(argv, cwd=str(where), stdout=out, stderr=err, env=env,
+                                start_new_session=True)
+        try:
+            proc.wait(timeout=limit)
+        except subprocess.TimeoutExpired:
+            raise RanOutOfTime(limit) from None
+        finally:
+            _end(proc)
+        return subprocess.CompletedProcess(argv, proc.returncode, _read(out), _read(err))
+
+
+def _end(proc: subprocess.Popen) -> None:
+    """Kill the process group a run leads, and reap its leader."""
+    if os.name == "posix":
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(proc.pid, signal.SIGKILL)
+    elif proc.poll() is None:
+        proc.kill()
+    proc.wait()
+
+
+def _read(handle) -> str:
+    handle.seek(0)
+    return handle.read().decode("utf-8", errors="replace")
 
 
 def _tail(proc: subprocess.CompletedProcess) -> str:

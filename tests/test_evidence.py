@@ -179,6 +179,38 @@ class TestCleanRerun(RepoCase):
         self.assertEqual(before, after)
 
 
+class TestTheCleanRerunHasOnlyTheStopsTime(RepoCase):
+    """The re-run had a fixed 300 seconds on top of everything the Stop had already spent.
+
+    A 310-second suite passed the gate's own run and was then refused on every Stop, ten
+    minutes each, with "clean re-run exceeded 300s and was killed" — naming nothing to run —
+    and the server its test had started was still running after the gate returned.
+    """
+
+    def test_running_out_is_inconclusive_and_names_the_command(self):
+        verdict = evidence.clean_rerun(self.ctx(), ["sh", "-c", "sleep 30"], "", time.time() + 1)
+        self.assertTrue(verdict.ok, "running out of the Stop's time is not the code failing")
+        self.assertTrue(verdict.unverified, verdict.reason)
+        self.assertIn("`sh -c sleep 30`", verdict.reason)
+
+    def test_with_nothing_left_it_is_not_started(self):
+        verdict = evidence.clean_rerun(self.ctx(), ["sh", "-c", "exit 1"], "", time.time() - 1)
+        self.assertTrue(verdict.ok, verdict.reason)
+        self.assertTrue(verdict.unverified)
+        self.assertIn("not started", verdict.reason)
+
+    def test_nothing_it_started_outlives_it(self):
+        from helpers import process_gone
+
+        pidfile = self.tmp / "server.pid"
+        evidence.clean_rerun(
+            self.ctx(), ["sh", "-c", f"sleep 300 & echo $! > '{pidfile}'; sleep 30"], "",
+            time.time() + 2)
+        self.assertTrue(pidfile.is_file(), "precondition: the suite started its server")
+        self.assertTrue(process_gone(int(pidfile.read_text())),
+                        "the server the suite started outlived the gate")
+
+
 class TestLoopDetection(unittest.TestCase):
     def test_detects_a_three_gram_repeated_three_times(self):
         sigs = ["Bash:a", "Read:b", "Edit:c"] * 3

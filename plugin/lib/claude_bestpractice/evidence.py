@@ -48,8 +48,6 @@ from .gitctx import GitContext, changed_files
 # The platform overrides the hook after 8, so escalating past that just burns turns.
 MAX_CONSECUTIVE_BLOCKS = 4
 
-CLEAN_RERUN_TIMEOUT = 300
-
 # How much of the declared suite a run may miss before it stops counting as a witnessed
 # green. Loose on purpose: parametrisation, generated cases and language-specific
 # idioms all make the structural count approximate, and a false accusation here costs
@@ -271,8 +269,6 @@ def material_changes(
 
 
 
-RUN_TIMEOUT = 300
-
 # POSIX shells report "command not found" this way, and it is the difference
 # between "your tests fail" and "your test runner is not installed".
 NOT_EXECUTABLE = 127
@@ -340,27 +336,22 @@ def run_suite(ctx: GitContext, command: list[str], where: Path | None = None,
     tests passed — writing one by hand takes four lines, and `touch` defeats any
     freshness check based on mtime. Both were demonstrated against the previous version
     of this gate. So the gate stops reading claims and runs the suite itself.
+
+    `seconds` is what the Stop hook has left, and it is the only limit: a fixed 300 on this
+    path outlived #158's fix for the witnessed one, so a project's own `make test` of five
+    minutes and a few seconds was killed at five, and the kill was then reported as a missing
+    JUnit file. Running out raises `witness.RanOutOfTime`, which the caller turns into
+    the same verdict as a witnessed run that outlasted the hook.
     """
     env = dict(os.environ)
     env[VERIFYING_ENV] = _issue_nonce(ctx)
-    limit = RUN_TIMEOUT if seconds is None else max(1.0, min(RUN_TIMEOUT, seconds))
+    limit = witness.timeout_for() if seconds is None else max(1.0, seconds)
     try:
-        proc = subprocess.run(
-            command,
-            cwd=str(where or ctx.worktree_root),
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=limit,
-            env=env,
-            start_new_session=True,
-        )
+        proc = witness.run_bounded(command, where or ctx.worktree_root, env, limit)
     except FileNotFoundError:
         return -1, f"test command not found: {command[0]}"
     except OSError as exc:
         return -1, f"could not run the test command: {exc}"
-    except subprocess.TimeoutExpired:
-        return -1, f"the suite exceeded {int(limit)}s and was killed"
     finally:
         _retire_nonce(ctx)
 
@@ -374,7 +365,7 @@ def run_suite(ctx: GitContext, command: list[str], where: Path | None = None,
 
 
 def verify(ctx: GitContext, globs: list[str], changed: list[str], command: list[str] | None = None,
-           plan: list | None = None) -> Verdict:
+           plan: list | None = None, deadline: float | None = None) -> Verdict:
     """Tier 1: the suite must have actually run, here, on this code, and passed.
 
     `changed` is passed in rather than recomputed so the caller decides what counts as
@@ -386,13 +377,18 @@ def verify(ctx: GitContext, globs: list[str], changed: list[str], command: list[
     first and `command` is what answers for whatever it could not: a guessed subproject
     runner that will not start must leave the repository no worse verified than it was
     before anybody guessed (#206).
+
+    `deadline` is when the Stop hook's time for running suites is spent, and everything run
+    here shares it — the plan, and the repository's command after it. It is the caller's
+    because the clean re-run that follows shares it too. Left out, the plan starts its own
+    clock and a lone repository-wide run is given the whole budget, as before.
     """
     if not changed:
         return Verdict(True, "no changes to verify")
 
     wide = list(command or ())
     if plan:
-        settled = _verify_the_plan(ctx, globs, changed, plan)
+        settled = _verify_the_plan(ctx, globs, changed, plan, deadline)
         if settled is not None:
             return settled
         if any(not suite.path for suite in plan):
@@ -401,14 +397,15 @@ def verify(ctx: GitContext, globs: list[str], changed: list[str], command: list[
             wide = []
 
     if wide:
-        bound = _verify_by_running(ctx, globs, wide, changed)
+        bound = _verify_by_running(ctx, globs, wide, changed, deadline)
         if bound is not None:
             return bound
 
     return _verify_by_reading(ctx, globs, changed)
 
 
-def _verify_the_plan(ctx: GitContext, globs: list[str], changed: list[str], plan: list) -> Verdict | None:
+def _verify_the_plan(ctx: GitContext, globs: list[str], changed: list[str], plan: list,
+                     deadline: float | None = None) -> Verdict | None:
     """Run the suites this change touched. None when none of them could be witnessed.
 
     A hard failure in any suite settles the turn immediately — there is nothing a later
@@ -416,13 +413,13 @@ def _verify_the_plan(ctx: GitContext, globs: list[str], changed: list[str], plan
     because a suite further down the plan may still be outright red, and the difference
     between "could not check" and "checked and broken" is the whole of decision 0002.
 
-    The suites SHARE one deadline. Each one used to be handed the Stop hook's entire
-    budget, which is only sound while there is exactly one of them. A suite whose turn comes
-    after that deadline is not started: every run is floored at a few seconds, so a long plan
-    would carry the gate past the hook's own budget, where the harness kills it and nobody is
-    told anything. It is named instead, and the finish is unverified.
+    The suites SHARE one deadline, the Stop's own. Each one used to be handed the Stop hook's
+    entire budget, which is only sound while there is exactly one of them. A suite whose turn
+    comes after that deadline is not started: every run is floored at a few seconds, so a long
+    plan would carry the gate past the hook's own budget, where the harness kills it and
+    nobody is told anything. It is named instead, and the finish is unverified.
     """
-    deadline = time.time() + witness.timeout_for()
+    deadline = time.time() + witness.timeout_for() if deadline is None else deadline
     answers: list = []
     unreached: list = []
     for suite in plan:
@@ -513,7 +510,13 @@ def _verify_one(ctx: GitContext, globs: list[str], changed: list[str], suite,
     if seen is not None:
         return _judge_witnessed(ctx, seen, suite, tree)
 
-    return _verify_by_declared_command(ctx, globs, suite, tree, seconds)
+    try:
+        return _verify_by_declared_command(ctx, globs, suite, tree, seconds)
+    except witness.RanOutOfTime as killed:
+        # The same correction for the project's own command, which it never reached: this
+        # run was capped at 300 seconds, and the kill was read as "no machine-readable test
+        # artifact found" — advice to add a JUnit reporter to a suite that was simply long.
+        return _too_long_to_witness(ctx, globs, changed, killed.seconds, suite)
 
 
 # Paths in a failing run's output, by extension. Matched loosely and then checked against
@@ -701,18 +704,30 @@ def _the_same_run(entry: dict | None, suite, tree: str) -> bool:
 
 
 def _too_long_to_witness(
-    ctx: GitContext, globs: list[str], changed: list[str], seconds: float
+    ctx: GitContext, globs: list[str], changed: list[str], seconds: float, declared=None
 ) -> Verdict:
-    """The suite outran the hook. Read what the project's own run left, and name why."""
+    """The suite outran the hook. Read what the project's own run left, and name why.
+
+    `declared` is the suite when what was stopped is the project's OWN command rather than a
+    runner this gate drove. The lever is different then: `witness_exclude` only reaches a run
+    the gate builds itself, and naming it for `make test` would be naming a switch that is
+    not connected to anything.
+    """
     verdict = _verify_by_reading(ctx, globs, changed)
+    lever = (
+        "  `witness_exclude` in .claude/claude-bestpractice/config.json names paths this "
+        "gate should skip, if part of the suite is what makes it long."
+        if declared is None else
+        f"  `{' '.join(declared.command)}` is the project's own command. `test_commands` in "
+        ".claude/claude-bestpractice/config.json can split it into suites by path, so a "
+        "change runs only the part it reaches."
+    )
     return Verdict(
         verdict.ok,
         f"This gate's own run was stopped at {int(seconds)}s — longer than the Stop hook "
         "lives, so it cannot be witnessed here whatever the settings say. Falling back to "
         "the artifact your run wrote.\n"
-        f"  {verdict.reason}\n"
-        "  `witness_exclude` in .claude/claude-bestpractice/config.json names paths this "
-        "gate should skip, if part of the suite is what makes it long.",
+        f"  {verdict.reason}\n" + lever,
         verdict.artifact,
         unverified=True,
     )
@@ -781,14 +796,16 @@ def _skipped(ctx: GitContext) -> list[str]:
 
 
 def _verify_by_running(
-    ctx: GitContext, globs: list[str], command: list[str], changed: list[str]
+    ctx: GitContext, globs: list[str], command: list[str], changed: list[str],
+    deadline: float | None = None,
 ) -> Verdict | None:
     """Witness the REPOSITORY'S OWN command. Returns None to fall back to reading.
 
     One suite covering everything, which is what a single-project repository has and what
-    answers for whatever no scoped suite claimed.
+    answers for whatever no scoped suite claimed — by `deadline`, when a plan has already
+    spent part of the Stop's time.
     """
-    return _verify_one(ctx, globs, changed, suites.Suite("", tuple(command), True))
+    return _verify_one(ctx, globs, changed, suites.Suite("", tuple(command), True), deadline)
 
 
 def _verify_by_declared_command(
@@ -1216,7 +1233,8 @@ def _judge_clean_failure(ctx: GitContext, command: list[str], tail: str) -> Verd
     )
 
 
-def clean_rerun(ctx: GitContext, command: list[str], where: str = "") -> Verdict:
+def clean_rerun(ctx: GitContext, command: list[str], where: str = "",
+                deadline: float | None = None) -> Verdict:
     """Tier 2: run the suite against the COMMITTED tree, in a throwaway worktree.
 
     This is what catches the whole class of green-in-my-directory results: an
@@ -1227,6 +1245,14 @@ def clean_rerun(ctx: GitContext, command: list[str], where: str = "") -> Verdict
     `where` is the suite's own directory inside that checkout, for a repository whose
     suites are per subproject: re-running a scoped suite from the repository root would
     re-run the wide one instead, which is the thing the plan exists to avoid (#206).
+
+    `deadline` is the Stop's own, shared with the runs before this one; left out, it starts
+    now. The re-run had a fixed 300 seconds on top of whatever those had used, so a suite
+    between five minutes and the hook's budget passed the gate's own run and was then refused
+    on every Stop — ten minutes each, with a message that named nothing to run — and a long
+    enough pair carried the gate past the hook's budget, where the harness kills it and says
+    nothing. It gets what is left now, and running out is inconclusive, as a checkout with no
+    dependencies installed is: the committed tree simply was not re-checked.
     """
     if not command:
         return Verdict(False, "No test command configured or detected for a clean re-run.")
@@ -1238,37 +1264,16 @@ def clean_rerun(ctx: GitContext, command: list[str], where: str = "") -> Verdict
         # not exist — breaking Stop on every zero-commit repository past prototype.
         return Verdict(True, "unborn branch: nothing committed to re-run")
 
+    until = time.time() + witness.timeout_for() if deadline is None else deadline
     tmp = Path(tempfile.mkdtemp(prefix="claude-bestpractice-verify-"))
     target = tmp / "tree"
     try:
-        add = subprocess.run(
-            ["git", "worktree", "add", "--detach", "--quiet", str(target), ctx.head],
-            cwd=str(ctx.worktree_root),
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=120,
-        )
-        if add.returncode != 0:
-            return Verdict(False, f"could not create verification worktree: {add.stderr.strip()}")
-
-        env = dict(os.environ)
-        env[VERIFYING_ENV] = _issue_nonce(ctx)
-        proc = subprocess.run(
-            command,
-            cwd=str(target / where if where else target),
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=CLEAN_RERUN_TIMEOUT,
-            env=env,
-        )
-        if proc.returncode != 0:
-            tail = hookio.tail_of(proc.stdout + proc.stderr)
-            return _judge_clean_failure(ctx, command, tail)
-        return Verdict(True, "clean-checkout re-run passed")
-    except subprocess.TimeoutExpired:
-        return Verdict(False, f"clean re-run exceeded {CLEAN_RERUN_TIMEOUT}s and was killed")
+        failed = _check_out_committed(ctx, target, until)
+        if failed:
+            return Verdict(False, f"could not create verification worktree: {failed}")
+        return _rerun_committed(ctx, command, target / where, until)
+    except witness.RanOutOfTime as killed:
+        return _committed_tree_unchecked(command, killed.seconds)
     except OSError as exc:
         # A missing or unexecutable runner used to escape as an exception, straight past
         # the gate's escalation counter and into the fail-closed handler. That wedged the
@@ -1276,21 +1281,75 @@ def clean_rerun(ctx: GitContext, command: list[str], where: str = "") -> Verdict
         # the four-strikes release could never fire. A setup problem must be reportable.
         return Verdict(False, f"could not run the clean re-run ({exc}). Check the test command.")
     finally:
-        subprocess.run(
-            ["git", "worktree", "remove", "--force", str(target)],
+        _remove_verification_tree(ctx, tmp, target)
+
+
+def _check_out_committed(ctx: GitContext, target: Path, until: float) -> str:
+    """Put the committed tree at `target`. What went wrong, or "" when it is there."""
+    try:
+        add = subprocess.run(
+            ["git", "worktree", "add", "--detach", "--quiet", str(target), ctx.head],
             cwd=str(ctx.worktree_root),
             capture_output=True,
             encoding="utf-8",
             errors="replace",
-            timeout=60,
+            timeout=max(1.0, min(120.0, until - time.time())),
         )
-        subprocess.run(
-            ["git", "worktree", "prune"],
-            cwd=str(ctx.worktree_root),
-            capture_output=True,
-            timeout=60,
-        )
-        shutil.rmtree(tmp, ignore_errors=True)
+    except subprocess.TimeoutExpired as killed:
+        raise witness.RanOutOfTime(killed.timeout) from None
+    return "" if add.returncode == 0 else add.stderr.strip()
+
+
+def _rerun_committed(ctx: GitContext, command: list[str], where: Path, until: float) -> Verdict:
+    """The suite, in the checkout of the committed tree, in the time the Stop has left."""
+    left = until - time.time()
+    if left <= 0:
+        raise witness.RanOutOfTime(0)
+    env = dict(os.environ)
+    env[VERIFYING_ENV] = _issue_nonce(ctx)
+    proc = witness.run_bounded(command, where, env, left)
+    if proc.returncode != 0:
+        return _judge_clean_failure(ctx, command, hookio.tail_of(proc.stdout + proc.stderr))
+    return Verdict(True, "clean-checkout re-run passed")
+
+
+def _committed_tree_unchecked(command: list[str], seconds: float) -> Verdict:
+    """The Stop's time ran out before the committed tree could answer. Inconclusive.
+
+    Said with the command that would answer it, which the refusal this replaces never did:
+    "clean re-run exceeded 300s and was killed" was a block nothing in the session could
+    act on, repeated on every Stop over a suite that had just passed (decision 0020).
+    """
+    ran = f"stopped at {int(seconds)}s" if seconds >= 1 else "not started"
+    return Verdict(
+        True,
+        f"clean re-run {ran}: the Stop hook's time ran out, so the committed tree was not "
+        f"re-checked here. `{' '.join(command)}` in a fresh checkout of HEAD answers it.",
+        unverified=True,
+    )
+
+
+def _remove_verification_tree(ctx: GitContext, tmp: Path, target: Path) -> None:
+    """Take the throwaway checkout back out, its registration with it.
+
+    The directory goes before the prune, so a `worktree remove` that refuses still leaves
+    nothing registered: prune forgets only a worktree whose directory is gone.
+    """
+    subprocess.run(
+        ["git", "worktree", "remove", "--force", str(target)],
+        cwd=str(ctx.worktree_root),
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=60,
+    )
+    shutil.rmtree(tmp, ignore_errors=True)
+    subprocess.run(
+        ["git", "worktree", "prune"],
+        cwd=str(ctx.worktree_root),
+        capture_output=True,
+        timeout=60,
+    )
 
 
 def detect_loop(signatures: list[str], n: int = 3, repeats: int = 3) -> str | None:
