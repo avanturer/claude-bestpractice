@@ -596,6 +596,23 @@ class TestAMergeWaitsForTheFoundersWord(PRCase):
         self.open_a_pr(number=PRCase.PR_NUMBER)
         self.assertEqual("deny", self.decision(self.merging()))
 
+    def test_a_merge_refused_over_its_blockers_keeps_the_word(self):
+        """The refusal promises the merge "as soon as the list above is empty". The word
+        used to be spent before the blockers were judged, so once they were fixed the
+        founder was asked for it a second time — the question decision 0010 rejects."""
+        self.green()
+        self.start()
+        self.open_a_pr()
+        self.accept()
+        evidence.record_red(self.ctx(), ["pytest"], "1 failed")
+        refused = self.merging()
+        self.assertEqual("deny", self.decision(refused))
+        self.assertIn("in the way", self.reason(refused))
+
+        evidence.record_green(self.ctx(), ["pytest"])
+        evidence.clear_red(self.ctx(), ["pytest"], 1)
+        self.assertNotEqual("deny", self.decision(self.merging()))
+
     def test_talking_about_a_merge_is_not_accepting_one(self):
         """The failure mode decision 0006 named: a gate switched by phrasing."""
         from claude_bestpractice import config
@@ -780,10 +797,12 @@ class TestAPullRequestThisPluginNeverSaw(PRCase):
         self.assertEqual("deny", self.decision(self.tool("Bash", {"command": "gh pr merge --squash"})))
 
     def test_a_numbered_merge_of_an_unknown_pull_request_is_not(self):
+        """Not judged on this branch's problems — once the founder has accepted it."""
         self.write("src/app.py", "x = 1\n")
         self.commit("add the app module")
         self.start()
         evidence.record_red(self.ctx(), ["pytest"], "1 failed")
+        self.accept()
         self.assertNotEqual("deny", self.decision(self.tool("Bash", {"command": "gh pr merge 91"})))
 
 
@@ -802,6 +821,7 @@ class TestMergingSomebodyElsesPullRequest(PRCase):
         self.start()
         self.open_a_pr()
         evidence.record_red(self.ctx(), ["pytest"], "1 failed")
+        self.accept()
 
         proc = self.tool("Bash", {"command": "gh pr merge 501 --squash"})
         self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
@@ -820,11 +840,35 @@ class TestMergingSomebodyElsesPullRequest(PRCase):
         git(["remote", "add", "origin", "https://github.com/o/r.git"], self.repo)
         self.start()
         self.open_a_pr()
+        self.accept()
 
         proc = self.tool("Bash", {"command": "gh pr merge 501 --squash"})
         self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
         still_open = [r["branch"] for r in pullrequest.outstanding(self.ctx())]
         self.assertIn("feat/x", still_open, "somebody else's merge discharged this branch")
+
+    def test_naming_a_number_does_not_skip_the_founders_word(self):
+        """The acceptance sat inside the branch matching, so `gh pr merge <N>` — and the
+        GitHub tool, which always sends a number — merged unasked whenever the number was
+        not this branch's recorded one."""
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+        for name, tool_input in (
+            ("Bash", {"command": "gh pr merge 501 --squash --delete-branch"}),
+            ("mcp__github__merge_pull_request", {"owner": "o", "repo": "r", "pullNumber": 501}),
+        ):
+            with self.subTest(tool=name):
+                proc = self.tool(name, tool_input)
+                self.assertEqual("deny", self.decision(proc))
+                self.assertIn("not been accepted by the founder", self.reason(proc))
+
+    def test_one_word_is_still_one_merge_of_somebody_elses(self):
+        self.start()
+        self.accept()
+        self.assertNotEqual("deny", self.decision(self.tool("Bash", {"command": "gh pr merge 501"})))
+        self.assertEqual("deny", self.decision(self.tool("Bash", {"command": "gh pr merge 502"})))
 
     def test_the_branch_this_session_is_on_is_still_judged_when_it_is_the_one_merging(self):
         """The protection that must survive the fix: an unnumbered merge is this branch's

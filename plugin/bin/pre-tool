@@ -830,36 +830,49 @@ def main() -> None:
         command = str(ti.get("command", "")) if event.tool_name == "Bash" else ""
         number = pullrequest.merge_target(event.tool_name, command, ti)
         if number is not None:
+            # Green is not accepted. The checks say the code works; they say nothing about
+            # whether the founder wants what was built, and in a repository that deploys
+            # from the trunk a merge is a step towards shipping it. So the merge waits for
+            # their word — and once it is given, the assistant opens, checks and merges on
+            # its own, which is the arrangement they asked for.
+            #
+            # Asked of EVERY merge, before anything decides whose pull request it is. It
+            # sat inside the branch-matching below, so naming a number — `gh pr merge 7`,
+            # and the GitHub tool, which always sends one — went through unasked whenever
+            # the number was not this branch's recorded one: a pull request opened with
+            # `gh pr create`, one opened on the website, any merge from the main checkout.
+            if not config.approved(ctx, config.APPROVE_MERGE):
+                deny_for_founder(
+                    ctx, rec,
+                    "claude-bestpractice: this pull request has not been accepted by the founder "
+                    "yet. Passing checks mean the code works, not that the work is "
+                    "wanted — and main deploys, so merging is a step towards shipping "
+                    "it.\n"
+                    "  Show them what changed and ask. When they are happy they say "
+                    "`+merge` — copy it exactly — and this allows the merge once.\n"
+                    "  Their word is read from their own message; nothing you write "
+                    "can stand in for it."
+                )
             gated = pullrequest.gated_by(
                 ctx, number, pullrequest.about_current_branch(event.tool_name, command)
             )
-            if gated is not None:
-                # Green is not accepted. The checks say the code works; they say nothing
-                # about whether the founder wants what was built, and in a repository that
-                # deploys from the trunk a merge is a step towards shipping it. So the
-                # merge waits for their word — and once it is given, the assistant opens,
-                # checks and merges on its own, which is the arrangement they asked for.
-                if not config.approved(ctx, config.APPROVE_MERGE):
-                    deny_for_founder(
-                        ctx, rec,
-                        "claude-bestpractice: this pull request has not been accepted by the founder "
-                        "yet. Passing checks mean the code works, not that the work is "
-                        "wanted — and main deploys, so merging is a step towards shipping "
-                        "it.\n"
-                        "  Show them what changed and ask. When they are happy they say "
-                        "`+merge` — copy it exactly — and this allows the merge once.\n"
-                        "  Their word is read from their own message; nothing you write "
-                        "can stand in for it."
-                    )
-                # Spent here rather than after the call, because a PreToolUse hook never
-                # sees the result: one word authorises one merge either way, and a merge
-                # that failed is re-authorised by the founder rather than by its own retry.
+            if gated is None:
+                # Somebody else's pull request: nothing checked here is about it (#135).
+                # Still one word, one merge.
                 config.clear_switch(ctx, config.APPROVE_MERGE)
+            else:
                 base = str(gated.get("base") or "") or gitpolicy.default_branch(ctx) or "main"
                 # The pull request's own head, not the tree this session is standing in.
                 problems = pullrequest.blockers(ctx, base, str(gated.get("branch") or ""))
                 if problems:
                     deny_for_founder(ctx, rec, pullrequest.merge_refusal(gated, problems))
+                # Spent once the merge goes ahead, and never before its blockers are judged:
+                # the refusal above promises the merge "as soon as the list is empty", and
+                # spending the word first turned that into asking the founder a second time.
+                # Still before the call rather than after it, because a PreToolUse hook
+                # never sees the result: a merge that then fails is re-authorised by the
+                # founder rather than by its own retry.
+                config.clear_switch(ctx, config.APPROVE_MERGE)
                 # Judged, and nothing found. Carried to the vouch at the end of this file
                 # rather than allowed here, because `allow_tool` ends the permission
                 # pipeline and every gate below this line still has its say.
