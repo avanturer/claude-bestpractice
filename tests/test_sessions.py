@@ -9,6 +9,7 @@ import subprocess
 import sys
 import time
 import unittest
+from unittest import mock
 
 from helpers import BIN, LIB, RepoCase, git, session_record_for, sid
 
@@ -827,3 +828,22 @@ class TestAPidFromAnotherNamespaceProvesNothing(RepoCase):
         rec = self.a_session_in_a_container(ctx)
         rec.heartbeat_at = time.time() - (sessions.HEARTBEAT_DEAD_SECONDS + 60)
         self.assertFalse(sessions.is_live(ctx, rec))
+
+
+class TestAResumeDuringAReapStillFindsItsBaseline(RepoCase):
+    def test_the_log_entry_is_written_before_the_record_goes(self):
+        """Unlinked first, a resume landing between the two found neither the record nor
+        the entry, re-anchored at HEAD, and every commit before the crash left the diff."""
+        ctx = self.ctx()
+        sessions.register(ctx, record(ctx, "crashed", pid=999_999_999))
+        seen = []
+        logged = store.append_jsonl
+
+        def watching(path, row, mode=0o600):
+            seen.append(sessions.get(ctx, "crashed"))
+            logged(path, row, mode)
+
+        with mock.patch.object(store, "append_jsonl", watching):
+            sessions.reap(ctx)
+        self.assertIsNotNone(seen[0], "the record was gone before its baseline was logged")
+        self.assertIsNone(sessions.get(ctx, "crashed"))
