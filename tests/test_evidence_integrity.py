@@ -8,6 +8,7 @@ passing and the suite reported OK.
 from __future__ import annotations
 
 import json
+import os
 import time
 import subprocess
 import sys
@@ -474,6 +475,64 @@ class TestAMissingRunnerIsNotACodeFailure(RepoCase):
         self.assertFalse(verdict.ok)
         self.assertIn("environment problem", verdict.reason)
         self.assertIsNone(evidence.red(self.ctx()), "an unrunnable suite was filed as red")
+
+    def test_an_interpreter_without_the_runner_is_a_missing_runner(self):
+        """`python3 -m pytest`, which this plugin itself detects, on a `python3` whose
+        pytest is in somebody's virtualenv: exit 1 rather than 127, and the module named."""
+        from claude_bestpractice import evidence
+
+        said = evidence._missing_runner(1, "/usr/local/bin/python3: No module named pytest",
+                                        ["python3", "-m", "pytest", "-q"])
+        self.assertIn("pytest", said)
+        self.assertIn("not installed", said)
+
+    def test_a_test_importing_what_the_tree_lacks_is_still_a_code_failure(self):
+        """The same words about any module but the one after `-m` are the code's problem."""
+        from claude_bestpractice import evidence
+
+        command = ["python3", "-m", "pytest", "-q"]
+        for tail in ("E   ModuleNotFoundError: No module named 'calc'\n1 error in 0.12s",
+                     "E   ModuleNotFoundError: No module named 'pytest_django'\n1 error"):
+            self.assertEqual("", evidence._missing_runner(1, tail, command), tail)
+        self.assertEqual("", evidence._missing_runner(
+            1, "No module named integration", ["pytest", "-m", "integration"]),
+            "pytest's own -m is a marker, not a module")
+
+    def test_pytest_only_in_the_projects_virtualenv_is_not_a_red_suite(self):
+        """End to end, on an interpreter that really has no pytest: refused as the
+        environment problem it is, with nothing filed red and nothing sent to the others."""
+        from claude_bestpractice import evidence, inbox, sessions
+        from helpers import BIN, session_record_for, sid
+
+        bare = self.tmp / "bare"
+        made = subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(bare)],
+                              capture_output=True, timeout=120)
+        if made.returncode != 0 or not (bare / "bin" / "python3").exists():
+            self.skipTest("cannot make a virtualenv here")
+        self.configure(require_task=False, manage_pull_requests=False)
+        self.write("pyproject.toml", "[project]\nname = 'calc'\nversion = '0'\n")
+        self.write("calc.py", "def add(a, b):\n    return a + b\n")
+        self.write("tests/test_calc.py", "from calc import add\n\n\ndef test_add():\n"
+                                         "    assert add(2, 3) == 5\n")
+        self.commit("a project whose pytest lives in its own virtualenv")
+        watcher = sid(self.repo, "watching")
+        sessions.register(self.ctx(), session_record_for(self.ctx(), watcher))
+        self.write("calc.py", 'def add(a, b):\n    """Sum."""\n    return a + b\n')
+
+        env = dict(os.environ)
+        env["PATH"] = f"{bare / 'bin'}:{env.get('PATH', '')}"
+        proc = subprocess.run(
+            [sys.executable, str(BIN / "evidence-gate")],
+            input=json.dumps({"session_id": "s1", "hook_event_name": "Stop",
+                              "cwd": str(self.repo)}),
+            capture_output=True, text=True, cwd=str(self.repo), env=env, timeout=180,
+        )
+        self.assertEqual(2, proc.returncode, proc.stderr or proc.stdout)
+        self.assertIn("environment problem", proc.stderr)
+        self.assertNotIn("FAILS", proc.stderr)
+        self.assertIsNone(evidence.red(self.ctx()), "a runner that never ran was filed red")
+        self.assertEqual([], inbox.pending(self.ctx(), watcher),
+                         "every sibling was told the suite is red")
 
 
 class TestAGreenRunReportedByTheHookClearsTheRed(RepoCase):

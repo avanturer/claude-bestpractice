@@ -808,7 +808,7 @@ def _verify_by_declared_command(
         # an unrunnable command is a setup problem, not evidence of a bug.
         return None
 
-    missing = _missing_runner(code, tail)
+    missing = _missing_runner(code, tail, command)
     if missing:
         # A DETECTED suite is a guess, and a guess whose runner is not installed must not
         # make a finish harder than it was before anybody guessed — the repository-wide
@@ -1326,7 +1326,7 @@ _NOT_FOUND = re.compile(
 )
 
 
-def _missing_runner(code: int, tail: str) -> str:
+def _missing_runner(code: int, tail: str, command: list[str] | tuple = ()) -> str:
     """Name the tool that is absent, or "" when the suite genuinely ran.
 
     "The suite FAILS on the code as it stands" is a claim about the CODE, and it was
@@ -1337,6 +1337,9 @@ def _missing_runner(code: int, tail: str) -> str:
 
     The two situations need opposite responses: one is "fix your environment", the other is
     "fix your code". Blocking the turn is right either way; only the diagnosis was wrong.
+
+    `command` is what ran, because one way of not running is only legible against it: an
+    interpreter asked for a module it does not have (`_absent_module`).
     """
     found = _NOT_FOUND.search(tail or "")
     tool = ""
@@ -1347,8 +1350,46 @@ def _missing_runner(code: int, tail: str) -> str:
             tool = ""
     if tool:
         return f"`{tool}` not found on PATH (exit {code})"
+    absent = _absent_module(command, tail)
+    if absent:
+        return f"`{absent}` is not installed for the interpreter that ran it (exit {code})"
     if code == 127:
         return f"the runner is not on PATH (exit {code})"
+    return ""
+
+
+# The interpreters a `-m <module>` belongs to: `python3 -m pytest`, `py -3 -m pytest`, and
+# the same behind `uv run` or `poetry run`.
+_INTERPRETER = re.compile(r"^(?:python[\d.]*|pypy[\d.]*|py)(?:\.exe)?$", re.I)
+
+
+def _absent_module(command: list[str] | tuple, tail: str) -> str:
+    """The module a `python -m <module>` suite could not find, or "" when it ran.
+
+    The same issue #40 one layer in, and the commonest shape of it: `python3 -m pytest -q`
+    is the command this plugin itself detects for a Python project, and pytest installed in
+    the project's virtualenv is not installed for the `python3` the gate finds on PATH. The
+    interpreter exits 1, not the shell's 127, and prints `No module named pytest` — which
+    was filed as a red suite, put on every board as "fix it before new work" and broadcast
+    to every sibling session, over code nothing had run.
+
+    Only the module after `-m` counts. A test importing something the tree does not have
+    says the same words about ITS module, and that is a failure of the code.
+    """
+    parts = [str(part) for part in command]
+    for index, part in enumerate(parts):
+        if not _INTERPRETER.match(PurePosixPath(part.replace("\\", "/")).name):
+            continue
+        rest = parts[index + 1:]
+        if "-m" not in rest or rest.index("-m") + 1 >= len(rest):
+            return ""
+        module = rest[rest.index("-m") + 1]
+        names = {module, module.split(".")[0]}
+        said = re.search(
+            r"No module named ['\"]?(?:" + "|".join(re.escape(n) for n in names) + r")['\"]?(?![\w.])",
+            tail or "",
+        )
+        return module.split(".")[0] if said else ""
     return ""
 
 

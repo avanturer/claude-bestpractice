@@ -1153,6 +1153,33 @@ def _forget_numbers_carried_to_the_next_pull_request(ctx: GitContext) -> str:
             "forgotten until the real one is learned") if carried else ""
 
 
+def _forget_a_red_suite_that_never_ran(ctx: GitContext) -> str:
+    """A red-suite record written for a run that never reached the code.
+
+    Until 1.69.0 `python3 -m pytest` on an interpreter without pytest — the commonest shape
+    of a project whose pytest lives in its own virtualenv — was read as a failing suite: its
+    `No module named pytest` was filed here, put on every board as "fix it before new work"
+    and held against every merge. The gate reads it as a missing runner now, so nothing it
+    runs writes one again; and nothing it runs clears the one already written either, since
+    the command that wrote it cannot pass on the interpreter it failed on.
+
+    Only a record whose own output names the module after its own `-m`. A red suite that
+    failed for anything else stays exactly as it was.
+    """
+    from . import evidence
+
+    entry = evidence.red(ctx)
+    if not entry:
+        return ""
+    command = [str(part) for part in entry.get("command") or []]
+    absent = evidence._absent_module(command, str(entry.get("tail") or ""))
+    if not absent:
+        return ""
+    store.tier_a(ctx, evidence.RED_SUITE_FILE).unlink(missing_ok=True)
+    return (f"dropped the red-suite record for `{' '.join(command)}` — `{absent}` was not "
+            "installed, so that run never reached the code")
+
+
 _REPAIRS = {
     "0001-task-paths": (1, _backfill_task_paths),
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
@@ -1180,6 +1207,7 @@ _REPAIRS = {
     "0024-forget-a-number-carried-to-the-next-pull-request":
         (1, _forget_numbers_carried_to_the_next_pull_request),
     "0025-carry-checkpoints-out-of-trees": (1, _carry_checkpoints_out_of_trees),
+    "0026-forget-a-red-suite-that-never-ran": (1, _forget_a_red_suite_that_never_ran),
 }
 
 

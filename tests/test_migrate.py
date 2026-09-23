@@ -1475,3 +1475,33 @@ class TestANumberCarriedToTheNextPullRequestIsForgotten(RepoCase):
         self.filed(number=42, state="open")
         migrate.repair(self.ctx())
         self.assertEqual(42, pullrequest._records(self.ctx())["feat/x"]["number"])
+
+
+class TestARedSuiteThatNeverRanIsForgotten(RepoCase):
+    """`No module named pytest` was filed as a red suite until 1.69.0 — on every board as
+    "fix it before new work", and against every merge — for a run that reached no code.
+    The gate stopped writing them; this takes back the one already on disk, which nothing
+    the gate runs could ever clear.
+    """
+
+    def recorded(self, tail: str) -> None:
+        from claude_bestpractice import evidence
+
+        evidence.record_red(self.ctx(), ["python3", "-m", "pytest", "-q"], tail)
+
+    def test_a_record_of_a_runner_that_was_not_installed_is_dropped(self):
+        from claude_bestpractice import evidence
+
+        self.recorded("/usr/local/bin/python3: No module named pytest")
+        changed = migrate.repair(self.ctx())
+
+        self.assertIsNone(evidence.red(self.ctx()))
+        self.assertTrue([line for line in changed if "never reached the code" in line],
+                        "a repair that changes what the board says must say so")
+
+    def test_a_suite_that_really_failed_stays_red(self):
+        from claude_bestpractice import evidence
+
+        self.recorded("E   ModuleNotFoundError: No module named 'calc'\n1 error in 0.12s")
+        migrate.repair(self.ctx())
+        self.assertIsNotNone(evidence.red(self.ctx()))
