@@ -138,7 +138,7 @@ def shipped(ctx: GitContext, base: str) -> str:
     """
     from . import evidence
 
-    lines = _work_sections(ctx)
+    lines = _work_sections(ctx, base)
 
     lines.append("")
     lines.append(_test_health(ctx))
@@ -178,13 +178,30 @@ def _section(heading: str, items: list[str], bullet: str = "  - ") -> list[str]:
     return [heading] + [f"{bullet}{item}" for item in items] if items else []
 
 
-def _work_sections(ctx: GitContext) -> list[str]:
-    """Delivered, in flight, decided, ruled out — the four a founder asks about."""
-    from . import attempts, knowledge, plan
+def _on_this_branch(ctx: GitContext, tasks: list, delivered: list[str]) -> list:
+    """The cards this branch carries: filed or claimed on it, or naming a file it changes.
 
+    Every card in the clone was listed, so the body of a one-file pull request on
+    `feat/login` read "Old work from last week: migrate DB driver", then a sibling
+    session's billing rewrite, then the login fix it actually was — on the one surface the
+    founder reads instead of the diff. The files are the second test because a card claimed
+    in the main checkout keeps that branch's name after its work moves to a worktree's.
+    """
+    from . import plan
+
+    return [t for t in tasks if t.branch == ctx.branch or plan.carried_by(t, delivered)]
+
+
+def _work_sections(ctx: GitContext, base: str) -> list[str]:
+    """Delivered, in flight, decided, ruled out — the four a founder asks about."""
+    from . import attempts, knowledge, plan, pullrequest
+
+    delivered = pullrequest.delivered_paths(ctx, base)
     return (
-        _section("DELIVERED", [t.title for t in plan.load_all(ctx, plan.DONE)[-8:]])
-        + _section("IN FLIGHT", [t.title for t in plan.load_all(ctx, plan.DOING)[:5]])
+        _section("DELIVERED", [t.title for t in _on_this_branch(
+            ctx, plan.load_all(ctx, plan.DONE), delivered)[-8:]])
+        + _section("IN FLIGHT", [t.title for t in _on_this_branch(
+            ctx, plan.load_all(ctx, plan.DOING), delivered)[:5]])
         + _section(
             "DECIDED",
             [p.stem.split("-", 1)[-1].replace("-", " ") for p in knowledge.decision_files(ctx)[-4:]],
@@ -198,9 +215,10 @@ def _work_sections(ctx: GitContext) -> list[str]:
 
 def pr_body(ctx: GitContext, base: str) -> str:
     """A pull request body written for a reader who does not read diffs."""
-    from . import attempts, knowledge, plan
+    from . import attempts, knowledge, plan, pullrequest
 
-    tasks = plan.load_all(ctx, plan.DONE) + plan.load_all(ctx, plan.DOING)
+    tasks = _on_this_branch(ctx, plan.load_all(ctx, plan.DONE) + plan.load_all(ctx, plan.DOING),
+                            pullrequest.delivered_paths(ctx, base))
     what = [t.title for t in tasks[-8:]] or commits_since(ctx, base)[:8] or ["(no commits yet)"]
 
     lines = ["## What this does", ""] + [f"- {item}" for item in what]

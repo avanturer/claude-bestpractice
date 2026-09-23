@@ -30,6 +30,25 @@ class DeliveryCase(RepoCase):
         self.commit()
         subprocess.run(["git", "merge", "feat/a"], cwd=str(self.repo), capture_output=True, timeout=60)
 
+    def a_clone_with_other_peoples_cards(self):
+        """The shape reported: last week's closed card, a sibling's card in flight, and this
+        branch's own, with one file changed on `feat/login`."""
+        from claude_bestpractice import plan
+
+        old = plan.add(self.ctx(), "Old work from last week: migrate DB driver",
+                       paths=["db/driver.py"], done_when="stated", branch="feat/db")
+        plan.claim(self.ctx(), old.id, "old", "feat/db")
+        plan.complete(self.ctx(), old.id)
+        sibling = plan.add(self.ctx(), "Session B: rewrite billing export",
+                           paths=["billing/export.py"], done_when="stated")
+        plan.claim(self.ctx(), sibling.id, "b", "feat/billing")
+        git(["switch", "-qc", "feat/login"], self.repo)
+        self.write("auth/login.py", "redirect = 1\n")
+        self.commit("fix the login redirect")
+        mine = plan.add(self.ctx(), "Session A: fix login redirect", paths=["auth/login.py"],
+                        done_when="stated")
+        plan.claim(self.ctx(), mine.id, "a", "feat/login")
+
 
 class TestMergeState(DeliveryCase):
     def test_a_clean_repository_reports_nothing(self):
@@ -159,6 +178,27 @@ class TestWhatShipped(DeliveryCase):
     def test_the_cli_runs(self):
         proc = self.ship()
         self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_the_summary_is_this_branchs_work_and_nobody_elses(self):
+        self.a_clone_with_other_peoples_cards()
+
+        out = self.ship().stdout
+
+        self.assertIn("Session A: fix login redirect", out)
+        self.assertNotIn("Old work from last week", out)
+        self.assertNotIn("Session B", out)
+
+    def test_a_card_claimed_elsewhere_over_a_file_this_branch_changes_is_its_work(self):
+        """Claimed in the main checkout, it keeps `main` as its branch after the work moves."""
+        from claude_bestpractice import delivery, plan
+
+        git(["switch", "-qc", "feat/export"], self.repo)
+        self.write("src/export.py", "x = 1\n")
+        self.commit("the export")
+        card = plan.add(self.ctx(), "Add CSV export", paths=["src/export.py"], done_when="stated")
+        plan.claim(self.ctx(), card.id, "a", "main")
+
+        self.assertIn("Add CSV export", delivery.shipped(self.ctx(), "main"))
 
     def test_the_cli_refuses_mid_merge(self):
         self.conflict()
@@ -301,6 +341,16 @@ class TestPullRequestReadiness(DeliveryCase):
         self.assertIn("## What this does", body)
         self.assertIn("Add CSV export", body)
         self.assertNotIn("diff --git", body)
+
+    def test_the_body_says_what_this_pull_request_does_and_nothing_else(self):
+        from claude_bestpractice import delivery
+
+        self.a_clone_with_other_peoples_cards()
+
+        body = delivery.pr_body(self.ctx(), "main")
+        self.assertIn("- Session A: fix login redirect", body)
+        self.assertNotIn("Old work from last week", body)
+        self.assertNotIn("Session B", body)
 
 
 if __name__ == "__main__":
