@@ -102,6 +102,11 @@ def opened(ctx: GitContext, branch: str, base: str, session_id: str,
     PreToolUse hook never sees the result. An obligation for a call that then failed is
     the cost of that, and it is a bounded one: the Stop gate hands it to the founder once
     and never blocks on it again.
+
+    The number is this call's or none. A settled record's number belongs to the pull
+    request that was merged or closed, and a branch that carries on gets a NEW one: carried
+    over, it put "#41" on the board for #42, and a merge of #42 was judged against a number
+    that no longer named anything open.
     """
     existing = _records(ctx).get(branch, {})
     if existing.get("state") == OPEN:
@@ -109,7 +114,7 @@ def opened(ctx: GitContext, branch: str, base: str, session_id: str,
     _write(ctx, {
         "branch": branch,
         "base": base,
-        "number": number or int(existing.get("number") or 0),
+        "number": number,
         "url": url,
         "session_id": session_id,
         "opened_at": time.time(),

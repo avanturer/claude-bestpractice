@@ -882,6 +882,40 @@ class TestMergingSomebodyElsesPullRequest(PRCase):
         self.assertEqual("deny", self.decision(self.tool("Bash", {"command": "gh pr merge --squash"})))
 
 
+class TestASecondPullRequestIsNotTheFirst(PRCase):
+    """A branch whose pull request merged and which carried on. The second one was filed under
+    the first one's number, so the board said "#48" for a pull request that was not #48, and
+    a merge of the real one was judged against a number that named nothing open."""
+
+    def merged_once(self) -> None:
+        self.write("src/app.py", "x = 1\n")
+        self.commit("the first pull request")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+        self.open_a_pr(number=48)
+        self.accept()
+        self.tool("mcp__github__merge_pull_request",
+                  {"owner": "o", "repo": "r", "pullNumber": 48})
+        self.assertEqual([], pullrequest.outstanding(self.ctx()), "precondition: #48 merged")
+        self.write("src/app.py", "x = 2\n")
+        self.commit("the branch carries on")
+
+    def test_a_second_one_opened_from_the_shell_carries_no_number_yet(self):
+        self.merged_once()
+        self.tool("Bash", {"command": "gh pr create --fill"})
+
+        [record] = pullrequest.outstanding(self.ctx())
+        self.assertEqual(0, record["number"])
+        self.assertNotIn("#48", pullrequest.line(self.ctx()))
+
+    def test_a_second_one_opened_with_the_tool_carries_its_own(self):
+        self.merged_once()
+        self.open_a_pr(number=49)
+
+        [record] = pullrequest.outstanding(self.ctx())
+        self.assertEqual(49, record["number"])
+
+
 class TestAStaleLocalTrunkDoesNotWidenTheMerge(PRCase):
     """Card 0061. The pull request's files were measured against the LOCAL trunk first, and a
     local trunk is wherever somebody last fast-forwarded it — nineteen commits behind in a
