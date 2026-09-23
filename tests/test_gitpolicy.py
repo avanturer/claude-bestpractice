@@ -1082,6 +1082,23 @@ class TestCommitMessages(PolicyCase):
         """`git commit` opening an editor carries no message to judge."""
         self.assertEqual(self.commit("git commit")[0], "allow")
 
+    def test_a_heredoc_message_is_judged_by_its_body(self):
+        """How Claude Code writes every multi-line commit. The opener is not the subject.
+
+        Found by running a real session under the plugin: `"$(cat <<'EOF'" is 13
+        characters` refused the commit, and the `git add` chained before it went with it.
+        """
+        body = ("git add a.py && git commit -m \"$(cat <<'EOF'\n"
+                "Add the \"multiply\" helper next to add_one\n\nCo-Authored-By: A <a@b.c>\nEOF\n)\"")
+        self.assertEqual(self.commit(body)[0], "allow")
+        self.assertEqual(self.commit("git commit -m \"$(cat <<'EOF'\nwip\nEOF\n)\"")[0], "deny")
+
+    def test_a_message_the_shell_writes_is_not_judged_as_typed(self):
+        """`"$MSG"` is a variable name; the message git receives is not on the line."""
+        for command in ('git commit -m "$MSG"', 'git commit -m "`cat msg.txt`"'):
+            with self.subTest(command=command):
+                self.assertEqual(self.commit(command)[0], "allow")
+
 
 class TestConflictMarkers(PolicyCase):
     relax_git_policy = True

@@ -511,6 +511,18 @@ COMMIT_MESSAGE = re.compile(
     re.S,
 )
 
+# The same flag with the message handed over by a heredoc — `-m "$(cat <<'EOF' … EOF)"`,
+# which is how Claude Code writes every multi-line commit. Anchored on the terminator, so a
+# quote inside the message cannot end it early the way it ends the pattern above.
+_HEREDOC_MESSAGE = re.compile(
+    r"""git\s+commit\b[^\n]*?(?:-[a-zA-Z]*m|--message=?)\s*"\$\(\s*cat\s*<<-?\s*"""
+    r"""(?P<q>['"]?)(?P<tag>\w+)(?P=q)[ \t]*\n(?P<body>.*?)\n[ \t]*(?P=tag)[ \t]*\n\s*\)""",
+    re.S,
+)
+
+# What the shell rewrites inside double quotes before git ever sees the message.
+_EXPANDED = re.compile(r"\$[({\w]|`")
+
 # `=======` alone is also how Markdown and reStructuredText underline a seven-character
 # heading, so requiring the OPENING marker as well is what stops `Options` under a row of
 # equals signs being hard-refused as an unresolved conflict.
@@ -714,9 +726,22 @@ def _dirty_paths(ctx: GitContext) -> list[str]:
 
 
 def commit_message(command: str) -> str:
-    """The message out of a `git commit -m` command line, or empty if there is none."""
+    """The message out of a `git commit -m` command line, or empty if there is none.
+
+    Empty, too, when the shell writes the message rather than the command line: judging
+    `"$(cat <<'EOF'"` as a thirteen-character subject refused every multi-line commit Claude
+    Code makes, and a `"$MSG"` is a variable name, not a message.
+    """
+    heredoc = _HEREDOC_MESSAGE.search(command)
+    if heredoc:
+        return heredoc.group("body")
     match = COMMIT_MESSAGE.search(command)
-    return match.group("message") if match else ""
+    if not match:
+        return ""
+    message = match.group("message")
+    if match.group("q") == '"' and _EXPANDED.search(message):
+        return ""
+    return message
 
 
 # How many recent subjects decide whether this repository has a convention, and how many
