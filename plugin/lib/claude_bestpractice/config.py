@@ -773,9 +773,35 @@ def _shown(ctx: GitContext, path: Path) -> str:
         return str(path)
 
 
+def _read_config(path: Path) -> tuple[Any, str]:
+    """The founder's file as it parses, and what is wrong with it when it does not.
+
+    `read_json` answers its default for a missing file and a broken one alike, and here
+    those are opposite facts: no file is a founder content with every default, and a broken
+    one is a founder whose every key — `enabled` among them — is being ignored in silence.
+    A trailing comma was enough, and nothing anywhere said so.
+    """
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except FileNotFoundError:
+        return {}, ""
+    except (OSError, ValueError) as exc:
+        return {}, f"{CONFIG_NAME} cannot be read ({exc})"
+    try:
+        return json.loads(text), ""
+    except ValueError as exc:
+        return {}, f"{CONFIG_NAME} does not parse ({exc})"
+
+
 def load_checked(ctx: GitContext) -> tuple[Config, list[str]]:
-    raw = store.read_json(config_path(ctx), default={}) or {}
-    complaints: list[str] = []
+    """The config, and every complaint about it a human should be shown.
+
+    Shown on the board and by `claude-bp status`, because a complaint only this function
+    could see was one nobody saw.
+    """
+    raw, broken = _read_config(config_path(ctx))
+    raw = raw or {}
+    complaints: list[str] = [f"{broken}, so every key is at its default"] if broken else []
     if not isinstance(raw, dict):
         raw = {}
         complaints.append(f"{CONFIG_NAME} is not a JSON object; every value defaulted")
@@ -784,7 +810,10 @@ def load_checked(ctx: GitContext) -> tuple[Config, list[str]]:
     known = cfg.to_dict()
     for key, value in raw.items():
         if key not in known:
-            complaints.append(f"unknown key {key!r} ignored")
+            # `$comment` and its kind are notes: JSON has no comments, and this plugin's
+            # own hooks.json uses the same convention. Theirs to keep, not to hear about.
+            if not key.startswith("$"):
+                complaints.append(f"unknown key {key!r} ignored")
             continue
         if value is None:
             continue

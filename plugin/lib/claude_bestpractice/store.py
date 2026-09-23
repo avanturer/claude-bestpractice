@@ -231,9 +231,13 @@ def read_json(path: Path, default: Any = None) -> Any:
     `IsADirectoryError` straight past this reader and into the config every gate reads
     first, so one `mkdir` refused every tool call in the repository — and the command that
     switches the plugin off died on the same traceback.
+
+    `utf-8-sig`, so a byte-order mark is not a parse error. PowerShell 5.1's `Set-Content
+    -Encoding UTF8` writes one, and a founder's `"enabled": false` saved that way was read
+    as no config at all.
     """
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return default
 

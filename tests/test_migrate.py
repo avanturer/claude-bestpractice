@@ -198,6 +198,49 @@ class TestRepairsRunThemselvesAndRunOnce(RepoCase):
         self.assertFalse(broken.exists())
         self.assertTrue(broken.with_suffix(".json.broken").exists(), "the original was deleted")
 
+    def test_the_founders_config_is_never_set_aside(self):
+        """It is theirs and committed, a file they edit by hand: moving it aside to fix a
+        parse error left `git status` showing their config deleted, and every gate on the
+        defaults in silence."""
+        config = store.tier_a(self.ctx(), "config.json")
+        config.write_text('{"enabled": false,}', encoding="utf-8")
+        self.commit("the founder's config")
+
+        migrate.repair(self.ctx())
+        self.assertTrue(config.is_file())
+        self.assertFalse(config.with_suffix(".json.broken").exists())
+
+    def test_a_config_an_earlier_upgrade_set_aside_is_put_back(self):
+        config = store.tier_a(self.ctx(), "config.json")
+        config.replace(config.with_suffix(".json.broken"))
+
+        changed = migrate.repair(self.ctx())
+        self.assertEqual({"require_worktree": False, "protect_trunk": False},
+                         json.loads(config.read_text(encoding="utf-8")))
+        self.assertFalse(config.with_suffix(".json.broken").exists())
+        self.assertTrue([line for line in changed if "config.json" in line], changed)
+
+    def test_it_is_put_back_in_whichever_tree_it_was_set_aside_in(self):
+        """The quarantine ran in the tree that happened to start first; this runs once per
+        clone, so it cannot wait for that tree to start again."""
+        tree = self.add_worktree("elsewhere")
+        config = tree / store.TIER_A_DIRNAME / "config.json"
+        config.replace(config.with_suffix(".json.broken"))
+
+        migrate.repair(self.ctx())
+        self.assertTrue(config.is_file())
+        self.assertEqual("", git(["status", "--porcelain"], tree))
+
+    def test_one_the_founder_has_written_since_is_left_alone(self):
+        config = store.tier_a(self.ctx(), "config.json")
+        broken = config.with_suffix(".json.broken")
+        broken.write_text('{"old": true,}', encoding="utf-8")
+
+        migrate.repair(self.ctx())
+        self.assertEqual({"require_worktree": False, "protect_trunk": False},
+                         json.loads(config.read_text(encoding="utf-8")))
+        self.assertTrue(broken.exists())
+
     def test_readable_state_is_untouched(self):
         good = store.tier_a(self.ctx(), "fine.json")
         good.parent.mkdir(parents=True, exist_ok=True)

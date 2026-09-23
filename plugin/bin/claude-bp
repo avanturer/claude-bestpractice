@@ -61,6 +61,15 @@ def cmd_status(ctx) -> int:
     elif upgrade.orphaned():
         print("  this copy has been superseded — restart Claude Code to pick up the new one")
 
+    # Before everything the config decides. A file that does not parse was read as no config
+    # at all — `enabled: false` included — and this is where the founder looks.
+    _cfg, complaints = config.load_checked(ctx)
+    if complaints:
+        heading("CONFIG")
+        for complaint in complaints:
+            print(f"  {complaint}")
+        print(f"  {DIM}{config.config_path(ctx)} — yours to edit; sessions are refused it{OFF}")
+
     heading("CHECKS")
     for line in ci.status_lines(ctx):
         print(f"  {line}" if line else "")

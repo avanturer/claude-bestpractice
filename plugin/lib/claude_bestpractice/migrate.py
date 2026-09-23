@@ -174,12 +174,18 @@ def _quarantine_unreadable_state(ctx: GitContext) -> str:
     own decode error and carries on with a default, so nothing is broken loudly and
     nothing is ever fixed. Moved to `.broken` with the original kept, because deleting a
     founder's file to fix a parse error is not a trade this plugin gets to make.
+
+    Never `config.json`. It is not this plugin's state but the founder's word, committed and
+    edited by hand, and setting it aside showed their config as deleted in `git status`
+    while every gate went on at the defaults. A broken one is named on the board instead.
     """
+    from . import config
+
     root = store.tier_a(ctx)
     moved = 0
     for path in sorted(root.glob("*.json")):
         raw = store.read_json(path, default=None)
-        if raw is not None:
+        if raw is not None or path.name == config.CONFIG_NAME:
             continue
         try:
             path.replace(path.with_suffix(".json.broken"))
@@ -821,6 +827,31 @@ def _put_back_what_a_reindex_stranded(ctx: GitContext) -> str:
             "is back where sessions read it")
 
 
+def _put_back_a_config_set_aside(ctx: GitContext) -> str:
+    """The founder's `config.json`, moved aside by repair 0002 when it did not parse.
+
+    A byte-order mark was enough (PowerShell 5.1 writes one), so a committed config that
+    every reader now takes sat as `config.json.broken`, with `git status` showing the
+    founder's file deleted. Put back only where nothing has taken its place: a config
+    written since is their newer word, and the old one stays beside it for them to read.
+
+    Every tree, because 0002 ran in whichever one started first and this runs once a clone.
+    """
+    from . import config
+
+    restored = 0
+    for tree in _trees_of(ctx):
+        current = tree / store.TIER_A_DIRNAME / config.CONFIG_NAME
+        aside = current.with_suffix(".json.broken")
+        if aside.is_file() and not current.exists():
+            aside.replace(current)
+            restored += 1
+    if not restored:
+        return ""
+    return (f"config.json set aside by an earlier upgrade is back in {restored} tree(s); "
+            "if it still does not parse, the board says so")
+
+
 _REPAIRS = {
     "0001-task-paths": (1, _backfill_task_paths),
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
@@ -840,6 +871,7 @@ _REPAIRS = {
     "0016-drop-the-compaction-marker": (1, _drop_the_compaction_demand_marker),
     "0017-finish-removals-done-by-hand": (1, _finish_removals_done_by_hand),
     "0018-put-back-what-reindex-stranded": (1, _put_back_what_a_reindex_stranded),
+    "0019-put-back-a-config-set-aside": (1, _put_back_a_config_set_aside),
 }
 
 

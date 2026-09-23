@@ -319,6 +319,69 @@ class TestNothingInTheConfigCanTakeTheSwitchAway(OffCase):
         self.assertFalse(config.enforcing(self.ctx())[0])
 
 
+class TestAConfigTheGatesCannotReadIsSaidAloud(OffCase):
+    """A config.json that did not parse was read as no config at all, in silence: every key
+    at its default, `enabled: false` included, and no complaint anywhere a person would see
+    one. PowerShell 5.1's `Set-Content -Encoding UTF8` writes a byte-order mark, which is
+    enough — and then the next session start moved the founder's committed file aside.
+    """
+
+    CONFIG = ".claude/claude-bestpractice/config.json"
+
+    def founders(self, raw: bytes) -> Path:
+        path = self.repo / self.CONFIG
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+        self.commit("the founder's config")
+        return path
+
+    def test_a_byte_order_mark_and_crlf_are_read_and_off_is_off(self):
+        self.founders(b"\xef\xbb\xbf" + b'{\r\n  "enabled": false,\r\n'
+                      b'  "require_worktree": false\r\n}\r\n')
+        self.assertFalse(config.enforcing(self.ctx())[0])
+        proc = self.tool("Write", {"file_path": str(self.repo / self.CONFIG), "content": "{}"})
+        self.assertIsNone(self.hook_decision(proc), proc.stdout)
+
+    def test_so_is_a_settings_file_saved_the_same_way(self):
+        (self.repo / ".claude" / "settings.local.json").write_bytes(
+            b"\xef\xbb\xbf" + json.dumps({"enabledPlugins": {PLUGIN: False}}).encode("utf-8"))
+        self.assertFalse(config.enforcing(self.ctx())[0])
+
+    def test_one_that_does_not_parse_is_named_on_the_board_and_in_status(self):
+        import subprocess
+        import sys
+
+        self.founders(b'{"enabled": false, "require_worktree": false,}')
+        _cfg, complaints = config.load_checked(self.ctx())
+        self.assertTrue([c for c in complaints if "does not parse" in c], complaints)
+
+        board = self.run_hook("session-start", {
+            "session_id": "s1", "hook_event_name": "SessionStart", "source": "startup",
+        })
+        context = json.loads(board.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("config.json does not parse", context)
+
+        status = subprocess.run([sys.executable, str(BIN / "claude-bp"), "status"],
+                                cwd=str(self.repo), capture_output=True, text=True, timeout=120)
+        self.assertIn("config.json does not parse", status.stdout)
+
+    def test_the_founders_file_is_never_moved_aside(self):
+        self.founders(b'{"enabled": false,}')
+        self.run_hook("session-start", {
+            "session_id": "s1", "hook_event_name": "SessionStart", "source": "startup",
+        })
+        self.assertTrue((self.repo / self.CONFIG).is_file())
+        self.assertEqual("", git(["status", "--porcelain", "--", ".claude/claude-bestpractice"],
+                                 self.repo))
+
+    def test_a_note_to_themselves_is_not_a_complaint(self):
+        """JSON has no comments, and `$comment` is the convention this plugin's own
+        hooks.json uses. Reported on every session start it would be noise they cannot
+        clear without deleting their own note."""
+        self.configure(**{"$comment": "require_worktree off: single-dev repo"})
+        self.assertEqual([], config.load_checked(self.ctx())[1])
+
+
 class TestTheIsolationGateDoesNotBlockItsOwnCure(OffCase):
     """#216. The refusal reads "set DATABASE_URL in .env to a database name nobody else
     holds, then `claude-bp database`" — and refused that write with the same message. The

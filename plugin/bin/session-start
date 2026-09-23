@@ -106,6 +106,20 @@ def _autonomy_line(mode: str) -> str:
     return _AUTONOMY_LINES.get(mode, _AUTONOMY_LINES["vibecode"])
 
 
+def _config_line(ctx: GitContext, complaints: list) -> str:
+    """What in the founder's config no gate can read, said where somebody will see it.
+
+    A `config.json` that did not parse was read as no config at all — every key at its
+    default, `enabled: false` included — and the one reader that says so had no caller
+    outside the tests. Sessions are refused the file, so the line is the founder's to act on.
+    """
+    if not complaints:
+        return ""
+    more = f" (+{len(complaints) - 1} more in `claude-bp status`)" if len(complaints) > 1 else ""
+    return (f"\nconfig: {complaints[0]}{more}. {config.config_path(ctx)} is the founder's to "
+            "fix — tell them; no session may edit it.")
+
+
 def _armed_line(ctx: GitContext) -> str:
     """Arm the push gate on the first session that finds it missing, and say so once.
 
@@ -496,7 +510,7 @@ def main() -> None:
     # applied by one command.
     repaired = migrate.repair(ctx)
 
-    cfg = config.load(ctx)
+    cfg, complaints = config.load_checked(ctx)
     # Work that stopped moving. `reap` covers the session that DIED; this covers the
     # commoner case — a live chat that claimed 0007, moved on, and left it reading `doing`
     # on every board for the rest of the week. Before the board is rendered, because the
@@ -514,6 +528,7 @@ def main() -> None:
     body = board.render(ctx, me, others, len(reaped), leases)
     body += f"\nstage: {resolved_stage} (computed from the repository, not configured)"
     body += "\n" + _autonomy_line(cfg.autonomy)
+    body += _config_line(ctx, complaints)
     body += _armed_line(ctx)
     body += _swept_line(swept)
     body += _reclaimed_line(returned)
