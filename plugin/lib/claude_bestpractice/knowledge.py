@@ -408,9 +408,14 @@ def retires(meta: dict[str, str]) -> set[str]:
     all three stores" is the end of whatever three separate records said before it. Read
     as a single value, the second and third stayed live and kept being injected alongside
     the record that had replaced them.
+
+    Quotes come off each number, as they do off each path in `paths_of`: YAML habit writes
+    `supersedes: "0001"`, and read with its quotes that retired nothing — in this
+    repository's own records too, where 0004 and 0018 each name one.
     """
     raw = (meta.get("supersedes") or "").strip("[] ")
-    return {part.strip().zfill(4) for part in raw.split(",") if part.strip().isdigit()}
+    parts = (part.strip().strip("'\"").strip() for part in raw.split(","))
+    return {part.zfill(4) for part in parts if part.isdigit()}
 
 
 def paths_of(meta: dict[str, str]) -> list[str]:
@@ -468,6 +473,11 @@ def validate_decisions(ctx: GitContext) -> list[Problem]:
                     )
 
         known = {q.name.split("-", 1)[0] for q in decision_files(ctx)}
+        named = (meta.get("supersedes") or "").strip("[]'\" ")
+        if named and not retires(meta):
+            problems.append(
+                Problem(rel, f"`supersedes: {named}` names no decision number — nothing was retired")
+            )
         for number in retires(meta):
             if number not in known:
                 problems.append(

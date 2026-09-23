@@ -471,6 +471,29 @@ class TestADecisionIsRetiredNotRewritten(RepoCase):
         problems = " ".join(str(p) for p in knowledge.validate_decisions(self.ctx()))
         self.assertIn("names no decision", problems)
 
+    def test_a_quoted_number_retires_what_it_names(self):
+        """YAML habit writes `supersedes: "0001"`, and read with its quotes it retired
+        nothing — this repository's own 0004 and 0018 among the records it failed."""
+        from claude_bestpractice import knowledge
+
+        self.decide(1, "release.py")
+        self.decide(2, "ci/publish.yml")
+        self.decide(3, "release.py", supersedes='"0001"')
+        self.decide(4, "ci/publish.yml", supersedes="['0002']")
+        self.assertEqual(["0003", "0004"], self.live())
+        self.assertNotIn("[0001]", knowledge.build_index(self.ctx()))
+
+    def test_a_supersedes_that_names_no_number_is_reported(self):
+        """It retires nothing, and said nothing about it: the record read as a retirement
+        to anyone who looked, and to the index as none."""
+        from claude_bestpractice import knowledge
+
+        self.decide(1, "release.py")
+        self.decide(2, "release.py", supersedes="the old release policy")
+        problems = " ".join(str(p) for p in knowledge.validate_decisions(self.ctx()))
+        self.assertIn("names no decision number", problems)
+        self.assertEqual(["0001", "0002"], self.live())
+
     def test_a_record_naming_itself_is_reported(self):
         from claude_bestpractice import knowledge
 
