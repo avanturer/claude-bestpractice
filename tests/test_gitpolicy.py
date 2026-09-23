@@ -674,6 +674,66 @@ class TestGitItselfReachesIntoOtherTrees(PolicyCase):
             decision, reason = self.bash(mine, command)
             self.assertEqual(decision, "allow", f"{command} -> {reason}")
 
+    def test_the_main_checkout_can_be_brought_up_to_the_trunk(self):
+        """Nobody stands in the main checkout, so nothing else will ever update it, and one
+        left behind the trunk turned suites red on code nobody present wrote (decision
+        0018). A fast-forward makes no commit, and git refuses it rather than overwrite
+        anything uncommitted. The subshell is the form the stranding refusal recommends,
+        and was refused by this rule as soon as it was taken (decision 0017)."""
+        mine = self.worktree("feat/mine")
+        for command in (
+            f"git -C {self.repo} pull --ff-only",
+            f"git -C {self.repo} merge --ff-only origin/main",
+            f"(cd {self.repo} && git pull --ff-only)",
+        ):
+            decision, reason = self.bash(mine, command)
+            self.assertEqual("allow", decision, f"{command} -> {reason}")
+
+    def test_but_nothing_that_can_merge_and_no_siblings_tree(self):
+        mine = self.worktree("feat/mine")
+        theirs = self.worktree("feat/theirs")
+        for command in (
+            f"git -C {self.repo} pull",
+            f"(cd {self.repo} && git pull)",
+            f"git -C {self.repo} pull --ff-only --rebase",
+            f"git -C {theirs} pull --ff-only",
+        ):
+            decision, reason = self.bash(mine, command)
+            self.assertEqual("deny", decision, f"{command} -> {reason}")
+
+    def test_a_tree_verb_spelled_to_read_is_a_read(self):
+        """`git -C <main> stash list` came back as a command that discards uncommitted
+        work, and so did every other way to look without changing anything."""
+        mine = self.worktree("feat/mine")
+        for command in (
+            f"git -C {self.repo} stash list",
+            f"git -C {self.repo} stash show -p",
+            f"git -C {self.repo} clean -nd",
+            f"git -C {self.repo} apply --check fix.patch",
+        ):
+            decision, reason = self.bash(mine, command)
+            self.assertEqual("allow", decision, f"{command} -> {reason}")
+
+    def test_a_refusal_never_recommends_what_the_next_rule_refuses(self):
+        """`cd <main> && git checkout …` was told to run it as `(cd <main> && ...)`, which
+        this rule refused the moment it was taken. The rule that refuses the subshell now
+        speaks first, and for the main checkout it names the update that is allowed."""
+        mine = self.worktree("feat/mine")
+        decision, reason = self.bash(mine, f"cd {self.repo} && git checkout -b feat/x")
+        self.assertEqual("deny", decision, reason)
+        self.assertNotIn("(cd", reason)
+        self.assertIn(f"git -C {self.repo} pull --ff-only", reason)
+
+    def test_a_quoted_tree_is_still_the_tree(self):
+        """Read off the text with quoted spans blanked, `-C "<a path with a space>"` came
+        back as the word after it, and the command was judged in the session's own tree."""
+        spaced = make_repo(self.tmp / "dir with space", "app")
+        mine = self.tmp / "mine-of-spaced"
+        git(["worktree", "add", "-q", "-b", "feat/mine", str(mine)], spaced)
+        decision, reason = self.bash(mine, f'git -C "{spaced}" reset --hard')
+        self.assertEqual("deny", decision, reason)
+        self.assertIn("main checkout", reason)
+
     def test_a_cd_into_the_shared_checkout_is_refused_before_the_shell_is_stuck(self):
         """The step the founder took, and the one that cannot be taken back."""
         mine = self.worktree("feat/mine")

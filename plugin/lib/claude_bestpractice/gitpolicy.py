@@ -499,16 +499,50 @@ def foreign_git_refusal(owner: Path, ctx: GitContext) -> str:
     should be told which one happened: no path is named, nothing appears in a diff, and
     `reset --hard` or `clean -fd` takes uncommitted work that was never written anywhere
     else. Every rule keyed on "which files does this write" saw nothing at all here.
+
+    Nobody owns the main checkout, so for it the second half of that advice named nobody —
+    and it is the tree decision 0018 needs kept level with the trunk. It is told the one
+    update that is allowed there instead.
     """
-    kind = "the main checkout" if owner == ctx.common_dir.parent.resolve() else "another session's worktree"
+    main = owner == ctx.common_dir.parent.resolve()
+    kind = "the main checkout" if main else "another session's worktree"
     return (
         f"claude-bestpractice: this git command operates on {kind} ({owner}), not on this "
         f"session's working tree ({ctx.worktree_root}).\n"
         "  reset, checkout, switch, clean and stash discard uncommitted work and move the "
         "HEAD another session is standing on. Nothing names a file, so nothing shows up in "
         "a diff and no lease covers it.\n"
-        "  Run it in your own tree, or let the session that owns that one run it."
+        + (
+            "  Run it in your own tree. Bringing the main checkout up to the trunk is allowed, "
+            "and so is anything that only reads it:\n"
+            f"  git -C {shlex.quote(str(owner))} pull --ff-only"
+            if main else
+            "  Run it in your own tree, or let the session that owns that one run it."
+        )
     )
+
+
+def split_git(argv: list[str]) -> tuple[list[str], str, list[str]]:
+    """A git command as the trees `-C` and `--work-tree` point it at, its subcommand, and
+    that subcommand's own arguments. All three empty for anything that is not git.
+
+    From the words the shell hands git, so a quoted `-C "<a path with a space>"` is the
+    path: read off the text with quoted spans blanked, it came back as whatever word
+    followed, and the command was judged in the session's own tree instead.
+    """
+    if not argv or argv[0].rsplit("/", 1)[-1] != "git":
+        return [], "", []
+    pointed: list[str] = []
+    index = 1
+    while index < len(argv) and argv[index].startswith("-"):
+        word = argv[index]
+        if word in ("-C", "--work-tree") and index + 1 < len(argv):
+            pointed.append(argv[index + 1])
+        elif word.startswith("--work-tree="):
+            pointed.append(word.split("=", 1)[1])
+        index += 2 if word in _GLOBAL_WITH_VALUE else 1
+    subcommand = argv[index] if index < len(argv) else ""
+    return pointed, subcommand, argv[index + 1:]
 
 
 def worktree_paths_in_use(ctx: GitContext) -> dict[str, str]:

@@ -555,6 +555,13 @@ _WORKTREE_REMOVE = re.compile(r"\bworktree\s+remove\b(?P<args>(?:\s+(?:-\S+|[\w.
 # refused as a command that discards uncommitted work (#218).
 _WORKTREE_READ = re.compile(r"\bworktree\s+(?:list|prune)\b")
 
+# The same for the other verbs, read off each command's own arguments wherever the line can
+# be read that way: `stash list` and `stash show` print, `clean -n` lists what it would
+# delete, and `apply --check` and its siblings report. `git -C <main> stash list` came back
+# as a command that discards uncommitted work, and so did every other way to look.
+_READ_SPELLINGS = {"stash": {"list", "show"}, "worktree": {"list", "prune"}}
+_APPLY_REPORTS = {"--check", "--stat", "--numstat", "--summary"}
+
 # The session asking for the tree to go whatever is in it. Read rather than decided:
 # nothing in this plugin adds `--force` on its own.
 _WORKTREE_FORCE = re.compile(r"\bworktree\s+remove\b[^&|;\n]*\s(?:--force|-f)\b")
@@ -676,8 +683,7 @@ def _removal_targets(rest: str, literal: str, here: Path) -> list[Path]:
 
 def _removed_by(argv: list[str]) -> list[str]:
     """What one command's `git worktree remove` names, or nothing when it is not one."""
-    if argv[0].rsplit("/", 1)[-1] != "git":
-        return []
+    argv = _launched(argv, "git")
     for at in range(1, len(argv) - 1):
         if argv[at:at + 2] == ["worktree", "remove"]:
             return [word for word in argv[at + 2:] if not word.startswith("-")]
@@ -704,52 +710,95 @@ def worktree_removals(command: str, cwd: Path) -> list[Path]:
     return out
 
 
-def git_tree_targets(command: str, cwd: Path) -> list[Path]:
-    """Working trees a git command would mutate, however it was pointed at them.
+def git_tree_targets(command: str, cwd: Path) -> list[tuple[Path, bool]]:
+    """Working trees a git command would mutate, however it was pointed at them — each with
+    whether a fast-forward is all it would do there.
 
     Three ways to name one, and all three are explicit, which is why this is worth doing
     statically at all: `-C <path>`, `--work-tree <path>`, or the directory the command runs
     in — which `cd` already tracks for redirects.
     """
     scannable = _QUOTED.sub(lambda m: " " * len(m.group(0)), command)
-    out: list[Path] = []
+    out: list[tuple[Path, bool]] = []
     for segment, literal, here in _segments_with_cwd(scannable, cwd, command):
         found = _GIT_VERB.search(segment)
         if not found:
             continue
-        rest = found.group("rest")
-        verbs = GIT_TREE_VERBS & set(_ARG.findall(rest))
-        if not verbs:
-            continue
-        # Only when `worktree` is the whole reason this matched: `git worktree list && git
-        # reset --hard` is two commands in one segment and the second one still counts.
-        if verbs == {"worktree"} and _WORKTREE_READ.search(rest):
-            continue
-        # Only when `worktree` is the whole reason this matched: `git worktree list && git
-        # reset --hard` is two commands in one segment and the second one still counts.
-
-        # `git worktree remove <path>` destroys a tree named as a plain argument.
-        removals = _removal_targets(rest, literal, here)
-        if removals:
-            # ONLY the tree being removed. `-C <main checkout>` is where the command RUNS,
-            # and running it there mutates nothing there: `git worktree remove` moves no
-            # HEAD, touches no index and discards nobody's uncommitted work — it deletes
-            # another directory. Counting the `-C` as a target refused a session tidying up
-            # its own tree after a merge, in the name of protecting a checkout the command
-            # does not go near, and git will not remove a tree from inside it either, so
-            # the advice to "run it in your own tree" named the one place it cannot be run
-            # (#218).
-            bases = removals
-        else:
-            bases = [_resolve(here, m.group("path"))
-                     for m in list(_GIT_C.finditer(rest)) + list(_GIT_WORK_TREE.finditer(rest))]
-        if not bases:
-            bases = [_resolve(here, ".")]
-
-        for base in bases:
-            if base is not None and base not in out:
-                out.append(base)
+        commands = _commands_in(literal)
+        named = _trees_changed(commands, here) if commands else [
+            (base, False) for base in _trees_named(found.group("rest"), literal, here)
+        ]
+        for target in named:
+            if target[0] is not None and target not in out:
+                out.append(target)
     return out
+
+
+def _trees_changed(commands: list[list[str]], here: Path) -> list[tuple[Path | None, bool]]:
+    """The trees these commands change, read from git's own arguments."""
+    out: list[tuple[Path | None, bool]] = []
+    for argv in commands:
+        launched = _launched(argv, "git")
+        pointed, verb, args = gitpolicy.split_git(launched)
+        if verb not in GIT_TREE_VERBS or _only_reads(verb, args):
+            continue
+        # ONLY the tree being removed, when it is a removal. `-C <main checkout>` is where
+        # the command RUNS, and running it there mutates nothing there: `git worktree
+        # remove` moves no HEAD, touches no index and discards nobody's uncommitted work —
+        # it deletes another directory. Counting the `-C` as a target refused a session
+        # tidying up its own tree after a merge, in the name of protecting a checkout the
+        # command does not go near, and git will not remove a tree from inside it either,
+        # so the advice to "run it in your own tree" named the one place it cannot be run
+        # (#218).
+        bases = _removed_by(launched) or pointed or ["."]
+        out += [(_resolve(here, base), _fast_forwards(verb, args)) for base in bases]
+    return out
+
+
+def _trees_named(rest: str, literal: str, here: Path) -> list[Path | None]:
+    """The same, off the text, for a line the tokeniser declines: generous, as before."""
+    verbs = GIT_TREE_VERBS & set(_ARG.findall(rest))
+    # Only when `worktree` is the whole reason this matched: `git worktree list && git
+    # reset --hard` is two commands in one segment and the second one still counts.
+    if not verbs or (verbs == {"worktree"} and _WORKTREE_READ.search(rest)):
+        return []
+    # A removal names only the tree being removed, for the reason `_trees_changed` gives.
+    removals = _removal_targets(rest, literal, here)
+    if removals:
+        return removals
+    bases = [_resolve(here, m.group("path"))
+             for m in list(_GIT_C.finditer(rest)) + list(_GIT_WORK_TREE.finditer(rest))]
+    return bases or [_resolve(here, ".")]
+
+
+def _only_reads(verb: str, args: list[str]) -> bool:
+    """Is this tree verb spelled so that it changes nothing?"""
+    if verb in _READ_SPELLINGS:
+        return bool(args) and args[0] in _READ_SPELLINGS[verb]
+    if verb == "clean":
+        return any(arg == "--dry-run" or (arg[:1] == "-" and arg[1:2] != "-" and "n" in arg)
+                   for arg in args)
+    return verb == "apply" and bool(_APPLY_REPORTS.intersection(args)) and "--apply" not in args
+
+
+def _fast_forwards(verb: str, args: list[str]) -> bool:
+    """A `pull` or `merge` told it may only move its branch forward, and nothing else."""
+    return verb in ("pull", "merge") and "--ff-only" in args and not any(
+        arg in ("-r", "--no-ff", "--squash") or arg.startswith("--rebase") for arg in args
+    )
+
+
+def _launched(argv: list[str], *programs: str) -> list[str]:
+    """`argv` from the first of `programs` on, run directly or behind one of `_LAUNCHERS`;
+    nothing when it runs none of them."""
+    names = [word.rsplit("/", 1)[-1] for word in argv]
+    if names[0] in programs:
+        return argv
+    if names[0] in _LAUNCHERS:
+        for index, name in enumerate(names):
+            if name in programs:
+                return argv[index:]
+    return []
 
 
 def _runs_inline_code(literal: str) -> bool:
@@ -790,10 +839,8 @@ def _sed_in_place(argv: list[str]) -> list[str]:
     inside a cluster such as `-ni`. The first operand is the script unless `-e` or `-f`
     gave it, and every operand after that is a file sed rewrites.
     """
-    names = [word.rsplit("/", 1)[-1] for word in argv]
-    if names[0] in _LAUNCHERS and "sed" in names:
-        argv = argv[names.index("sed"):]
-    elif names[0] not in ("sed", "gsed"):
+    argv = _launched(argv, "sed", "gsed")
+    if not argv:
         return []
     in_place, scripted, operands = False, False, []
     at = 1
@@ -1386,6 +1433,34 @@ def main() -> None:
                 "without stranding this session."
             )
 
+    # Kept out of `absolute` on purpose, so these never reach the worktree and trunk rules
+    # below. `git switch -c` is the command that RESOLVES a trunk violation, and a gate
+    # that refuses the fix for the thing it is complaining about is a trap the agent learns
+    # to route around. Pointed at somebody else's tree it is a different act entirely, and
+    # that is the only thing checked here.
+    #
+    # Asked BEFORE the stranding rule below, whose way out is a subshell — `(cd <main> &&
+    # ...)`. When this rule refuses what is inside it, saying so first is the only order in
+    # which the two do not give opposite advice (decision 0017): the subshell was offered,
+    # taken, and then refused here, for `git pull --ff-only` among others.
+    if cfg.require_worktree and event.tool_name == "Bash":
+        main_checkout = ctx.common_dir.parent.resolve()
+        for path, fast_forward in git_tree_targets(str(ti.get("command", "")), session_cwd):
+            owner = gitpolicy.foreign_tree(ctx, path, rec.session_id)
+            # A fast-forward of the main checkout moves it to the trunk and nowhere else:
+            # it makes no commit, and git refuses it rather than overwrite anything
+            # uncommitted. Nobody stands in that tree to lose work, and a main checkout left
+            # behind the trunk is what turned suites red on code nobody present wrote
+            # (decision 0018) — refusing it left nothing anywhere able to update it.
+            if owner is None or (fast_forward and owner == main_checkout):
+                continue
+            # Ours to clean up if our own hook made it for us. Otherwise the refusal that
+            # hands a session a worktree also makes that worktree permanent: the main
+            # checkout is told it belongs to another session, and a worktree cannot remove
+            # itself from the inside.
+            if not gitpolicy.provisioned_for(ctx, rec.session_id, path):
+                deny(ctx, rec, gitpolicy.foreign_git_refusal(owner, ctx))
+
     # Before the shell takes a step it cannot take back. Claude Code refuses every Bash
     # call whose working directory is inside the protected checkout — judged before the
     # command runs, so `cd` back into the worktree is refused too, and the persistent
@@ -1406,21 +1481,6 @@ def main() -> None:
                 f"`(cd {shlex.quote(str(stranded))} && ...)` leaves this shell where it is.\n"
                 + config.switch_advice("require_worktree", False)
             )
-
-    # Kept out of `absolute` on purpose, so these never reach the worktree and trunk rules
-    # below. `git switch -c` is the command that RESOLVES a trunk violation, and a gate
-    # that refuses the fix for the thing it is complaining about is a trap the agent learns
-    # to route around. Pointed at somebody else's tree it is a different act entirely, and
-    # that is the only thing checked here.
-    if cfg.require_worktree and event.tool_name == "Bash":
-        for path in git_tree_targets(str(ti.get("command", "")), session_cwd):
-            owner = gitpolicy.foreign_tree(ctx, path, rec.session_id)
-            # Ours to clean up if our own hook made it for us. Otherwise the refusal that
-            # hands a session a worktree also makes that worktree permanent: the main
-            # checkout is told it belongs to another session, and a worktree cannot remove
-            # itself from the inside.
-            if owner is not None and not gitpolicy.provisioned_for(ctx, rec.session_id, path):
-                deny(ctx, rec, gitpolicy.foreign_git_refusal(owner, ctx))
 
     # Outside every working tree of this repository there is no rule to apply: a scratch
     # file in /tmp is not somebody else's work, and refusing it only taught the agent that
