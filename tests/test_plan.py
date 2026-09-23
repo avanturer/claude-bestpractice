@@ -1307,3 +1307,35 @@ class TestATransitionReachesEveryCopy(RepoCase):
         plan.claim(self.ctx(), task.id, "s1", "main")
         self.assertEqual(1, plan.reconcile_copies(self.ctx()))
         self.assertEqual([plan.DOING], sorted({c.state for c in plan.copies(self.ctx(), task.id)}))
+
+
+class TestOneCardInAnotherEncodingStopsNothing(PlanCase):
+    """A card saved in cp1251 raised UnicodeDecodeError out of every reader of the ledger:
+    `claude-bp-plan list` died on a traceback, and every Write in every session was refused
+    with "gate failed (UnicodeDecodeError…)", naming neither the file nor a way out."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        ours = plan.add(self.ctx(), "Fix the parser", paths=["a.py"], done_when="stated")
+        (ours.path.parent / "0002-importer.md").write_bytes(
+            "---\ntitle: Починить импорт\npaths: b.py\ndone_when: цены\n---\n\nПочинить импорт\n"
+            .encode("cp1251"))
+
+    def test_the_ledger_still_reads_and_says_which_card(self):
+        proc = subprocess.run([sys.executable, str(BIN / "claude-bp-plan"), "list"],
+                              capture_output=True, text=True, cwd=str(self.repo), timeout=120)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn("0002", proc.stdout)
+        self.assertEqual(["b.py"], plan.find(self.ctx(), "0002").paths)
+
+    def test_a_write_is_judged_rather_than_refused_on_a_codec(self):
+        proc = self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Write",
+            "tool_input": {"file_path": str(self.repo / "a.py"), "content": "x = 1\n"},
+        })
+        self.assertNotIn("gate failed", proc.stdout + proc.stderr)
+
+    def test_the_card_itself_can_still_move(self):
+        _claimed, error = plan.claim(self.ctx(), "0002", "s1", "main")
+        self.assertEqual("", error)
+        self.assertEqual(plan.DOING, plan.find(self.ctx(), "0002").state)

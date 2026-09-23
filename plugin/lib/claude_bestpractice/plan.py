@@ -168,8 +168,12 @@ def _frontmatter(text: str) -> tuple[dict[str, str], str]:
 
 
 def _load(path: Path, state: str) -> Task | None:
+    # `replace`, here and wherever a card is read: one card saved in cp1251 raised
+    # UnicodeDecodeError out of every reader, so every write in every session was refused
+    # with a message naming neither the file nor a way out. A garbled title still says
+    # which card, who holds it and on what files; a traceback says nothing.
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
     meta, body = _frontmatter(text)
@@ -690,7 +694,7 @@ def _move(task: Task, state: str, owner: str = "", branch: str = "",
     store.ensure_dir(target_dir)
     target = target_dir / task.path.name
 
-    text = task.path.read_text(encoding="utf-8")
+    text = task.path.read_text(encoding="utf-8", errors="replace")
     meta, body = _frontmatter(text)
     updated = _render(
         task.id,
@@ -829,7 +833,7 @@ def sweep_queue(ctx: GitContext, days: float = QUEUE_STALE_DAYS) -> list[Task]:
 
 def _rewrite_body(task: Task) -> None:
     """Persist an amended body in place, leaving the frontmatter as it stands."""
-    meta, _ = _frontmatter(task.path.read_text(encoding="utf-8"))
+    meta, _ = _frontmatter(task.path.read_text(encoding="utf-8", errors="replace"))
     head = "\n".join(f"{k}: {v}" for k, v in meta.items())
     store.atomic_write(task.path, f"---\n{head}\n---\n\n{task.body}\n", mode=0o644)
 
@@ -981,7 +985,7 @@ def _amended(task: Task, note: str, paths: list[str] | None, done_when: str, tit
     were dropped by omission here, so a note on an ordered task silently cut it loose from
     the order it was written to respect.
     """
-    meta, body = _frontmatter(task.path.read_text(encoding="utf-8"))
+    meta, body = _frontmatter(task.path.read_text(encoding="utf-8", errors="replace"))
     return _render(
         task.id, title.strip() or meta.get("title", task.title), task.state, task.owner,
         task.branch,
@@ -1331,7 +1335,7 @@ def reclaim(ctx: GitContext, session_id: str) -> list[str]:
 def _move_to(path: Path, target_dir: Path, task: Task) -> None:
     """Rename a task file within the worktree that owns it, not the caller's."""
     store.ensure_dir(target_dir)
-    meta, body = _frontmatter(path.read_text(encoding="utf-8"))
+    meta, body = _frontmatter(path.read_text(encoding="utf-8", errors="replace"))
     # Everything, not just the title. Reclaiming a crashed session's task rewrote the
     # document without its files, its finish condition or its relations — handing the
     # next session the thin task the ledger exists to prevent, at the exact moment it
