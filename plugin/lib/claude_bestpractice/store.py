@@ -82,7 +82,11 @@ def newest_checkpoint(ctx: GitContext, session_id: str) -> str:
         found = sorted(directory.glob("*.md"))
     except OSError:
         return ""
-    mine = [p for p in found if session_id and session_id[:8] in p.name] or found
+    # This session's own, or nothing. Falling back to whichever checkpoint was newest
+    # handed a session whose own capture had failed ANOTHER session's work, under
+    # "RESTORED AFTER COMPACTION … keep working from it" — a sibling's instruction, obeyed
+    # as this session's own.
+    mine = [p for p in found if session_id and session_id[:8] in p.name]
     if not mine:
         return ""
     try:

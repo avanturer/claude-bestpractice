@@ -532,6 +532,12 @@ class TestWhatCompactionDestroysIsHandedBack(GateCase):
         self.assertIn("RESTORED AFTER COMPACTION", said)
         self.assertIn("written at the time", said)
 
+    def test_another_sessions_checkpoint_is_never_restored_as_this_ones(self):
+        """A session whose own capture produced nothing was handed the newest checkpoint in
+        the tree — a sibling's request, under "keep working from it"."""
+        self.long_session()
+        self.assertNotIn("RESTORED AFTER COMPACTION", self.context(self.compacted("zz-other")))
+
     def test_an_ordinary_start_pays_nothing_for_this(self):
         """It costs the always-on budget exactly zero, which is why it can afford to be
         generous when it does fire."""
