@@ -45,7 +45,11 @@ def main() -> int:
         print("\ndry run: nothing removed")
         return 0
 
-    carried = [name for name in store.CARRIED if (root / name).is_file()]
+    carried = store.carried_files(ctx)
+    # One family named once: a clone with forty dead ends on record has forty stamps.
+    stamps = [name for name in carried if name not in store.CARRIED]
+    carried = [name for name in carried if name in store.CARRIED]
+    carried += [f"{len(stamps)} attempt stamp(s)"] if stamps else []
 
     store.purge_tier_b(ctx)
     store.ensure_dir(root)

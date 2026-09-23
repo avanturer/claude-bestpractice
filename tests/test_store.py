@@ -342,6 +342,26 @@ class TestAReindexKeepsWhatItSaysItKeeps(RepoCase):
         beside = [p.name for p in store.tier_b(ctx).parent.iterdir() if ".carry" in p.name]
         self.assertEqual([], beside)
 
+    def test_the_repairs_had_and_the_attempt_stamps_are_not_rebuilt_but_kept(self):
+        """Neither can be derived again. An emptied repair ledger re-armed every one-shot
+        repair, and a lost stamp is a dead end about rewritten code shown as current."""
+        from claude_bestpractice import attempts, migrate
+
+        ctx = self.ctx()
+        self.write("billing.py", "rates = {}\n")
+        self.commit("billing")
+        migrate.repair(ctx)
+        attempts.record(ctx, "cache fee rates in a module dict", "leaks across tenants",
+                        ["billing.py"])
+
+        proc = self.reindex()
+
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual([], migrate.pending(ctx))
+        self.assertIn("attempt stamp", proc.stdout)
+        self.write("billing.py", "rates = {}  # per tenant now\n")
+        self.assertIn("rewritten since", attempts.render_for_board(ctx, ["billing.py"]))
+
     def test_what_an_interrupted_run_left_beside_the_root_is_put_back(self):
         ctx = self.ctx()
         store.ensure_dir(store.tier_b(ctx))

@@ -497,7 +497,7 @@ def guarded_json(
         write_json(path, box[0])
 
 
-# Tier B is DESCRIBED as entirely derived, and four of its files are not. These record
+# Tier B is DESCRIBED as entirely derived, and several of its files are not. These record
 # events — a finish that could not be proved, a suite observed failing, a decision the
 # agent drafted and nobody has accepted yet — and no amount of rescanning the repository
 # brings an event back. Purging them was silent, permanent, and `claude-bp reindex`
@@ -509,9 +509,30 @@ CARRIED = (
     "open-items.jsonl",       # board.OPEN_ITEMS_FILE — including UNVERIFIED warnings
     "decision-inbox.jsonl",   # drafts.INBOX_FILE — drafted, not yet accepted
     "unverified.jsonl",       # the evidence gate's record of a finish it could not prove
+    # migrate.LEDGER — which repairs this clone has had. Purged, it re-armed every one of
+    # them, the ones that rewrite files in the founder's tree among them.
+    "migrations.json",
 )
 # `failing-suite.json` is deliberately absent: the red ledger is Tier A, committed, and
 # this function never reaches it.
+
+# The same rule for a family of files. Each attempt's provenance stamp is the content of its
+# subject when the dead end was hit, and the file has moved on since by definition — so a
+# purged stamp is a staleness marker that can never be shown again.
+CARRIED_PATTERNS = (
+    "attempt-*.stamp",        # attempts.record — the blobs a dead end was about
+)
+
+
+def carried_files(ctx: GitContext) -> list[str]:
+    """The files in Tier B that a purge keeps, by name."""
+    root = tier_b(ctx)
+    named = [name for name in CARRIED if (root / name).is_file()]
+    try:
+        matched = sorted({p.name for pattern in CARRIED_PATTERNS for p in root.glob(pattern)})
+    except OSError:
+        matched = []
+    return named + [name for name in matched if (root / name).is_file()]
 
 # Same rule, one directory rather than one file. A note another session queued is an event
 # too — the lease conflict that produced it happened at a moment that rescanning cannot
@@ -542,7 +563,7 @@ def purge_tier_b(ctx: GitContext) -> None:
     if not root.exists():
         return
 
-    kept = {name: (root / name).read_bytes() for name in CARRIED if (root / name).is_file()}
+    kept = {name: (root / name).read_bytes() for name in carried_files(ctx)}
     # Held BESIDE the root, not in the system temp directory: a move within one filesystem
     # is atomic and cannot half-copy, and `/tmp` is frequently a different mount. A fresh
     # one per run, so one a crashed run left behind is never overwritten or deleted.
