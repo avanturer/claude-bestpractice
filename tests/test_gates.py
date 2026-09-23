@@ -1628,6 +1628,42 @@ class TestDoctorAndReindex(GateCase):
         self.assertIsNotNone(sessions.get(self.ctx(), sid(self.repo, "keepme")))
 
 
+class TestTheDoctorLeavesTheFoundersGitAlone(RepoCase):
+    """`install.sh` runs the doctor before it registers anything, on a machine whose git
+    config nobody here controls — and the doctor's own git calls read it.
+
+    With a global core.hooksPath, the pushes check installed this plugin's hook into the
+    founder's GLOBAL hooks, moved theirs aside and never put it back. With a global
+    commit-msg hook that wants a ticket id, the first fixture commit died in a traceback
+    and not one result was printed. And every run left two directories in the temp dir.
+    """
+
+    def test_a_machine_with_global_hooks_is_proven_and_left_as_it_was(self):
+        home = self.tmp / "founder-home"
+        hooks = home / ".githooks"
+        hooks.mkdir(parents=True)
+        (home / ".gitconfig").write_text(f"[core]\n\thooksPath = {hooks}\n")
+        mine = {
+            "pre-push": "#!/bin/sh\necho FOUNDERS-GLOBAL-PRE-PUSH\n",
+            "commit-msg": '#!/bin/sh\ngrep -qE "[A-Z]+-[0-9]+" "$1" || exit 1\n',
+        }
+        for name, body in mine.items():
+            (hooks / name).write_text(body)
+            (hooks / name).chmod(0o755)
+        scratch = self.tmp / "scratch"
+        scratch.mkdir()
+
+        proc = subprocess.run(
+            [sys.executable, str(BIN / "claude-bp-doctor")], capture_output=True, text=True,
+            timeout=600, env={**os.environ, "HOME": str(home), "TMPDIR": str(scratch)},
+        )
+        self.assertEqual(0, proc.returncode, proc.stdout[-1500:] + proc.stderr[-1500:])
+        self.assertEqual(mine, {p.name: p.read_text() for p in hooks.iterdir()},
+                         "the doctor changed the founder's global hooks")
+        self.assertEqual([], sorted(p.name for p in scratch.iterdir()),
+                         "the doctor left its temporary directories behind")
+
+
 class TestTheBoardIsDemandedBeforeAShellWrite(RepoCase):
     """Issue #141. The ledger gate only ever looked at `Write`/`Edit`, while the leases
     and the secret scan in the same file already resolved what a `sed -i` or a heredoc

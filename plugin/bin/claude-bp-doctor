@@ -50,11 +50,27 @@ class Result:
 # them now writes to `~/.claude/settings.json` by design. Run with the founder's own HOME
 # that meant one `claude-bp-doctor` left 68 entries in their settings naming repositories
 # that were deleted seconds later (#121). A per-run sandbox, set once, for every gate.
-_HOME = Path(tempfile.mkdtemp(prefix="claude-bestpractice-doctor-home-"))
+#
+# And for every git call, the doctor's own included — which read the founder's global and
+# system config. `install.sh` runs this before it registers anything: with a global
+# core.hooksPath the pushes check installed this plugin's hook into the founder's global
+# hooks and never took it out, and with a global commit-msg hook that wants a ticket id
+# the first fixture commit died in a traceback before one result was printed.
+_ISOLATED_GIT = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+
+
+def isolate(home: Path) -> None:
+    """Point this process, and everything it starts, at a sandbox HOME and at no git config
+    but each repository's own. In-process calls too: several checks drive the library
+    directly, and its git calls inherit this environment."""
+    home.mkdir(parents=True, exist_ok=True)
+    os.environ.update({"HOME": str(home), **_ISOLATED_GIT})
+    os.environ.pop("XDG_CONFIG_HOME", None)
 
 
 def gate_env(home: Path | None = None) -> dict:
-    return {"HOME": str(home or _HOME), "PATH": os.environ.get("PATH", "")}
+    return {"HOME": str(home or os.environ["HOME"]), "PATH": os.environ.get("PATH", ""),
+            **_ISOLATED_GIT}
 
 
 def run_gate(
@@ -512,7 +528,7 @@ def check_policy_reaches_the_settings(repo: Path) -> Result:
         input=json.dumps({"session_id": "doctor-policy", "hook_event_name": "SessionStart",
                           "cwd": str(repo)}),
         capture_output=True, text=True, cwd=str(repo), timeout=120,
-        env={"HOME": str(home), "PATH": os.environ.get("PATH", "")},
+        env=gate_env(home),
     )
 
     try:
@@ -1396,9 +1412,10 @@ def check_plan_ledger(repo: Path) -> Result:
 
 def check_worktree_provisioning(repo: Path) -> Result:
     """The worktree hook must return a path and seed trust, or hooks never run there."""
-    import tempfile as _tempfile
-
-    home = Path(_tempfile.mkdtemp(prefix="claude-bestpractice-home-"))
+    # Beside the case's repository, so the run's own cleanup takes it. A directory of its
+    # own under the system temp dir was left behind by every run.
+    home = repo.parent / "provisioning-home"
+    home.mkdir()
     # Something to isolate FROM. Without it the tree is born with no database either, and
     # the check would pass over a plugin that does nothing. No credentials in it: this
     # project's own secret scanner refuses a DSN carrying them, correctly.
@@ -1417,7 +1434,7 @@ def check_worktree_provisioning(repo: Path) -> Result:
         text=True,
         cwd=str(repo),
         timeout=60,
-        env={"HOME": str(home), "PATH": os.environ.get("PATH", "")},
+        env=gate_env(home),
     )
     path = proc.stdout.strip()
     if proc.returncode != 0 or not path:
@@ -1621,10 +1638,12 @@ def main() -> int:
     print(f"{DIM}claude-bp doctor {__version__}{OFF}")
     print(f"{DIM}Proving gates by attempting known-bad actions, not by reading config.{OFF}\n")
 
-    results = [check_environment(), check_hooks_wiring(), check_fail_closed_on_garbage()]
-
+    # One directory for everything this run makes, the sandbox HOME included, removed as a
+    # whole: the HOME used to be a second directory of its own, and a run left it behind.
     tmp = Path(tempfile.mkdtemp(prefix="claude-bp-doctor-"))
     try:
+        isolate(tmp / "home")
+        results = [check_environment(), check_hooks_wiring(), check_fail_closed_on_garbage()]
         for factory in (
             check_session_start,
             check_secret_write_denied,
@@ -1660,8 +1679,10 @@ def main() -> int:
             check_a_hidden_ledger_is_reported,
             check_every_refusal_leaves_a_command,
         ):
-            repo = make_repo(Path(tempfile.mkdtemp(prefix="claude-bestpractice-case-", dir=tmp)))
+            # The fixture inside the try as well: a repository that cannot be made is that
+            # check failing, and the other thirty still report.
             try:
+                repo = make_repo(Path(tempfile.mkdtemp(prefix="claude-bestpractice-case-", dir=tmp)))
                 results.append(factory(repo))
             except Exception as exc:  # noqa: BLE001 - a crashed check is a failed check
                 results.append(Result(factory.__name__, False, f"{type(exc).__name__}: {exc}"))
