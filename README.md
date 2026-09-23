@@ -433,9 +433,12 @@ In a session: `/claude-bestpractice:status` · `/claude-bestpractice:plan` · `/
 | `subagent-brief` | SubagentStart | fails open | Non-goals, entities and a query-biased map to agents that inherit no rules |
 | `checkpoint` | PreCompact | fails open | Extractive checkpoint, zero model calls, secrets scrubbed. **Never refuses a compaction** — a refusal there reaches the founder, never the model (decision 0021) |
 | `evidence-gate` | Stop | **fails closed** | Scope drift, test evidence, clean re-run, a turn ending on an unanswered block; harvests decision drafts; asks once for what only this window knows; puts a finished worktree away |
+| `pr-opened` | PostToolUse `.*create_pull_request` | fails open | Learns the number of the pull request just opened, so the merge gate can tell its own from somebody else's |
+| `permission-denied` | PermissionDenied | fails open | Records what auto mode refused, so a repeated prompt can be traced to its rule; never overturns one |
 
-Nine entries against a self-imposed budget of twelve. Always-on context **~332 tokens**
-against a cap of 400 — roughly 0.1 % of a 200k window.
+Eleven entries — `pre-tool` and `review-commit` share the PreToolUse event — against a
+self-imposed budget of twelve. Always-on context **~332 tokens** against a cap of 400 —
+roughly 0.1 % of a 200k window.
 
 ---
 
@@ -492,8 +495,10 @@ written under 1.0.1 was still there and still readable after. It lives in your r
 and in your git common directory, never in the plugin cache, which is what the version
 bump replaces.
 
-Installed with `install.sh` instead? That path is a clone, so it updates with `git pull`
-in the directory you cloned into, and needs no version bump to do it.
+Installed with `install.sh` instead? Run it again. The clone is only the source: Claude Code
+runs a copy in its own plugin cache, so `git pull` in the clone updates the terminal commands
+and leaves every session's gates on the old code. The installer fetches, runs the doctor,
+and refreshes that copy.
 
 ## Requirements
 
@@ -502,7 +507,7 @@ tool call, so a dependency tree is latency, an extra failure mode and a supply-c
 surface for the component whose whole job is to be trustworthy. Enforced in CI.
 
 Tested on Python 3.9, 3.11 and 3.13. `claude plugin validate --strict` passes against
-Claude Code 2.1.247.
+Claude Code 2.1.280.
 
 Everything works on any recent Claude Code; two features need a floor, and both fail
 quiet rather than loud, which is why they are written down:
@@ -574,7 +579,8 @@ enforces nothing.
 
 - **Not a memory engine.** The harness stores and loads memory. This owns curation.
 - **Not a code reviewer.** Several first-party review paths exist; pick one and integrate.
-- **Not a task manager.** The native task system is subsumed and gated, never replaced.
+- **Not a task manager.** The ledger is the only board; the harness's own task tools are
+  left unused rather than mirrored.
 - **Not for teams.** Every trade-off assumes one owner and no reviewer.
 
 ## Four things it cannot enforce
