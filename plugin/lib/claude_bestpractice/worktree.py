@@ -38,9 +38,23 @@ def derive_port(worktree_path: str) -> int:
     return PORT_BASE + (int(digest[:8], 16) % PORT_RANGE)
 
 
+# Postgres keeps 63 bytes of an identifier and silently drops the rest.
+DB_NAME_MAX = 60
+
+
 def derive_db_name(repo_name: str, branch: str) -> str:
+    """The database a tree gets, unique to it for as long as its name is.
+
+    Cut at the limit, a long name lost its tail — and the tail is the per-session hash that
+    tells two trees apart, so two sessions given the same instruction in a repository with
+    a forty-character name derived one database between them, the collision this exists to
+    prevent. So a name that has to be cut keeps a hash of all of it in place of what went.
+    """
     safe = re.sub(r"[^a-z0-9_]", "_", f"{repo_name}_{branch}".lower())
-    return safe[:60] or "claude_bestpractice_dev"
+    if len(safe) <= DB_NAME_MAX:
+        return safe or "claude_bestpractice_dev"
+    whole = hashlib.sha256(safe.encode()).hexdigest()[:8]
+    return f"{safe[:DB_NAME_MAX - len(whole) - 1]}_{whole}"
 
 
 ENV_FILE = ".env"

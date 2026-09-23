@@ -2018,6 +2018,23 @@ class TestOneDatabasePerSession(RepoCase):
         self.assertNotEqual(worktree.database_of(self.repo), theirs)
         self.assertIn("user:pw@localhost:5432", theirs, "credentials were invented rather than kept")
 
+    def test_two_sessions_given_one_instruction_get_two_databases(self):
+        """Cut at the length Postgres keeps, a long repository name took the per-session
+        hash with it, and two trees derived one database between them."""
+        from claude_bestpractice import worktree
+        from claude_bestpractice.gitctx import resolve
+
+        from helpers import make_repo
+
+        ctx = resolve(make_repo(self.tmp, "acme-commerce-platform-backend-services",
+                                relax_git_policy=True))
+        task = "implement the new checkout flow with apple pay"
+        names = {worktree.record_for(ctx, worktree.provision(ctx, task, who))[1]["database"]
+                 for who in ("session-one", "session-two")}
+
+        self.assertEqual(2, len(names), names)
+        self.assertTrue(all(len(name) <= worktree.DB_NAME_MAX for name in names), names)
+
     def test_a_project_with_no_database_gets_no_invented_one(self):
         """Every tree of every project used to be born with an untracked `.env` naming
         `postgresql://localhost:5432/<tree>` — found in a real session on a library with no
