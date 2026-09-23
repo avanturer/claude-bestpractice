@@ -24,7 +24,7 @@ CONFIGURATION out. One line of `addopts = --ignore=tests/test_total.py`, a `pyte
 the repository's PARENT directory, or `go env -w GOFLAGS=-run=TestAdd` — one command,
 outside the repo, in no diff — all narrowed the run this gate was driving. The gate had
 chosen where the report went and not what was executed. So `addopts` is blanked, the
-config file is pinned to one inside the repository, GOFLAGS is cleared, and the count is
+config file is pinned to one inside the repository, GOFLAGS is overridden, and the count is
 compared against the tree on this path too.
 
 What genuinely remains, and the earlier claim here was wrong to call it all diff-visible:
@@ -314,6 +314,13 @@ def _run_pytest(ctx: GitContext, report: Path, env: dict[str, str] | None,
     return Witnessed(proc.returncode, executed, artifact.failed, _tail(proc), "pytest")
 
 
+# What the gate's own `go test` runs under in place of anything `go env -w` left behind.
+# Its only job is to be non-empty; see `_run_go`. `-short=false` is what go does with no
+# flags at all, and a flag every go release that reads GOFLAGS knows, so the run is the
+# default one everywhere.
+GOFLAGS = "-short=false"
+
+
 def _run_go(ctx: GitContext, env: dict[str, str] | None,
             where: Path | None = None, seconds: float | None = None) -> Witnessed | None:
     """`go test -json` emits one event per test action on stdout.
@@ -322,11 +329,17 @@ def _run_go(ctx: GitContext, env: dict[str, str] | None,
     the `go` binary this gate invoked, not from a recipe the project wrote, which is the
     property that matters.
     """
-    # GOFLAGS blanked: `go env -w GOFLAGS=-run=TestAdd` is ONE command, writes
+    # GOFLAGS overridden: `go env -w GOFLAGS=-run=TestAdd` is ONE command, writes
     # ~/.config/go/env outside the repository, appears in no diff and no commit, and
     # silently restricted the gate's own `go test` to a test that passes. Zero bytes
     # changed inside the thing under review.
-    proc = _spawn(ctx, ["go", "test", "-json", "./..."], {**(env or {}), "GOFLAGS": ""},
+    #
+    # Overridden with a VALUE, never blanked. go reads an empty variable as an unset one
+    # and falls back to that very file, so the blank this used to pass restored the attack
+    # it was written to stop: a regression failed the first Stop and passed the next one,
+    # after one `go env -w`, and the red record was cleared on the way. Any value at all
+    # replaces the file's; this one is the default, so it replaces it with nothing.
+    proc = _spawn(ctx, ["go", "test", "-json", "./..."], {**(env or {}), "GOFLAGS": GOFLAGS},
                   where, seconds)
     if proc is None:
         return None

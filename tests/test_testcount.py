@@ -11,7 +11,11 @@ This counts test declarations out of the test FILES. Moving it means writing rea
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
 import unittest
+from unittest import mock
 
 from helpers import RepoCase
 
@@ -317,3 +321,73 @@ class TestTheConfigPinnedIsTheOnePytestReads(RepoCase):
             "    here = Path(__file__).resolve().parent.parent\n"
             "    assert Path(str(request.config.rootpath)).resolve() == here\n"))
         self.assertTrue(seen.passed, seen.tail)
+
+
+CALC_GO = """package calc
+
+func Add(a, b int) int { return a + b }
+func Sub(a, b int) int { return a - b }
+func Mul(a, b int) int { return a * b }
+"""
+
+CALC_GO_TESTS = """package calc
+
+import "testing"
+
+func TestAdd(t *testing.T) { if Add(2, 3) != 5 { t.Fatal("add") } }
+func TestSub(t *testing.T) { if Sub(5, 3) != 2 { t.Fatal("sub") } }
+func TestMul(t *testing.T) { if Mul(2, 3) != 6 { t.Fatal("mul") } }
+"""
+
+
+class TestAGoEnvFileCannotNarrowTheRun(RepoCase):
+    """`go env -w GOFLAGS=-run=TestAdd` is one command, outside the repository, in no diff.
+
+    The gate passed `GOFLAGS=""` to its own `go test` to neutralise it, and go reads an
+    empty variable as an unset one — so it went back to the very file `go env -w` wrote.
+    A regression in `Mul` failed the first Stop and passed the next, and the red record for
+    it was cleared on the way.
+    """
+
+    def test_the_run_is_never_handed_a_goflags_go_would_ignore(self):
+        """Holds wherever the suite runs, with or without a go toolchain installed."""
+        from claude_bestpractice import witness
+
+        handed: dict = {}
+
+        def spawn(_ctx, _argv, env, _where=None, _seconds=None):
+            handed.update(env or {})
+            return None
+
+        with mock.patch.object(witness, "_spawn", spawn):
+            witness._run_go(self.ctx(), None)
+        self.assertIn("GOFLAGS", handed)
+        self.assertTrue(handed["GOFLAGS"].strip(),
+                        "an empty GOFLAGS sends go back to the `go env -w` file")
+
+    @unittest.skipUnless(shutil.which("go"), "no go toolchain on this machine")
+    def test_a_flag_written_with_go_env_w_does_not_narrow_the_gates_run(self):
+        """The attack end to end: the real file, where `go env -w` puts it, and the real gate."""
+        from claude_bestpractice import evidence
+
+        self.configure(require_task=False, manage_pull_requests=False)
+        self.write("go.mod", "module example.com/calc\n\ngo 1.21\n")
+        self.write("calc.go", CALC_GO)
+        self.write("calc_test.go", CALC_GO_TESTS)
+        self.commit("a go module and its three tests")
+        env = {**os.environ, "XDG_CONFIG_HOME": str(self.tmp / "config")}
+        env.pop("GOFLAGS", None)
+        env.pop("GOENV", None)
+
+        self.write("calc.go", CALC_GO.replace("return a * b", "return a + b"))
+        subprocess.run(["go", "env", "-w", "GOFLAGS=-run=TestAdd|TestSub"], cwd=str(self.repo),
+                       env=env, check=True, capture_output=True, timeout=120)
+        written = (self.tmp / "config" / "go" / "env").read_text(encoding="utf-8")
+        self.assertIn("-run=TestAdd", written, "precondition: go env -w wrote its file")
+
+        proc = self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                               "stop_hook_active": False}, env=env)
+        self.assertEqual(2, proc.returncode, proc.stderr or proc.stdout)
+        self.assertIn("1 failing of 3", proc.stderr)
+        self.assertIsNotNone(evidence.red(self.ctx()), "the regression left no red record")
+        self.assertIsNone(evidence.last_green(self.ctx()))
