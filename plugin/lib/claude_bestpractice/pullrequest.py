@@ -496,12 +496,21 @@ def _files_against(ctx: GitContext, base: str, head: str = "HEAD") -> set[str] |
     None when git cannot answer — an unknown base, an unborn branch — and the caller then
     keeps every finding. Losing a real finding is worse than repeating a stale one, so the
     filter only ever narrows on an answer it actually got.
-    """
-    from .gitctx import _run
 
-    for ref in (base, f"origin/{base}"):
-        listed = _run(["diff", "--name-only", f"{ref}...{head or 'HEAD'}"], ctx.worktree_root, check=False)
-        if listed.strip():
+    `origin/<base>` first, and the local branch only where there is no remote one. A pull
+    request is measured against the remote base, and a local trunk is wherever somebody last
+    fast-forwarded it: in a fresh clone it sat 19 commits behind, so a 20-file branch was
+    measured as 81. Wider was safe while every caller filtered review findings with this; it
+    is not since `settle_delivered` closes cards with it, where a merge of one file closed a
+    card over somebody else's already-merged release (card 0061). The first ref git can
+    answer for is the answer, empty included — falling through on an empty diff is how the
+    stale ref got asked.
+    """
+    from .gitctx import _status
+
+    for ref in (f"origin/{base}", base):
+        code, listed = _status(["diff", "--name-only", f"{ref}...{head or 'HEAD'}"], ctx.worktree_root)
+        if code == 0:
             return {line.strip() for line in listed.splitlines() if line.strip()}
     return None
 

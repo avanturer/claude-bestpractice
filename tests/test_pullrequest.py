@@ -8,7 +8,7 @@ import sys
 import time
 import unittest
 
-from helpers import BIN, RepoCase, git
+from helpers import BIN, RepoCase, git, sid
 
 from claude_bestpractice import board, evidence, pullrequest, store
 
@@ -880,6 +880,59 @@ class TestMergingSomebodyElsesPullRequest(PRCase):
         evidence.record_red(self.ctx(), ["pytest"], "1 failed")
 
         self.assertEqual("deny", self.decision(self.tool("Bash", {"command": "gh pr merge --squash"})))
+
+
+class TestAStaleLocalTrunkDoesNotWidenTheMerge(PRCase):
+    """Card 0061. The pull request's files were measured against the LOCAL trunk first, and a
+    local trunk is wherever somebody last fast-forwarded it — nineteen commits behind in a
+    fresh clone, so a 20-file branch counted 81. Since the merge closes cards with that list,
+    a merge of one file closed a card over somebody else's already-merged release."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        bare = self.tmp / "origin.git"
+        git(["init", "-q", "--bare", "-b", "main", str(bare)], self.tmp)
+        git(["remote", "add", "origin", str(bare)], self.repo)
+        git(["push", "-q", "origin", "main"], self.repo)
+        # The trunk moves on from another clone; this clone fetches and never fast-forwards
+        # its own `main`, and its branch is cut from what it fetched.
+        other = self.tmp / "other"
+        git(["clone", "-q", str(bare), str(other)], self.tmp)
+        (other / "src").mkdir()
+        (other / "src" / "release.py").write_text("RELEASE = 1\n")
+        git(["add", "-A"], other)
+        git(["-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false",
+             "commit", "-q", "-m", "an already-merged release"], other)
+        git(["push", "-q", "origin", "main"], other)
+        git(["fetch", "-q", "origin"], self.repo)
+        git(["reset", "-q", "--hard", "origin/main"], self.repo)
+        self.write("src/export.py", "x = 1\n")
+        self.commit("this pull request: the export")
+        evidence.record_green(self.ctx(), ["pytest"])
+
+    def test_the_files_are_the_pull_requests_and_not_the_stale_trunks(self):
+        self.assertEqual(["src/export.py"], pullrequest.delivered_paths(self.ctx(), "main"))
+
+    def test_the_merge_closes_the_card_it_carried_and_not_the_releases(self):
+        from claude_bestpractice import plan
+
+        self.start()
+        ctx = self.ctx()
+        ours = plan.add(ctx, "the export", paths=["src/export.py"], done_when="stated")
+        theirs = plan.add(ctx, "follow up on the release", paths=["src/release.py"],
+                          done_when="stated")
+        for card in (ours, theirs):
+            plan.claim(ctx, card.id, sid(self.repo, "s1"), "feat/x")
+        self.open_a_pr()
+        self.accept()
+
+        merged = self.tool("mcp__github__merge_pull_request",
+                           {"owner": "o", "repo": "r", "pullNumber": PRCase.PR_NUMBER})
+
+        self.assertNotEqual("deny", self.decision(merged), self.reason(merged))
+        self.assertEqual(plan.DONE, plan.find(ctx, ours.id).state)
+        self.assertEqual(plan.DOING, plan.find(ctx, theirs.id).state,
+                         "a merge of one file closed a card over the release it never carried")
 
 
 class TestAFindingFromMainIsNotThisPullRequests(PRCase):
