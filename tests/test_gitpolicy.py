@@ -1093,6 +1093,20 @@ class TestCommitMessages(PolicyCase):
         self.assertEqual(self.commit(body)[0], "allow")
         self.assertEqual(self.commit("git commit -m \"$(cat <<'EOF'\nwip\nEOF\n)\"")[0], "deny")
 
+    def test_the_message_is_read_the_way_the_shell_reads_it(self):
+        """A pattern over the text stopped at the first quote: `Handle \\"quoted\\" …` was
+        judged as `Handle \\` and `'Don'\\''t …'` as `Don` — refusals no rewording could
+        satisfy — and a commit inside a heredoc being written to a script as a commit."""
+        for command in (
+            'git commit -m "Handle \\"quoted\\" fields in the CSV parser so exports round-trip"',
+            "git commit -m 'Don'\\''t crash on empty input to the parser'",
+            "cat > scripts/release.sh <<'EOF'\ngit commit -am \"Release\"\nEOF",
+            'git commit --message "Explain the retry budget in the client"',
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.commit(command)[0], "allow")
+        self.assertEqual(self.commit("git commit --message=wip")[0], "deny")
+
     def test_a_message_the_shell_writes_is_not_judged_as_typed(self):
         """`"$MSG"` is a variable name; the message git receives is not on the line."""
         for command in ('git commit -m "$MSG"', 'git commit -m "`cat msg.txt`"'):

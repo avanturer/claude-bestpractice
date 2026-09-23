@@ -735,13 +735,59 @@ def commit_message(command: str) -> str:
     heredoc = _HEREDOC_MESSAGE.search(command)
     if heredoc:
         return heredoc.group("body")
+    parsed = shellcmd.commands(command)
+    if not parsed:
+        # Not tokenisable here, so the text is all there is to go on.
+        return _message_by_pattern(command)
+    # From the shell's own reading of the line, not a pattern over its text. The pattern
+    # ended the message at the first quote it met: `-m "Handle \"quoted\" fields …"` was
+    # judged as `Handle \`, `-m 'Don'\''t crash …'` as `Don` — refusals no rewording could
+    # satisfy — and a `git commit` inside a heredoc being written to a script was judged
+    # as if it were being run.
+    for argv in parsed:
+        if argv[0].rsplit("/", 1)[-1] == "git" and argv[1:2] == ["commit"]:
+            message = _message_argument(argv[2:])
+            if message is not None:
+                return "" if _EXPANDED.search(message) else message
+    return ""
+
+
+def _message_by_pattern(command: str) -> str:
     match = COMMIT_MESSAGE.search(command)
-    if not match:
+    if not match or (match.group("q") == '"' and _EXPANDED.search(match.group("message"))):
         return ""
-    message = match.group("message")
-    if match.group("q") == '"' and _EXPANDED.search(message):
-        return ""
-    return message
+    return match.group("message")
+
+
+# `git commit` flags that take no value, so `-am`, `-qm` and `-vm` are still the message flag.
+_VALUELESS = set("aeinqsvz")
+
+
+def _message_argument(args: list[str]) -> str | None:
+    """The first `-m`/`--message` value among `git commit`'s arguments, None for none."""
+    for index, arg in enumerate(args):
+        if arg == "--":
+            return None
+        if arg.startswith("--message="):
+            return arg.split("=", 1)[1]
+        glued = _glued_message(arg)
+        if glued:
+            return glued
+        if arg == "--message" or glued == "":
+            return args[index + 1] if index + 1 < len(args) else ""
+    return None
+
+
+def _glued_message(arg: str) -> str | None:
+    """For a short-flag cluster that ends in the message flag: what is glued after the `m`.
+
+    `-m` and `-am` give "" (the message is the next argument), `-mwip` gives "wip", and
+    anything that is not such a cluster gives None.
+    """
+    if not arg.startswith("-") or arg.startswith("--") or "m" not in arg:
+        return None
+    before, _, after = arg[1:].partition("m")
+    return after if set(before) <= _VALUELESS else None
 
 
 # How many recent subjects decide whether this repository has a convention, and how many
