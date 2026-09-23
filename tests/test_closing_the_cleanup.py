@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import unittest
 
-from helpers import RepoCase, git
+from helpers import RepoCase, add_origin, git
 from test_closing_the_work import TreeCase
 
 from claude_bestpractice import worktree
@@ -293,11 +293,7 @@ class TestABranchGoesOnlyOnItsOwnProof(RepoCase):
 
     def setUp(self) -> None:
         super().setUp()
-        origin = self.tmp / "origin.git"
-        git(["init", "-q", "--bare", "-b", "main", str(origin)], self.tmp)
-        git(["remote", "add", "origin", str(origin)], self.repo)
-        git(["push", "-q", "-u", "origin", "main"], self.repo)
-        git(["remote", "set-head", "origin", "main"], self.repo)
+        add_origin(self.repo, self.tmp)
 
     def a_branch(self, name: str, relpath: str, mode: int = 0o644) -> str:
         """One commit of work on its own branch, and main left where it was."""

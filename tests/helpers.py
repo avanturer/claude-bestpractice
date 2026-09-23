@@ -88,6 +88,20 @@ def make_repo(parent: Path, name: str = "repo", seed: bool = True, relax_git_pol
     return repo
 
 
+def add_origin(repo: Path, parent: Path) -> Path:
+    """A bare `origin` for `repo`, pushed to and set as its remote HEAD.
+
+    The shape every rule about "the trunk" is written for: `origin/HEAD` resolves, a branch
+    can have an upstream, and the clone's own `main` can lag the remote's.
+    """
+    origin = parent / "origin.git"
+    git(["init", "-q", "--bare", "-b", "main", str(origin)], parent)
+    git(["remote", "add", "origin", str(origin)], repo)
+    git(["push", "-q", "-u", "origin", "main"], repo)
+    git(["remote", "set-head", "origin", "main"], repo)
+    return origin
+
+
 class RepoCase(unittest.TestCase):
     """Base class providing a throwaway repository per test."""
 

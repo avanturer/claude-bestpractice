@@ -18,7 +18,7 @@ import unittest
 from pathlib import Path
 
 from claude_bestpractice.gitctx import worktree_paths
-from helpers import BIN, RepoCase, git, make_repo, sid
+from helpers import BIN, RepoCase, add_origin, git, make_repo, sid
 
 
 def _verdict(proc) -> tuple[str, str]:
@@ -1874,6 +1874,63 @@ class TestABareCloneKeepsItsTreesBesideIt(RepoCase):
 
         self.assertFalse(inside.is_dir(), "the tree is still inside the git directory")
         self.assertTrue((self.home / "old-work").is_dir())
+
+
+class TestANewTreeStartsFromTheTrunk(RepoCase):
+    """A `WorktreeCreate` hook replaces Claude Code's own creation, and with it the documented
+    default `worktree.baseRef: "fresh"` — branch from the remote's default branch. Every tree
+    here started from the checkout's local HEAD instead, which lags `origin/main` until
+    somebody pulls, so a session sent into a new tree worked without a merged fix."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        origin = add_origin(self.repo, self.tmp)
+        elsewhere = self.tmp / "elsewhere"
+        git(["clone", "-q", str(origin), str(elsewhere)], self.tmp)
+        for key, value in (("user.email", "o@example.com"), ("user.name", "o"),
+                           ("commit.gpgsign", "false")):
+            git(["config", key, value], elsewhere)
+        (elsewhere / "fix.py").write_text("fixed = True\n", encoding="utf-8")
+        git(["add", "-A"], elsewhere)
+        git(["commit", "-qm", "fix the crash (#41)"], elsewhere)
+        git(["push", "-q", "origin", "main"], elsewhere)
+        git(["fetch", "-q", "origin"], self.repo)
+
+    def test_the_gate_s_tree_has_what_the_trunk_has(self):
+        from claude_bestpractice import worktree
+
+        tree = worktree.provision(self.ctx(), "the next thing", "s1")
+
+        self.assertTrue((tree / "fix.py").is_file(), "cut from a main that had not pulled")
+        branch = git(["rev-parse", "--abbrev-ref", "HEAD"], tree)
+        self.assertEqual("", git(["for-each-ref", "--format=%(upstream)", f"refs/heads/{branch}"],
+                                 tree), "the new branch was set to push to the trunk")
+
+    def test_the_hook_s_tree_has_it_too(self):
+        made = self.run_hook("worktree-create", {"session_id": "s1", "hook_event_name":
+                                                 "WorktreeCreate", "name": "feature-auth"})
+
+        self.assertTrue((Path(made.stdout.strip()) / "fix.py").is_file(), made.stderr)
+
+    def test_head_is_kept_where_the_founder_chose_it(self):
+        from claude_bestpractice import worktree
+
+        self.write(".claude/settings.local.json", json.dumps({"worktree": {"baseRef": "head"}}))
+
+        tree = worktree.provision(self.ctx(), "the next thing", "s1")
+
+        self.assertFalse((tree / "fix.py").exists())
+
+    def test_work_the_trunk_does_not_have_is_not_cut_away(self):
+        """What `"fresh"` costs, and not paid here: a HEAD carrying commits the trunk lacks."""
+        from claude_bestpractice import worktree
+
+        self.write("unpushed.py", "mine = True\n")
+        self.commit("not pushed yet")
+
+        tree = worktree.provision(self.ctx(), "the next thing", "s1")
+
+        self.assertTrue((tree / "unpushed.py").is_file())
 
 
 class TestWorktreeCreateMakesTheTreeItNames(RepoCase):

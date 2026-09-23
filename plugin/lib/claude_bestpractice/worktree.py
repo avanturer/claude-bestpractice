@@ -1562,6 +1562,46 @@ def provision(ctx: GitContext, task: str = "", session_id: str = "") -> Path | N
     return target
 
 
+def _base_of(ctx: GitContext) -> str:
+    """The commit a new tree starts from, when it is not HEAD. "" for HEAD.
+
+    Claude Code cuts its own trees from the remote's default branch — `worktree.baseRef`,
+    `"fresh"` by default — and a `WorktreeCreate` hook REPLACES that, so every tree this
+    plugin made started from whatever the checkout it was asked from had checked out. The
+    main checkout lags the trunk until somebody pulls: `origin/main: fix the crash (#41) |
+    local main: init`, and the session sent into a new tree worked without a fix already
+    merged — on the tree decision 0019 calls "cut from a trunk that has moved on".
+
+    So the trunk the remote has, as `"fresh"` would, where HEAD is only behind it. HEAD
+    itself where the founder set `"head"`, where there is no remote trunk, and where HEAD
+    carries commits the trunk does not: cutting past those is how unpushed work silently
+    vanishes from a new tree, the cost DESIGN §4.3 names. A subagent isolated from a
+    branch in progress keeps that branch.
+    """
+    from .gitctx import is_ancestor, trunk_ref
+
+    if _base_ref_setting(ctx) == "head" or not ctx.head:
+        return ""
+    trunk = trunk_ref(ctx)
+    return trunk if trunk and is_ancestor(ctx, ctx.head, trunk) else ""
+
+
+def _base_ref_setting(ctx: GitContext) -> str:
+    """`worktree.baseRef` as the founder's settings say it, most specific first. "" for unset.
+
+    The local file from the main checkout, which is where Claude Code keeps it for every
+    tree of a repository; the committed one from this tree; then the founder's own.
+    """
+    for settings in (main_checkout(ctx) / ".claude" / "settings.local.json",
+                     ctx.worktree_root / ".claude" / "settings.json",
+                     Path.home() / ".claude" / "settings.json"):
+        raw = store.read_json(settings, default={})
+        chosen = raw.get("worktree") if isinstance(raw, dict) else None
+        if isinstance(chosen, dict) and isinstance(chosen.get("baseRef"), str):
+            return chosen["baseRef"]
+    return ""
+
+
 def add_tree(ctx: GitContext, absolute: str, branch: str) -> bool:
     """`git worktree add`, with the one recoverable failure handled. False if git refused.
 
@@ -1569,9 +1609,13 @@ def add_tree(ctx: GitContext, absolute: str, branch: str) -> bool:
     path it had never created — only the path's PARENT was made — so the harness refused
     the agent with "the hook must create the directory before echoing its path", and
     `isolation: "worktree"` could not start at all (#148).
+
+    Cut from `_base_of`, not from wherever HEAD happens to be.
     """
+    base = _base_of(ctx)
+    cut = ["--no-track", "-b", branch, absolute, base] if base else ["-b", branch, absolute]
     proc = subprocess.run(
-        ["git", "worktree", "add", "-b", branch, absolute],
+        ["git", "worktree", "add", *cut],
         cwd=str(ctx.worktree_root), capture_output=True,
         encoding="utf-8", errors="surrogateescape", timeout=120,
     )
