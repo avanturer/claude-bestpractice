@@ -127,7 +127,7 @@ class TestTheReleaseCutsItself(unittest.TestCase):
         )
 
     def test_every_workflow_that_runs_the_suite_installs_a_runner_for_it(self):
-        """Three tests drive a real pytest over a throwaway project; a bare runner has none.
+        """Several tests drive a real pytest over a throwaway project; a bare runner has none.
 
         This was latent for as long as the repository existed: `check.yml` is gated behind
         a variable and had never executed, so nothing had ever run `make check` on a clean

@@ -1,4 +1,4 @@
-.PHONY: check check-fast test test-fast doctor lint budget docs knowledge slop ratchet shipped clean help
+.PHONY: check check-fast test test-fast needs-pytest doctor lint budget docs knowledge slop ratchet shipped clean help
 
 PY := python3
 
@@ -50,13 +50,23 @@ knowledge:
 	@$(PY) plugin/bin/claude-bp-knowledge index >/dev/null
 	@$(PY) plugin/bin/claude-bp-knowledge validate
 
-test:
+test: needs-pytest
 	@$(PY) -m unittest discover -s tests -t tests
+
+# The plugin imports only the standard library; its SUITE does not. Several tests build a
+# throwaway project and require the Stop gate to drive `python3 -m pytest` over it, which is
+# what it does in a user's repository. Without pytest those fail on assertions about the
+# gate and never mention pytest, so the missing tool is named here, once, instead.
+needs-pytest:
+	@$(PY) -c "import pytest" 2>/dev/null || { \
+		echo "make: the suite needs pytest, because the Stop gate it tests drives \`$(PY) -m pytest\`." >&2; \
+		echo "      $(PY) -m pip install pytest" >&2; \
+		exit 1; }
 
 # For iterating, never for deciding. One process is what lets the suite catch state
 # leaking between tests, and sharding is precisely what hides it — so `check` keeps
 # the serial run and this exists to shorten the loop before you get there.
-test-fast:
+test-fast: needs-pytest
 	@$(PY) tools/run_tests.py
 
 # The edit loop's whole gate: every cheap check (2s together) plus the sharded suite.
