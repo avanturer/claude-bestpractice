@@ -1261,12 +1261,15 @@ class TestDeliveryClosesTheCard(PlanCase):
 
 
 class TestATransitionIsARenameInGitToo(PlanCase):
-    """A tracked task file that moves must move in the index as well (#208).
+    """A tracked task file that moves must not leave git guessing (#208), and must not be
+    carried back into it (decision 0018).
 
     The founder's global ignore covers `.claude/claude-bestpractice/`, so a state the
     repository never committed — `paused` — is invisible to git. Moving a committed task
     into it deleted a tracked file and created a hidden one: fifty unstaged `D` rows in a
-    working checkout, each one indistinguishable from lost work.
+    working checkout, each one indistinguishable from lost work. The answer was to stage a
+    rename with `add -f`, and that is how the ledger came back into git after it was taken
+    out: the path the card left is taken out of the index now, and nothing is added.
     """
 
     def ignore_the_ledger(self) -> None:
@@ -1283,18 +1286,34 @@ class TestATransitionIsARenameInGitToo(PlanCase):
 
     def test_pausing_a_committed_task_leaves_no_phantom_deletion(self):
         task = self.committed_task()
-        plan.pause(self.ctx(), task.id, "waiting on the API key")
+        paused, _ = plan.pause(self.ctx(), task.id, "waiting on the API key")
 
-        status = git(["status", "--short"], self.repo)
-        self.assertNotIn(" D ", f" {status} ", status)
-        self.assertIn("plan/paused/", git(["diff", "--cached", "--name-only"], self.repo))
+        unstaged = [line for line in git(["status", "--porcelain"], self.repo).splitlines()
+                    if line[1:2] == "D"]
+        self.assertEqual([], unstaged, "a bare deletion git was never told about")
+        self.assertTrue(paused.path.is_file(), "the paused card left the disk")
 
-    def test_git_records_it_as_a_rename(self):
+    def test_the_card_leaves_the_index_rather_than_moving_in_it(self):
+        """A staged rename is the ledger being put back into git by the next commit."""
         task = self.committed_task()
         plan.claim(self.ctx(), task.id, sid(self.repo, "s1"), "main")
 
-        moved = git(["diff", "--cached", "--name-status", "-M"], self.repo)
-        self.assertTrue(moved.startswith("R"), moved)
+        staged = git(["diff", "--cached", "--name-status"], self.repo).splitlines()
+        self.assertEqual([f"D\t{task.path.relative_to(self.repo).as_posix()}"], staged)
+        self.assertEqual("", git(["ls-files", ".claude/claude-bestpractice/plan"], self.repo))
+
+    def test_a_tree_whose_trunk_still_tracks_the_cards_commits_no_card(self):
+        """The shape reported: a tree cut after the upgrade from a trunk that still tracked
+        its cards, one `done` there, and the tree's next commit carrying the card back."""
+        task = self.committed_task()
+        tree = self.add_worktree("feat-x")
+        done = subprocess.run([sys.executable, str(BIN / "claude-bp-plan"), "done", task.id],
+                              capture_output=True, text=True, cwd=str(tree), timeout=120)
+        self.assertEqual(0, done.returncode, done.stderr)
+
+        git(["commit", "-qm", "the work in that tree"], tree)
+        self.assertEqual("", git(["ls-files", ".claude/claude-bestpractice/plan"], tree),
+                         "the card went back into git with the tree's commit")
 
     def test_an_untracked_ledger_is_not_quietly_added_to_git(self):
         """Preserving what the founder tracks is not the same as granting a place in it."""

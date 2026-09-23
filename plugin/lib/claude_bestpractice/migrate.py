@@ -616,10 +616,10 @@ def _already_home(home: Path, name: str, states: tuple) -> bool:
 def _carry_one(path: Path, target: Path) -> int:
     """Move one task file, or leave it where it is. Returns how many moved, for the sum.
 
-    The move is carried into both indexes when git was tracking the file. Without that
-    this repair RECREATED the defect the one after it exists to undo: a tracked file
-    leaving a worktree with git never told is a bare `D` in that tree and an untracked
-    copy in another (#208).
+    The move reaches the index when git was tracking the file. Without that this repair
+    RECREATED the defect the one after it exists to undo: a tracked file leaving a worktree
+    with git never told is a bare `D` in that tree (#208). It is a staged deletion there now,
+    and nothing is added where it lands: the ledger is out of git (decision 0018).
     """
     from . import plan
 
@@ -764,6 +764,10 @@ def _restage_ledger_moves_git_lost(ctx: GitContext) -> str:
     Matched by FILENAME, which carries the id and the slug and is what a transition keeps
     identical; a deletion whose file is nowhere on the board is left exactly as it is,
     because it may be a real one somebody meant.
+
+    It restaged them as renames until the ledger left git (decision 0018). `follow_in_git`
+    now stages the deletion and adds nothing, so a stranded `D` becomes the staged one the
+    repair after this leaves everywhere else.
     """
     from . import plan
 
@@ -783,7 +787,7 @@ def _restage_ledger_moves_git_lost(ctx: GitContext) -> str:
         if on_the_board.get(gone.name) not in (None, gone)
     ]
     restaged = sum(1 for gone, target in moved if plan.follow_in_git(gone, target))
-    return f"{restaged} ledger move(s) git had recorded as deletions restaged" if restaged else ""
+    return f"{restaged} ledger move(s) git had recorded as bare deletions staged" if restaged else ""
 
 
 def _reconcile_scattered_ledger_copies(ctx: GitContext) -> str:
@@ -826,28 +830,56 @@ def _untrack_the_ledger(ctx: GitContext) -> str:
     from . import worktree
 
     worktree.hide(ctx)
-    untracked = 0
-    refused = 0
-    for tree in _trees_of(ctx):
-        listed = _git_out(tree, ["ls-files", "-z", "--", _LEDGER_PATH])
-        names = [name for name in listed.split("\0") if name.strip()]
-        if not names:
-            continue
-        # `-z` on the READ, never on the removal: `git rm` accepts it only with
-        # `--pathspec-from-file`, so passing it there failed the whole call and the repair
-        # reported nothing while nothing had happened. Found by running it, not by reading.
-        done = subprocess.run(
-            ["git", "rm", "--cached", "--quiet", "--", *names],
-            cwd=str(tree), capture_output=True,
-            encoding="utf-8", errors="surrogateescape", timeout=120,
-        )
-        untracked += len(names) if done.returncode == 0 else 0
-        refused += 1 if done.returncode != 0 else 0
-    said = (f"{untracked} ledger file(s) taken out of git's index and left on disk; "
-            "commit the staged deletion when you next commit") if untracked else ""
-    if refused:
+    counts = [untrack_ledger(ctx, tree) for tree in _trees_of(ctx)]
+    said = _untracked_note(sum(count for count in counts if count > 0))
+    if any(count < 0 for count in counts):
+        # A tree whose index git refused — its lock held by an IDE or a sibling mid-commit —
+        # is not done. Recorded as done anyway, the ledger stayed in that tree's index for
+        # good, because a repair recorded once is never run again.
         raise Unfinished(said)
     return said
+
+
+def keep_the_ledger_out(ctx: GitContext) -> str:
+    """The repair above, asked again on EVERY session start, of the session's own tree.
+
+    The repair runs once per clone, in the trees that exist that day, and records itself
+    done. A tree added later from a trunk that still tracked the cards had them in its index
+    again, and so did one that checked out or pulled a branch carrying them: a transition
+    there staged a rename, the next commit put the ledger back into git, and `git worktree
+    remove` refused the tree over it (#219, #220). One `ls-files` when there is nothing to
+    take out, which is every start after the first.
+    """
+    return _untracked_note(max(0, untrack_ledger(ctx, ctx.worktree_root)))
+
+
+def untrack_ledger(ctx: GitContext, tree: Path) -> int:
+    """Take whatever of the ledger ONE tree's index still holds out of it. How many files,
+    or -1 when git refused that tree's index, so the repair can say it is not finished."""
+    listed = _git_out(tree, ["ls-files", "-z", "--", _LEDGER_PATH])
+    names = [name for name in listed.split("\0") if name.strip()]
+    if not names:
+        return 0
+    from . import worktree
+
+    # The rule first, so the cards go from tracked to hidden and never show as untracked.
+    worktree.hide(ctx)
+    # `-z` on the READ, never on the removal: `git rm` accepts it only with
+    # `--pathspec-from-file`, so passing it there failed the whole call and the repair
+    # reported nothing while nothing had happened. Found by running it, not by reading.
+    done = subprocess.run(
+        ["git", "rm", "--cached", "--quiet", "--", *names],
+        cwd=str(tree), capture_output=True,
+        encoding="utf-8", errors="surrogateescape", timeout=120,
+    )
+    return len(names) if done.returncode == 0 else -1
+
+
+def _untracked_note(untracked: int) -> str:
+    if not untracked:
+        return ""
+    return (f"{untracked} ledger file(s) taken out of git's index and left on disk; "
+            "commit the staged deletion when you next commit")
 
 
 def _finish_removals_done_by_hand(ctx: GitContext) -> str:

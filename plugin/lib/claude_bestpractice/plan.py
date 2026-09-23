@@ -635,30 +635,34 @@ def _git(args: list[str], cwd: Path) -> tuple[int, str]:
 
 
 def follow_in_git(source: Path, target: Path) -> bool:
-    """Carry a TRACKED task file's move into the index, so git records a rename.
+    """Take a TRACKED task file out of the index when it moves, rather than carry it along.
 
-    A transition has always been a rename on disk and nothing in git, which is invisible
-    while both paths look the same to git and a disaster the moment they do not. The
-    founder's global ignore covers `.claude/claude-bestpractice/`, and `plan/paused/` was
-    never committed, so pausing a task committed earlier deleted a tracked file and
-    created an ignored one: `git status` showed a bare `D` with no counterpart anywhere,
-    fifty times over, and every one of them looked like lost work (#208).
+    A transition is a rename on disk, and a bare unstaged `D` with no counterpart is what it
+    left in git while the founder's ignore rule hid the new copy — fifty of them, each one
+    looking like lost work (#208). The answer to that was `add -f` of the new path, a staged
+    rename, and it is what put the ledger BACK into git after decision 0018 took it out: a
+    tree cut from a trunk that still tracked its cards staged `R next/0061 -> done/0061` on
+    the first `done`, the next commit carried it, and `git worktree remove` refused the tree.
 
-    Only ever for a file git is ALREADY tracking. Adding an ignored file the founder never
-    committed would be the plugin granting itself a place in their history, which is the
-    line decision 0008 draws; preserving what they already track is the opposite.
+    So nothing is added any more. The path the card left is taken out of the index — the
+    one staged deletion 0018 accepts, committed with whatever the tree commits next — and so
+    is the path it arrived at, if some commit had put it there; the card stays on disk,
+    where the exclude rule hides it. Only for a file git ALREADY tracks: a ledger the founder
+    never committed is not touched, and nothing is granted a place in their history (0008).
 
-    `add -f` is what makes it work at all: without the force the target is ignored and the
-    add is a silent no-op, which is exactly the bug. Never raises, and answers whether the
-    index actually moved — a ledger transition that fails because git is busy is a task
-    the founder cannot pause.
+    Never raises, and answers whether the index actually moved — a ledger transition that
+    fails because git is busy is a task the founder cannot pause.
     """
     tree = target.parent
-    if not _tracked(source, tree):
+    if not _git(["ls-files", "--", str(source), str(target)], tree)[1]:
         return False
-    if _git(["add", "-f", "--", str(target)], tree)[0] != 0:
-        return False
-    return _git(["add", "-A", "--", str(source)], tree)[0] == 0
+    return _untrack([source, target], tree)
+
+
+def _untrack(paths: list[Path], tree: Path) -> bool:
+    """Take these paths out of one tree's index, leaving the files where they are."""
+    names = [str(path) for path in paths]
+    return _git(["rm", "--cached", "--quiet", "--ignore-unmatch", "--", *names], tree)[0] == 0
 
 
 def _tracked(path: Path, tree: Path | None = None) -> bool:
@@ -673,21 +677,21 @@ def _tracked(path: Path, tree: Path | None = None) -> bool:
 
 
 def follow_across_trees(source: Path, target: Path) -> bool:
-    """Carry a tracked ledger file's move into both indexes when it changes CHECKOUT.
+    """Take a tracked ledger file out of both indexes when it changes CHECKOUT.
 
-    Two worktrees of one clone have two indexes, so a move between them cannot be one
-    rename however git is asked: the deletion belongs to the tree the file left and the
-    addition to the tree it arrived in. Staging both is what keeps the move from reading
-    as the loss it is not — the bare `D` with no counterpart that fifty stranded files
-    taught this repository to recognise (#208).
+    Two worktrees of one clone have two indexes, so a move between them touches two: the
+    deletion belongs to the tree the file left, and is staged there rather than left as
+    the bare `D` fifty stranded files taught this repository to read as lost work (#208).
+    The tree it arrived in — the main checkout — no longer gets an addition: that was the
+    ledger coming back into git (0018). Its index loses the path too if it held one.
 
     Same rule as `follow_in_git`: only for a file git ALREADY tracks. Where the founder
     does not commit the ledger, neither index is touched and nothing is granted (0008).
     """
     if not _tracked(source):
         return False
-    staged = _git(["add", "-f", "--", str(target)], target.parent)[0] == 0
-    return _git(["add", "-A", "--", str(source)], source.parent)[0] == 0 and staged
+    arrived = _untrack([target], target.parent)
+    return _untrack([source], source.parent) and arrived
 
 
 def stranded_deletions(root: Path, base: Path) -> list[Path]:
@@ -706,11 +710,12 @@ def stranded_deletions(root: Path, base: Path) -> list[Path]:
 
 def _move(task: Task, state: str, owner: str = "", branch: str = "",
           blocker: str | None = None) -> Task:
-    """A state transition is a rename, in the working tree and in the index alike.
+    """A state transition is a rename in the working tree, and never an addition in git.
 
-    Git records it as a rename, which merges cleanly — but only because `follow_in_git`
-    puts it there. The move itself is plain filesystem work, so that a repository where
-    git is unavailable or the file untracked still transitions.
+    Where git still tracks the card, `follow_in_git` takes it out of the index rather than
+    staging the rename, because the ledger is out of git (decision 0018). The move itself is
+    plain filesystem work, so that a repository where git is unavailable or the file
+    untracked still transitions.
 
     The rename happens where the FILE is, not where the caller is. Now that the ledger
     reads across siblings, `plan_dir(ctx, ...)` would have written the moved copy into

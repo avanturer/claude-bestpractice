@@ -508,6 +508,10 @@ def main() -> None:
     # the founder's repository and does not — it is surfaced by `_knowledge_line` and
     # applied by one command.
     repaired = migrate.repair(ctx)
+    # Every start, not once per clone: a tree added or pulled since the upgrade can track the
+    # ledger again, and its next transition put it back into git (decision 0018).
+    kept_out = migrate.keep_the_ledger_out(ctx)
+    repaired += [f"ledger: {kept_out}"] if kept_out else []
 
     # Settled before the board names them. A pull request closed on the website, or merged
     # there with its branch deleted, was read out at every session start for thirty days,

@@ -113,6 +113,55 @@ class TestTheLedgerIsKeptOutOfGit(RepoCase):
         self.assertEqual([], self.tracked())
 
 
+class TestEverySessionStartKeepsItOut(RepoCase):
+    """The upgrade's untrack ran once per clone, in the trees that existed that day, and
+    recorded itself done. A tree cut afterwards from a trunk that still tracked the cards had
+    them in its index again, and so did a checkout whose index got them back: a transition
+    there staged a rename, and the next commit put the ledger back into git."""
+
+    def start(self, cwd=None):
+        return self.run_hook("session-start", {
+            "session_id": "s1", "hook_event_name": "SessionStart", "source": "startup",
+        }, cwd=cwd)
+
+    def tracked(self, tree) -> list[str]:
+        return [line for line in git(["ls-files", LEDGER], tree).splitlines() if line]
+
+    def a_committed_card(self):
+        plan.add(self.ctx(), "a card somebody committed", paths=["src/app.py"],
+                 done_when="stated")
+        self.commit("commit the ledger, as this repository's founder had")
+
+    def test_a_card_back_in_the_index_is_taken_out_at_the_next_start(self):
+        self.a_committed_card()
+        self.start()
+        self.assertEqual([], self.tracked(self.repo), "precondition: the upgrade untracked it")
+        git(["reset", "-q", "HEAD", "--", LEDGER], self.repo)
+        self.assertEqual(1, len(self.tracked(self.repo)), "precondition: it is back")
+
+        said = self.start().stdout
+
+        self.assertEqual([], self.tracked(self.repo))
+        self.assertIn("ledger file(s) taken out of git's index", said)
+
+    def test_a_tree_cut_after_the_upgrade_is_cleared_where_a_session_starts_in_it(self):
+        self.a_committed_card()
+        self.start()
+        tree = self.add_worktree("feat-x")
+        self.assertEqual(1, len(self.tracked(tree)), "precondition: the new tree tracks it")
+
+        self.start(cwd=tree)
+
+        self.assertEqual([], self.tracked(tree))
+        self.assertTrue(any((tree / LEDGER).rglob("*.md")), "the card left the tree's disk")
+
+    def test_a_clone_that_never_committed_it_is_not_touched(self):
+        plan.add(self.ctx(), "never committed", paths=["src/a.py"], done_when="stated")
+        self.start()
+        self.start()
+        self.assertEqual("", git(["diff", "--cached", "--name-only"], self.repo))
+
+
 class TestTheHealthLineStopsReportingOurOwnRule(RepoCase):
     def test_our_rule_over_the_ledger_is_not_a_hidden_tier_a(self):
         worktree.hide(self.ctx())
