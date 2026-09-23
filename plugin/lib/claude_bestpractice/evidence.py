@@ -231,6 +231,12 @@ def _is_exempt(rel: str, exempt: list[str], globs: list[str], byproducts: set[st
     called docs/ or target/ invisible, so a red suite in ordinary domain code finished
     silently green.
 
+    A TEST DIRECTORY is exempt from scope drift and from nothing else. It is on the default
+    list so that the test this gate demands is not called spill, and read here as well it
+    left a turn whose whole diff was a test with nothing to verify: a new failing test, or
+    an existing one broken or skipped, finished silently while the suite run by hand said
+    FAILED. A change to a test is exactly a change the suite has to answer for.
+
     A byproduct directory never hides SOURCE. `coverage/` is a report directory in most
     repositories and a package in some, `reports/` is a service in plenty, and only the
     extension separates them — a coverage report is not written in Python. The rule leans
@@ -242,7 +248,8 @@ def _is_exempt(rel: str, exempt: list[str], globs: list[str], byproducts: set[st
     under reports/ — so a repository whose source lived there had that service made
     invisible and Stop exited 0 over a real regression.
     """
-    if any(rel == p or rel.startswith(p.rstrip("/") + "/") for p in exempt):
+    if any(rel == p or rel.startswith(p.rstrip("/") + "/") for p in exempt
+           if not testcount.in_test_directory(p.rstrip("/") + "/")):
         return True
     if byproducts & set(rel.split("/")) and not rel.endswith(SOURCE_SUFFIXES):
         return True

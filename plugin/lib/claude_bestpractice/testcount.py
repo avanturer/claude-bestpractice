@@ -78,8 +78,18 @@ MAX_FILES = 4_000
 MAX_BYTES = 400_000
 
 
+# Where tests live by DIRECTORY, whatever the file inside is called — a fixture, a snapshot
+# or a conftest under `tests/` is part of the suite as much as `test_app.py` is. The first
+# half of `_TEST_FILE`, on its own.
+_TEST_DIR = re.compile(r"(?i)(?:^|/)(?:tests?|specs?|__tests__)/")
+
+
 def is_test_file(relpath: str) -> bool:
     return bool(_TEST_FILE.search(relpath))
+
+
+def in_test_directory(relpath: str) -> bool:
+    return bool(_TEST_DIR.search(relpath))
 
 
 def count_in_text(text: str, suffix: str) -> int:

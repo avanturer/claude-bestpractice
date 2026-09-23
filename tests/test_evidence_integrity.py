@@ -114,6 +114,58 @@ class TestByproductDirectoriesDoNotHideSource(RepoCase):
             )
 
 
+class TestATurnThatOnlyTouchesTestsIsStillJudged(RepoCase):
+    """The cheapest way past the gate was to leave the code alone and change the tests.
+
+    `tests/`, `test/`, `spec/` and `__tests__/` are exempt from scope drift by default,
+    because this plugin demands the test and a test the task did not name is not spill. The
+    same list also decided what counted as a material change, so a turn whose whole diff was
+    a test — a new failing one, an assertion broken, an existing one skipped — had nothing to
+    verify: Stop exited 0 without running anything while the suite run by hand said FAILED.
+    """
+
+    def a_passing_suite(self) -> None:
+        self.write("app.py", "def add(a, b):\n    return a + b\n")
+        self.write("tests/test_app.py",
+                   "from app import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n")
+        self.commit("a passing suite")
+        self.claim_a_task("s1", "tests/")
+
+    def stop(self):
+        return self.run_hook(
+            "evidence-gate",
+            {"session_id": "s1", "hook_event_name": "Stop", "cwd": str(self.repo)},
+        )
+
+    def test_a_new_failing_test_is_run_and_refused(self):
+        self.a_passing_suite()
+        self.write("tests/test_more.py",
+                   "from app import add\n\n\ndef test_negative():\n    assert add(-1, -1) == -3\n")
+        proc = self.stop()
+        self.assertEqual(2, proc.returncode, "a failing test finished the turn unverified")
+        self.assertIn("FAILS on the code as it stands", proc.stderr)
+
+    def test_breaking_an_existing_test_is_run_and_refused(self):
+        self.a_passing_suite()
+        self.write("tests/test_app.py",
+                   "from app import add\n\n\ndef test_add():\n    assert add(1, 2) == 4\n")
+        proc = self.stop()
+        self.assertEqual(2, proc.returncode, "a broken test finished the turn unverified")
+        self.assertIn("FAILS on the code as it stands", proc.stderr)
+
+    def test_a_test_the_task_did_not_name_is_still_not_drift(self):
+        """The exemption this came from stays where it belongs: a fix and its new test pass."""
+        self.a_passing_suite()
+        self.run_hook("prompt-capture", {"session_id": "s1", "hook_event_name": "UserPromptSubmit",
+                                         "prompt": "fix the rounding in app.py"})
+        self.write("app.py", "def add(a, b):\n    return int(a + b)\n")
+        self.write("tests/test_rounding.py",
+                   "from app import add\n\n\ndef test_whole():\n    assert add(1.2, 1.9) == 3\n")
+        proc = self.stop()
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertNotIn("Scope drift", proc.stderr)
+
+
 class TestTheGatedPartyCannotAmendTheRules(RepoCase):
     """`config.json` names the command the Stop gate runs, and lives where the agent writes.
 

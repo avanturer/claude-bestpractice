@@ -139,6 +139,16 @@ class TestMaterialChanges(unittest.TestCase):
         """`docs/` must not exempt `docsite/`."""
         self.assertEqual(evidence.material_changes(["docsite/a.py"], ["docs/"]), ["docsite/a.py"])
 
+    def test_a_test_directory_is_exempt_from_drift_and_never_from_verification(self):
+        """The default list exempts `tests/`, `test/`, `spec/` and `__tests__/` so that the test
+        this gate demands is not called scope drift. The same list decided what was material,
+        so a turn that only added a failing test had nothing to verify and finished silent."""
+        exempt = ["docs/", "tests/", "test/", "spec/", "__tests__/", "backend/tests/"]
+        tests = ["tests/test_billing.py", "test/fixtures/cart.json", "spec/cart_spec.rb",
+                 "__tests__/app.test.js", "backend/tests/conftest.py"]
+        self.assertEqual(tests, evidence.material_changes(tests + ["docs/guide.md"], exempt))
+        self.assertEqual([], evidence.scope_drift(tests, ["src/billing.py"], exempt))
+
 
 class TestCleanRerun(RepoCase):
     def test_passes_when_committed_tree_is_good(self):
