@@ -8,6 +8,8 @@ with neither session told. So the rule is checked before the write, not after.
 from __future__ import annotations
 
 import json
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -16,7 +18,7 @@ import unittest
 from pathlib import Path
 
 from claude_bestpractice.gitctx import worktree_paths
-from helpers import BIN, RepoCase, git, sid
+from helpers import BIN, RepoCase, git, make_repo, sid
 
 
 def _verdict(proc) -> tuple[str, str]:
@@ -505,6 +507,34 @@ class TestTheScannerFollowsTheShellIntoEverySegment(PolicyCase):
             write_targets("cd ~/scratch && rm -rf junk", self.repo),
         )
 
+    def test_a_quoted_directory_is_still_a_directory(self):
+        """`_CD` read the copy with quoted spans blanked, where `cd "/tmp/dir with space"`
+        has no directory left — so the `cd` went unread and the write after it was judged
+        in the checkout the command had just left. From the main checkout that refused a
+        write into /tmp; from a worktree it let a write into the main checkout through."""
+        with tempfile.TemporaryDirectory() as tmp:
+            spaced = Path(tmp).resolve() / "dir with space"
+            self.assertEqual(
+                [str(spaced / "out.txt")],
+                write_targets(f'cd "{spaced}" && echo hi > out.txt', self.repo),
+            )
+            proc = self.run_hook("pre-tool", {
+                "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+                "tool_input": {"command": f'cd "{spaced}" && echo hi > out.txt'},
+                "cwd": str(self.repo),
+            }, cwd=self.repo)
+            self.assertEqual("allow", _verdict(proc)[0], _verdict(proc)[1])
+
+        mine = self.worktree("feat/mine")
+        proc = self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+            "tool_input": {"command": f"(cd '{self.repo}' && echo hi > out.txt)"},
+            "cwd": str(mine),
+        }, cwd=mine)
+        decision, reason = _verdict(proc)
+        self.assertEqual("deny", decision, reason)
+        self.assertIn("main checkout", reason)
+
     def test_an_absolute_write_is_still_read_where_it_points(self):
         """The `cd` tracking must not swallow the case it was added for."""
         self.assertIn(
@@ -931,6 +961,102 @@ class TestTheTrunkIsProtected(PolicyCase):
     def test_it_can_be_switched_off(self):
         self.configure(require_worktree=False, protect_trunk=False)
         self.assertEqual(self.decision()[0], "allow")
+
+
+class TestTheCommandARefusalNamesRunsAsWritten(PolicyCase):
+    """Decision 0020: a refusal's way out has to run on this machine. Paths went into those
+    commands unquoted, so a repository under `…/final space ü/app` was told
+    `cd …/final space ü/app/.claude/worktrees/…` — and bash answered "too many arguments"."""
+
+    def named(self, reason: str, pattern: str) -> list[str]:
+        """The words of the command the refusal names, split the way a shell splits them."""
+        found = re.search(pattern, reason)
+        self.assertIsNotNone(found, reason)
+        return shlex.split(found.group(1))
+
+    def say(self, prompt: str, where) -> None:
+        self.run_hook("prompt-capture", {
+            "session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": prompt,
+            "cwd": str(where),
+        }, cwd=where)
+
+    def test_the_worktree_it_hands_over_can_be_entered(self):
+        spaced = make_repo(self.tmp / "final space ü", "app")
+        decision, reason = self.decision(spaced)
+        self.assertEqual("deny", decision, reason)
+        command = re.search(r"`(cd [^`]+)`", reason).group(1)
+        proc = subprocess.run(["bash", "-c", command], cwd=str(spaced),
+                              capture_output=True, text=True, timeout=60)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+
+    def test_the_subshell_it_recommends_can_be_run(self):
+        spaced = make_repo(self.tmp / "final space ü", "app")
+        mine = self.tmp / "mine"
+        git(["worktree", "add", "-q", "-b", "feat/mine", str(mine)], spaced)
+        proc = self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+            "tool_input": {"command": f"cd '{spaced}'"}, "cwd": str(mine),
+        }, cwd=mine)
+        words = self.named(_verdict(proc)[1], r"`\((cd .+?) && \.\.\.\)`")
+        self.assertEqual(["cd", str(spaced)], words)
+
+    def test_the_branch_it_names_is_one_argument(self):
+        self.configure(require_worktree=False)
+        self.say("Fix the user's login redirect", self.repo)
+        decision, reason = self.decision()
+        self.assertEqual("deny", decision, reason)
+        words = self.named(reason, r"(git switch -c [^\n]+)")
+        self.assertEqual(["git", "switch", "-c", "feat/fix-the-user's-login"], words)
+
+    def test_the_card_it_asks_for_names_the_file(self):
+        mine = self.worktree("feat/mine", occupant="")
+        self.say("Write up the parser notes", mine)
+        proc = self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Write",
+            "tool_input": {"file_path": str(mine / "parser notes.md"), "content": "x\n"},
+            "cwd": str(mine),
+        }, cwd=mine)
+        words = self.named(_verdict(proc)[1], r"(claude-bp-plan add [^\n]+)")
+        self.assertEqual("parser notes.md", words[words.index("--paths") + 1])
+
+    def test_the_paths_it_says_to_stage_are_the_paths(self):
+        from claude_bestpractice import sessions
+
+        from helpers import session_record_for
+
+        self.write("src/my module.py", "x = 1\n")
+        self.write("src/theirs.py", "y = 1\n")
+        self.commit("both files exist")
+        theirs = sid(self.repo, "theirs")
+        sessions.register(self.ctx(), session_record_for(self.ctx(), theirs, pid=1))
+        sessions.acquire_lease(self.ctx(), theirs, "src/theirs.py")
+        self.write("src/my module.py", "x = 2\n")
+        self.write("src/theirs.py", "y = 2\n")
+        proc = self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+            "tool_input": {"command": "git add -A"}, "cwd": str(self.repo),
+        })
+        words = self.named(_verdict(proc)[1], r"(git add -- [^\n]+)")
+        self.assertEqual(["git", "add", "--", "src/my module.py"], words)
+
+    def test_the_commands_around_removing_its_own_tree_run(self):
+        from claude_bestpractice import worktree
+        from claude_bestpractice.gitctx import resolve
+
+        spaced = make_repo(self.tmp / "final space ü", "app")
+
+        def remove(tree):
+            return _verdict(self.run_hook("pre-tool", {
+                "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+                "tool_input": {"command": f"git worktree remove '{tree}'"}, "cwd": str(spaced),
+            }, cwd=spaced))[1]
+
+        tree = worktree.provision(resolve(spaced), "tidy up", sid(spaced, "s1"))
+        (tree / "untracked.txt").write_text("x\n", encoding="utf-8")
+        words = self.named(remove(tree), r"\n  (git -C [^\n]+)")
+        self.assertEqual(["git", "-C", str(tree)], words[:3])
+        (tree / "untracked.txt").unlink()
+        self.assertEqual(["cd", str(spaced)], self.named(remove(tree), r"`(cd [^`]+)`"))
 
 
 class TestAdoptability(PolicyCase):

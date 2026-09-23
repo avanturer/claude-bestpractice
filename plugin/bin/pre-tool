@@ -15,6 +15,7 @@ exist; shipped plugins that read them enforce nothing.
 from __future__ import annotations
 
 import os
+import shlex
 import sys
 import time
 from pathlib import Path
@@ -458,8 +459,19 @@ _ARG = re.compile(r"[\w./@+~-]+")
 # with "`(cd … && ...)` leaves this shell where it is", so taking the advice was what
 # triggered the refusal (#203). A subshell's `cd` moves the commands inside it; it is only
 # the PARENT shell's final directory that it leaves alone, and that is asked elsewhere.
-_CD = re.compile(r"^\s*[(\s]*cd\s+(?P<path>[\"']?[\w./@+~-]+[\"']?)\s*$")
+#
+# The directory is read from the words the shell will see, never from the copy with quoted
+# spans blanked: that copy has no directory left in `cd "/tmp/dir with space"`, so the `cd`
+# went unread and `cd "/tmp/dir with space" && echo hi > out.txt` from the main checkout was
+# refused as a write into the checkout it had just left. This only says a segment MAY be one.
+_CD = re.compile(r"^[\s({]*cd\b")
 _SEGMENTS = re.compile(r"&&|\|\||;|\n")
+
+# A subshell's brackets, at the edges of a segment. `_SEGMENTS` cuts on `&&` and `;` and
+# never on brackets, so `(cd x && git pull)` arrives as `(cd x ` and ` git pull)` — and a
+# bracket is the one piece of shell `shellcmd` declines outright. Trimmed at the edges only:
+# one anywhere else still makes it decline, which every caller here falls back from.
+_EDGE_BRACKETS = re.compile(r"^[\s({]+|[\s)}]+$")
 
 # Git destroys a working tree without ever naming a file in it, so every rule here keyed
 # on "which paths does this write" saw nothing at all. `git -C ../main reset --hard HEAD~1`
@@ -519,18 +531,43 @@ def _segments_with_cwd(scannable: str, cwd: Path, literal: str = ""):
     edges.append(len(scannable))
     for start, end in zip(edges[0::2], edges[1::2]):
         segment = scannable[start:end]
-        moved = _CD.match(segment)
-        if moved:
+        moved = _moves_to(raw[start:end])
+        if moved is not None:
             # Tracked, never executed. `cd` into a path that does not exist still changes
             # what the rest of the line means to this scanner, and guessing wrong here
             # only costs a target that lands outside every tree, which is ignored anyway.
             # Through `_resolve`, because `here / "~/x"` is `<here>/~/x` and `.expanduser()`
             # does not touch it — the #37 rewrite of a home path into a repository one,
             # still live in this half of the file long after the other half was fixed.
-            moved_to = _resolve(here, moved.group("path"))
+            moved_to = _resolve(here, moved)
             here = moved_to if moved_to is not None else here
             continue
         yield segment, raw[start:end], here
+
+
+def _commands_in(segment: str) -> list[list[str]]:
+    """What one segment runs, split the way the shell splits it; empty where it cannot be.
+
+    A heredoc body is blanked first, for the reason it is everywhere in this file: it is
+    data handed to the command, not words of the command.
+    """
+    body = _HEREDOC.sub(lambda m: " " * len(m.group(0)), segment)
+    return shellcmd.commands(_EDGE_BRACKETS.sub("", body))
+
+
+def _moves_to(segment: str) -> str | None:
+    """The directory a segment that is nothing but a `cd` names, or None for any other."""
+    if not _CD.match(segment):
+        return None
+    commands = _commands_in(segment)
+    if len(commands) != 1 or commands[0][0] != "cd":
+        return None
+    named = [word for word in commands[0][1:] if not word.startswith("-")]
+    # One directory, and a literal one. `cd` alone and `cd -` go where only the shell
+    # knows, and `$DIR` is whatever it expands to: none of them is a place to resolve.
+    if len(named) != 1 or "$" in named[0] or "`" in named[0]:
+        return None
+    return named[0]
 
 
 def _resolve(base: Path, raw: str) -> Path | None:
@@ -557,13 +594,30 @@ def _resolve(base: Path, raw: str) -> Path | None:
         return None
 
 
-def _removal_targets(rest: str, here: Path) -> list[Path]:
-    """The trees `git worktree remove` would delete, as this segment names them."""
-    return [
-        _resolve(here, a)
-        for removal in _WORKTREE_REMOVE.finditer(rest)
+def _removal_targets(rest: str, literal: str, here: Path) -> list[Path]:
+    """The trees `git worktree remove` would delete, as this segment names them.
+
+    Read from the words the shell will see wherever the segment can be read that way. In
+    `rest` a quoted path is blanked, so `git worktree remove "<a tree under a space>"` named
+    no tree at all — and a session removing its own tree was let through to do it from
+    inside, the one step decision 0022 exists to take for it (#224).
+    """
+    commands = _commands_in(literal)
+    named = [word for argv in commands for word in _removed_by(argv)] if commands else [
+        a for removal in _WORKTREE_REMOVE.finditer(rest)
         for a in _ARG.findall(removal.group("args")) if not a.startswith("-")
     ]
+    return [_resolve(here, word) for word in named]
+
+
+def _removed_by(argv: list[str]) -> list[str]:
+    """What one command's `git worktree remove` names, or nothing when it is not one."""
+    if argv[0].rsplit("/", 1)[-1] != "git":
+        return []
+    for at in range(1, len(argv) - 1):
+        if argv[at:at + 2] == ["worktree", "remove"]:
+            return [word for word in argv[at + 2:] if not word.startswith("-")]
+    return []
 
 
 def worktree_removals(command: str, cwd: Path) -> list[Path]:
@@ -576,11 +630,11 @@ def worktree_removals(command: str, cwd: Path) -> list[Path]:
     """
     scannable = _QUOTED.sub(lambda m: " " * len(m.group(0)), command)
     out: list[Path] = []
-    for segment, _literal, here in _segments_with_cwd(scannable, cwd):
+    for segment, literal, here in _segments_with_cwd(scannable, cwd, command):
         found = _GIT_VERB.search(segment)
         if not found:
             continue
-        for path in _removal_targets(found.group("rest"), here):
+        for path in _removal_targets(found.group("rest"), literal, here):
             if path is not None and path not in out:
                 out.append(path)
     return out
@@ -595,7 +649,7 @@ def git_tree_targets(command: str, cwd: Path) -> list[Path]:
     """
     scannable = _QUOTED.sub(lambda m: " " * len(m.group(0)), command)
     out: list[Path] = []
-    for segment, _literal, here in _segments_with_cwd(scannable, cwd):
+    for segment, literal, here in _segments_with_cwd(scannable, cwd, command):
         found = _GIT_VERB.search(segment)
         if not found:
             continue
@@ -611,7 +665,7 @@ def git_tree_targets(command: str, cwd: Path) -> list[Path]:
         # reset --hard` is two commands in one segment and the second one still counts.
 
         # `git worktree remove <path>` destroys a tree named as a plain argument.
-        removals = _removal_targets(rest, here)
+        removals = _removal_targets(rest, literal, here)
         if removals:
             # ONLY the tree being removed. `-C <main checkout>` is where the command RUNS,
             # and running it there mutates nothing there: `git worktree remove` moves no
@@ -1034,7 +1088,7 @@ def main() -> None:
             worktree.working_context(ctx, event.session_id), rec.session_id)
         if foreign:
             shown = ", ".join(foreign[:4]) + (f" (+{len(foreign) - 4} more)" if len(foreign) > 4 else "")
-            yours = " ".join(mine[:8]) if mine else ""
+            yours = " ".join(shlex.quote(path) for path in mine[:8]) if mine else ""
             deny(ctx, rec, (
                 f"claude-bestpractice: this stages the whole tree, and {len(foreign)} path(s) in "
                 f"it are not this session's: {shown}. In a checkout several sessions share, that "
@@ -1183,14 +1237,14 @@ def main() -> None:
                     "removing the directory this shell stands in leaves Claude Code refusing "
                     "every later git call as isolated in a worktree that no longer exists.\n"
                     f"  The shell is now in a directory that is gone — `cd "
-                    f"{where}`. There is nothing else to clean up."
+                    f"{shlex.quote(str(where))}`. There is nothing else to clean up."
                 )
             deny(
                 ctx, rec,
                 f"claude-bestpractice: git refused to remove {own}, so it is still there and so "
                 "is this shell. `git worktree remove` without `--force` will not delete a tree "
                 "holding a modified or untracked file.\n"
-                f"  git -C {own} status --porcelain --untracked-files=all\n"
+                f"  git -C {shlex.quote(str(own))} status --porcelain --untracked-files=all\n"
                 "  Commit what is worth keeping, remove what is not, then run this again — it "
                 "is performed from the main checkout, which is the only place it can be run "
                 "without stranding this session."
@@ -1213,7 +1267,7 @@ def main() -> None:
                 "`cd` back — and the shell stays unusable until the session restarts. It is "
                 "refused here because that is recoverable and the deadlock is not.\n"
                 f"  Run it from this worktree, or in a subshell that returns: "
-                f"`(cd {stranded} && ...)` leaves this shell where it is.\n"
+                f"`(cd {shlex.quote(str(stranded))} && ...)` leaves this shell where it is.\n"
                 + config.switch_advice("require_worktree", False)
             )
 
@@ -1392,7 +1446,8 @@ def main() -> None:
                     "  Every sibling session reads the board to decide what is safe to "
                     "touch, and unlisted work is invisible to all of them — so this is "
                     "asked BEFORE the write, while there is still something to protect.\n"
-                    f'  claude-bp-plan add "<what you are about to do>" --paths {writing_now[0]}\n'
+                    f'  claude-bp-plan add "<what you are about to do>" --paths '
+                    f"{shlex.quote(writing_now[0])}\n"
                     "  then: claude-bp-plan claim <id>   (or claim the task you are on)"
                 )
 

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -77,7 +78,7 @@ def worktree_advice(ctx: GitContext, task: str = "") -> str:
         part for part in "".join(c.lower() if c.isalnum() else " " for c in task).split()[:5]
     ) or "work"
     target = ctx.worktree_root.parent / f"{ctx.worktree_root.name}-{slug}"
-    return f"git worktree add -b feat/{slug} {target}"
+    return f"git worktree add -b feat/{slug} {shlex.quote(str(target))}"
 
 
 def worktree_refusal(ctx: GitContext, task: str = "", session_id: str = "") -> str:
@@ -93,6 +94,10 @@ def worktree_refusal(ctx: GitContext, task: str = "", session_id: str = "") -> s
     own rule being satisfied. A hook runs without a permission prompt, so the plugin does it
     and says where to go. The last line is there because the measured failure was the agent
     being polite rather than the agent being unable.
+
+    Every path put into a command here is quoted for the shell. Unquoted, a repository under
+    `…/final space ü/app` was told `cd …/final space ü/app/.claude/worktrees/…`, which bash
+    answers with "too many arguments" — a refusal whose one way out does not run.
     """
     from . import worktree
 
@@ -113,8 +118,8 @@ def worktree_refusal(ctx: GitContext, task: str = "", session_id: str = "") -> s
         "claude-bestpractice: this is the main checkout, not a worktree. Several sessions "
         "sharing one working tree overwrite each other silently — git does not notice, and "
         "neither will you.\n"
-        f"  A worktree has been created for you at {ready} — `cd {ready}` and redo this "
-        "write there.\n"
+        f"  A worktree has been created for you at {ready} — `cd {shlex.quote(str(ready))}` "
+        "and redo this write there.\n"
         "  This is not a question for the founder: do not ask whether to use a worktree, "
         "just move.\n"
         "  If this repository is genuinely single-session: "
@@ -135,10 +140,13 @@ def violations(ctx: GitContext, task: str = "", session_id: str = "") -> list[st
     if not ctx.is_worktree:
         out.append(worktree_refusal(ctx, task, session_id))
     if on_trunk(ctx):
+        # Quoted: the name is the founder's words, and `fix the user's login` put an
+        # unterminated quote into the one command this refusal offers.
+        branch = f"feat/{'-'.join(task.lower().split()[:4]) or 'work'}"
         out.append(
             f"claude-bestpractice: {ctx.branch} is the trunk. Work on a branch so it can be "
             "reverted and merged as one unit.\n"
-            f"  git switch -c feat/{'-'.join(task.lower().split()[:4]) or 'work'}\n"
+            f"  git switch -c {shlex.quote(branch)}\n"
             + config.switch_advice("protect_trunk", False)
         )
     return out
