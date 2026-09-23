@@ -593,7 +593,7 @@ COMMIT_MESSAGE = re.compile(
 # which is how Claude Code writes every multi-line commit. Anchored on the terminator, so a
 # quote inside the message cannot end it early the way it ends the pattern above.
 _HEREDOC_MESSAGE = re.compile(
-    r"""git\s+commit\b[^\n]*?(?:-[a-zA-Z]*m|--message=?)\s*"\$\(\s*cat\s*<<-?\s*"""
+    r"""git(?:\s+-[cC]\s+\S+|\s+--\S+)*\s+commit\b[^\n]*?(?:-[a-zA-Z]*m|--message=?)\s*"\$\(\s*cat\s*<<-?\s*"""
     r"""(?P<q>['"]?)(?P<tag>\w+)(?P=q)[ \t]*\n(?P<body>.*?)\n[ \t]*(?P=tag)[ \t]*\n\s*\)""",
     re.S,
 )
@@ -851,8 +851,13 @@ def commit_message(command: str) -> str:
     # satisfy — and a `git commit` inside a heredoc being written to a script was judged
     # as if it were being run.
     for argv in parsed:
-        if argv[0].rsplit("/", 1)[-1] == "git" and argv[1:2] == ["commit"]:
-            message = _message_argument(argv[2:])
+        if argv[0].rsplit("/", 1)[-1] != "git":
+            continue
+        # Past git's own options: `git -C <tree> commit -m …` is how a session commits in
+        # its tree from anywhere, and reading only `argv[1]` let every such message through.
+        verb, args = _subcommand_of(argv)
+        if verb == "commit":
+            message = _message_argument(args)
             if message is not None:
                 return "" if _EXPANDED.search(message) else message
     return ""

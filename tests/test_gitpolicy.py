@@ -1372,6 +1372,22 @@ class TestCommitMessages(PolicyCase):
         self.assertEqual("deny", self.commit("git status\ngit commit -m wip")[0])
         self.assertEqual("deny", self.commit("git add -A\ngit commit -m wip")[0])
 
+    def test_git_options_before_the_subcommand_do_not_hide_the_message(self):
+        """`git -C <tree> commit -m …` is how a session commits in its tree from anywhere.
+        Only the word straight after `git` was compared, so every such message went unread."""
+        for command in (
+            'git -C . commit -m "wip"',
+            'git -c commit.gpgsign=false commit -qm "wip"',
+            "git -C . commit -m \"$(cat <<'EOF'\nwip\nEOF\n)\"",
+        ):
+            with self.subTest(command=command):
+                decision, reason = self.commit(command)
+                self.assertEqual(decision, "deny")
+                self.assertIn("describes committing", reason)
+        self.assertEqual(
+            self.commit('git -C . commit -m "Explain the retry budget in the client"')[0], "allow"
+        )
+
     def test_a_message_the_shell_writes_is_not_judged_as_typed(self):
         """`"$MSG"` is a variable name; the message git receives is not on the line."""
         for command in ('git commit -m "$MSG"', 'git commit -m "`cat msg.txt`"'):
