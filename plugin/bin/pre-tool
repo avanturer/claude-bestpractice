@@ -192,10 +192,173 @@ DESTRUCTIVE_DDL = re.compile(
 
 # Promotion is the one-way door. Preview deploys stay free; rollback is fully automatic
 # precisely because its failure mode is returning to what already worked.
-PRODUCTION_DEPLOY = re.compile(
-    r"(?i)(?:--prod\b|--production\b|-e\s+prod(?:uction)?\b|environment[= ]production\b|"
-    r"kubectl\s+.*--context[= ]\S*prod|fly\s+deploy(?!.*--config)|railway\s+up\b)"
-)
+#
+# Decided on the PROGRAM and what it was told to do, never on a flag wherever it appears.
+# `--prod` anywhere in a line refused `npm ci --production` and `pnpm install --prod`, which
+# install; `git grep -- --production`, which searches; a commit message mentioning the flag;
+# and `terraform plan` and `kubectl get` pointed at production, which change nothing. Each
+# went to the founder rather than to the session — and each spent their one `+release` on
+# the way through, so the real promotion after it was refused again.
+_PRODUCTION = re.compile(r"(?i)(?:^|[^a-z])prod(?:uction)?(?:[^a-z]|$)")
+
+# A project's own way to ship, named for it: `./deploy.sh --prod`, `npm run deploy --
+# --production`, `make release ENV=production`. The name is all a gate can read about what
+# a project's script does, and it is what the flag-anywhere rule was catching for these.
+_NAMED_FOR_SHIPPING = re.compile(r"(?i)deploy|release|promote")
+
+# How such a script is reached: a package runner, a package manager's `run`, make, or an
+# interpreter handed the file.
+_RUNS_A_SCRIPT = {"npx", "pnpx", "bunx", "yarn", "make", "just"}
+_SCRIPT_VERBS = {"run", "run-script", "exec", "dlx", "x"}
+_PACKAGE_MANAGERS = {"npm", "pnpm", "yarn", "bun"}
+
+# Each tool's subcommands, the ones that change what is deployed and the ones that only
+# look, so that the first of them on a line says which kind this is — whatever global
+# option values stand in front of it.
+_VERCEL_VERBS = {"deploy", "redeploy", "promote", "build", "dev", "env", "pull", "link", "ls",
+                 "list", "inspect", "logs", "rollback", "alias", "domains", "rm", "remove"}
+_KUBECTL_CHANGES = {"apply", "create", "delete", "replace", "patch", "edit", "set", "rollout",
+                    "scale", "autoscale", "label", "annotate", "expose", "run", "drain",
+                    "cordon", "uncordon", "taint"}
+_KUBECTL_READS = {"get", "describe", "logs", "top", "explain", "diff", "version", "config",
+                  "api-resources", "api-versions", "auth", "cluster-info", "events", "wait",
+                  "port-forward", "exec", "cp", "attach", "proxy"}
+_HELM_VERBS = {"install", "upgrade", "uninstall", "delete", "rollback", "list", "ls",
+               "status", "get", "history", "template", "lint", "show", "diff", "repo",
+               "dependency", "search", "pull", "package", "test", "version"}
+_TERRAFORM_VERBS = {"apply", "destroy", "plan", "show", "output", "validate", "fmt", "init",
+                    "state", "graph", "providers", "version", "workspace", "import", "refresh",
+                    "console", "taint", "untaint", "test", "get"}
+
+
+def _verb(args: list[str], known: set[str]) -> str:
+    """The first argument that is one of a tool's own subcommands, or ""."""
+    return next((arg for arg in args if arg in known), "")
+
+
+def _values(args: list[str], *names: str) -> list[str]:
+    """Every value these options were given, as `--name value` or `--name=value`."""
+    out: list[str] = []
+    for index, arg in enumerate(args):
+        for name in names:
+            if arg == name and index + 1 < len(args):
+                out.append(args[index + 1])
+            elif arg.startswith(name + "="):
+                out.append(arg.split("=", 1)[1])
+    return out
+
+
+def _names_production(words: list[str]) -> bool:
+    return any(_PRODUCTION.search(word) for word in words)
+
+
+def _vercel(args: list[str]) -> bool:
+    verb = _verb(args, _VERCEL_VERBS)
+    if verb == "promote":
+        return True
+    return verb in ("", "deploy", "redeploy") and (
+        "--prod" in args or _names_production(_values(args, "--target"))
+    )
+
+
+def _netlify(args: list[str]) -> bool:
+    return _verb(args, {"deploy"}) == "deploy" and bool(
+        {"--prod", "--prod-if-unlocked", "-p"}.intersection(args)
+    )
+
+
+def _fly(args: list[str]) -> bool:
+    # A named config is how a fly app is deployed anywhere but its production one.
+    return _verb(args, {"deploy"}) == "deploy" and not _values(args, "--config", "-c")
+
+
+def _railway(args: list[str]) -> bool:
+    return _verb(args, {"up"}) == "up"
+
+
+def _kubectl(args: list[str]) -> bool:
+    verb = _verb(args, _KUBECTL_CHANGES | _KUBECTL_READS)
+    if verb not in _KUBECTL_CHANGES or (verb == "rollout" and _verb(args, {"status", "history"})):
+        return False
+    return _names_production(_values(args, "--context"))
+
+
+def _helm(args: list[str]) -> bool:
+    verb = _verb(args, _HELM_VERBS)
+    return verb in ("install", "upgrade", "uninstall", "delete") and _names_production(args)
+
+
+def _terraform(args: list[str]) -> bool:
+    return _verb(args, _TERRAFORM_VERBS) in ("apply", "destroy") and _names_production(args)
+
+
+# An over-the-air update is a promotion like any other (decision 0010).
+def _eas(args: list[str]) -> bool:
+    return _verb(args, {"update", "build", "submit", "channel", "branch"}) == "update" and \
+        _names_production(_values(args, "--branch", "--channel", "--environment"))
+
+
+_PROMOTES = {
+    "vercel": _vercel, "netlify": _netlify, "ntl": _netlify, "fly": _fly, "flyctl": _fly,
+    "railway": _railway, "kubectl": _kubectl, "helm": _helm, "terraform": _terraform,
+    "tofu": _terraform, "terragrunt": _terraform, "eas": _eas,
+}
+
+
+def _what_runs(argv: list[str]) -> tuple[str, list[str]]:
+    """The program a command really runs, and its arguments: past `npx`, `npm run`, `make`
+    and an interpreter handed a script."""
+    name, rest = argv[0].rsplit("/", 1)[-1], argv[1:]
+    if name in _PACKAGE_MANAGERS and rest[:1] and rest[0] in _SCRIPT_VERBS:
+        rest = rest[1:]
+    elif name not in _RUNS_A_SCRIPT and not _INTERPRETER.match(name):
+        return name, rest
+    for index, word in enumerate(rest):
+        if not word.startswith("-"):
+            return word.rsplit("/", 1)[-1], rest[index + 1:]
+    return name, rest
+
+
+def promotes(argv: list[str]) -> bool:
+    """Does this one command promote something to production?"""
+    name, args = _what_runs(argv)
+    judge = _PROMOTES.get(name)
+    if judge is not None:
+        return judge(args)
+    return bool(_NAMED_FOR_SHIPPING.search(name)) and _names_production([name, *args])
+
+
+# The words of a segment the tokeniser declines, for the one question asked of them here.
+_WORD = re.compile(r"[^\s'\"`$();|&<>]+")
+
+
+def promotes_to_production(command: str, cwd: Path) -> bool:
+    """Does anything this line runs promote to production — its text about one never counts.
+
+    Read per segment, so `(cd web && vercel --prod)` is read at all. A segment the tokeniser
+    declines is not a way past: its words are still searched for a deploying program, which
+    is the only thing that could make it one. A shell's `-c` is read as the line it is.
+    """
+    scannable = _QUOTED.sub(lambda m: " " * len(m.group(0)),
+                            _HEREDOC.sub(lambda m: " " * len(m.group(0)), command))
+    for _segment, literal, _here in _segments_with_cwd(scannable, cwd, command):
+        commands = _commands_in(literal)
+        if not commands:
+            words = _WORD.findall(literal)
+            commands = [words[at:] for at, word in enumerate(words)
+                        if word.rsplit("/", 1)[-1] in _PROMOTES]
+        for argv in commands:
+            code = _shell_code(argv)
+            if promotes(argv) or (code and promotes_to_production(code, cwd)):
+                return True
+    return False
+
+
+def _shell_code(argv: list[str]) -> str:
+    """The line a `sh -c` hands its shell to run, or "" for any other command."""
+    if argv[0].rsplit("/", 1)[-1] in ("sh", "bash", "zsh") and "-c" in argv[1:-1]:
+        return argv[argv.index("-c") + 1]
+    return ""
 
 
 def signature(event: hookio.HookEvent) -> str:
@@ -1290,20 +1453,11 @@ def main() -> None:
 
     if gates["migration_gate"]:
         if event.tool_name == "Bash":
-            command = str(ti.get("command", ""))
-            # Per COMMAND, not per line. `--prod` inside `echo "deploy with --prod"` is
-            # text about a deploy, and refusing it is the defect #76 reported one gate
-            # over. An unparseable line falls back to the whole string, so a command
-            # crafted to break the tokeniser does not become one that walks past this.
-            # Two different empties, and folding them together made `echo "--prod"` a
-            # deploy again: `acting` returns nothing both for a line that cannot be parsed
-            # and for a line that only reads. The first must fall back to the whole string,
-            # the second must pass. Caught by the test written for this very fix.
-            parsed = shellcmd.commands(command)
-            deploying = (
-                any(PRODUCTION_DEPLOY.search(" ".join(argv)) for argv in shellcmd.acting(command))
-                if parsed else bool(PRODUCTION_DEPLOY.search(command))
-            )
+            # Per COMMAND, and per the program it runs. `--prod` inside `echo "deploy with
+            # --prod"` is text about a deploy, and refusing it is the defect #76 reported one
+            # gate over; so is the same flag handed to an installer, a search or a commit.
+            # And spent only on a real promotion, since the founder's word allows one.
+            deploying = promotes_to_production(str(ti.get("command", "")), session_cwd)
             if deploying and not config.approved(ctx, config.APPROVE_RELEASE):
                 # The literal used to be a token IN THE COMMAND, which the session writes
                 # — so the gate on the one irreversible action was openable by the party

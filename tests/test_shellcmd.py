@@ -91,6 +91,47 @@ class TestTheSameShapeOneGateOver(RepoCase):
     def test_actually_deploying_is_still_refused(self):
         self.assertEqual("deny", self.bash("railway up"))
 
+    def test_the_flag_handed_to_something_else_is_not_a_deploy(self):
+        """`--prod` anywhere in a line was a promotion, so an install, a search, a commit
+        message, and `plan` and `get` against production all waited on the founder."""
+        for command in (
+            "npm ci --production",
+            "pnpm install --prod",
+            "git grep -n -- --production",
+            'git commit -m "Install only production deps with npm ci --production"',
+            "terraform plan -var environment=production",
+            "kubectl get pods --context prod-eu",
+        ):
+            self.assertNotEqual("deny", self.bash(command), command)
+
+    def test_every_real_promotion_is_still_refused(self):
+        for command in (
+            "vercel --prod",
+            "npx vercel deploy --prod",
+            "netlify deploy --prod",
+            "kubectl --context=prod-eu rollout restart deploy/api",
+            "kubectl set image deploy/api api=api:2 --context production",
+            "terraform apply -var environment=production",
+            "helm upgrade api ./chart --kube-context prod",
+            "eas update --branch production",
+            "(cd web && vercel --prod)",
+            "URL=$(vercel --prod)",
+            "./scripts/deploy.sh --production",
+            "npm run deploy -- --prod",
+        ):
+            self.assertEqual("deny", self.bash(command), command)
+
+    def test_the_founders_word_is_spent_only_on_a_real_promotion(self):
+        """`+release` allows one promotion, and a search that merely mentioned the flag
+        spent it — so the promotion the founder had approved was refused after all."""
+        self.run_hook("prompt-capture", {
+            "session_id": "s1", "hook_event_name": "UserPromptSubmit",
+            "prompt": "checked the preview\n+release",
+        })
+        self.assertNotEqual("deny", self.bash("git grep -n -- --production"))
+        self.assertNotEqual("deny", self.bash("vercel --prod"))
+        self.assertEqual("deny", self.bash("vercel --prod"), "one word allowed two promotions")
+
 
 class TestALineTheShellWillNotParse(unittest.TestCase):
     """A dangling `&&` used to make a line parse SHORTER, not fail.
