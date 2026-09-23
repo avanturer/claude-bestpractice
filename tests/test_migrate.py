@@ -230,6 +230,19 @@ class TestRepairsRunThemselvesAndRunOnce(RepoCase):
         with only_repair("9999-explodes", 1, lambda ctx: 1 / 0):
             migrate.repair(self.ctx())
 
+    def test_an_inbox_an_interrupted_reindex_stranded_is_put_back(self):
+        """A reindex that raised between its purge and its put-back left the queued notes
+        in the carry directory beside Tier B, where nothing reads them."""
+        ctx = self.ctx()
+        stranded = store.tier_b(ctx).parent / f".{store.TIER_B_DIRNAME}.carry" / "inbox"
+        store.write_json(stranded / "peer.json", [{"text": "queued before the crash"}])
+
+        changed = migrate.repair(ctx)
+
+        self.assertEqual([{"text": "queued before the crash"}],
+                         store.read_json(store.tier_b(ctx, "inbox", "peer.json")))
+        self.assertTrue([line for line in changed if "claude-bp-reindex" in line], changed)
+
 
 @contextlib.contextmanager
 def only_repair(name: str, revision: int, step):

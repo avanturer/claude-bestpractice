@@ -802,6 +802,20 @@ def _drop_the_compaction_demand_marker(ctx: GitContext) -> str:
     return "dropped the compaction demand's marker; a manual /compact is no longer blocked"
 
 
+def _put_back_what_a_reindex_stranded(ctx: GitContext) -> str:
+    """The inbox an interrupted `claude-bp-reindex` left beside Tier B.
+
+    Until this release one log torn inside a multibyte character made the purge raise
+    after its `rmtree` and before its put-back, so the queued notes it had set aside stayed
+    in `.claude-bestpractice.carry/`, read by nothing, until the next reindex deleted them.
+    """
+    back = store.restore_carried(ctx)
+    if not back:
+        return ""
+    return (f"{', '.join(sorted(set(back)))} set aside by an interrupted `claude-bp-reindex` "
+            "is back where sessions read it")
+
+
 _REPAIRS = {
     "0001-task-paths": (1, _backfill_task_paths),
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
@@ -820,6 +834,7 @@ _REPAIRS = {
     "0015-untrack-the-ledger": (1, _untrack_the_ledger),
     "0016-drop-the-compaction-marker": (1, _drop_the_compaction_demand_marker),
     "0017-finish-removals-done-by-hand": (1, _finish_removals_done_by_hand),
+    "0018-put-back-what-reindex-stranded": (1, _put_back_what_a_reindex_stranded),
 }
 
 

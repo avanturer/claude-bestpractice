@@ -291,6 +291,69 @@ class TestJsonl(RepoCase):
         store.append_jsonl(path, {"i": 3})
         self.assertEqual([r["i"] for r in store.read_jsonl(path)], [1, 3])
 
+    def test_one_record_torn_inside_a_character_does_not_hide_the_rest(self):
+        """The file was decoded whole, so a partial write that stopped inside `é` made every
+        record in it unreadable — and the pull-request checks reading `unverified.jsonl`
+        found no unverified finish at all."""
+        path = store.tier_b(self.ctx(), "unverified.jsonl")
+        for i in range(3):
+            store.append_jsonl(path, {"i": i, "reason": "café"})
+        torn = json.dumps({"i": 3, "reason": "café"}, ensure_ascii=False).encode("utf-8")
+        with path.open("ab") as fh:
+            fh.write(torn[: torn.index("é".encode("utf-8")) + 1])
+        self.assertEqual([0, 1, 2], [r["i"] for r in store.read_jsonl(path)])
+
+    def test_a_line_separator_inside_a_record_is_not_the_end_of_it(self):
+        """Records are written with `ensure_ascii=False`, so U+2028 reaches the file raw —
+        and text splitting took it for a line break and lost the record."""
+        path = store.tier_b(self.ctx(), "log.jsonl")
+        store.append_jsonl(path, {"said": "one two"})
+        self.assertEqual([{"said": "one two"}], store.read_jsonl(path))
+
+
+class TestAReindexKeepsWhatItSaysItKeeps(RepoCase):
+    """`claude-bp-reindex` read the carried logs, deleted Tier B, and wrote them back through
+    a decode and an encode. One log torn inside a multibyte character raised at the encode —
+    after the delete — so that log was lost, and the inbox waiting in the carry directory
+    beside the root was never put back, and was the first thing the next reindex deleted.
+    """
+
+    def reindex(self):
+        from helpers import BIN
+
+        return subprocess.run([sys.executable, str(BIN / "claude-bp-reindex")],
+                              capture_output=True, text=True, cwd=str(self.repo), timeout=120)
+
+    def test_a_torn_log_comes_back_byte_for_byte_with_the_inbox(self):
+        ctx = self.ctx()
+        log = store.tier_b(ctx, "unverified.jsonl")
+        store.append_jsonl(log, {"branch": "feat", "reason": "café"})
+        with log.open("ab") as fh:
+            fh.write('{"branch": "fix", "reason": "caf'.encode("utf-8") + b"\xc3")
+        before = log.read_bytes()
+        store.write_json(store.tier_b(ctx, "inbox", "peer.json"), [{"text": "queued"}])
+
+        proc = self.reindex()
+
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual(before, log.read_bytes())
+        self.assertEqual([{"text": "queued"}],
+                         store.read_json(store.tier_b(ctx, "inbox", "peer.json")))
+        beside = [p.name for p in store.tier_b(ctx).parent.iterdir() if ".carry" in p.name]
+        self.assertEqual([], beside)
+
+    def test_what_an_interrupted_run_left_beside_the_root_is_put_back(self):
+        ctx = self.ctx()
+        store.ensure_dir(store.tier_b(ctx))
+        stranded = store.tier_b(ctx).parent / f".{store.TIER_B_DIRNAME}.carry" / "inbox"
+        store.write_json(stranded / "peer.json", [{"text": "queued before the crash"}])
+
+        store.purge_tier_b(ctx)
+
+        self.assertEqual([{"text": "queued before the crash"}],
+                         store.read_json(store.tier_b(ctx, "inbox", "peer.json")))
+        self.assertFalse(stranded.parent.exists())
+
 
 class TestLocks(RepoCase):
     def test_lock_is_exclusive(self):

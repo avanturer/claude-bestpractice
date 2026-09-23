@@ -158,8 +158,9 @@ def ensure_dir(path: Path) -> Path:
     return path
 
 
-def atomic_write(path: Path, data: str, mode: int = 0o600, follow_symlink: bool = False) -> None:
-    """Write via temp-in-same-dir, fsync, rename.
+def atomic_write(path: Path, data: str | bytes, mode: int = 0o600,
+                 follow_symlink: bool = False) -> None:
+    """Write via temp-in-same-dir, fsync, rename. Text is written as UTF-8, bytes as they are.
 
     Same directory matters: `os.replace` is only atomic within a filesystem, and a
     temp file in /tmp may be on a different one. The fsync is what makes the content
@@ -192,7 +193,7 @@ def atomic_write(path: Path, data: str, mode: int = 0o600, follow_symlink: bool 
     try:
         fd = os.open(str(tmp), os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
         try:
-            _write_all(fd, data.encode("utf-8"))
+            _write_all(fd, data if isinstance(data, bytes) else data.encode("utf-8"))
             os.fsync(fd)
         finally:
             os.close(fd)
@@ -302,19 +303,26 @@ def rewrite_jsonl(path: Path, rows: list[Any], mode: int = 0o600) -> None:
 
 
 def read_jsonl(path: Path) -> list[Any]:
-    """Read an append-only log, skipping records damaged by a partial write."""
+    """Read an append-only log, skipping records damaged by a partial write.
+
+    Decoded a LINE at a time. The whole file used to be decoded at once, so one record
+    torn inside a multibyte character — a partial write lands mid-`é` as easily as
+    anywhere — made the entire log read as empty, and the pull-request checks reading
+    `unverified.jsonl` then found no unverified finish at all. Split on bytes, too, so a
+    raw U+2028 inside a record's string is not taken for the end of it.
+    """
     out: list[Any] = []
     try:
-        text = path.read_text(encoding="utf-8")
-    except (FileNotFoundError, UnicodeDecodeError):
+        raw = path.read_bytes()
+    except OSError:
         return out
-    for line in text.splitlines():
+    for line in raw.splitlines():
         line = line.strip()
         if not line:
             continue
         try:
-            out.append(json.loads(line))
-        except json.JSONDecodeError:
+            out.append(json.loads(line.decode("utf-8")))
+        except ValueError:
             continue
     return out
 
@@ -520,28 +528,69 @@ def purge_tier_b(ctx: GitContext) -> None:
     Everything else here IS derivable — session records re-register on the next hook, the
     repomap cache rescans, the stage signals re-probe, locks are meaningless once the
     holders are gone. Those are what this is for.
+
+    What is kept goes back byte for byte, and in a `finally`. It was decoded and encoded
+    again on the way, after the `rmtree`, so one log torn inside a multibyte character
+    raised UnicodeEncodeError at that point: the log was gone, the rest was never written
+    back, and the inbox stayed stranded in the carry directory beside the root.
     """
     import shutil
+    import tempfile
 
+    restore_carried(ctx)
     root = tier_b(ctx)
     if not root.exists():
         return
 
     kept = {name: (root / name).read_bytes() for name in CARRIED if (root / name).is_file()}
     # Held BESIDE the root, not in the system temp directory: a move within one filesystem
-    # is atomic and cannot half-copy, and `/tmp` is frequently a different mount.
-    carry = root.parent / f".{root.name}.carry"
-    shutil.rmtree(carry, ignore_errors=True)
+    # is atomic and cannot half-copy, and `/tmp` is frequently a different mount. A fresh
+    # one per run, so one a crashed run left behind is never overwritten or deleted.
+    carry = Path(tempfile.mkdtemp(prefix=f".{root.name}.carry-", dir=str(root.parent)))
     for name in CARRIED_DIRS:
         if (root / name).is_dir():
-            ensure_dir(carry)
             shutil.move(str(root / name), str(carry / name))
 
-    shutil.rmtree(root)
-    ensure_dir(root)
-    for name, blob in kept.items():
-        atomic_write(root / name, blob.decode("utf-8", "surrogateescape"))
-    for name in CARRIED_DIRS:
-        if (carry / name).is_dir():
-            shutil.move(str(carry / name), str(root / name))
-    shutil.rmtree(carry, ignore_errors=True)
+    try:
+        shutil.rmtree(root)
+    finally:
+        ensure_dir(root)
+        for name, blob in kept.items():
+            atomic_write(root / name, blob)
+        restore_carried(ctx)
+
+
+def restore_carried(ctx: GitContext) -> list[str]:
+    """Put back what a purge moved aside and never returned. Answers with what came back.
+
+    A carry directory outlives its run only when that run died between the purge and the
+    put-back, and then it holds the ONLY copy of what it carried — which the next purge used
+    to delete before doing anything else. Whatever would land on a newer copy of the same
+    name stays where it is for a person to look at, rather than being chosen between.
+    """
+    import shutil
+
+    root = tier_b(ctx)
+    back: list[str] = []
+    for carry in sorted(root.parent.glob(f".{root.name}.carry*")):
+        for name in CARRIED_DIRS:
+            source, target = carry / name, root / name
+            if not source.is_dir():
+                continue
+            if not target.exists():
+                ensure_dir(root)
+                shutil.move(str(source), str(target))
+                back.append(name)
+                continue
+            moved = [item for item in sorted(source.iterdir()) if not (target / item.name).exists()]
+            for item in moved:
+                shutil.move(str(item), str(target / item.name))
+            back.extend([name] if moved else [])
+            _remove_if_empty(source)
+        _remove_if_empty(carry)
+    return back
+
+
+def _remove_if_empty(directory: Path) -> None:
+    if directory.is_dir() and not any(directory.iterdir()):
+        directory.rmdir()
