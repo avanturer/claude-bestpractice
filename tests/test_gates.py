@@ -404,6 +404,14 @@ class TestAHarnessBlockIsNeverTheTask(GateCase):
         self.assertTrue(pc.is_harness_block(future))
         self.assertFalse(pc.is_statement_of_work(future, []))
 
+    def test_two_blocks_side_by_side_are_not_a_statement_either(self):
+        """One element was the whole test, so the pair `!` shell mode records for a command
+        — its output and its errors — read as the founder's instruction."""
+        pc = self.capture()
+        shell = "<bash-stdout>deployed three services to staging</bash-stdout><bash-stderr></bash-stderr>"
+        self.assertTrue(pc.is_harness_block(shell))
+        self.assertFalse(pc.is_statement_of_work(shell, []))
+
     def test_a_founder_pasting_xml_is_still_instructing(self):
         """They paste it INTO a sentence. Asking about the whole message rather than about
         brackets appearing in it is what keeps this from eating their real instruction."""
