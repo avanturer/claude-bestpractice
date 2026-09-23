@@ -113,6 +113,50 @@ class TestClaiming(PlanCase):
         self.assertEqual(released.state, plan.NEXT)
         self.assertEqual(released.owner, "")
 
+    def test_two_claims_at_once_give_the_card_to_exactly_one_session(self):
+        """Read, judged and moved with nothing held across the three: two sessions claiming
+        one card both read it free, both printed "claimed", and the file named whichever
+        wrote last — or one of them died on a file the other had already moved."""
+        ctx = self.ctx()
+        contenders = [sid(self.repo, "alpha"), sid(self.repo, "beta")]
+        for contender in contenders:
+            self.session(contender)
+        for attempt in range(6):
+            task = plan.add(ctx, f"contested {attempt}", done_when="stated", paths=["src/app.py"])
+            racing = [subprocess.Popen(
+                [sys.executable, str(BIN / "claude-bp-plan"), "claim", task.id, "--session", who],
+                cwd=str(self.repo), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            ) for who in contenders]
+            said = [(proc.communicate(timeout=120), proc.returncode) for proc in racing]
+            self.assertEqual([0, 1], sorted(code for _, code in said), said)
+            self.assertFalse(any("Traceback" in err for (_, err), _ in said), said)
+            loser = next(err for (_, err), code in said if code == 1)
+            self.assertIn("held by live session", loser)
+            winner = contenders[[code for _, code in said].index(0)]
+            self.assertEqual(winner, plan.find(ctx, task.id).owner)
+
+    def test_a_card_moved_between_the_read_and_the_rename_is_read_again(self):
+        """`resume`, the sweeps and the reaper move cards without the lock. A claim that read
+        the card before one of them moved it died on the file that was no longer there."""
+        from unittest import mock
+
+        ctx = self.ctx()
+        task = plan.add(ctx, "on the move", done_when="stated", paths=["src/app.py"])
+        stale = plan.find(ctx, task.id)
+        plan.pause(ctx, task.id, "waiting on the schema decision")
+        reads = []
+        current = plan.find
+
+        def find(where, task_id):
+            reads.append(task_id)
+            return stale if len(reads) == 1 else current(where, task_id)
+
+        with mock.patch.object(plan, "find", find):
+            claimed, error = plan.claim(ctx, task.id, "s1", "main")
+        self.assertEqual("", error)
+        self.assertEqual(plan.DOING, claimed.state)
+        self.assertEqual(2, len(reads), "it did not read the card again")
+
 
 class TestParallelWorktrees(PlanCase):
     def test_ids_do_not_collide_across_worktrees(self):

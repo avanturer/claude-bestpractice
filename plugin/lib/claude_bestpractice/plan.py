@@ -1000,6 +1000,16 @@ def _unplanned(task: Task) -> str:
     )
 
 
+# Held by a claim from the read to the rename. Unlocked, two sessions claiming one card both
+# read it free, both printed "claimed", and the file named whichever wrote last; or one of
+# them died on a file the other had already moved.
+CLAIM_LOCK = "plan-claim.lock"
+
+# How many times a claim reads a card that keeps moving under it. `resume`, the sweeps and
+# the reaper move files without the lock, and a card that moved once has been re-read.
+CLAIM_READS = 2
+
+
 def _held_elsewhere(ctx: GitContext, task: Task, mine: set[str]) -> str:
     """Why a LIVE session other than this one holds `task`, or "" when none does.
 
@@ -1044,11 +1054,22 @@ def _claimable(ctx: GitContext, task_id: str, session_id: str) -> tuple[Task | N
 
 
 def claim(ctx: GitContext, task_id: str, session_id: str, branch: str) -> tuple[Task | None, str]:
-    """Take ownership. Returns (task, error). A task owned by a LIVE session is refused."""
-    task, error = _claimable(ctx, task_id, session_id)
-    if task is None:
-        return None, error
-    return _move(task, DOING, owner=session_id, branch=branch), ""
+    """Take ownership. Returns (task, error). A task owned by a LIVE session is refused.
+
+    Read, judged and moved under one lock (`CLAIM_LOCK`), and read again if the card moved
+    anyway — a transition that takes no lock can still move the file between the read and
+    the rename, and a claim that dies on a traceback has told nobody anything.
+    """
+    with store.file_lock(store.tier_b(ctx, CLAIM_LOCK)):
+        for _ in range(CLAIM_READS):
+            task, error = _claimable(ctx, task_id, session_id)
+            if task is None:
+                return None, error
+            try:
+                return _move(task, DOING, owner=session_id, branch=branch), ""
+            except FileNotFoundError:
+                continue
+    return None, f"task {task_id} kept moving while it was being claimed — claim it again"
 
 
 def complete(ctx: GitContext, task_id: str) -> tuple[Task | None, str]:
