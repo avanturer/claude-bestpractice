@@ -400,6 +400,19 @@ class TestTheCeilingIsTakenBackOutOnUpgrade(RepoCase):
         migrate.repair(self.ctx())
         self.assertEqual(5000, self.value(path))
 
+    def test_the_copy_every_tree_reads_is_the_one_lifted_from_any_tree(self):
+        """Revision 1 repaired whichever tree started first. Every tree reads the main
+        checkout's copy now, so a 2000 left there would bind every worktree again."""
+        from claude_bestpractice.gitctx import resolve
+
+        path = self.configured(2000)
+        store.write_json(store.tier_b(self.ctx(), migrate.LEDGER),
+                         {"0004-lift-the-tool-call-ceiling": {"revision": 1}})
+        tree = self.add_worktree("elsewhere")
+
+        migrate.repair(resolve(tree))
+        self.assertEqual(0, self.value(path))
+
     def test_a_config_without_the_key_does_not_gain_one(self):
         path = store.tier_a(self.ctx(), "config.json")
         path.parent.mkdir(parents=True, exist_ok=True)

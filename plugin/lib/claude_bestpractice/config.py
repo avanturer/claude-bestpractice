@@ -6,7 +6,8 @@ detection that got it wrong.
 
 Config lives in Tier A (committed) so all worktrees and all sessions agree. Eight
 sessions reading different settings is the contradictory-instruction failure this
-plugin exists to prevent.
+plugin exists to prevent — which is why every tree reads the MAIN checkout's copy
+(`founders_tree`) rather than its own.
 """
 
 from __future__ import annotations
@@ -717,8 +718,63 @@ def load(ctx: GitContext) -> Config:
     return cfg
 
 
+# One lookup per process and clone. Every gate asks on every tool call, and the answer is a
+# `git worktree list` that cannot change while the process lives: the main checkout of a
+# clone is wherever its `.git` directory is. None where the clone has no main checkout.
+_MAIN_CHECKOUT: dict[str, Path | None] = {}
+
+
+def founders_tree(ctx: GitContext) -> Path:
+    """The checkout whose config and settings speak for every tree of this clone.
+
+    The main one, from whichever tree is asking, as `plan.plan_dir` already resolves it.
+    A worktree's copy of `config.json` is its branch's snapshot, and `settings.local.json`
+    is in no branch at all, so the founder's word — an edit not yet committed, a `claude-bp
+    set`, the local switch — is only ever in the main checkout. Read per tree, `enabled off`
+    stood the plugin down there and nowhere a session was working, because sessions work
+    in worktrees by default, and the founder's `test_command` gave way to a detected one
+    in the Stop gate the same way. The harness reads the local settings file from the main
+    checkout for the same reason.
+
+    `git worktree list` names the git directory itself as the main tree of a bare clone and
+    of one made with `--separate-git-dir`. Neither is a checkout, so there the tree asking
+    is the tree that answers.
+    """
+    # The main checkout asking is its own answer: no subprocess, and the right answer even
+    # where the listing would name a separate git directory instead of it.
+    if not ctx.is_worktree:
+        return ctx.worktree_root
+    key = str(ctx.common_dir)
+    if key not in _MAIN_CHECKOUT:
+        from . import worktree
+
+        try:
+            main: Path | None = worktree.main_checkout(ctx)
+        except Exception:  # noqa: BLE001 - an unlistable clone still has its own tree
+            main = None
+        # A linked worktree is never the main tree; hearing that it is means git could not
+        # list the trees, and that answer is this tree's alone, not the clone's.
+        if main == ctx.worktree_root:
+            return ctx.worktree_root
+        _MAIN_CHECKOUT[key] = main if main is not None and (main / ".git").exists() else None
+    return _MAIN_CHECKOUT[key] or ctx.worktree_root
+
+
+def config_path(ctx: GitContext) -> Path:
+    """The `config.json` every tree reads — and the one `claude-bp set` writes."""
+    return founders_tree(ctx) / store.TIER_A_DIRNAME / CONFIG_NAME
+
+
+def _shown(ctx: GitContext, path: Path) -> str:
+    """A path as a session standing in this tree should read it."""
+    try:
+        return path.relative_to(ctx.worktree_root).as_posix()
+    except ValueError:
+        return str(path)
+
+
 def load_checked(ctx: GitContext) -> tuple[Config, list[str]]:
-    raw = store.read_json(store.tier_a(ctx, CONFIG_NAME), default={}) or {}
+    raw = store.read_json(config_path(ctx), default={}) or {}
     complaints: list[str] = []
     if not isinstance(raw, dict):
         raw = {}
@@ -778,12 +834,16 @@ def disabled_for_project(ctx: GitContext) -> str:
     for the rest of that session — worktrees provisioned, writes blocked, and the switch
     they just threw having no effect until they restart (#215). Nothing here can unload a
     hook; what it can do is stand down when the answer is written down.
+
+    Asked of the main checkout first, where the founder throws it, and then of the tree
+    asking: a copy there is one the harness also reads for a session started in it.
     """
-    for rel in PROJECT_SETTINGS:
-        raw = store.read_json(ctx.worktree_root / rel, default={})
-        wanted = raw.get("enabledPlugins") if isinstance(raw, dict) else None
-        if isinstance(wanted, dict) and wanted.get(PLUGIN_KEY) is False:
-            return rel
+    for root in dict.fromkeys((founders_tree(ctx), ctx.worktree_root)):
+        for rel in PROJECT_SETTINGS:
+            raw = store.read_json(root / rel, default={})
+            wanted = raw.get("enabledPlugins") if isinstance(raw, dict) else None
+            if isinstance(wanted, dict) and wanted.get(PLUGIN_KEY) is False:
+                return _shown(ctx, root / rel)
     return ""
 
 
@@ -794,7 +854,7 @@ def enforcing(ctx: GitContext) -> tuple[bool, str]:
     fourth is the shape this is fixing rather than a smaller version of it.
     """
     if not load(ctx).enabled:
-        return False, "`enabled off` in .claude/claude-bestpractice/config.json"
+        return False, f"`enabled off` in {_shown(ctx, config_path(ctx))}"
     off = disabled_for_project(ctx)
     if off:
         return False, f"{off} switches this plugin off for this project"
@@ -802,6 +862,6 @@ def enforcing(ctx: GitContext) -> tuple[bool, str]:
 
 
 def save(ctx: GitContext, cfg: Config) -> Path:
-    path = store.tier_a(ctx, CONFIG_NAME)
+    path = config_path(ctx)
     store.write_json(path, cfg.to_dict(), mode=0o644)
     return path

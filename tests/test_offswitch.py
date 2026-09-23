@@ -96,6 +96,90 @@ class TestOffMeansOffOnThisCall(OffCase):
         self.assertIn("standing down", proc.stderr)
 
 
+class TestOffReachesEveryTree(OffCase):
+    """Sessions work in worktrees by default, and the switch was read per tree.
+
+    The founder edits the main checkout: `config.json` there, uncommitted, and the
+    gitignored `settings.local.json`, which no worktree has at all. Both stood the plugin
+    down in the main checkout and nowhere a session was working — the Stop gate went on
+    refusing a finish, and `claude-bp set enabled off` run from one worktree switched off
+    that tree alone. Decision 0016 promises off on the next tool call.
+    """
+
+    CONFIG = ".claude/claude-bestpractice/config.json"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.write("seed.py", "x = 0\n")
+        self.commit("seed a history")
+        self.tree = self.add_worktree("feature")
+        self.addCleanup(lambda: git(["worktree", "remove", "--force", str(self.tree)], self.repo))
+
+    def a_refused_write_in_the_tree(self):
+        """A call every enforcing gate refuses, made from the worktree: its own config."""
+        return self.tool("Write", {"file_path": str(self.tree / self.CONFIG), "content": "{}"},
+                         cwd=self.tree)
+
+    def test_the_precondition_is_a_refusal(self):
+        self.assertEqual("deny", self.hook_decision(self.a_refused_write_in_the_tree()))
+
+    def test_enabled_off_in_the_main_checkout_stands_the_worktree_down(self):
+        self.configure(enabled=False)  # the main checkout's copy, not committed
+        proc = self.a_refused_write_in_the_tree()
+        self.assertIsNone(self.hook_decision(proc), proc.stdout)
+
+    def test_the_local_settings_file_in_the_main_checkout_does_too(self):
+        self.settings(enabled=False, rel=".claude/settings.local.json")
+        proc = self.a_refused_write_in_the_tree()
+        self.assertIsNone(self.hook_decision(proc), proc.stdout)
+
+    def test_the_stop_gate_in_the_worktree_stands_down(self):
+        (self.tree / "unverified.py").write_text("x = 2\n", encoding="utf-8")
+        self.configure(enabled=False)
+        proc = self.run_hook(
+            "evidence-gate",
+            {"session_id": "s1", "hook_event_name": "Stop", "stop_hook_active": False},
+            cwd=self.tree,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn("standing down", proc.stderr)
+
+    def test_the_founders_test_command_is_the_one_every_tree_runs(self):
+        from claude_bestpractice.gitctx import resolve
+
+        self.configure(test_command=["make", "check"])
+        self.assertEqual(["make", "check"], config.load(resolve(self.tree)).test_command)
+
+    def test_set_from_a_worktree_stands_every_tree_down(self):
+        import subprocess
+        import sys
+
+        from claude_bestpractice.gitctx import resolve
+
+        other = self.add_worktree("other")
+        self.addCleanup(lambda: git(["worktree", "remove", "--force", str(other)], self.repo))
+        self.run_hook("prompt-capture", {
+            "session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": "enabled off",
+        }, cwd=self.tree)
+        proc = subprocess.run([sys.executable, str(BIN / "claude-bp"), "set", "enabled", "off"],
+                              cwd=str(self.tree), capture_output=True, text=True, timeout=120)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        for where in (self.repo, self.tree, other):
+            self.assertFalse(config.enforcing(resolve(where))[0], where)
+
+    def test_a_worktree_session_cannot_rewrite_the_config_every_tree_reads(self):
+        proc = self.tool("Write", {"file_path": str(self.repo / self.CONFIG),
+                                   "content": json.dumps({"enabled": False})}, cwd=self.tree)
+        self.assertEqual("deny", self.hook_decision(proc))
+
+    def test_nor_throw_the_local_switch_every_tree_reads(self):
+        proc = self.tool("Write", {
+            "file_path": str(self.repo / ".claude" / "settings.local.json"),
+            "content": json.dumps({"enabledPlugins": {PLUGIN: False}}),
+        }, cwd=self.tree)
+        self.assertEqual("deny", self.hook_decision(proc))
+
+
 class TestOnlyTheFounderThrowsIt(OffCase):
     """A gate the gated party can switch off is a suggestion. `config.json` is refused to
     sessions outright; the project settings file cannot be, because a session edits

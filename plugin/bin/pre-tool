@@ -146,14 +146,38 @@ def _disables_the_plugin(ctx, path: Path, content: str) -> bool:
     switches it off. A session edits permissions, hooks and env in that file for the
     founder all day, and refusing the file wholesale would be this plugin taking a file
     that is not its own.
+
+    In this tree or in the main checkout, which is where every tree reads the switch from.
     """
-    try:
-        rel = path.resolve().relative_to(ctx.worktree_root.resolve()).as_posix()
-    except (OSError, ValueError):
-        return False
-    if rel not in config.PROJECT_SETTINGS or config.disabled_for_project(ctx):
+    rels = _relative_in(path, ctx.worktree_root, config.founders_tree(ctx))
+    if not set(rels) & set(config.PROJECT_SETTINGS) or config.disabled_for_project(ctx):
         return False
     return _turns_it_off(content)
+
+
+def _relative_in(path: Path, *roots: Path) -> list:
+    """This path as each of these trees names it, for the trees it is inside."""
+    out = []
+    for root in roots:
+        try:
+            out.append(path.resolve().relative_to(root.resolve()).as_posix())
+        except (OSError, ValueError):
+            continue
+    return out
+
+
+def _founders_state(ctx, absolute: list) -> list:
+    """Enforcement state in the main checkout, written from another tree.
+
+    Every tree reads the main checkout's `config.json` now, and the rule below only sees
+    writes inside this session's own tree — so without this a session in a worktree could
+    rewrite the one config every tree obeys, `enabled` and `test_command` included.
+    """
+    home = config.founders_tree(ctx)
+    if home.resolve() == ctx.worktree_root.resolve():
+        return []
+    return [str(path) for path in absolute
+            if any(_protected_state(rel) for rel in _relative_in(path, home))]
 
 
 MIGRATION_DIRS = ("migrations/", "db/migrate/", "prisma/migrations/", "alembic/versions/")
@@ -1285,6 +1309,7 @@ def main() -> None:
                     )
 
         protected = [rel for rel in writing_now if _protected_state(rel)]
+        protected += _founders_state(ctx, absolute)
         if protected:
             deny_for_founder(
                 ctx, rec,

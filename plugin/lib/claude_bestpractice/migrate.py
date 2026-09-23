@@ -378,10 +378,14 @@ def _lift_the_tool_call_ceiling(ctx: GitContext) -> str:
 
     Only the value this plugin chose. A number the founder set themselves is their word on
     the subject and is left exactly as it is.
+
+    The copy every tree reads, which is the main checkout's (`config.founders_tree`).
+    Revision 1 repaired whichever tree happened to start first, and once every tree read the
+    main checkout's copy, a 2000 left there would have come back into force everywhere.
     """
     from . import config
 
-    path = store.tier_a(ctx, config.CONFIG_NAME)
+    path = config.config_path(ctx)
     raw = store.read_json(path, default=None)
     if not isinstance(raw, dict) or raw.get("max_tool_calls") != 2000:
         return ""
@@ -401,10 +405,11 @@ def _drop_the_witness_timeout(ctx: GitContext) -> str:
     `config.save` writes every key, so the number is on disk in every repository that
     saved a config while it existed — and leaving it there leaves a knob that does
     nothing, which is worse than no knob. The ceiling comes from the hook budget now.
+    In the main checkout's copy, for the reason the step above gives.
     """
     from . import config
 
-    path = store.tier_a(ctx, config.CONFIG_NAME)
+    path = config.config_path(ctx)
     raw = store.read_json(path, default=None)
     # The key check is belt over braces and said so rather than dressed up as a rule:
     # `repair` swallows what a step raises, so without it a config lacking the key would
@@ -820,9 +825,9 @@ _REPAIRS = {
     "0001-task-paths": (1, _backfill_task_paths),
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
     "0003-absorb-scratch-todos": (1, _absorb_scratch_todos),
-    "0004-lift-the-tool-call-ceiling": (1, _lift_the_tool_call_ceiling),
+    "0004-lift-the-tool-call-ceiling": (2, _lift_the_tool_call_ceiling),
     "0005-trees-into-the-no-prompt-zone": (2, _move_trees_into_the_no_prompt_zone),
-    "0006-drop-the-witness-timeout": (1, _drop_the_witness_timeout),
+    "0006-drop-the-witness-timeout": (2, _drop_the_witness_timeout),
     "0007-forget-a-switch-taken-as-a-task": (1, _forget_a_statement_that_was_only_a_switch),
     "0008-collapse-the-decision-inbox": (1, _collapse_the_decision_inbox),
     "0009-drop-defects-that-are-not-ours": (1, _drop_defects_from_things_that_are_not_gates),
