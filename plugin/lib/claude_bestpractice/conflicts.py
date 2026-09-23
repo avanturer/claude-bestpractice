@@ -24,8 +24,10 @@ Nothing here modifies anything unless explicitly asked. Detection runs anywhere;
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -232,6 +234,7 @@ def quarantine_loose_hooks(ctx: GitContext) -> tuple[int, list[str]]:
         quarantined = data.get(QUARANTINE_KEY)
         quarantined = quarantined if isinstance(quarantined, dict) else {}
         remaining: dict[str, list] = {}
+        parked = 0
 
         for event, matchers in hooks.items():
             if event == QUARANTINE_KEY or not isinstance(matchers, list):
@@ -241,10 +244,14 @@ def quarantine_loose_hooks(ctx: GitContext) -> tuple[int, list[str]]:
                 remaining[event] = keep
             if park:
                 quarantined.setdefault(event, []).extend(park)
-                moved += len(park)
+                parked += len(park)
 
-        if not moved:
+        # Counted per file. A running total across both rewrote settings.local.json because
+        # settings.json had something to park: reformatted, loosened, and given an empty
+        # quarantine block, with nothing in it moved.
+        if not parked:
             continue
+        moved += parked
 
         # 0600, not 0644. settings.local.json is where personal tokens live, and the
         # backup is a NEW file no standard .gitignore covers — so a world-readable copy
@@ -255,9 +262,43 @@ def quarantine_loose_hooks(ctx: GitContext) -> tuple[int, list[str]]:
 
         data["hooks"] = remaining
         data[QUARANTINE_KEY] = quarantined
-        store.atomic_write(path, json.dumps(data, indent=2) + "\n", mode=0o644)
+        _rewrite(path, data)
 
     return moved, backups
+
+
+def _rewrite(path: Path, data: dict) -> None:
+    """Write a settings file back with the mode it had.
+
+    It was written 0644 whatever it had been. settings.local.json is where personal tokens
+    live, and a founder's 0600 became 0644 through `adopt` and stayed that way through
+    `adopt --restore`.
+    """
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+    except OSError:
+        mode = 0o644
+    store.atomic_write(path, json.dumps(data, indent=2) + "\n", mode=mode)
+    # The create is narrowed by the umask; the file had exactly this mode before.
+    with contextlib.suppress(OSError):
+        path.chmod(mode)
+
+
+def drop_empty_quarantine(ctx: GitContext) -> list[str]:
+    """Take out a quarantine block with nothing in it. Returns the files it came out of.
+
+    What the running count left in a settings file it had nothing to take from.
+    """
+    cleaned = []
+    for rel in SETTINGS_FILES:
+        path = ctx.worktree_root / rel
+        data = _read_json(path)
+        if data.get(QUARANTINE_KEY) != {}:
+            continue
+        data.pop(QUARANTINE_KEY)
+        _rewrite(path, data)
+        cleaned.append(rel)
+    return cleaned
 
 
 def _split_matchers(event: str, matchers: list) -> tuple[list, list]:
@@ -295,7 +336,7 @@ def restore_quarantined(ctx: GitContext) -> int:
             restored += len(matchers)
         data["hooks"] = hooks
         data.pop(QUARANTINE_KEY, None)
-        store.atomic_write(path, json.dumps(data, indent=2) + "\n", mode=0o644)
+        _rewrite(path, data)
     return restored
 
 

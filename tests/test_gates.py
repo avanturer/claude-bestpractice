@@ -1796,6 +1796,58 @@ class TestAdoptDoesNotWriteADeadProductNameIntoYourSettings(GateCase):
         self.assertEqual(["PostToolUse"], list(self.settings()["hooks"].keys()))
 
 
+class TestAdoptLeavesAFileItTakesNothingFrom(RepoCase):
+    """`claude-bp adopt` counted what it parked across both settings files.
+
+    settings.json having a hook to park was enough to rewrite settings.local.json too —
+    reformatted, given an empty quarantine block, and moved from 0600 to 0644. That is the
+    file personal tokens live in, and `adopt --restore` left it at 0644.
+    """
+
+    THEIRS = {"SessionStart": [{"hooks": [{"type": "command", "command": "./theirs.sh"}]}]}
+    LOCAL = ('{"env": {"TOKEN": "s3cret"}, "hooks": {"PostToolUse": [{"matcher": "Write", '
+             '"hooks": [{"type": "command", "command": "prettier"}]}]}}\n')
+
+    def setUp(self) -> None:
+        super().setUp()
+        claude = self.repo / ".claude"
+        claude.mkdir(exist_ok=True)
+        (claude / "settings.json").write_text(json.dumps({"hooks": self.THEIRS}))
+        self.local = claude / "settings.local.json"
+        self.local.write_text(self.LOCAL)
+        self.local.chmod(0o600)
+
+    def adopt(self, *args: str) -> None:
+        subprocess.run([sys.executable, str(BIN / "claude-bp"), "adopt", *args],
+                       capture_output=True, text=True, cwd=str(self.repo), timeout=120)
+
+    def mode(self) -> int:
+        return self.local.stat().st_mode & 0o777
+
+    def test_a_file_with_nothing_to_move_is_not_touched(self):
+        self.adopt()
+        self.assertEqual(self.LOCAL, self.local.read_text())
+        self.assertEqual(0o600, self.mode())
+
+    def test_a_file_it_does_move_something_from_keeps_its_mode_both_ways(self):
+        from claude_bestpractice import conflicts
+
+        self.local.write_text(json.dumps({"env": {"TOKEN": "s3cret"}, "hooks": self.THEIRS}))
+        self.adopt()
+        self.assertIn(conflicts.QUARANTINE_KEY, json.loads(self.local.read_text()))
+        self.assertEqual(0o600, self.mode(), "adopt loosened the file tokens live in")
+        self.adopt("--restore")
+        self.assertEqual(0o600, self.mode(), "adopt --restore loosened it")
+
+    def test_an_upgrade_drops_the_empty_block_an_older_adopt_left(self):
+        from claude_bestpractice import conflicts, migrate
+
+        self.local.write_text(json.dumps({"env": {"TOKEN": "s3cret"}, conflicts.QUARANTINE_KEY: {}}))
+        migrate.repair(self.ctx())
+        self.assertEqual({"env": {"TOKEN": "s3cret"}}, json.loads(self.local.read_text()))
+        self.assertEqual(0o600, self.mode())
+
+
 class TestTheGateNamesADoorThatOpens(GateCase):
     """Every gate here named `config.json` as the way to switch it off, and that file is
     refused to the session being enforced. So the founder was read a remedy out loud and

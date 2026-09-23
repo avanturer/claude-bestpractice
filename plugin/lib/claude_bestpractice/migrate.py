@@ -994,6 +994,21 @@ def _unchain_a_hook_that_calls_itself(ctx: GitContext) -> str:
     return f"removed {chained.name}: a copy of this plugin's own pre-push hook it was chaining as yours"
 
 
+def _drop_an_empty_quarantine_block(ctx: GitContext) -> str:
+    """The quarantine block `claude-bp adopt` wrote, empty, into a settings file it had
+    nothing to take from.
+
+    Adopt counted what it parked across both settings files, so settings.json having a
+    hook to park was enough to rewrite settings.local.json as well: reformatted, and given
+    an empty `_claudeBestpracticeQuarantined`. The block goes. The 0644 it was written with
+    stays, because it cannot be told from a mode the founder chose.
+    """
+    from . import conflicts
+
+    cleaned = conflicts.drop_empty_quarantine(ctx)
+    return f"dropped an empty quarantine block from {', '.join(cleaned)}" if cleaned else ""
+
+
 def _drop_the_hook_under_a_literal_tilde(ctx: GitContext) -> str:
     """The pre-push hook written into a directory literally named `~` inside a tree.
 
@@ -1056,6 +1071,7 @@ _REPAIRS = {
     "0020-push-gate-out-of-shared-hooks": (1, _take_the_push_gate_out_of_shared_hooks),
     "0021-drop-the-hook-under-a-literal-tilde": (1, _drop_the_hook_under_a_literal_tilde),
     "0022-unchain-a-hook-that-calls-itself": (1, _unchain_a_hook_that_calls_itself),
+    "0023-drop-an-empty-quarantine-block": (1, _drop_an_empty_quarantine_block),
 }
 
 
