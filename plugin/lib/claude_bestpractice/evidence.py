@@ -849,7 +849,7 @@ def _verify_by_declared_command(
     #
     # A green record now means exactly what the red record's absence means, or it is not
     # written at all.
-    if clear_red(ctx, command, _executed_from_output(tail)) or red(ctx) is None:
+    if clear_red(ctx, command, _executed_from_output(tail), suite) or red(ctx) is None:
         record_green(ctx, command, suite)
     return verdict
 
@@ -899,7 +899,7 @@ def _judge_witnessed(ctx: GitContext, seen: witness.Witnessed, suite=None, tree:
             unverified=True,
         )
 
-    if clear_red(ctx, command, seen.executed) or red(ctx) is None:
+    if clear_red(ctx, command, seen.executed, suite) or red(ctx) is None:
         record_green(ctx, command, suite)
     return Verdict(True, f"{seen.executed} test(s) run by the gate itself via {seen.runner}")
 
@@ -1376,20 +1376,27 @@ def _absent_module(command: list[str] | tuple, tail: str) -> str:
     Only the module after `-m` counts. A test importing something the tree does not have
     says the same words about ITS module, and that is a failure of the code.
     """
+    module = _dash_m(command)
+    if not module:
+        return ""
+    names = {module, module.split(".")[0]}
+    said = re.search(
+        r"No module named ['\"]?(?:" + "|".join(re.escape(n) for n in names) + r")['\"]?(?![\w.])",
+        tail or "",
+    )
+    return module.split(".")[0] if said else ""
+
+
+def _dash_m(command: list[str] | tuple) -> str:
+    """The module a `python -m <module>` command runs, or "" when it runs none."""
     parts = [str(part) for part in command]
     for index, part in enumerate(parts):
         if not _INTERPRETER.match(PurePosixPath(part.replace("\\", "/")).name):
             continue
         rest = parts[index + 1:]
-        if "-m" not in rest or rest.index("-m") + 1 >= len(rest):
-            return ""
-        module = rest[rest.index("-m") + 1]
-        names = {module, module.split(".")[0]}
-        said = re.search(
-            r"No module named ['\"]?(?:" + "|".join(re.escape(n) for n in names) + r")['\"]?(?![\w.])",
-            tail or "",
-        )
-        return module.split(".")[0] if said else ""
+        if "-m" in rest and rest.index("-m") + 1 < len(rest):
+            return rest[rest.index("-m") + 1]
+        return ""
     return ""
 
 
@@ -1740,13 +1747,13 @@ def record_green(ctx: GitContext, command: list[str], suite=None) -> bool:
     founder saw a green suite, a gate saying "the test suite is red", and no command that
     changed either (#152).
 
-    Same rules as everywhere else: `clear_red` still requires the SAME command, so a
-    narrower suite passing cannot erase a wider one's failure. Without the run's output
-    there is no executed count to check, and the declared-count guard inside `clear_red`
-    stands in for it — which is why this passes `None` rather than a number it does not
-    have.
+    Same rules as everywhere else: `clear_red` still requires the SAME suite and the same
+    command, so a narrower suite passing cannot erase a wider one's failure. Without the
+    run's output there is no executed count to check, and the declared-count guard inside
+    `clear_red` stands in for it — which is why this passes `None` rather than a number it
+    does not have.
     """
-    cleared = clear_red(ctx, command)
+    cleared = clear_red(ctx, command, None, suite)
     record_run(ctx, command, passed=True)
     store.write_json(
         _green_path(ctx),
@@ -1905,7 +1912,8 @@ def _covers_the_red_run(ctx: GitContext, entry: dict, executed: int | None) -> b
 
 
 def clear_red(
-    ctx: GitContext, command: list[str] | None = None, executed: int | None = None
+    ctx: GitContext, command: list[str] | None = None, executed: int | None = None,
+    suite=None,
 ) -> bool:
     """A green run clears the red record only when it is the SAME run that went red.
 
@@ -1921,11 +1929,18 @@ def clear_red(
 
     That is worse than missing the regression. The plugin manufactures positive evidence
     for it and destroys the record that contradicted it, for a founder who reads no code.
+
+    The same run is the same SUITE before it is the same command: `suite` is the one that
+    passed, None for the repository as a whole. The command alone could not tell them
+    apart, because every run the gate witnesses records itself as the bare runner — one
+    green `pytest` in `backend/` erased the record of `web/`, which was still failing.
     """
     entry = red(ctx)
     if not entry:
         return False
-    if command is not None and list(entry.get("command") or []) != list(command):
+    if str(entry.get("path") or "") != ("" if suite is None else suite.path):
+        return False
+    if command is not None and not _same_command(list(entry.get("command") or []), list(command)):
         return False
 
     # Matching the command's NAME is not enough, and this is where the first fix fell
@@ -1944,6 +1959,38 @@ def clear_red(
 
     store.tier_a(ctx, RED_SUITE_FILE).unlink(missing_ok=True)
     return True
+
+
+# How the witness records a run it drove itself: the bare runner, never a recipe.
+_WITNESSED_RUNNERS = ("pytest", "go")
+
+
+def _same_command(recorded: list, passed: list) -> bool:
+    """Whether a green of `passed` is the command that went red as `recorded`.
+
+    Byte for byte, with one exception, and it runs in one direction only: a run the gate
+    WITNESSED — the runner itself, its configuration neutralised, its count floored against
+    the tree — answers for a recorded command that started that same runner over the same
+    suite. Without it, a suite recorded red as `python3 -m pytest -q`, back when the gate's
+    interpreter could not import pytest, stayed red on every board and in every merge gate
+    after the gate had watched the same suite pass: from then on the gate drove pytest
+    itself, recorded the run as `pytest`, and the declared command never ran again to match.
+
+    Never the other way. A recipe — `make check`, `npm test` — is not the runner it wraps,
+    and neither is a narrower command line: `pytest tests/test_new.py` is not `pytest`.
+    """
+    if recorded == passed:
+        return True
+    runner = passed[0] if len(passed) == 1 and passed[0] in _WITNESSED_RUNNERS else ""
+    return bool(runner) and _invokes(recorded, runner)
+
+
+def _invokes(command: list, runner: str) -> bool:
+    """Whether a command line starts `runner` itself rather than something around it."""
+    names = [PurePosixPath(str(part).replace("\\", "/")).name for part in command]
+    if runner == "go":
+        return names[:2] == ["go", "test"]
+    return names[:1] == [runner] or _dash_m(command) == runner
 
 
 def red_problem(ctx: GitContext, branch: str = "") -> str:

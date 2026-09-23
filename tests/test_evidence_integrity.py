@@ -296,6 +296,87 @@ class TestARedLedgerSurvivesAShrinkingSuite(RepoCase):
         self.assertFalse(self.still_red())
 
 
+class TestARedRecordIsClearedByItsOwnSuite(RepoCase):
+    """Which suite passed, before which command it was.
+
+    Every run the gate witnesses records itself as the bare runner, so the command could
+    not tell two suites apart: one green `pytest` in `backend/` erased the record of `web/`
+    while `web/` was still failing. And the reverse, from the other side of the same
+    record: a suite recorded red as `python3 -m pytest -q`, while the gate's interpreter
+    had no pytest, stayed red on every board and in every merge gate after the gate had
+    watched that same suite pass — the gate drove pytest itself from then on and recorded
+    the run as `pytest`, so the declared command never ran again to match.
+    """
+
+    def a_suite(self, path: str, tests: int):
+        from claude_bestpractice import suites
+
+        self.write(f"{path}tests/test_{path.strip('/') or 'all'}.py",
+                   "".join(f"def test_{n}():\n    assert True\n" for n in range(tests)))
+        return suites.Suite(path, ("pytest",), False)
+
+    def witnessed_green(self, suite, executed: int):
+        from claude_bestpractice import evidence, witness
+
+        seen = witness.Witnessed(0, executed, 0, f"{executed} passed in 0.1s", "pytest")
+        return evidence._judge_witnessed(self.ctx(), seen, suite, "")
+
+    def test_a_green_in_one_suite_leaves_anothers_failure_standing(self):
+        from claude_bestpractice import evidence
+
+        web, backend = self.a_suite("web/", 1), self.a_suite("backend/", 3)
+        evidence.record_red(self.ctx(), ["pytest"], "1 failed in 0.1s", web)
+
+        self.assertTrue(self.witnessed_green(backend, 3).ok)
+        self.assertEqual("web/", (evidence.red(self.ctx()) or {}).get("path"),
+                         "a backend green erased web/'s failure")
+
+    def test_the_gates_own_run_of_the_same_runner_clears_it(self):
+        """End to end: recorded red by the declared command, then witnessed green."""
+        from claude_bestpractice import evidence
+        from helpers import BIN
+
+        self.configure(require_task=False, manage_pull_requests=False)
+        self.write("pyproject.toml", "[project]\nname = 'calc'\nversion = '0'\n")
+        self.write("calc.py", "def add(a, b):\n    return a - b\n")
+        self.write("tests/test_calc.py", "from calc import add\n\n\ndef test_add():\n"
+                                         "    assert add(2, 3) == 5\n")
+        self.commit("a suite that fails")
+        evidence.record_red(self.ctx(), ["python3", "-m", "pytest", "-q"],
+                            "F\nFAILED tests/test_calc.py::test_add\n1 failed in 0.05s")
+        self.write("calc.py", "def add(a, b):\n    return a + b\n")
+
+        proc = subprocess.run(
+            [sys.executable, str(BIN / "evidence-gate")],
+            input=json.dumps({"session_id": "s1", "hook_event_name": "Stop",
+                              "cwd": str(self.repo)}),
+            capture_output=True, text=True, cwd=str(self.repo), timeout=180,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual(["pytest"], (evidence.last_green(self.ctx()) or {}).get("command"),
+                         "precondition: the gate has to have driven pytest itself")
+        self.assertIsNone(evidence.red(self.ctx()),
+                          "the same suite passed under the gate's eyes and stayed red")
+
+    def test_a_recipe_is_not_the_runner_it_wraps(self):
+        """`make check` may lint as well as test; a pytest green says nothing about it."""
+        from claude_bestpractice import evidence, suites
+
+        self.a_suite("", 1)
+        evidence.record_red(self.ctx(), ["make", "check"], "1 failed in 0.1s")
+        self.witnessed_green(suites.Suite("", ("make", "check"), True), 1)
+        self.assertIsNotNone(evidence.red(self.ctx()))
+
+    def test_a_narrower_command_line_does_not_answer_for_the_runner(self):
+        """Never the other way: `pytest tests/test_new.py` passing is not `pytest` passing."""
+        from claude_bestpractice import evidence
+
+        self.a_suite("", 2)
+        evidence.record_red(self.ctx(), ["pytest"], "1 failed, 1 passed in 0.1s")
+        self.assertFalse(evidence.clear_red(self.ctx(), ["pytest", "tests/test_new.py"], 5))
+        self.assertIsNotNone(evidence.red(self.ctx()))
+
+
 class TestCannotTellIsNotGreen(RepoCase):
     """"The output said nothing I can count" was being reported as "the tests passed"."""
 
