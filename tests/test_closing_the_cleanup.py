@@ -282,6 +282,54 @@ class TestFinishingWhatWasLeftBehind(CleanupCase):
                               if "0017-finish-removals" in line])
 
 
+class TestACheckpointDoesNotPinItsTree(TreeCase):
+    """A compaction checkpoint was written into the tree the session stood in — the hook's
+    working directory follows the session into its worktree — as an untracked file, and
+    `git worktree remove` refuses a tree holding one for good: the reaper never cleared it,
+    the finished tree never removed itself, and nothing named it, because `stranded()`
+    exempts `.claude/`."""
+
+    HARNESS = "4f1c2a9e-7b3d-4e8f-9a1b-2c3d4e5f6a7b"
+
+    def compacted_in(self, tree) -> None:
+        proc = self.run_hook("checkpoint", {"session_id": self.HARNESS, "trigger": "auto",
+                                            "hook_event_name": "PreCompact"}, cwd=tree)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+
+    def test_a_compaction_in_the_tree_leaves_it_clean(self):
+        from claude_bestpractice import store
+
+        tree, _branch = self.a_tree()
+
+        self.compacted_in(tree)
+
+        self.assertEqual("", git(["status", "--porcelain", "--untracked-files=all"], tree))
+        self.assertTrue(list(store.checkpoint_dir(self.ctx()).glob("*.md")))
+
+    def test_the_session_still_gets_it_back(self):
+        tree, _branch = self.a_tree()
+        self.compacted_in(tree)
+
+        said = self.run_hook("session-start", {"session_id": self.HARNESS, "source": "compact",
+                                               "hook_event_name": "SessionStart"}, cwd=tree)
+
+        self.assertIn("RESTORED AFTER COMPACTION", said.stdout)
+
+    def test_one_an_earlier_version_left_in_a_tree_is_carried_out(self):
+        from claude_bestpractice import migrate, store
+
+        tree, _branch = self.a_tree()
+        left = tree / ".claude" / "claude-bestpractice" / "checkpoints"
+        left.mkdir(parents=True)
+        (left / f"20260901-120000-{self.HARNESS[:8]}.md").write_text(
+            "---\nkind: checkpoint\n---\nwhat the window held\n", encoding="utf-8")
+
+        migrate.repair(self.ctx())
+
+        self.assertEqual("", git(["status", "--porcelain", "--untracked-files=all"], tree))
+        self.assertIn("what the window held", store.newest_checkpoint(self.ctx(), self.HARNESS))
+
+
 class TestABranchGoesOnlyOnItsOwnProof(RepoCase):
     """What the sweep deleted was decided by `git branch -d`, which answers whether a branch
     is merged into its UPSTREAM — or into HEAD when it has none — and by a proof computed for

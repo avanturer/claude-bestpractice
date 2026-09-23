@@ -227,7 +227,9 @@ def main() -> None:
 
     stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
     name = f"{stamp}-{(event.session_id or 'anon')[:8]}.md"
-    path = store.tier_a(ctx, "checkpoints", name)
+    # The main checkout's, not this tree's: an untracked file here is one `git worktree
+    # remove` refuses the tree over, for good.
+    path = store.checkpoint_dir(ctx) / name
     store.atomic_write(path, "\n".join(lines) + "\n", mode=0o644)
 
     hookio.emit_silent()

@@ -233,7 +233,7 @@ def _restored_line(ctx: GitContext, event) -> str:
     if len(body) > MAX_RESTORED:
         # Name the directory. "on disk" without a path is a pointer to nowhere, and the
         # session it is addressed to has just been compacted and knows least of anyone.
-        where = store.tier_a(ctx, "checkpoints")
+        where = store.checkpoint_dir(ctx)
         try:
             where = where.relative_to(ctx.worktree_root)
         except ValueError:

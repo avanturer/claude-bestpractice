@@ -69,6 +69,25 @@ _VISIBILITY_PROBE = (".visibility-probe",)
 _LEDGER_PREFIX = "plan/"
 
 
+def checkpoint_dir(ctx: GitContext) -> Path:
+    """Where compaction checkpoints live: the MAIN checkout's Tier A, whichever tree writes.
+
+    Written into the tree the session was standing in — and the hook's working directory
+    follows the session into its worktree — each checkpoint was an untracked file there, so
+    `git worktree remove` without `--force` refused that tree for good. The reaper could not
+    clear it, a finished tree could not remove itself, and `stranded()`, which exempts
+    `.claude/`, never named it. The main checkout is the one tree that outlives the others,
+    which is why the ledger lives there too (decision 0018).
+    """
+    from . import worktree
+
+    try:
+        root = worktree.main_checkout(ctx)
+    except Exception:  # noqa: BLE001 - an unlistable clone still has a tree to write in
+        root = ctx.worktree_root
+    return root.joinpath(TIER_A_DIRNAME, "checkpoints")
+
+
 def newest_checkpoint(ctx: GitContext, session_id: str) -> str:
     """The last thing written before this session's context was compacted, or "".
 
@@ -77,7 +96,7 @@ def newest_checkpoint(ctx: GitContext, session_id: str) -> str:
     every checkpoint and never look at it again. Compaction is the largest destroyer of
     in-context state, so the half that matters is the restore.
     """
-    directory = tier_a(ctx, "checkpoints")
+    directory = checkpoint_dir(ctx)
     try:
         found = sorted(directory.glob("*.md"))
     except OSError:

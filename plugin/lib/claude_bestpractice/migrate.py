@@ -908,6 +908,47 @@ def _finish_removals_done_by_hand(ctx: GitContext) -> str:
     return f"finished the cleanup of {len(cleaned)} item(s) left by a removed worktree: {shown}{more}"
 
 
+_CHECKPOINTS = f"{store.TIER_A_DIRNAME}/checkpoints"
+
+
+def _carry_checkpoints_out_of_trees(ctx: GitContext) -> str:
+    """Checkpoints earlier versions wrote into worktrees, moved to where they are read now.
+
+    Each one was an untracked file in its tree, and `git worktree remove` without `--force`
+    refuses a tree holding one: the reaper never cleared it, a finished tree never removed
+    itself, and nothing named it, because `stranded()` exempts `.claude/`. Every tree of the
+    clone rather than this one's, since a tree whose session is gone starts no session to
+    repair itself. A checkpoint git tracks is somebody's commit and stays where it is.
+    """
+    from . import gitpolicy, worktree
+
+    home = store.checkpoint_dir(ctx)
+    main = worktree.main_checkout(ctx).resolve()
+    moved = sum(_carry_checkpoints_of(tree, home) for tree in gitpolicy.working_trees(ctx)
+                if tree != main)
+    return f"{moved} checkpoint(s) moved out of the worktrees they kept from being removed" \
+        if moved else ""
+
+
+def _carry_checkpoints_of(tree: Path, home: Path) -> int:
+    """Move one tree's untracked checkpoints to `home`. How many moved."""
+    tracked = set(subprocess.run(
+        ["git", "ls-files", "--", _CHECKPOINTS], cwd=str(tree), capture_output=True,
+        encoding="utf-8", errors="surrogateescape", timeout=60,
+    ).stdout.splitlines())
+    moved = 0
+    for path in sorted((tree / _CHECKPOINTS).glob("*.md")):
+        if f"{_CHECKPOINTS}/{path.name}" in tracked or (home / path.name).exists():
+            continue
+        try:
+            store.ensure_dir(home)
+            path.replace(home / path.name)
+        except OSError:
+            continue
+        moved += 1
+    return moved
+
+
 _LEDGER_PATH = ".claude/claude-bestpractice/plan"
 
 
@@ -1138,6 +1179,7 @@ _REPAIRS = {
     "0023-drop-an-empty-quarantine-block": (1, _drop_an_empty_quarantine_block),
     "0024-forget-a-number-carried-to-the-next-pull-request":
         (1, _forget_numbers_carried_to_the_next_pull_request),
+    "0025-carry-checkpoints-out-of-trees": (1, _carry_checkpoints_out_of_trees),
 }
 
 
