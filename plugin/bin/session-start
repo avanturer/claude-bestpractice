@@ -305,16 +305,18 @@ def _removable_line(ctx: GitContext) -> str:
     left = worktree.needs_a_decision(ctx)
     if not left:
         return ""
-    merged = [(path, branch) for path, branch in left if branch]
-    adrift = [path for path, branch in left if not branch]
+    main = worktree.main_checkout(ctx)
+    merged = [(path, branch) for path, branch, held in left if branch and not held]
+    adrift = [path for path, branch, held in left if not branch and not held]
     shown = ", ".join(f"{Path(path).name} ({branch})" for path, branch in merged[:3])
     more = f" (+{len(merged) - 3} more)" if len(merged) > 3 else ""
+    # `-D` and not `-d`: `-d` asks this checkout's HEAD, which lags the trunk for as long as
+    # nobody pulls, and refused the very branches this line had just called merged.
     said = (
         f"\nTREES NOBODY IS IN: {len(merged)} whose branch is already in the trunk — "
-        f"{shown}{more}; nothing in them is unmerged, so "
-        f"`git -C {worktree.main_checkout(ctx)} worktree remove <path>` and "
-        "`git branch -d <branch>` lose nothing. This plugin removes the trees IT made and "
-        "leaves these."
+        f"{shown}{more}; nothing in them is unmerged, so `git -C {main} worktree remove "
+        f"<path>` and `git -C {main} branch -D <branch>` lose nothing. This plugin removes "
+        "the trees IT made and leaves these."
     ) if merged else "\nTREES NOBODY IS IN:"
     if adrift:
         # A detached HEAD is worse than a stale tree and reads the same from outside: the
@@ -325,6 +327,26 @@ def _removable_line(ctx: GitContext) -> str:
             "`git -C <path> log --oneline -3` says what is in one; `git -C <path> branch "
             "<name>` keeps it."
         )
+    return said + _held_by_git(main, left)
+
+
+def _held_by_git(main: Path, left: list) -> str:
+    """The trees on that line that `git worktree remove` refuses as it stands, and what runs.
+
+    The ordinary command named for them was a dead end (decision 0020): a directory deleted
+    by hand read as a DETACHED HEAD and its `git -C <path> …` died on `cannot change to`,
+    and a tree holding a submodule answered `worktree remove` with exit 128.
+    """
+    gone = [Path(path).name for path, _branch, held in left if held == worktree.GONE]
+    tied = [Path(path).name for path, _branch, held in left if held == worktree.SUBMODULES]
+    said = ""
+    if gone:
+        said += (f" {len(gone)} whose directory is already gone ({', '.join(gone[:3])}) — "
+                 f"`git -C {main} worktree prune` forgets them, and their branches stay.")
+    if tied:
+        said += (f" {len(tied)} holding a submodule ({', '.join(tied[:3])}), which `worktree "
+                 "remove` refuses without `--force` — and `--force` also takes anything "
+                 "uncommitted, so `git -C <path> status --porcelain` first.")
     return said
 
 

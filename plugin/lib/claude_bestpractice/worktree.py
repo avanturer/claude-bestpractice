@@ -758,8 +758,14 @@ def stranded(ctx: GitContext) -> list[str]:
     return out
 
 
-def needs_a_decision(ctx: GitContext) -> list[tuple[str, str]]:
-    """Trees nobody is in that somebody has to decide about: (path, branch), as git lists them.
+# What git will say to `git worktree remove <path>` before it says anything about the work
+# in it, which decides the command a tree can be named with (decision 0020).
+GONE = "gone"
+SUBMODULES = "submodules"
+
+
+def needs_a_decision(ctx: GitContext) -> list[tuple[str, str, str]]:
+    """Trees nobody is in that somebody has to decide about: (path, branch, what git says).
 
     Two kinds, and the empty branch is the second: a tree whose branch is already in the
     trunk, which can simply go, and a tree on a DETACHED HEAD, whose commits are on no
@@ -775,28 +781,90 @@ def needs_a_decision(ctx: GitContext) -> list[tuple[str, str]]:
     "на SessionStart печатать поимённо «эти деревья принадлежат влитым веткам, их можно
     снять»". Empty in a clone whose trees are all occupied or all still being worked on,
     which is the steady state once the plugin is putting its own away.
+
+    Named with a command that runs, which is what the third field is for: "" where `git
+    worktree remove` takes the tree as it stands, `GONE` for a registration whose directory
+    was deleted by hand — `git worktree prune`, whatever its branch — and `SUBMODULES` for
+    one git refuses without `--force`. A LOCKED tree is not named at all: Claude Code locks
+    the tree of every agent it is running, and a lock set by hand says to leave it.
     """
     from . import sessions
-    from .gitctx import is_ancestor, trunk_ref, worktree_paths
+    from .gitctx import trunk_ref
 
     try:
         trunk = trunk_ref(ctx)
-        trees = worktree_paths(ctx) if trunk else []
-        occupied = {Path(rec.worktree).resolve() for rec in sessions.live_sessions(ctx)}
+        trees = _trees_as_git_lists_them(ctx) if trunk else []
+        skip = {Path(rec.worktree).resolve() for rec in sessions.live_sessions(ctx)}
+        skip.add(main_checkout(ctx).resolve())
     except Exception:  # noqa: BLE001 - a naming line must never be what fails a session start
         return []
-    main = main_checkout(ctx)
-    out: list[tuple[str, str]] = []
-    for tree in trees:
-        try:
-            if tree.resolve() in occupied or tree.resolve() == main.resolve():
-                continue
-        except OSError:
-            continue
-        branch = _branch_in(tree)
-        if not branch or is_ancestor(ctx, branch, trunk):
-            out.append((str(tree), branch))
+    out: list[tuple[str, str, str]] = []
+    for listed in trees:
+        said = _what_git_says(ctx, listed, trunk, skip)
+        if said is not None:
+            out.append((str(listed[0]), listed[1], said))
     return out
+
+
+def _what_git_says(ctx: GitContext, listed: tuple, trunk: str, skip: set) -> str | None:
+    """`needs_a_decision`'s third field for one listed tree, or None when it is not named."""
+    from .gitctx import is_ancestor
+
+    tree, branch, state = listed
+    try:
+        if state == _LOCKED or tree.resolve() in skip:
+            return None
+    except OSError:
+        return None
+    if state == _PRUNABLE:
+        return GONE
+    if branch and not is_ancestor(ctx, branch, trunk):
+        return None
+    return SUBMODULES if _holds_submodules(tree) else ""
+
+
+_LOCKED = "locked"
+_PRUNABLE = "prunable"
+
+
+def _trees_as_git_lists_them(ctx: GitContext) -> list[tuple[Path, str, str]]:
+    """(path, branch, state) for every working tree, from one `git worktree list --porcelain`.
+
+    `branch` is "" on a detached HEAD, and `state` is git's own word for why a tree cannot
+    be removed as it stands, `prunable` or `locked`, or "". Read off git's listing because
+    asking the directory failed exactly where there is none: a tree deleted by hand read as
+    a DETACHED HEAD, and the `git -C <path> …` offered for it died on `cannot change to`.
+    """
+    trees: list[tuple[Path, str, str]] = []
+    for line in _git_lines(ctx.worktree_root, ["worktree", "list", "--porcelain"]):
+        word, _, rest = line.partition(" ")
+        if word == "worktree":
+            trees.append((Path(rest), "", ""))
+        elif trees and word == "branch":
+            trees[-1] = (trees[-1][0], rest.removeprefix("refs/heads/"), trees[-1][2])
+        elif trees and word in (_LOCKED, _PRUNABLE):
+            trees[-1] = (trees[-1][0], trees[-1][1], word)
+    return trees
+
+
+def _holds_submodules(tree: Path) -> bool:
+    """Would `git worktree remove` refuse this tree for a checked-out submodule?
+
+    git's own test, as near as a file read gets: a path `.gitmodules` names that is a
+    non-empty directory. A submodule declared and never initialised does not stop it.
+    """
+    try:
+        declared = (tree / ".gitmodules").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    for line in declared.splitlines():
+        key, _, value = line.partition("=")
+        if key.strip() != "path" or not value.strip():
+            continue
+        with contextlib.suppress(OSError):
+            if any((tree / value.strip()).iterdir()):
+                return True
+    return False
 
 
 def _branch_in(tree: Path) -> str:
