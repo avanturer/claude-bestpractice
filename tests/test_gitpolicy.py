@@ -496,6 +496,41 @@ class TestAnInPlaceEditIsReadFromSedsOwnArguments(PolicyCase):
                              write_targets(command, self.repo), command)
 
 
+class TestAnInterpreterWritesOnlyWhereItRuns(PolicyCase):
+    """`open('x', 'w')` anywhere in a command was a write, whatever program ran — so a
+    search for it, a pull request body describing it, and a heredoc writing a script to
+    /tmp each provisioned a worktree from the main checkout. #76, one rule over."""
+
+    def test_text_about_an_open_is_not_one(self):
+        for command in (
+            "grep -rn \"open('config.json', 'w')\" src/",
+            "gh pr create --title \"Atomic config writes\" "
+            "--body \"Replaces open('config.json', 'w') with an atomic rename.\"",
+            "git commit -m \"Replace open('config.json', 'w') with an atomic write\"",
+            "cat > /tmp/gen.py <<'EOF'\nwith open('report.json', 'w') as f:\n    f.write('{}')\nEOF",
+            "python3 tools/gen.py \"open('no.txt', 'w')\"",
+        ):
+            inside = [t for t in write_targets(command, self.repo) if t.startswith(str(self.repo))]
+            self.assertEqual([], inside, command)
+        proc = self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+            "tool_input": {"command": "grep -rn \"open('config.json', 'w')\" ."},
+            "cwd": str(self.repo),
+        })
+        self.assertNotEqual("deny", _verdict(proc)[0], _verdict(proc)[1])
+        self.assertFalse((self.repo / ".claude" / "worktrees").exists(), "a search provisioned a tree")
+
+    def test_code_an_interpreter_runs_still_writes(self):
+        for command, written in (
+            ("python3 -c \"open('out.txt','w').write('x')\"", "out.txt"),
+            ("python3 - <<'EOF'\nopen('out2.txt', 'w').write('x')\nEOF", "out2.txt"),
+            ("node -e \"require('fs').writeFileSync('out3.txt', 'x')\"", "out3.txt"),
+            ("uv run python -c \"open('uv.txt','w')\"", "uv.txt"),
+            ("echo \"open('piped.txt','w')\" | python3", "piped.txt"),
+        ):
+            self.assertIn(str(self.repo / written), write_targets(command, self.repo), command)
+
+
 class TestTheScannerFollowsTheShellIntoEverySegment(PolicyCase):
     """A relative path means whatever the last `cd` says it means, everywhere.
 

@@ -404,8 +404,10 @@ BASH_WRITE_TARGETS = re.compile(
 # provisioned a worktree for every session that ran it, and a lease on a file it only read.
 SED_IN_PLACE = re.compile(r"\bsed\s+(?:-\S+\s+|'[^']*'\s+|\"[^\"]*\"\s+)*(?P<path>[\w./@+-]+)")
 
-# What stands in front of sed without changing which files it edits.
-_SED_LAUNCHERS = {"sudo", "doas", "xargs"}
+# What stands in front of a program without changing what it does: sed's files are still
+# sed's under `sudo`, and `uv run python -c …` is still Python running inline code.
+_LAUNCHERS = {"sudo", "doas", "xargs", "uv", "poetry", "pipenv", "pdm", "hatch", "rye",
+              "npx", "pnpx", "bunx"}
 
 # A verb writes only when it is the command being RUN, and `\b` matched it as an ARGUMENT
 # too. `install` is a subcommand of nearly every package manager there is, so `pip install
@@ -521,6 +523,16 @@ _INTERPRETER_WRITE = re.compile(
     r"""|(?:^|\W)open\s*\(\s*['"](?P<b>[^'"]+)['"]\s*,\s*['"][wax]""",
     re.M,
 )
+
+# ...and only where an interpreter RUNS the code: handed it with `-c` or `-e`, told `-` to
+# read it, or given no script at all so a heredoc or a pipe feeds it. Scanned in every
+# segment, `open('x', 'w')` anywhere in a command was a write whatever program ran — so
+# `grep -rn "open('config.json', 'w')" src/` was one, and a pull request body describing
+# the change, and a heredoc writing a script to /tmp. Reading taken for doing: #76, one
+# rule over, and each provisioned a worktree when run from the main checkout.
+_INTERPRETER = re.compile(r"^(?:python[\d.]*|pypy[\d.]*|node|nodejs|deno|bun|ruby|perl|php|"
+                          r"sh|bash|zsh)$")
+_INLINE_CODE = {"-c", "-e", "-E", "-p", "-r", "--eval", "--print", "-", "eval"}
 
 
 def _segments_with_cwd(scannable: str, cwd: Path, literal: str = ""):
@@ -696,6 +708,25 @@ def git_tree_targets(command: str, cwd: Path) -> list[Path]:
     return out
 
 
+def _runs_inline_code(literal: str) -> bool:
+    """Does this segment hand an interpreter code written on the line itself?
+
+    A line the tokeniser declines answers yes: the text is all there is, as before.
+    """
+    commands = _commands_in(literal)
+    return not commands or any(_inline(argv) for argv in commands)
+
+
+def _inline(argv: list[str]) -> bool:
+    """Is this one command an interpreter running code it was given here, not a script?"""
+    names = [word.rsplit("/", 1)[-1] for word in argv]
+    at = next((index for index, name in enumerate(names) if _INTERPRETER.match(name)), None)
+    if at is None or (at > 0 and names[0] not in _LAUNCHERS):
+        return False
+    given = argv[at + 1:]
+    return bool(_INLINE_CODE.intersection(given)) or all(word.startswith("-") for word in given)
+
+
 def _edited_in_place(segment: str, literal: str) -> list[str]:
     """The files a `sed -i` in this segment rewrites, as the segment names them."""
     commands = _commands_in(literal)
@@ -716,7 +747,7 @@ def _sed_in_place(argv: list[str]) -> list[str]:
     gave it, and every operand after that is a file sed rewrites.
     """
     names = [word.rsplit("/", 1)[-1] for word in argv]
-    if names[0] in _SED_LAUNCHERS and "sed" in names:
+    if names[0] in _LAUNCHERS and "sed" in names:
         argv = argv[names.index("sed"):]
     elif names[0] not in ("sed", "gsed"):
         return []
@@ -775,7 +806,8 @@ def bash_write_targets(command: str, cwd: Path) -> list[Path]:
         # `cd`: `cd /tmp/scratch && python3 -c "open('out.txt','w')…"` was resolved against
         # the repository root and refused as a write into the main checkout, for a file in
         # /tmp the command never went near (#203).
-        for match in _INTERPRETER_WRITE.finditer(literal):
+        run = _INTERPRETER_WRITE.finditer(literal) if _runs_inline_code(literal) else ()
+        for match in run:
             resolved = _resolve(here, match.group("a") or match.group("b") or "")
             if resolved is not None and resolved not in out:
                 out.append(resolved)
