@@ -64,11 +64,12 @@ in your shell.
 
 The push gate does not wait for either of them. The first session started in a repository
 that has no `pre-push` hook installs one, and says so on the board; after that it stays
-quiet. `claude-bp-ci off` removes it and the removal sticks — the next session will not
-put it back. It arms itself rather than waiting for a command because a gate that only
-fires when someone remembers to run something is the gate this whole project exists to
-replace — and verification found exactly that, an install reporting `✓ enabled` over a
-push path with nothing on it.
+quiet. `claude-bp-ci off` removes it — from your own terminal, or from a session once you
+have said `pre_push off` — and the removal sticks: the next session will not put it back.
+It arms itself rather than waiting for a command because a gate that only fires when
+someone remembers to run something is the gate this whole project exists to replace —
+and verification found exactly that, an install reporting `✓ enabled` over a push path
+with nothing on it.
 
 In any repository afterwards — from your terminal, or by asking Claude to run them:
 
@@ -563,6 +564,7 @@ plugin down — on the next tool call, not after a restart:
 
 ```
 enabled off          # then: claude-bp set enabled off
+pre_push off         # then: claude-bp-ci off   (the pre-push hook only)
 ```
 
 Or, in the project's `.claude/settings.json`, the harness's own entry:

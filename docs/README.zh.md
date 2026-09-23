@@ -60,8 +60,9 @@ Claude Code 会自动把插件的 `bin/` 加进 Bash 工具的 PATH，所以走 
 下面这些命令在**会话内**可用，在你自己的 shell 里则是 `command not found`。
 
 push gate 并不等这两条命令。在没有 `pre-push` 钩子的仓库里启动的第一个会话会装上它，
-并在 board 上说一声；之后就不再出声。`claude-bp-ci off` 可以移除它，而且这个决定会保留
-下来——下一个会话不会把它装回去。它自己装上而不等命令，是因为「只在有人想起来执行时才生效」
+并在 board 上说一声；之后就不再出声。`claude-bp-ci off` 可以移除它（在你自己的终端里运行，
+或者在你说出 `pre_push off` 之后由会话运行），而且这个决定会保留下来——下一个会话不会把它
+装回去。它自己装上而不等命令，是因为「只在有人想起来执行时才生效」
 的 gate 正是这个项目要替代的东西。验证过程发现的就是这种情况：安装显示 `✓ enabled`，
 而 push 路径上什么都没有。
 
@@ -429,6 +430,7 @@ claude-bestpractice 的常驻上下文为 **约 332 tokens**，分布在四个�
 
 ```
 enabled off          # 然后：claude-bp set enabled off
+pre_push off         # 然后：claude-bp-ci off   （只关 pre-push 钩子）
 ```
 
 或者在项目的 `.claude/settings.json` 里，用 harness 自己的那条记录：
