@@ -311,9 +311,17 @@ def next_id(ctx: GitContext) -> str:
     return f"{highest + 1:04d}"
 
 
+# Six words say what a card is; a length says what a filesystem will take. One long word —
+# a pasted hash, a URL with the punctuation stripped out — was a single 300-character
+# "word", and `add` died on ENAMETOOLONG with a traceback after allocating the id. Sixty
+# is above every slug six ordinary words have produced here, so no name changes because
+# of it.
+MAX_SLUG_CHARS = 60
+
+
 def slug(text: str) -> str:
     words = re.findall(r"[a-z0-9]+", text.lower())[:6]
-    return "-".join(words) or "task"
+    return "-".join(words)[:MAX_SLUG_CHARS].rstrip("-") or "task"
 
 
 def _render(task_id: str, title: str, state: str, owner: str, branch: str, body: str,

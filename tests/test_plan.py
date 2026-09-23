@@ -388,6 +388,18 @@ class TestCli(PlanCase):
     def test_empty_plan_says_so(self):
         self.assertIn("plan is empty", self.run_cli("list").stdout)
 
+    def test_a_title_that_is_one_very_long_word_is_filed(self):
+        """A pasted hash or a URL with its punctuation stripped is one 300-character word,
+        and the slug made from it was longer than a filename may be: `add` died with a
+        traceback after the id was already allocated."""
+        filed = self.run_cli("add", "x" * 300)
+
+        self.assertEqual(0, filed.returncode, filed.stderr)
+        self.assertNotIn("Traceback", filed.stderr)
+        [card] = plan.load_all(self.ctx())
+        self.assertLessEqual(len(card.path.name), len("0001-.md") + plan.MAX_SLUG_CHARS)
+        self.assertEqual("x" * plan.MAX_TITLE_CHARS, card.title, "the slug's cap reached the title")
+
 
 class TestClosingATaskSticksAcrossWorktrees(RepoCase):
     """Ten tasks closed in a worktree all came back as NEXT and stayed there: `load_all`
