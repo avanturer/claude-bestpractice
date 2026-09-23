@@ -305,6 +305,39 @@ class TestRepairsRunThemselvesAndRunOnce(RepoCase):
         with only_repair("9999-explodes", 1, lambda ctx: 1 / 0):
             migrate.repair(self.ctx())
 
+    def test_sessions_that_start_together_run_each_repair_once(self):
+        """Restarting sessions after an upgrade starts them together, and each ran every
+        pending repair: in five trials out of five one scratch TODO became two to four cards
+        on the one board."""
+        self.write("TODO-refactor-parser.md",
+                   "# Refactor the parser\n\nThe tokenizer in a.py double-counts newlines.\n")
+        self.commit("a scratch todo from an older session")
+        starts = [
+            subprocess.Popen([sys.executable, str(BIN / "session-start")], stdin=subprocess.PIPE,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             cwd=str(self.repo), text=True)
+            for _ in range(4)
+        ]
+        for index, proc in enumerate(starts):
+            proc.stdin.write(json.dumps({"session_id": f"s{index}", "cwd": str(self.repo),
+                                         "hook_event_name": "SessionStart", "source": "startup"}))
+            proc.stdin.close()
+        for proc in starts:
+            proc.wait(timeout=180)
+
+        self.assertEqual(["Refactor the parser"], [t.title for t in plan.load_all(self.ctx())])
+
+    def test_a_session_that_cannot_have_the_lock_starts_without_them(self):
+        """Its sibling is running them. Waiting its whole start out, or running them beside
+        the sibling, is what the lock is for."""
+        from unittest import mock
+
+        ctx = self.ctx()
+        with mock.patch.object(migrate, "_LOCK_TIMEOUT", 0.1):
+            with store.file_lock(store.tier_b(ctx, migrate.REPAIR_LOCK)):
+                self.assertEqual([], migrate.repair(ctx))
+        self.assertEqual(len(migrate._REPAIRS), len(migrate.pending(ctx)))
+
     def test_an_inbox_an_interrupted_reindex_stranded_is_put_back(self):
         """A reindex that raised between its purge and its put-back left the queued notes
         in the carry directory beside Tier B, where nothing reads them."""

@@ -97,6 +97,13 @@ def pending(ctx: GitContext) -> list[str]:
     return [name for name, (revision, _) in _REPAIRS.items() if _ran_at(ctx, name) < revision]
 
 
+# Held around a whole run, beside the ledger it guards. Sessions start together — restarting
+# them after an upgrade is exactly that — and each ran every pending repair at once: in five
+# trials out of five, four simultaneous starts filed one scratch TODO as two to four cards.
+REPAIR_LOCK = "migrations.lock"
+_LOCK_TIMEOUT = store.LOCK_ACQUIRE_TIMEOUT
+
+
 def repair(ctx: GitContext) -> list[str]:
     """Reconcile this repository with what the installed version now knows. Returns what
     actually changed.
@@ -116,7 +123,23 @@ def repair(ctx: GitContext) -> list[str]:
     Never raises. An upgrade that dies halfway through fixing something has left the
     repository worse than the defect it came to fix, and the founder with no way to tell
     which half ran.
+
+    One run per clone at a time, with the ledger read again inside the lock, so a repair a
+    sibling has just finished reads as finished. A session that cannot have the lock in time
+    starts without the repairs and leaves them to the one holding it: waiting its whole
+    start out, or running them beside it, is the defect.
     """
+    if not pending(ctx):
+        return []
+    try:
+        with store.file_lock(store.tier_b(ctx, REPAIR_LOCK), timeout=_LOCK_TIMEOUT):
+            return _repair_pending(ctx)
+    except (store.LockTimeout, OSError):
+        return []
+
+
+def _repair_pending(ctx: GitContext) -> list[str]:
+    """Every repair this clone has not had at its current revision. Callers hold the lock."""
     changed: list[str] = []
     for name, (revision, step) in _REPAIRS.items():
         if _ran_at(ctx, name) >= revision:
