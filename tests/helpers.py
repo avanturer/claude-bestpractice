@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -203,6 +204,31 @@ class RepoCase(unittest.TestCase):
             timeout=180,
             env=env,
         )
+
+
+def hooks_at_once(name: str, events: list[dict], cwd, env: dict | None = None) -> list[str]:
+    """One gate per event, all in the same instant: what each printed.
+
+    The way the harness runs the hooks of one message's parallel calls — every process
+    already started and waiting on its stdin, then every event handed over together. Run
+    one after another, a race between them cannot happen and a test of it proves nothing.
+    """
+    gates = [
+        subprocess.Popen([sys.executable, str(BIN / name)], cwd=str(cwd), env=env,
+                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                         stderr=subprocess.DEVNULL, text=True)
+        for _ in events
+    ]
+    time.sleep(1.5)
+    for gate, event in zip(gates, events):
+        gate.stdin.write(json.dumps({"cwd": str(cwd), **event}))
+        gate.stdin.close()
+    said = []
+    for gate in gates:
+        with gate.stdout:
+            said.append(gate.stdout.read())
+        gate.wait()
+    return said
 
 
 def session_record_for(ctx, session_id: str, pid: int | None = None):

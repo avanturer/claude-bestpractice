@@ -296,6 +296,45 @@ class TestWorktreeCreate(RepoCase):
         entries = list(config["projects"].values())
         self.assertTrue(any(e.get("hasTrustDialogAccepted") for e in entries))
 
+    def test_trees_made_at_once_are_all_trusted(self):
+        """Four isolation agents started in one message each wrote back the `~/.claude.json`
+        they had read, and one trust survived: three trees whose hooks never ran."""
+        from helpers import hooks_at_once
+
+        (self.tmp / ".claude.json").write_text(json.dumps({"numStartups": 7}))
+
+        made = hooks_at_once("worktree-create", [
+            {"session_id": "s1", "hook_event_name": "WorktreeCreate", "name": f"agent-{i}"}
+            for i in range(4)
+        ], self.repo, env={"HOME": str(self.tmp), "PATH": "/usr/bin:/bin:/usr/local/bin"})
+
+        config = json.loads((self.tmp / ".claude.json").read_text())
+        trusted = {path for path, entry in config["projects"].items()
+                   if entry.get("hasTrustDialogAccepted")}
+        self.assertEqual({path.strip() for path in made}, trusted)
+        self.assertEqual(7, config["numStartups"], "a key that was not ours was lost")
+
+    def test_every_trust_in_a_burst_is_kept(self):
+        """The same race without the `git worktree add` in front of it, which spreads the
+        writes out and lets a lost update slip past now and then."""
+        import os
+        import time
+
+        from helpers import LIB
+
+        code = ("import sys, time; from claude_bestpractice import worktree; "
+                "time.sleep(max(0.0, float(sys.argv[2]) - time.time())); "
+                "worktree.trust(sys.argv[1])")
+        start = str(time.time() + 1.5)
+        env = {**os.environ, "HOME": str(self.tmp), "PYTHONPATH": str(LIB)}
+        burst = [subprocess.Popen([sys.executable, "-c", code, f"/trees/t{i}", start], env=env)
+                 for i in range(6)]
+        for proc in burst:
+            proc.wait()
+
+        config = json.loads((self.tmp / ".claude.json").read_text())
+        self.assertEqual({f"/trees/t{i}" for i in range(6)}, set(config["projects"]))
+
     def test_derives_a_deterministic_port_and_database(self):
         """Worktrees isolate files but share the daemon, ports and caches."""
         self.hook(branch="feature-z")

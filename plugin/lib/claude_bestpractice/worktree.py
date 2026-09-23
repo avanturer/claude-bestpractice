@@ -398,14 +398,33 @@ def slugify(text: str, fallback: str = "work") -> str:
     return "-".join(words)[:60].strip("-") or fallback
 
 
+# Beside the founder's `~/.claude.json` and named as ours, so it can never be mistaken for a
+# lock the CLI itself takes on that file.
+TRUST_LOCK = ".claude.json.claude-bestpractice.lock"
+
+
 def trust(path: str) -> bool:
     """Mark a worktree trusted so project settings and hooks actually load.
 
     In an untrusted worktree every project `permissions.allow` entry is ignored, plugin
     hooks never run, and in headless mode prompting means auto-denial — it fails safe and
     looks exactly like a model failure.
+
+    Under a lock, with the file re-read inside it, because trees are made several at once —
+    parallel isolation agents, two sessions refused in the same second — and each of them
+    wrote back the file it had read: of four trusted together, one survived, and three
+    trees ran with their hooks switched off. Only this one key is changed; everything else
+    is written back exactly as it was read under the lock.
     """
-    config = Path.home() / ".claude.json"
+    try:
+        with store.file_lock(Path.home() / TRUST_LOCK):
+            return _trusted_in(Path.home() / ".claude.json", path)
+    except (OSError, store.LockTimeout):
+        return False
+
+
+def _trusted_in(config: Path, path: str) -> bool:
+    """Set this one path's trust in the file at `config`. False when it cannot be done."""
     try:
         data = json.loads(config.read_text(encoding="utf-8")) if config.exists() else {}
     except (OSError, json.JSONDecodeError):

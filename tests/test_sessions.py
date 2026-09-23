@@ -11,7 +11,7 @@ import time
 import unittest
 from unittest import mock
 
-from helpers import BIN, LIB, RepoCase, git, session_record_for, sid
+from helpers import BIN, LIB, RepoCase, git, hooks_at_once, session_record_for, sid
 
 from claude_bestpractice import sessions, store, worktree
 
@@ -864,23 +864,10 @@ class TestParallelHooksOfOneSessionAllCount(RepoCase):
         self.me = sid(self.repo, "fan")
 
     def at_once(self, calls: list) -> list[str]:
-        """Every call's gate started first and then handed its event in the same instant,
-        which is how the harness runs the hooks of one message's parallel calls."""
-        gates = [subprocess.Popen([sys.executable, str(BIN / "pre-tool")], cwd=str(self.repo),
-                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                  stderr=subprocess.DEVNULL, text=True) for _ in calls]
-        time.sleep(1.5)
-        for gate, (tool, tool_input) in zip(gates, calls):
-            gate.stdin.write(json.dumps({"session_id": "fan", "cwd": str(self.repo),
-                                         "hook_event_name": "PreToolUse", "tool_name": tool,
-                                         "tool_input": tool_input}))
-            gate.stdin.close()
-        said = []
-        for gate in gates:
-            with gate.stdout:
-                said.append(gate.stdout.read())
-            gate.wait()
-        return said
+        return hooks_at_once("pre-tool", [
+            {"session_id": "fan", "hook_event_name": "PreToolUse", "tool_name": tool,
+             "tool_input": tool_input} for tool, tool_input in calls
+        ], self.repo)
 
     def test_six_parallel_spawns_meet_a_fan_out_of_three(self):
         said = self.at_once([("Agent", {"subagent_type": "Explore", "model": "haiku",
