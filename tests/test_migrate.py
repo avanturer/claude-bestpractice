@@ -338,6 +338,32 @@ class TestRepairsRunThemselvesAndRunOnce(RepoCase):
                 self.assertEqual([], migrate.repair(ctx))
         self.assertEqual(len(migrate._REPAIRS), len(migrate.pending(ctx)))
 
+    def board(self) -> str:
+        proc = self.run_hook("session-start", {
+            "session_id": "s1", "hook_event_name": "SessionStart", "source": "startup",
+        })
+        payload = json.loads(proc.stdout or "{}")
+        return payload.get("hookSpecificOutput", {}).get("additionalContext", "")
+
+    def test_a_revision_that_is_not_a_number_does_not_take_the_board_with_it(self):
+        """`repair` promises never to raise, and `_ran_at` sat outside its guard: one
+        revision that was not a number raised, and the session started with no board."""
+        store.write_json(store.tier_b(self.ctx(), migrate.LEDGER),
+                         {"0001-task-paths": {"revision": "one"}})
+        self.assertIn("OTHER LIVE SESSIONS", self.board())
+        self.assertEqual([], migrate.pending(self.ctx()),
+                         "a garbled record is run again and written properly")
+
+    def test_bookkeeping_that_cannot_be_written_stops_no_repair(self):
+        """An unrecorded step costs a re-run that finds nothing to do. A raising `_mark`
+        cost every repair after the first, on every start, for as long as it lasted."""
+        store.tier_b(self.ctx(), migrate.LEDGER).mkdir(parents=True)
+        config = store.tier_a(self.ctx(), "config.json")
+        config.replace(config.with_suffix(".json.broken"))
+
+        self.assertIn("OTHER LIVE SESSIONS", self.board())
+        self.assertTrue(config.is_file(), "the repairs after the first never ran")
+
     def test_an_inbox_an_interrupted_reindex_stranded_is_put_back(self):
         """A reindex that raised between its purge and its put-back left the queued notes
         in the carry directory beside Tier B, where nothing reads them."""

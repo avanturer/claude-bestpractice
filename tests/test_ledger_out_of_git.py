@@ -82,6 +82,36 @@ class TestTheLedgerIsKeptOutOfGit(RepoCase):
         migrate._untrack_the_ledger(self.ctx())
         self.assertIn("src/app.py", git(["ls-files", "src"], self.repo))
 
+    def test_an_index_git_would_not_write_is_tried_again_next_time(self):
+        """An editor or a sibling holding `index.lock` for a moment made `git rm --cached`
+        fail, and the step was recorded as done anyway: never run again, and the ledger
+        stayed in git in that clone for good."""
+        self.a_committed_card()
+        store.write_json(store.tier_b(self.ctx(), migrate.LEDGER), {
+            name: {"revision": revision} for name, (revision, _) in migrate._REPAIRS.items()
+            if name != "0015-untrack-the-ledger"
+        })
+        busy = self.repo / ".git" / "index.lock"
+        busy.write_text("", encoding="utf-8")
+        migrate.repair(self.ctx())
+        self.assertEqual(["0015-untrack-the-ledger"], migrate.pending(self.ctx()))
+
+        busy.unlink()
+        migrate.repair(self.ctx())
+        self.assertEqual([], self.tracked())
+        self.assertEqual([], migrate.pending(self.ctx()))
+
+    def test_a_clone_where_it_was_recorded_over_a_refusal_gets_it_again(self):
+        """Revision 1 recorded itself done whatever git said, so those clones still carry
+        their ledger in git; the next revision reaches them."""
+        self.a_committed_card()
+        store.write_json(store.tier_b(self.ctx(), migrate.LEDGER), {
+            name: {"revision": 1 if name == "0015-untrack-the-ledger" else revision}
+            for name, (revision, _) in migrate._REPAIRS.items()
+        })
+        migrate.repair(self.ctx())
+        self.assertEqual([], self.tracked())
+
 
 class TestTheHealthLineStopsReportingOurOwnRule(RepoCase):
     def test_our_rule_over_the_ledger_is_not_a_hidden_tier_a(self):

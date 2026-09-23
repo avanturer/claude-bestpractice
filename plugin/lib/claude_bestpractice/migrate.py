@@ -71,13 +71,23 @@ def _done(ctx: GitContext) -> dict:
 
 
 def _mark(ctx: GitContext, step: str, revision: int, detail: str) -> None:
+    """Record a repair as done. A ledger that cannot be written leaves it to run again.
+
+    Every step is idempotent, so the cost of an unrecorded one is a re-run that finds
+    nothing to do. The cost of raising here was every repair after the first, on every
+    session start for as long as the ledger stayed unwritable — and, before `repair` took
+    its lock, the session start itself: this sat outside the guard around each step.
+    """
     record = _done(ctx)
     record[step] = {
         "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "revision": revision,
         "detail": detail,
     }
-    store.write_json(store.tier_b(ctx, LEDGER), record)
+    try:
+        store.write_json(store.tier_b(ctx, LEDGER), record)
+    except OSError:
+        return
 
 
 def _ran_at(ctx: GitContext, step: str) -> int:
@@ -85,12 +95,26 @@ def _ran_at(ctx: GitContext, step: str) -> int:
 
     A record written before repairs carried revisions reads as 0, so every repair at
     revision 1 or above runs again on it. That is the point rather than a side effect:
-    such a clone was last reconciled by code that has since changed.
+    such a clone was last reconciled by code that has since changed. A revision that is
+    not a number reads the same way — it raised, before any step was guarded, and a
+    session start with it in the ledger produced no board at all.
     """
     entry = _done(ctx).get(step)
     if entry is None:
         return -1
-    return int(entry.get("revision") or 0) if isinstance(entry, dict) else 0
+    try:
+        return int(entry.get("revision") or 0) if isinstance(entry, dict) else 0
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+class Unfinished(Exception):
+    """A repair that could not do all of its work, and must not be recorded as done.
+
+    Raised by a step whose git call was refused: `repair` marks every step that returns,
+    so a step that swallowed the refusal was recorded as done and never ran again. Its
+    message is what did get done, reported the way a finished step's detail is.
+    """
 
 
 def pending(ctx: GitContext) -> list[str]:
@@ -146,6 +170,9 @@ def _repair_pending(ctx: GitContext) -> list[str]:
             continue
         try:
             detail = step(ctx)
+        except Unfinished as partly:
+            changed.extend([f"{name}: {partly}"] if str(partly) else [])
+            continue
         except Exception:  # noqa: BLE001 - a failed repair must not brick a session
             continue
         _mark(ctx, name, revision, detail)
@@ -791,11 +818,16 @@ def _untrack_the_ledger(ctx: GitContext) -> str:
     git is a staged deletion the founder commits with whatever they commit next. Nothing is
     lost and nothing needs to be restored — `git restore --staged` puts the index back if
     they disagree. Reversibility is the whole reason this is `--cached` and not `rm`.
+
+    A tree whose index git would not write — an `index.lock` held by an editor or a sibling
+    for a moment — leaves the step unfinished rather than done: counted as done, it was
+    never run again, and that clone kept its ledger in git for good.
     """
     from . import worktree
 
     worktree.hide(ctx)
     untracked = 0
+    refused = 0
     for tree in _trees_of(ctx):
         listed = _git_out(tree, ["ls-files", "-z", "--", _LEDGER_PATH])
         names = [name for name in listed.split("\0") if name.strip()]
@@ -809,12 +841,13 @@ def _untrack_the_ledger(ctx: GitContext) -> str:
             cwd=str(tree), capture_output=True,
             encoding="utf-8", errors="surrogateescape", timeout=120,
         )
-        if done.returncode == 0:
-            untracked += len(names)
-    if not untracked:
-        return ""
-    return (f"{untracked} ledger file(s) taken out of git's index and left on disk; "
-            "commit the staged deletion when you next commit")
+        untracked += len(names) if done.returncode == 0 else 0
+        refused += 1 if done.returncode != 0 else 0
+    said = (f"{untracked} ledger file(s) taken out of git's index and left on disk; "
+            "commit the staged deletion when you next commit") if untracked else ""
+    if refused:
+        raise Unfinished(said)
+    return said
 
 
 def _finish_removals_done_by_hand(ctx: GitContext) -> str:
@@ -937,7 +970,7 @@ _REPAIRS = {
     "0012-carry-worktree-tasks-home": (1, _carry_this_worktrees_tasks_home),
     "0013-restage-ledger-moves": (1, _restage_ledger_moves_git_lost),
     "0014-reconcile-ledger-copies": (1, _reconcile_scattered_ledger_copies),
-    "0015-untrack-the-ledger": (1, _untrack_the_ledger),
+    "0015-untrack-the-ledger": (2, _untrack_the_ledger),
     "0016-drop-the-compaction-marker": (1, _drop_the_compaction_demand_marker),
     "0017-finish-removals-done-by-hand": (1, _finish_removals_done_by_hand),
     "0018-put-back-what-reindex-stranded": (1, _put_back_what_a_reindex_stranded),
