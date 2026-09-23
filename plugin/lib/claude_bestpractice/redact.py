@@ -21,7 +21,13 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("google-api-key", re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b")),
     ("openai-key", re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_\-]{20,}\b")),
     ("anthropic-key", re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{20,}\b")),
-    ("private-key-block", re.compile(r"-----BEGIN[A-Z ]*PRIVATE KEY-----")),
+    # The WHOLE block. Matching the BEGIN line alone redacted the one line that is not the
+    # key and wrote the body and the END line into a signal file verbatim. To its END line
+    # when the text has one within a key's length; otherwise the base64 that follows, which
+    # is what is left of a key cut off mid-way.
+    ("private-key-block", re.compile(
+        r"-----BEGIN[A-Z ]*PRIVATE KEY(?: BLOCK)?-----"
+        r"(?:[\s\S]{0,16384}?-----END[A-Z ]*PRIVATE KEY(?: BLOCK)?-----|[A-Za-z0-9+/=\s]{0,16384})")),
     ("jwt", re.compile(r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b")),
     ("bearer", re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._\-]{20,}")),
     # Assignment forms catch the long tail: FOO_TOKEN=..., "password": "..."
@@ -38,10 +44,24 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     # where a run of scheme characters starts: anchored on `\b` alone, every dot in `a.a.a…`
     # began a fresh scan of the rest of the run, so the time went with the SQUARE of its
     # length — a 20 KB Write took a second in the gate that scans every write, 40 KB 3.6 s.
+    # The user may be EMPTY: Redis names only a password, `redis://:<password>@host`, and a
+    # production one was written into a signal file whole.
     ("url-credentials", re.compile(
         r"(?<![a-z0-9+.\-])\b([a-z][a-z0-9+.\-]*)://"
-        r"(?P<user>[^\s:/@]+):(?P<secret>[^\s:/@]+)@(?P<host>[^\s:/@]+)")),
+        r"(?P<user>[^\s:/@]*):(?P<secret>[^\s:/@]+)@(?P<host>[^\s:/@]+)")),
 ]
+
+# What an HTTP header carries by its name: `Authorization: Basic …`, an API key, a cookie.
+# Only `Bearer` was known, so a signal quoting the headers of a failed request was written
+# down with the credential in it. Scrubbed and never refused: read by the header's name,
+# a value has no shape of its own to be told from prose by, and one word too many taken
+# out of a note costs nothing where a refused write costs the turn. A value is taken when
+# a scheme names it or it carries a digit, and never when it is a template — `${TOKEN}`.
+_HEADER_CREDENTIAL = re.compile(
+    r"(?i)\b(?P<name>(?:proxy-)?authorization|x-api-key|api-key|x-auth-token|set-cookie|cookie)"
+    r"(?P<sep>[\"']?[ \t]*[:=][ \t]*[\"']?)"
+    r"(?P<value>(?:(?:basic|bearer|token|digest)[ \t]+[^\s\"'$<{]{6,}|[^\"'$<{\r\n]*\d)[^\r\n\"']*)"
+)
 
 REDACTED = "[REDACTED]"
 
@@ -216,7 +236,7 @@ def scrub(text: str) -> str:
             )
         else:
             out = pattern.sub(REDACTED, out)
-    return out
+    return _HEADER_CREDENTIAL.sub(lambda m: f"{m.group('name')}{m.group('sep')}{REDACTED}", out)
 
 
 def find(text: str) -> list[str]:

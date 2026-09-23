@@ -78,6 +78,25 @@ class TestIngest(RepoCase):
         self.assertNotIn("AKIAIOSFODNN7EXAMPLE", text)
         self.assertIn("[REDACTED]", text)
 
+    def test_a_credential_is_scrubbed_in_every_shape_a_signal_carries_one(self):
+        """A real batch reached `.claude/signals/` with a key's body, a Redis password, a
+        Basic credential and an API key intact — files that sit untracked in the tree."""
+        body = "MHcCAQEEIBzfZzzrxvZYjEeV5N9Ls7AutBIEi4rjqsMrhSfciX+MoAoGCCqGSM49"
+        proc = self.ingest([
+            self.full_signal(fingerprint="pem", message=(
+                f"bad key:\n-----BEGIN EC PRIVATE KEY-----\n{body}\n-----END EC PRIVATE KEY-----")),
+            self.full_signal(fingerprint="redis", message=(
+                "Error 111 connecting to redis://:Prod-R3dis-Passw0rd-2026@redis-master:6379/0")),
+            self.full_signal(fingerprint="basic", message=(
+                "401 for /v1/charge; sent {'Authorization': 'Basic YWRtaW46UzNjcjN0LUJpbGxpbmc='}")),
+            self.full_signal(fingerprint="key", message="X-Api-Key: 9f8e7d6c5b4a39281706f5e4d3c2b1a0"),
+        ])
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        written = "\n".join(path.read_text() for path in self.signals())
+        for secret in (body, "END EC PRIVATE KEY", "Prod-R3dis-Passw0rd-2026",
+                       "YWRtaW46UzNjcjN0", "9f8e7d6c5b4a3928"):
+            self.assertNotIn(secret, written)
+
     def test_frames_resolve_to_repo_relative_paths(self):
         """A frame the agent cannot map to a file is a frame it hallucinates around."""
         self.write("src/app.py", "x = 1\n")
