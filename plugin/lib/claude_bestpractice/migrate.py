@@ -50,7 +50,10 @@ LEDGER = "migrations.json"
 # curated document a project maintains on purpose, and adopting one would be taking over
 # something that was never a workaround. The hyphen is the whole distinction, and it is
 # the difference between helping and helping yourself to someone's documentation.
-_PARKED_BY_HAND = re.compile(r"(?:^|/)TODO[-_][\w.-]+\.md$", re.I)
+#
+# The pattern used to accept an underscore as well, against the sentence above, and
+# `third_party/libfoo/TODO_LIST.md` — somebody else's list — was rewritten to a pointer.
+_PARKED_BY_HAND = re.compile(r"(?:^|/)TODO-[\w.-]+\.md$", re.I)
 
 # The sentence left where an adopted file stood. Adoption has to recognise its own work:
 # without this, a second run adopts the pointer, files a task whose body is the pointer
@@ -1218,21 +1221,31 @@ def brief(ctx: GitContext, path: Path) -> str:
 
 
 def parked_by_hand(ctx: GitContext) -> list[Path]:
-    """TODO files a session wrote because the ledger could not park a task yet."""
-    found: list[Path] = []
+    """TODO files a session wrote because the ledger could not park a task yet.
+
+    Only this repository's own files — tracked, or untracked and not ignored — which is
+    what `git ls-files` lists, and it stops at a submodule and at a nested repository.
+    Walking the directory reached both: the upgrade rewrote a submodule's `TODO-v2.md` to a
+    pointer, leaving ` m vendor/upstream` in the founder's status, and filed a card for it.
+    Decision 0005 bounds this write to files a session wrote as a stand-in, and a session
+    writes into this repository, not into the ones it vendors.
+    """
     root = ctx.worktree_root
-    for path in root.rglob("TODO*.md"):
-        if any(part in _SKIP for part in path.relative_to(root).parts):
+    listed = _git_out(root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard",
+                             "--", ":(glob,icase)**/TODO-*.md"])
+    found: list[Path] = []
+    for relative in sorted(set(listed.split("\0"))):
+        if not _PARKED_BY_HAND.search(relative) or any(
+                part in _SKIP for part in PurePosixPath(relative).parts):
             continue
-        if not _PARKED_BY_HAND.search(path.relative_to(root).as_posix()):
-            continue
+        path = root / relative
         try:
             if POINTER in path.read_text(encoding="utf-8", errors="replace"):
                 continue
         except OSError:
             continue
         found.append(path)
-    return sorted(found)
+    return found
 
 
 def adopt(ctx: GitContext, path: Path) -> str:

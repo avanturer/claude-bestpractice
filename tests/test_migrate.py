@@ -117,6 +117,38 @@ class TestTheWorkaroundIsTakenOver(RepoCase):
         self.write("TODO.md", "- ship the thing\n")
         self.assertEqual([], migrate.parked_by_hand(self.ctx()))
 
+    def test_the_hyphen_is_the_convention_and_the_underscore_is_not(self):
+        """`TODO_LIST.md` is somebody's list; the comment above the pattern always said so."""
+        self.write("docs/TODO_LIST.md", "# a list\n\nnot a stand-in\n")
+        self.assertEqual([], migrate.parked_by_hand(self.ctx()))
+
+    def test_another_repositorys_files_are_not_this_ones(self):
+        """A submodule, a nested repository and ignored vendored code all matched the name,
+        and the upgrade rewrote them: ` m vendor/upstream` in the founder's status, and a
+        card on the board for somebody else's plan."""
+        from helpers import make_repo
+
+        upstream = make_repo(self.tmp, "upstream")
+        (upstream / "TODO-v2.md").write_text("# upstream's own plan\n\ntheirs\n", encoding="utf-8")
+        git(["add", "-A"], upstream)
+        git(["commit", "-qm", "their plan"], upstream)
+        git(["-c", "protocol.file.allow=always", "submodule", "add", "-q", str(upstream),
+             "vendor/upstream"], self.repo)
+        self.write(".gitignore", "scratch/\n")
+        self.write("scratch/TODO-generated.md", "# generated\n\nignored\n")
+        self.commit("vendor it, and ignore the scratch area")
+        nested = self.repo / "third_party" / "libfoo"
+        nested.mkdir(parents=True)
+        git(["init", "-q"], nested)
+        (nested / "TODO-list.md").write_text("# libfoo's own\n\ntheirs\n", encoding="utf-8")
+
+        self.assertEqual([], migrate.parked_by_hand(self.ctx()))
+        migrate.repair(self.ctx())
+        self.assertEqual("", git(["status", "--porcelain", "--", "vendor"], self.repo))
+        self.assertEqual("# libfoo's own\n\ntheirs\n",
+                         (nested / "TODO-list.md").read_text(encoding="utf-8"))
+        self.assertEqual([], plan.load_all(self.ctx()))
+
     def test_adoption_carries_the_files_the_note_mentions(self):
         self.seed()
         task_id = migrate.adopt(self.ctx(), migrate.parked_by_hand(self.ctx())[0])
