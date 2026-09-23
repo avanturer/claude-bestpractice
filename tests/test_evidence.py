@@ -350,3 +350,83 @@ class TestAFastForwardIsNotAnEdit(RepoCase):
         git(["commit", "-qm", "my work"], self.repo)
 
         self.assertIn("mine.py", changed_files(self.ctx(), baseline))
+
+
+APP_READING_ITS_DATA = (
+    "import xml.etree.ElementTree as ET\n\n\n"
+    "def total():\n    return int(ET.parse('data/report.xml').getroot().get('total'))\n"
+)
+TEST_OF_THE_DATA = (
+    "import unittest\n\nfrom app import total\n\n\n"
+    "class T(unittest.TestCase):\n    def test_total(self):\n        self.assertEqual(total(), 3)\n"
+)
+
+
+class TestATrackedFileIsTheTreesOwnContent(RepoCase):
+    """A name that looks like a run's leftovers is only leftovers when nobody tracks it.
+
+    `tree_hash` let a changed TRACKED file through whenever its name matched an artifact glob
+    or sat under a byproduct directory. `data/report.xml` is both an artifact name and a file
+    the code reads: fixed in the working tree over a HEAD that still broke it, the green was
+    stamped with HEAD's tree and the push-time skip covered a commit that failed; edited the
+    other way, a failure the tree no longer had was re-asserted instead of run (decision 0013
+    breached in both directions).
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.configure(require_task=False, manage_pull_requests=False, test_command=[
+            "python3", "-m", "unittest", "discover", "-s", "tests", "-t", "."])
+        self.write("app.py", APP_READING_ITS_DATA)
+        self.write("data/report.xml", '<report total="3"/>\n')
+        self.write("tests/__init__.py", "")
+        self.write("tests/test_app.py", TEST_OF_THE_DATA)
+        self.commit("an app that reads a tracked data file")
+        # The session starts here, so what is committed next is its own work.
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart",
+                                        "source": "startup"})
+
+    def stop(self):
+        return self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                               "stop_hook_active": False})
+
+    def test_a_tracked_file_changed_in_place_is_uncommitted_work(self):
+        """An artifact's name, and a file under a byproduct directory — both tracked."""
+        self.write("coverage/thresholds.json", '{"lines": 80}\n')
+        self.commit("thresholds the build reads")
+        for rel, body in (("data/report.xml", '<report total="4"/>\n'),
+                          ("coverage/thresholds.json", '{"lines": 90}\n')):
+            self.write(rel, body)
+            self.assertEqual("", evidence.tree_hash(self.ctx()), rel)
+            git(["checkout", "--", rel], self.repo)
+
+    def test_what_a_run_leaves_behind_is_still_not(self):
+        """The allowance #206 needed stands: untracked byproducts and artifacts."""
+        self.write("junit.xml", "<testsuite tests='1'/>\n")
+        self.write("coverage/index.html", "<html></html>\n")
+        self.write("__pycache__/app.cpython-311.pyc", "x")
+        self.write(".claude/claude-bestpractice/notes.json", "{}\n")
+        head = git(["rev-parse", "HEAD^{tree}"], self.repo)
+        self.assertEqual(head, evidence.tree_hash(self.ctx()))
+
+    def test_a_fix_only_in_the_working_tree_is_not_stamped_as_heads(self):
+        self.write("app.py", APP_READING_ITS_DATA + "\n# refactor\n")
+        self.write("data/report.xml", '<report total="4"/>\n')
+        self.commit("HEAD breaks the suite")
+        self.write("data/report.xml", '<report total="3"/>\n')
+
+        proc = self.stop()
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertFalse(evidence.green_covers_tree(self.ctx()),
+                         "the push would skip a suite that fails on what it pushes")
+
+    def test_a_failure_the_tree_no_longer_has_is_run_not_reasserted(self):
+        self.write("app.py", APP_READING_ITS_DATA + "\n# refactor\n")
+        self.write("data/report.xml", '<report total="4"/>\n')
+        self.commit("HEAD breaks the suite")
+        self.assertEqual(2, self.stop().returncode, "precondition: the break is recorded red")
+
+        self.write("data/report.xml", '<report total="3"/>\n')
+        proc = self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                               "stop_hook_active": True})
+        self.assertEqual(0, proc.returncode, proc.stderr)

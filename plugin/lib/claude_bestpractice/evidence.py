@@ -1712,19 +1712,33 @@ def tree_hash(ctx: GitContext) -> str:
     returned "" in almost every real repository, which silently switched off both things
     that read it — the push-time skip, and the re-assertion of a failure already observed
     on this exact tree (#206).
+
+    Those allowances are for what a run LEAVES, which is untracked. A tracked file changed
+    in place is the tree's own content whatever it is called: a fix to a tracked
+    `data/report.xml` — an artifact name, and a file the code reads — was stamped green
+    against a HEAD that still held the break, so the push skipped a suite that failed on
+    exactly what it pushed; and the same file edited the other way had a failure the tree
+    no longer had re-asserted over it. Only `.claude/`, this plugin's own state, is left out
+    for tracked files too.
     """
-    from . import config
     from .gitctx import _run
 
     try:
-        listed = _run(["status", "--porcelain", "--untracked-files=normal"],
-                      ctx.worktree_root, check=False)
-        touched = [_porcelain_path(line) for line in listed.splitlines()]
-        if material_changes([p for p in touched if p], [".claude/"], config.DEFAULT_ARTIFACT_GLOBS):
+        entries = _status_entries(ctx)
+        if entries is None or any(_is_work(status, path) for status, path in entries):
             return ""
         return _run(["rev-parse", "HEAD^{tree}"], ctx.worktree_root, check=False).strip()
     except Exception:  # noqa: BLE001 - no hash means no shortcut, which is the safe answer
         return ""
+
+
+def _is_work(status: str, path: str) -> bool:
+    """Whether one `git status` entry is content the committed tree does not hold."""
+    from . import config
+
+    if status == "??":
+        return bool(material_changes([path], [".claude/"], config.DEFAULT_ARTIFACT_GLOBS))
+    return not (path == ".claude" or path.startswith(".claude/"))
 
 
 # `XY <path>`, and `XY <old> -> <new>` for a rename. Matched rather than sliced at a fixed
