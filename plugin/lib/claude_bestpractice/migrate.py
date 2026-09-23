@@ -27,6 +27,7 @@ command.
 
 from __future__ import annotations
 
+import calendar
 import re
 import subprocess
 import time
@@ -624,21 +625,64 @@ def _close_cards_whose_work_shipped(ctx: GitContext) -> str:
 
     Two conditions, both conservative, because this runs unattended in somebody's
     repository. The owner must not be a live session — a card a chat is holding right now
-    is that chat's to close. And EVERY file the card named must be byte-identical to what
-    the trunk holds, where `settle_delivered` needs only one: it is judging a delivery it
-    watched happen, and this is inferring one from the state left behind.
+    is that chat's to close. And EVERY file the card named must have reached the trunk from
+    the card's own branch, where `settle_delivered` needs only one: it is judging a delivery
+    it watched happen, and this is inferring one from the state left behind.
     """
-    from . import evidence, plan, sessions
+    from . import plan, sessions
+    from .gitctx import trunk_ref
 
+    trunk = trunk_ref(ctx)
     closed = 0
     for task in plan.load_all(ctx, plan.DOING):
         holder = sessions.get(ctx, task.owner) if task.owner else None
         if holder is not None and sessions.is_live(ctx, holder):
             continue
-        if not task.paths or len(evidence.landed(ctx, task.paths)) != len(task.paths):
+        if not trunk or not _delivered_by_its_branch(ctx, task, trunk):
             continue
         closed += len(plan.settle_delivered(ctx, task.owner, task.paths, "the trunk"))
     return f"{closed} in-flight card(s) closed over work already on the trunk" if closed else ""
+
+
+def _delivered_by_its_branch(ctx: GitContext, task, trunk: str) -> bool:
+    """Did the branch this card was claimed on put every file it names on the trunk?
+
+    Asked of that BRANCH, never of whichever tree happens to run the repair. A tree that
+    never touched the files holds the trunk's content by definition — the main checkout
+    beside a sibling worktree whose work is unmerged, which is the default workflow — and
+    this closed such a card as shipped, delivery note and all, while its work sat in the
+    sibling with `git branch --no-merged` still listing it.
+
+    Content, not ancestry, so a squash merge counts. And the branch must have touched those
+    files since the card was filed: one still standing where it was cut holds the trunk's
+    content too, and that equality is about work nobody did.
+    """
+    from .gitctx import _run
+
+    tip = _run(["rev-parse", "--verify", "--quiet", f"refs/heads/{task.branch}"],
+               ctx.worktree_root, check=False) if task.branch else ""
+    if not tip or not task.paths:
+        return False
+    touched = _run(["log", "-1", "--format=%ct", tip, "--", *task.paths],
+                   ctx.worktree_root, check=False)
+    if not touched.isdigit() or int(touched) < _filed_at(task.created_at):
+        return False
+    return all(_blob_at(ctx, tip, rel) == _blob_at(ctx, trunk, rel) != "" for rel in task.paths)
+
+
+def _blob_at(ctx: GitContext, rev: str, rel: str) -> str:
+    from .gitctx import _run
+
+    return _run(["rev-parse", "--verify", "--quiet", f"{rev}:{rel}"], ctx.worktree_root,
+                check=False)
+
+
+def _filed_at(created_at: str) -> float:
+    """When a card was filed; never, when it does not say — nothing is closed on a guess."""
+    try:
+        return float(calendar.timegm(time.strptime(created_at, "%Y-%m-%dT%H:%M:%SZ")))
+    except (TypeError, ValueError):
+        return float("inf")
 
 
 def _ledger_root(ctx: GitContext) -> Path:

@@ -1128,12 +1128,62 @@ class TestCardsLeftInFlightByTheMissingClosingHalf(RepoCase):
         return claimed
 
     def test_a_card_over_work_already_on_the_trunk_is_closed(self):
-        self.shipped("src/app.py")
         task = self.in_flight("a-session-that-is-gone", "src/app.py")
+        self.shipped("src/app.py")
 
         changed = migrate.repair(self.ctx())
         self.assertEqual(plan.DONE, plan.find(self.ctx(), task.id).state)
         self.assertTrue([line for line in changed if "already on the trunk" in line])
+
+    def test_a_card_whose_work_sits_unmerged_in_a_sibling_tree_is_left_alone(self):
+        """The default workflow: the work is in a worktree, and the tree that happens to run
+        the repair — the main checkout — never touched the files, so they equal the trunk
+        there. It closed the card with a delivery note over work that never left the sibling."""
+        from claude_bestpractice.gitctx import resolve
+
+        self.shipped("src/app.py")
+        tree = self.add_worktree("rework")
+        task = plan.add(self.ctx(), "rework the app", paths=["src/app.py"], done_when="stated")
+        plan.claim(resolve(tree), task.id, "a-session-that-is-gone", "rework")
+        (tree / "src" / "app.py").write_text("x = 2  # the rework\n", encoding="utf-8")
+        git(["commit", "-qam", "the rework, not merged"], tree)
+
+        migrate.repair(self.ctx())
+        self.assertEqual(plan.DOING, plan.find(self.ctx(), task.id).state)
+
+    def test_a_card_whose_branch_never_touched_its_files_is_left_alone(self):
+        """A branch standing where it was cut holds the trunk's content too."""
+        import os
+        import subprocess
+
+        self.write("src/app.py", "x = 1\n")
+        git(["add", "-A"], self.repo)
+        subprocess.run(["git", "commit", "-qm", "long before the card"], cwd=str(self.repo),
+                       check=True, env={**os.environ, "GIT_COMMITTER_DATE": "2026-01-01T00:00:00Z"})
+        git(["update-ref", "refs/remotes/origin/main", "HEAD"], self.repo)
+        git(["branch", "never-started"], self.repo)
+        task = plan.add(self.ctx(), "work never begun", paths=["src/app.py"], done_when="stated")
+        plan.claim(self.ctx(), task.id, "a-session-that-is-gone", "never-started")
+
+        migrate.repair(self.ctx())
+        self.assertEqual(plan.DOING, plan.find(self.ctx(), task.id).state)
+
+    def test_a_squash_merge_is_a_delivery_too(self):
+        """Its branch is never an ancestor of the trunk; its content is on it all the same."""
+        from claude_bestpractice.gitctx import resolve
+
+        self.shipped("src/app.py")
+        tree = self.add_worktree("squashed")
+        task = plan.add(self.ctx(), "rework the app", paths=["src/app.py"], done_when="stated")
+        plan.claim(resolve(tree), task.id, "a-session-that-is-gone", "squashed")
+        (tree / "src" / "app.py").write_text("x = 2  # the rework\n", encoding="utf-8")
+        git(["commit", "-qam", "the rework"], tree)
+        self.write("src/app.py", "x = 2  # the rework\n")
+        self.commit("the rework (squashed)")
+        git(["update-ref", "refs/remotes/origin/main", "HEAD"], self.repo)
+
+        migrate.repair(self.ctx())
+        self.assertEqual(plan.DONE, plan.find(self.ctx(), task.id).state)
 
     def test_a_card_a_live_session_is_holding_is_left_alone(self):
         """A card a chat is holding right now is that chat's to close."""
@@ -1168,8 +1218,8 @@ class TestCardsLeftInFlightByTheMissingClosingHalf(RepoCase):
         self.assertEqual(plan.DOING, plan.find(self.ctx(), task.id).state)
 
     def test_it_runs_once_and_says_nothing_the_second_time(self):
-        self.shipped("src/app.py")
         self.in_flight("a-session-that-is-gone", "src/app.py")
+        self.shipped("src/app.py")
 
         migrate.repair(self.ctx())
         self.assertEqual([], [line for line in migrate.repair(self.ctx())
