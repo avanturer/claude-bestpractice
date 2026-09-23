@@ -34,9 +34,13 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
             r"[\"']?\s*[:=]\s*(?P<quote>[\"']?)(?P<value>[^\s\"',;]{8,})"
         ),
     ),
-    # Connection strings leak credentials in the authority component.
+    # Connection strings leak credentials in the authority component. The scheme starts only
+    # where a run of scheme characters starts: anchored on `\b` alone, every dot in `a.a.a…`
+    # began a fresh scan of the rest of the run, so the time went with the SQUARE of its
+    # length — a 20 KB Write took a second in the gate that scans every write, 40 KB 3.6 s.
     ("url-credentials", re.compile(
-        r"\b([a-z][a-z0-9+.\-]*)://(?P<user>[^\s:/@]+):(?P<secret>[^\s:/@]+)@(?P<host>[^\s:/@]+)")),
+        r"(?<![a-z0-9+.\-])\b([a-z][a-z0-9+.\-]*)://"
+        r"(?P<user>[^\s:/@]+):(?P<secret>[^\s:/@]+)@(?P<host>[^\s:/@]+)")),
 ]
 
 REDACTED = "[REDACTED]"

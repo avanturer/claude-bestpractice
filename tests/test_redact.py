@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 import unittest
 
 from helpers import RepoCase  # noqa: F401  (ensures sys.path is set up)
@@ -200,6 +201,41 @@ class TestTheAssignmentFormOfADevelopmentDefault(unittest.TestCase):
                      'API_TOKEN = "https://deploy:s3cretpw@registry.example.com/"',
                      "SECRET_KEY=test-secret-key"):
             self.assertIn("assigned-secret", redact.find(text), text)
+
+
+class TestTheScanTakesTimeInProportionToTheText(RepoCase):
+    """The credential scan reads every Write and every Bash line. Anchored on `\\b` alone,
+    the connection-string pattern began a fresh scan of the rest of the run at every dot of
+    `a.a.a…`: 20 KB took a second and 40 KB 3.6 s, in a gate with a fifteen-second budget."""
+
+    DOTTED = "a." * 30_000
+
+    def test_sixty_kilobytes_of_dotted_text_is_read_in_well_under_a_second(self):
+        for scan in (redact.find, redact.scrub):
+            started = time.monotonic()
+            scan(self.DOTTED)
+            self.assertLess(time.monotonic() - started, 1.0, scan.__name__)
+
+    def test_the_gate_writes_it_without_stalling(self):
+        started = time.monotonic()
+        proc = self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Write",
+            "tool_input": {"file_path": str(self.repo / "data.txt"), "content": self.DOTTED}})
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertNotEqual("deny", self.hook_decision(proc), proc.stdout)
+        self.assertLess(time.monotonic() - started, 3.0)
+
+    def test_anchoring_the_scheme_loses_no_connection_string(self):
+        for text, secret in (("postgres://admin:s3cretpw@db.internal:5432/app", "s3cretpw"),
+                             ("DATABASE_URL=mysql+pymysql://root:hunter2hunter2@db/app",
+                              "hunter2hunter2"),
+                             ("cloned https://deploy:t0kenvalue@git.example.com/r.git",
+                              "t0kenvalue"),
+                             ('{"url": "amqp://guest:rabbitpass@mq:5672"}', "rabbitpass"),
+                             ("a.b.c.git+ssh://git:s3cretpw@host/repo", "s3cretpw")):
+            with self.subTest(text=text):
+                self.assertIn("url-credentials", redact.find(text))
+                self.assertNotIn(secret, redact.scrub(text))
 
 
 if __name__ == "__main__":
