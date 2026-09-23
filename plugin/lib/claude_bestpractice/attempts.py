@@ -105,7 +105,10 @@ def _parse(path: Path) -> Attempt | None:
         title=meta.get("title", ""),
         outcome=meta.get("outcome", FAILED),
         why=body.strip()[:MAX_BODY_CHARS],
-        paths=[p for p in meta.get("paths", "").split(",") if p.strip()],
+        # Stripped: `record` writes them joined by ", ", so every path after the first came
+        # back with a space in front and matched no file — a dead end about two files was
+        # surfaced for the first alone, and filed again for the second.
+        paths=[p.strip() for p in meta.get("paths", "").split(",") if p.strip()],
         branch=meta.get("branch", ""),
         session_id=meta.get("session", ""),
         recorded_at=float(meta.get("recorded_at") or 0),

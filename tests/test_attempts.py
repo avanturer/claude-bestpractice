@@ -87,6 +87,15 @@ class TestSurfacing(AttemptCase):
         self.assertIn("websockets", attempts.render_for_board(ctx, ["src/ws.ts"]))
         self.assertEqual(attempts.render_for_board(ctx, ["src/landing.tsx"]), "")
 
+    def test_every_file_it_names_is_its_subject_not_only_the_first(self):
+        """The paths are written joined by ", ", and every one after the first was read back
+        with a space in front: a dead end about two files warned on the first alone, and
+        the same one on the second was filed again as new."""
+        ctx = self.ctx()
+        attempts.record(ctx, "websockets", "reconnect storms", ["src/client.ts", "src/ws.ts"])
+        self.assertIn("websockets", attempts.render_for_board(ctx, ["src/ws.ts"]))
+        self.assertIsNone(attempts.record(ctx, "websockets", "again", ["src/ws.ts"]))
+
     def test_no_subject_at_all_falls_back_to_the_most_recent(self):
         """At SessionStart there is no subject — and `paths` was empty EVERY time.
 
