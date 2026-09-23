@@ -269,5 +269,50 @@ class TestSessionsThatArmTheGateTogether(HookCase):
         self.assertEqual(self.FOUNDERS, self.chained.read_text())
 
 
+class TestADisabledHookStaysDisabled(HookCase):
+    """git runs a hook only when it is executable, and clearing the bit is how a founder
+    switches one off. Installing over such a hook set the bit on the copy it chained: their
+    disabled deploy hook ran and failed the next push, and `off` put it back enabled for good.
+    """
+
+    def disabled_hook(self) -> Path:
+        from claude_bestpractice import ci
+
+        path = ci.hook_path(self.ctx())
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("#!/bin/sh\necho OLD-DEPLOY-HOOK\nexit 1\n")
+        path.chmod(0o644)
+        return path
+
+    def test_a_hook_git_was_ignoring_is_still_ignored(self):
+        from claude_bestpractice import ci
+
+        self.disabled_hook()
+        ci.install(self.ctx())
+        pushed = self.push(self.repo)
+        self.assertEqual(0, pushed.returncode, pushed.stderr)
+        self.assertNotIn("OLD-DEPLOY-HOOK", pushed.stdout + pushed.stderr)
+
+    def test_off_puts_it_back_as_it_was(self):
+        from claude_bestpractice import ci
+
+        path = self.disabled_hook()
+        ci.install(self.ctx())
+        ci.remove(self.ctx())
+        self.assertIn("OLD-DEPLOY-HOOK", path.read_text())
+        self.assertEqual(0o644, path.stat().st_mode & 0o777)
+
+    def test_the_script_a_symlinked_hook_points_at_keeps_its_mode(self):
+        from claude_bestpractice import ci
+
+        script = self.write("scripts/prepush.sh", "#!/bin/sh\necho mine\n")
+        script.chmod(0o644)
+        path = ci.hook_path(self.ctx())
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.symlink_to(script)
+        ci.install(self.ctx())
+        self.assertEqual(0o644, script.stat().st_mode & 0o777, "a tracked file's mode changed")
+
+
 if __name__ == "__main__":
     unittest.main()

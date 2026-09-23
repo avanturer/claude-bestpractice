@@ -643,6 +643,10 @@ def _arm(ctx: GitContext) -> tuple[bool, str]:
                 # older copy of this plugin still running in another session. Displacing it
                 # is how ours came to be chained to itself.
                 return False, f"pre-push hook already installed: {path}"
+            # Moved with the mode it has. git runs a hook only when it is executable, and
+            # clearing the bit is how a founder switches one off: setting it here ran their
+            # disabled deploy hook on the next push, and `off` put it back enabled for good.
+            # Through a symlink the chmod also landed on the tracked script it points at.
             displaced = _displace(path)
             if not displaced:
                 return False, (
@@ -650,8 +654,6 @@ def _arm(ctx: GitContext) -> tuple[bool, str]:
                     "hooks of yours, and chaining the first would overwrite the second. Remove "
                     "the one you no longer need, then: claude-bp-ci local"
                 )
-            with contextlib.suppress(OSError):
-                _make_executable(path.parent / displaced)
         _write_new_file(path, hook_body(ctx))
     except OSError as exc:
         return False, f"could not install the pre-push hook: {exc}"
