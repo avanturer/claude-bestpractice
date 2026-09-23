@@ -732,7 +732,31 @@ def _update(ctx: GitContext) -> tuple[bool, str]:
     before = stamped_version(ctx) or "unknown"
     if refresh(ctx):
         return True, f"pre-push hook updated {before} -> {__version__}"
+    if _rebaked(ctx):
+        return True, f"pre-push hook rewritten for this project as it is now ({__version__})"
     return False, f"pre-push hook already current ({__version__})"
+
+
+def _rebaked(ctx: GitContext) -> bool:
+    """Rewrite our hook when this project would now get a different one. True when it did.
+
+    This command is the remedy the hook itself names — "run 'claude-bp-ci local' if the
+    runner changed" — and it compared versions only: a hook of this version still baking
+    `go`, in a project that had moved to `make test`, was reported "already current" and
+    every push stayed refused. Here and not at a session start, which keeps comparing
+    versions: the body carries the interpreter that wrote it, and eight sessions each
+    rewriting it in their own would churn a file the founder may be reading.
+    """
+    path = hook_path(ctx)
+    body = hook_body(ctx)
+    try:
+        if path.read_text(encoding="utf-8", errors="replace") == body:
+            return False
+        path.write_text(body, encoding="utf-8")
+        _make_executable(path)
+    except OSError:
+        return False
+    return True
 
 
 def remove(ctx: GitContext) -> tuple[bool, str]:

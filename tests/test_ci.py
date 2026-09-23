@@ -1077,6 +1077,40 @@ class TestAStaleHookIsBroughtUpToDate(RepoCase):
         self.assertIn("husky", displaced.read_text(encoding="utf-8"))
 
 
+class TestTheRemedyTheHookNamesDoesSomething(CICase):
+    """A hook whose baked runner is gone refuses the push and says "run 'claude-bp-ci local'
+    if the runner changed". That command compared versions only, so over a hook of this
+    version still baking `go`, in a project that had moved to `make test`, it said "already
+    current" — and every push stayed refused.
+    """
+
+    def moved_from_go_to_make(self) -> None:
+        from claude_bestpractice import ci
+
+        self.write("go.mod", "module example.com/x\n")
+        ci.install(self.ctx())
+        self.assertIn("_runner=go", ci.hook_path(self.ctx()).read_text())
+        (self.repo / "go.mod").unlink()
+        self.write("Makefile", "test:\n\t@echo tests ok\n")
+        self.commit("the project runs make test now")
+
+    def test_local_rebakes_the_runner(self):
+        from claude_bestpractice import ci
+
+        self.moved_from_go_to_make()
+        said = self.cli("local").stdout
+        self.assertNotIn("already current", said)
+        self.assertIn("_runner=make", ci.hook_path(self.ctx()).read_text())
+
+    def test_and_the_push_it_was_refusing_goes_out(self):
+        self.moved_from_go_to_make()
+        self.with_remote()
+        self.cli("local")
+        pushed = subprocess.run(["git", "push", "origin", "main"], cwd=str(self.repo),
+                                capture_output=True, text=True, timeout=180)
+        self.assertEqual(0, pushed.returncode, pushed.stderr)
+
+
 class TestAHookFromBeforeTheRenameIsOurs(CICase):
     """The project was called founder-os once, and hooks written then say so.
 
