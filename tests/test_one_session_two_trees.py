@@ -131,6 +131,13 @@ class TestItsCardComesWithIt(MovedSession):
         self.assertEqual(0, proc.returncode, proc.stderr)
         self.assertEqual(sid(self.tree, "S"), plan.find(self.ctx(), "0001").owner)
 
+    def test_it_closes_its_own_card_from_its_tree(self):
+        """`done` refuses a live sibling's card, and the holder here is this session under
+        the id it claimed with — the command the Stop gate's closure demand names."""
+        proc = self.cli(self.tree, "done", "0001")
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual(plan.DONE, plan.find(self.ctx(), "0001").state)
+
     def test_the_founders_next_message_files_no_second_card(self):
         """`open_for` asked whether THIS id held a card in flight; the card was the other
         id's, so the next message in the tree put the same work on the board again."""
@@ -178,6 +185,13 @@ class TestASiblingIsStillASibling(MovedSession):
         claim = self.cli(self.tree, "claim", "0001")
         self.assertEqual(1, claim.returncode)
         self.assertIn("held by live session", claim.stderr)
+
+    def test_the_same_harness_id_in_another_process_cannot_close_its_card(self):
+        self.pin(self.repo, "S", ANOTHER_PROCESS)
+        proc = self.cli(self.tree, "done", "0001")
+        self.assertEqual(1, proc.returncode, proc.stdout)
+        self.assertIn("held by live session", proc.stderr)
+        self.assertEqual(plan.DOING, plan.find(self.ctx(), "0001").state)
 
     def test_a_sibling_on_the_same_database_is_still_refused(self):
         self.a_sibling(self.repo, "B")

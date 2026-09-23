@@ -158,6 +158,64 @@ class TestClaiming(PlanCase):
         self.assertEqual(2, len(reads), "it did not read the card again")
 
 
+class TestOnlyItsHolderHandsACardBack(PlanCase):
+    """`claim` refused a card a live session held; `pause` and `done` took it, clearing the
+    owner, and the holder's next write was refused for having nothing on the board."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.holder = sid(self.repo, "s2")
+        self.session(self.holder)
+        self.session(sid(self.repo, "s1"))
+        self.task = plan.add(self.ctx(), "the holder's work", done_when="stated",
+                             paths=["src/app.py"])
+        plan.claim(self.ctx(), self.task.id, self.holder, "main")
+
+    def cli(self, *args: str, session: str = "") -> subprocess.CompletedProcess:
+        """As a session runs it, or — with no session — as the founder does at a terminal."""
+        import os
+
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_SESSION_ID"}
+        if session:
+            env["CLAUDE_CODE_SESSION_ID"] = session
+        return subprocess.run([sys.executable, str(BIN / "claude-bp-plan"), *args],
+                              capture_output=True, text=True, cwd=str(self.repo), env=env,
+                              timeout=120)
+
+    def state(self) -> tuple[str, str]:
+        found = plan.find(self.ctx(), self.task.id)
+        return found.state, found.owner
+
+    def test_a_sibling_cannot_pause_it(self):
+        proc = self.cli("pause", self.task.id, "--blocker", "waiting on the schema decision",
+                        session="s1")
+        self.assertEqual(1, proc.returncode, proc.stdout)
+        self.assertIn("held by live session", proc.stderr)
+        self.assertEqual((plan.DOING, self.holder), self.state())
+
+    def test_a_sibling_cannot_close_it(self):
+        proc = self.cli("done", self.task.id, session="s1")
+        self.assertEqual(1, proc.returncode, proc.stdout)
+        self.assertIn("held by live session", proc.stderr)
+        self.assertEqual((plan.DOING, self.holder), self.state())
+
+    def test_its_holder_still_closes_it(self):
+        self.assertEqual(0, self.cli("done", self.task.id, session="s2").returncode)
+        self.assertEqual(plan.DONE, self.state()[0])
+
+    def test_the_founder_at_a_terminal_is_never_asked(self):
+        proc = self.cli("pause", self.task.id, "--blocker", "waiting on the schema decision")
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual(plan.PAUSED, self.state()[0])
+
+    def test_a_dead_holders_card_is_anybodys_to_hand_back(self):
+        self.session(self.holder, pid=999_999_999)
+        proc = self.cli("pause", self.task.id, "--blocker", "waiting on the schema decision",
+                        session="s1")
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual(plan.PAUSED, self.state()[0])
+
+
 class TestParallelWorktrees(PlanCase):
     def test_ids_do_not_collide_across_worktrees(self):
         """The allocator must see sibling worktrees before their files are committed."""

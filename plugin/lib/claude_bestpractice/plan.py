@@ -896,8 +896,9 @@ def _ago(seconds: float) -> str:
     return f"{int(seconds // 3600)}h"
 
 
-def pause(ctx: GitContext, task_id: str, blocker: str) -> tuple[Task | None, str]:
-    """Stop work and say what would restart it.
+def pause(ctx: GitContext, task_id: str, blocker: str,
+          session_id: str = "") -> tuple[Task | None, str]:
+    """Stop work and say what would restart it. `session_id` is who asks (see `_not_theirs`).
 
     The blocker is required. "Paused" without one is indistinguishable from abandoned, and
     the next session has no way to tell whether it is waiting on a decision, a credential,
@@ -908,12 +909,32 @@ def pause(ctx: GitContext, task_id: str, blocker: str) -> tuple[Task | None, str
             "a pause needs to say what would lift it — name the decision, the credential, "
             "the merge or the answer this is waiting on"
         )
-    task = find(ctx, task_id)
-    if task is None:
-        return None, f"no task {task_id}"
-    if task.state == DONE:
-        return None, f"task {task.id} is already done"
-    return _move_every(ctx, task_id, PAUSED, blocker=blocker.strip()) or task, ""
+    with store.file_lock(store.tier_b(ctx, CLAIM_LOCK)):
+        task = find(ctx, task_id)
+        if task is None:
+            return None, f"no task {task_id}"
+        if task.state == DONE:
+            return None, f"task {task.id} is already done"
+        refused = _not_theirs(ctx, task, session_id)
+        if refused:
+            return None, refused
+        return _move_every(ctx, task_id, PAUSED, blocker=blocker.strip()) or task, ""
+
+
+def _not_theirs(ctx: GitContext, task: Task, session_id: str) -> str:
+    """Why the session asking may not pause or close `task`, or "" when it may.
+
+    A live sibling's card is its own to hand back or to finish. `claude-bp-plan claim` refused
+    one while `pause` and `done` took it, and the sibling's next write was then refused for
+    having nothing on the board. Only a session this clone has registered is asked: the
+    founder at a terminal, this plugin closing the cards a delivery carried, and a process
+    that merely inherited somebody's session id are nobody's sibling here.
+    """
+    from . import sessions
+
+    if not session_id or sessions.get(ctx, session_id) is None:
+        return ""
+    return _held_elsewhere(ctx, task, sessions.identities(ctx, session_id))
 
 
 def resume(ctx: GitContext, task_id: str) -> tuple[Task | None, str]:
@@ -1000,9 +1021,10 @@ def _unplanned(task: Task) -> str:
     )
 
 
-# Held by a claim from the read to the rename. Unlocked, two sessions claiming one card both
-# read it free, both printed "claimed", and the file named whichever wrote last; or one of
-# them died on a file the other had already moved.
+# Held from the read to the rename by every transition that decides WHO holds a card —
+# `claim`, `pause`, `done`. Unlocked, two sessions claiming one card both read it free, both
+# printed "claimed", and the file named whichever wrote last; or one of them died on a file
+# the other had already moved.
 CLAIM_LOCK = "plan-claim.lock"
 
 # How many times a claim reads a card that keeps moving under it. `resume`, the sweeps and
@@ -1072,19 +1094,26 @@ def claim(ctx: GitContext, task_id: str, session_id: str, branch: str) -> tuple[
     return None, f"task {task_id} kept moving while it was being claimed — claim it again"
 
 
-def complete(ctx: GitContext, task_id: str) -> tuple[Task | None, str]:
+def complete(ctx: GitContext, task_id: str, session_id: str = "") -> tuple[Task | None, str]:
     """Close a card. The finish condition is demanded at `claim`, not here.
 
     v1.26.0 demanded it at this end, which was the right rule at the wrong moment: a card
     that reaches `doing` has been through `claim`, so by the time anything is closed the
     condition already exists, and the check here could only ever fire for a file edited by
     hand. Asked where the plan is owed instead — before the work, not after it.
+
+    `session_id` is who asks, and a live sibling's card is not theirs to close
+    (`_not_theirs`).
     """
-    task = find(ctx, task_id)
-    if task is None:
-        return None, f"no task {task_id}"
-    # Every copy, not the one this directory happens to hold: see `_move_every`.
-    landed = _move_every(ctx, task_id, DONE) or _move(task, DONE)
+    with store.file_lock(store.tier_b(ctx, CLAIM_LOCK)):
+        task = find(ctx, task_id)
+        if task is None:
+            return None, f"no task {task_id}"
+        refused = _not_theirs(ctx, task, session_id)
+        if refused:
+            return None, refused
+        # Every copy, not the one this directory happens to hold: see `_move_every`.
+        landed = _move_every(ctx, task_id, DONE) or _move(task, DONE)
 
     # Whoever was waiting on this is waiting right now, in a session that will not be
     # restarted for hours. `startable` already answers "what can begin"; nobody reads it
