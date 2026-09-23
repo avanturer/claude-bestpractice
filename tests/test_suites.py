@@ -15,10 +15,11 @@ from __future__ import annotations
 import json
 import time
 import unittest
+from unittest import mock
 
 from helpers import RepoCase
 
-from claude_bestpractice import config, evidence, suites
+from claude_bestpractice import config, evidence, suites, witness
 
 # Exits 0 and says three tests passed, which the count floor accepts against the three
 # declarations in the fixture below.
@@ -92,6 +93,13 @@ class TestWhichSuitesAChangeSelects(SuiteCase):
         )
         plan = suites.for_changes(self.ctx(), cfg, [f"p{i}/x.py" for i in range(5)])
         self.assertEqual([""], [s.path for s in plan])
+
+    def test_with_no_wide_run_to_collapse_to_no_suite_is_cut(self):
+        """Cutting the plan to three is a saving only when one wide run replaces it. With no
+        repository-wide command the fourth suite was cut and never mentioned again."""
+        cfg = self.cfg(test_command=[], test_commands={f"p{i}/": f"make p{i}" for i in range(5)})
+        plan = suites.for_changes(self.ctx(), cfg, [f"p{i}/x.py" for i in range(5)])
+        self.assertEqual([f"p{i}/" for i in range(5)], [s.path for s in plan])
 
     def test_a_subproject_runner_is_detected_without_being_declared(self):
         """config.json is for correcting a detection, not for having one at all."""
@@ -267,6 +275,48 @@ class TestOnlyTheSuitesTheDiffTouchesRun(SuiteCase):
         self.commit("the app")
         evidence.record_green(self.ctx(), ["make", "test"])
         self.assertTrue(evidence.green_covers_tree(self.ctx()))
+
+
+class TestNoSuiteTheDiffReachesIsDroppedInSilence(SuiteCase):
+    """Four suites declared, no repository-wide command, and a diff reaching all four.
+
+    The plan kept the first three and said nothing about the fourth, so a suite that failed
+    when run by hand finished green, with no UNVERIFIED record anywhere. Every suite the diff
+    reaches is now run against the shared deadline, and one the deadline leaves no room for
+    is named in an unverified verdict rather than cut.
+    """
+
+    def four_subprojects(self, first=PASSES, fourth=FAILS) -> tuple:
+        commands = {"api/": first, "backend/": PASSES, "mobile/": PASSES, "users/": fourth}
+        for where in commands:
+            self.write(f"{where}__tests__/app.test.js", MOBILE_TESTS)
+            self.write(f"{where}src/app.js", "export const x = 1\n")
+        cfg = self.cfg(test_command=[], test_commands=commands)
+        self.commit("four subprojects, and nothing at the root that runs them")
+        return cfg, [f"{where}src/app.js" for where in commands]
+
+    def verdict(self, cfg, changed):
+        plan = suites.for_changes(self.ctx(), cfg, changed)
+        return evidence.verify(self.ctx(), cfg.artifact_globs, changed, cfg.test_command, plan)
+
+    def test_the_fourth_suite_is_run_and_its_failure_refuses(self):
+        cfg, changed = self.four_subprojects()
+        verdict = self.verdict(cfg, changed)
+        self.assertFalse(verdict.ok, "the fourth suite was dropped and the finish was green")
+        self.assertIn("users/", verdict.reason)
+
+    def test_a_suite_past_the_shared_deadline_is_named_not_dropped(self):
+        """Every run is floored at a few seconds, so suites started after the deadline would
+        carry the gate past the Stop hook's own budget, where the harness kills it and nobody
+        is told. One that does not fit is not started, and the finish says which it was."""
+        slow = ["python3", "-c", "import time; time.sleep(0.6); print('3 passed in 0.6s')"]
+        cfg, changed = self.four_subprojects(first=slow, fourth=PASSES)
+        with mock.patch.object(witness, "timeout_for", return_value=0.3):
+            verdict = self.verdict(cfg, changed)
+        self.assertTrue(verdict.ok, verdict.reason)
+        self.assertTrue(verdict.unverified, "suites that never ran counted as a witnessed green")
+        for where in ("backend/", "mobile/", "users/"):
+            self.assertIn(where, verdict.reason)
 
 
 class TestAFailureIsNotRediscoveredFourTimes(SuiteCase):

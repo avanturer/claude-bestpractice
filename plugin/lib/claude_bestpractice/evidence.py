@@ -417,30 +417,50 @@ def _verify_the_plan(ctx: GitContext, globs: list[str], changed: list[str], plan
     between "could not check" and "checked and broken" is the whole of decision 0002.
 
     The suites SHARE one deadline. Each one used to be handed the Stop hook's entire
-    budget, which is only sound while there is exactly one of them.
+    budget, which is only sound while there is exactly one of them. A suite whose turn comes
+    after that deadline is not started: every run is floored at a few seconds, so a long plan
+    would carry the gate past the hook's own budget, where the harness kills it and nobody is
+    told anything. It is named instead, and the finish is unverified.
     """
     deadline = time.time() + witness.timeout_for()
     answers: list = []
+    unreached: list = []
     for suite in plan:
+        if time.time() >= deadline:
+            unreached.append(suite)
+            continue
         verdict = _verify_one(ctx, globs, changed, suite, deadline)
         if verdict is not None and not verdict.ok:
             return verdict
         if verdict is not None:
             answers.append((suite, verdict))
-    if not answers or len(answers) != len(plan):
+    if not answers or len(answers) + len(unreached) != len(plan):
         return None
-    return _plan_verdict(answers)
+    return _plan_verdict(answers, unreached)
 
 
-def _plan_verdict(answers: list) -> Verdict:
-    """One verdict for a whole plan that passed.
+def _plan_verdict(answers: list, unreached: list) -> Verdict:
+    """One verdict for a whole plan that passed, as far as it was run.
 
     An UNVERIFIED answer from any suite carries: a suite that could only be read rather
     than witnessed does not become witnessed by standing next to one that was. A plan of
     one keeps that suite's own words, which is every single-project repository and every
     message this gate printed before plans existed.
+
+    So does a suite the deadline left no time for, NAMED with the command that runs it:
+    part of a plan passing is not the plan passing, and the files only that suite answers
+    for were never looked at.
     """
     soft = next((verdict for _, verdict in answers if verdict.unverified), None)
+    if unreached:
+        missed = "; ".join(f"{suite.label}: `{' '.join(suite.command)}`" for suite in unreached)
+        return Verdict(
+            True,
+            f"NOT RUN — {missed}. The Stop hook's time ran out after {len(answers)} of "
+            f"{len(answers) + len(unreached)} suites, so nothing witnessed the files only "
+            f"those answer for.\n{(soft or answers[-1][1]).reason[:600]}",
+            unverified=True,
+        )
     if soft is not None:
         return soft
     if len(answers) == 1:

@@ -28,7 +28,8 @@ subproject with no test declarations is therefore not a subproject this gate kno
 
 Bounded on purpose. This runs inside the Stop gate, once per turn, so the scan is shallow,
 the number of runner probes is capped, and more subprojects than `MAX_SUITES` collapses
-back to one wide run rather than spending the hook's whole budget on five of them.
+back to one wide run rather than spending the hook's whole budget on five of them — where
+there is a wide run to collapse to. Where there is not, no suite is cut; see `for_changes`.
 """
 
 from __future__ import annotations
@@ -176,11 +177,17 @@ def for_changes(ctx: GitContext, cfg: Any, changed: list[str]) -> list[Suite]:
     scoped suite — which is every single-project repository, so nothing changes there. When
     a scoped suite covers every changed file, the wide command is not run at all, and that
     is the whole of the fix: a mobile-only diff stops being refused over a backend suite.
+
+    More than `MAX_SUITES` collapses to that one wide run, and only when there IS one. With
+    no repository-wide command the plan kept the first three and never mentioned the rest,
+    so a fourth suite that failed by hand finished green with no record anywhere. Nothing
+    the diff reaches is cut now: the gate runs the suites against one shared deadline and
+    names any it has no time left for.
     """
     everything = Suite("", tuple(cfg.test_command or ()), True)
     chosen, unclaimed = _claimed([suite for suite in scoped(ctx, cfg) if suite.path], changed)
-    if len(chosen) > MAX_SUITES:
-        return [everything] if everything.command else chosen[:MAX_SUITES]
+    if len(chosen) > MAX_SUITES and everything.command:
+        return [everything]
     if everything.command and (unclaimed or not chosen):
         chosen.append(everything)
     return chosen
