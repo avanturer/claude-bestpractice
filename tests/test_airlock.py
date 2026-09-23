@@ -362,6 +362,22 @@ class TestReviewCommit(GateCase):
         self.assertIn("swallowed-exception", body)
         self.assertIn("bad.py", body)
 
+    def test_a_file_named_with_a_space_or_an_accent_is_reviewed_too(self):
+        """Git ends `+++ b/<name>` with a TAB when the name holds a space, and quotes a name
+        outside ASCII, so neither file was ever reviewed: the swallowed exception that was a
+        finding in `app/cafe.py` was silence in `app/café.py`."""
+        names = ("app/my module.py", "app/café.py")
+        for name in names:
+            self.write(name, "def f():\n    return 1\n")
+        self.commit("the modules, clean")
+        self.start()
+        for name in names:
+            self.write(name, "def f():\n    try:\n        go()\n    except Exception:\n        pass\n")
+        self.write("app/naïve.py", "def g():\n    try:\n        go()\n    except ValueError:\n        pass\n")
+        body = self.context(self.review())
+        for name in (*names, "app/naïve.py"):
+            self.assertIn(f"swallowed-exception at {name}:", body)
+
     def test_does_not_blame_pre_existing_problems(self):
         """Rewriting a file that already had the issue is not this turn's doing."""
         self.write("legacy.py", "def f():\n    try:\n        go()\n    except Exception:\n        pass\n")
