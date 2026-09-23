@@ -894,3 +894,27 @@ def save(ctx: GitContext, cfg: Config) -> Path:
     path = config_path(ctx)
     store.write_json(path, cfg.to_dict(), mode=0o644)
     return path
+
+
+def set_key(ctx: GitContext, key: str, value: Any) -> Path:
+    """Write one key into the founder's file, and leave every other key as they wrote it.
+
+    `claude-bp set` used to `save` the whole defaulted view: their `$comment` and every key
+    this version does not know were deleted, every default was pinned into a committed file
+    (the pattern repairs 0004 and 0006 exist to undo), and the DETECTED `test_command` was
+    written in as if the founder had chosen it — an evidence key no command may set. On a
+    file that did not parse it wrote the defaults over it.
+
+    Raises ValueError, saying what is wrong, rather than write over a file it cannot read.
+    Their keys keep their order and a new one goes last, so the change reads as the one
+    they asked for.
+    """
+    path = config_path(ctx)
+    raw, broken = _read_config(path)
+    if broken:
+        raise ValueError(broken)
+    if not isinstance(raw, dict):
+        raise ValueError(f"{CONFIG_NAME} is not a JSON object")
+    raw[key] = value
+    store.atomic_write(path, store.dumps(raw, indent=2) + "\n", mode=0o644)
+    return path

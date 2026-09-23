@@ -1888,6 +1888,46 @@ class TestTheGateNamesADoorThatOpens(GateCase):
         self.assertEqual({}, config.switches_in("I set exempt_paths and it broke everything"))
         self.assertEqual({}, config.switches_in("по-моему worktree_setup сейчас пустой"))
 
+    FOUNDERS = {
+        "$comment": "require_worktree off: single-dev repo, agreed with Alice 2026-09-01",
+        "require_worktree": False,
+        "protect_trunk": False,
+        "a_key_this_version_does_not_know": 7,
+    }
+
+    def founders_config(self, text: str) -> Path:
+        path = self.repo / ".claude" / "claude-bestpractice" / "config.json"
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def test_set_writes_one_key_and_leaves_the_rest_as_the_founder_wrote_it(self):
+        """It saved the whole defaulted view: their note and every key this version does
+        not know were deleted, and every default was pinned into a committed file — the
+        DETECTED test command among them, an evidence key no command may set."""
+        path = self.founders_config(json.dumps(self.FOUNDERS))
+        self.write("Makefile", "test:\n\techo ok\n")
+        self.start()
+        self.founder_says("scope_drift_block off")
+        proc = self.cli("set", "scope_drift_block", "off")
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual({**self.FOUNDERS, "scope_drift_block": False},
+                         json.loads(path.read_text(encoding="utf-8")))
+
+    def test_set_will_not_write_over_a_file_it_cannot_read(self):
+        """Handed a file with a trailing comma it wrote the defaults over it."""
+        from claude_bestpractice import config
+
+        text = '{"enabled": true, "require_worktree": false,}'
+        path = self.founders_config(text)
+        self.start()
+        self.founder_says("scope_drift_block off")
+        proc = self.cli("set", "scope_drift_block", "off")
+        self.assertEqual(1, proc.returncode)
+        self.assertIn("does not parse", proc.stderr)
+        self.assertEqual(text, path.read_text(encoding="utf-8"))
+        self.assertEqual("off", config.asked_for(self.ctx(), "scope_drift_block"),
+                         "a word the write never happened for was spent anyway")
+
     def test_no_gate_advertises_the_file_the_write_hook_refuses(self):
         """The defect was a pattern, not one message: seven places named `config.json`."""
         from claude_bestpractice import evidence, gitpolicy, options  # noqa: F401

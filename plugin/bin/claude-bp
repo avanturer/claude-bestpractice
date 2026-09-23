@@ -332,9 +332,15 @@ def cmd_set(ctx, key: str, value: str) -> int:
               file=sys.stderr)
         return 1
 
-    cfg = config.load(ctx)
-    setattr(cfg, key, coerced)
-    written = config.save(ctx, cfg)
+    try:
+        written = config.set_key(ctx, key, coerced)
+    except ValueError as unreadable:
+        # The founder's word stays unspent: the write never happened, and fixing the file
+        # should not cost them a second message to say the same thing.
+        print(f"{unreadable} — nothing was written, because `set` changes one key in that "
+              "file and will not write over one it cannot read.", file=sys.stderr)
+        print(f"  It is the founder's to fix by hand: {config.config_path(ctx)}", file=sys.stderr)
+        return 1
     config.clear_switch(ctx, key)
     print(f"{key} = {coerced!r}")
     print(f"  written to {written}, on the founder's word")
