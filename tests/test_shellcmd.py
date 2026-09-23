@@ -10,14 +10,18 @@ from __future__ import annotations
 
 import json
 import pathlib
+import shlex
 import subprocess
 import tempfile
 import sys
+import time
 import unittest
+import uuid
+from unittest import mock
 
 from helpers import BIN, RepoCase
 
-from claude_bestpractice import pullrequest, shellcmd
+from claude_bestpractice import ci, gitpolicy, pullrequest, shellcmd, vouch
 
 
 class TestReadingIsNotDoing(unittest.TestCase):
@@ -172,5 +176,81 @@ class TestALineTheShellWillNotParse(unittest.TestCase):
     def test_a_quoted_operator_is_still_text(self):
         """The whole reason this module exists — `echo 'a && b'` runs one command."""
         self.assertEqual([["echo", "a && b"]], shellcmd.segments("echo 'a && b'"))
+
+
+class TestALineIsReadOnceAndInLinearTime(unittest.TestCase):
+    """Every gate asked its own question of the same Bash line and each tokenised it afresh —
+    eleven readings of one `git commit` — while `shlex` built each word by copying it whole
+    per character. A 256k-character commit message took the hook eleven seconds."""
+
+    # Quotes of both kinds, escapes in and out of them, adjacent quoted parts, operators,
+    # redirections, a comment, a heredoc, non-ASCII and an empty word.
+    LINES = (
+        "git commit -m 'Handle \"quoted\" fields' && git push",
+        'echo "a \\"b\\" c \\$HOME \\\\ d" | grep -c x; ls',
+        "echo a'b'\"c\"d '' \"\" x\\ y  >out.txt 2>&1",
+        "cat > notes.md <<'EOF'\nline one\nline 'two'\nEOF",
+        "echo 'café — привет' # a comment\npwd",
+        "grep -rn \"open('config.json', 'w')\" src/ || true",
+    )
+
+    def stock_words(self, line: str) -> list[str]:
+        lexer = shlex.shlex(line, posix=True, punctuation_chars="();<>|&`")
+        lexer.whitespace_split = True
+        return [word for word in lexer if word not in ("&&", "||", ";", "|", "&", "\n")]
+
+    def test_the_words_are_the_ones_the_stock_lexer_reads(self):
+        """Growing a word in place changes how long it takes, never what it is."""
+        for line in self.LINES:
+            with self.subTest(line=line):
+                read = [word for argv in shellcmd.segments(line) for word in argv]
+                self.assertEqual(self.stock_words(line), read)
+
+    def test_a_line_the_stock_lexer_refuses_is_still_refused(self):
+        with self.assertRaises(ValueError):
+            self.stock_words("echo \"it's")
+        self.assertEqual([], shellcmd.segments("echo \"it's"))
+
+    def test_every_gate_shares_one_reading_of_the_line(self):
+        line = f"git commit -m 'read once {uuid.uuid4().hex}' && gh pr create --title t --body b"
+        readings = []
+        original = shlex.shlex.__init__
+
+        def counting(lexer, *args, **kwargs):
+            readings.append(args[:1])
+            original(lexer, *args, **kwargs)
+
+        with mock.patch.object(shlex.shlex, "__init__", counting):
+            pullrequest.merge_target("Bash", line, {})
+            pullrequest.opens_a_pull_request("Bash", line)
+            gitpolicy.stages_everything(line)
+            gitpolicy.changes_the_repository(line)
+            gitpolicy.commit_message(line)
+            ci.verbs_run(line)
+            vouch.own_command(line)
+        self.assertEqual(1, len(readings), "the line was read once per question")
+
+    def test_a_shlex_that_builds_its_word_another_way_still_reads_the_line(self):
+        """The word is grown in place by standing in for `shlex`'s own attribute. A Python
+        whose `read_token` asks that attribute something new must cost speed, never a gate
+        that fails closed on every Bash call."""
+        marker = uuid.uuid4().hex
+        with mock.patch.object(shellcmd._Token, "__iadd__", side_effect=TypeError):
+            self.assertEqual([["git", "log", marker]], shellcmd.segments(f"git log '{marker}'"))
+
+    def test_what_one_caller_does_to_its_copy_is_not_what_the_next_reads(self):
+        marker = uuid.uuid4().hex
+        handed = shellcmd.segments(f"ls src {marker}")
+        handed[0].append("--pre=rm")
+        handed.append(["rm", "-rf", "src"])
+        self.assertEqual([["ls", "src", marker]], shellcmd.segments(f"ls src {marker}"))
+
+    def test_one_long_quoted_argument_is_read_in_linear_time(self):
+        """Measured where this was written: 5.1 s through the stock lexer, 0.23 s grown in place."""
+        body = "x" * 600_000
+        started = time.monotonic()
+        parsed = shellcmd.segments(f"git commit -m '{body}'")
+        self.assertLess(time.monotonic() - started, 3.0)
+        self.assertEqual([["git", "commit", "-m", body]], parsed)
 
 

@@ -16,6 +16,7 @@ tokeniser must not become a line that walks past the gate.
 
 from __future__ import annotations
 
+import functools
 import re
 import shlex
 
@@ -95,13 +96,20 @@ def segments(line: str) -> list[list[str]]:
     # falls out empty anyway, and this still answers for a None a caller should not pass.
     if not line:
         return []
+    # Copies, so a caller that edits what it was handed cannot change what the next one reads.
+    return [list(argv) for argv in _parsed(line)]
+
+
+# Read ONCE per hook call. Every gate asks its own question of the same line — the pull
+# request gate twice, the staging rule, the history rule, the commit rule, the push gate's
+# verbs, the ceiling and the vouch — and each used to tokenise it afresh: eleven readings of
+# one `git commit`, which is what made a long command cost seconds.
+@functools.lru_cache(maxsize=8)
+def _parsed(line: str) -> tuple[tuple[str, ...], ...]:
     try:
-        # The backtick is added to the default `();<>|&` so an unquoted one is its own token.
-        lexer = shlex.shlex(line, posix=True, punctuation_chars="();<>|&`")
-        lexer.whitespace_split = True
-        tokens = list(lexer)
+        tokens = _tokens(line)
     except ValueError:
-        return []
+        return ()
 
     out: list[list[str]] = []
     current: list[str] = []
@@ -111,7 +119,7 @@ def segments(line: str) -> list[list[str]]:
     for token in tokens:
         if token in _SEPARATORS:
             if token in _UNMODELLED or (token in _NEEDS_A_FOLLOWER and not current):
-                return []
+                return ()
             out.append(current)
             current = []
             owed = token in _NEEDS_A_FOLLOWER
@@ -119,11 +127,76 @@ def segments(line: str) -> list[list[str]]:
         current.append(token)
         owed = False
     if owed:
-        return []
+        return ()
     out.append(current)
     # Emptied in one place rather than guarded in two: `a ;; b` and a trailing `;` both
     # leave a gap, and neither is a command to hand a gate.
-    return [argv for argv in out if argv]
+    return tuple(tuple(argv) for argv in out if argv)
+
+
+def _tokens(line: str) -> list[str]:
+    try:
+        return _lexed(_Lexer, line)
+    except (TypeError, AttributeError):
+        # A Python whose `shlex` builds its token in a way `_Token` does not answer for: the
+        # stock lexer reads the line exactly the same, only in quadratic time.
+        return _lexed(shlex.shlex, line)
+
+
+def _lexed(lexer_class: type, line: str) -> list[str]:
+    # The backtick is added to the default `();<>|&` so an unquoted one is its own token.
+    lexer = lexer_class(line, posix=True, punctuation_chars="();<>|&`")
+    lexer.whitespace_split = True
+    return list(lexer)
+
+
+class _Token:
+    """The word `shlex` is building, grown in place rather than copied per character.
+
+    `shlex.read_token` extends `self.token` one character at a time with `+=`, and a str
+    held on an attribute is copied whole every time — so one long quoted argument costs
+    time in the square of its length. Reading a 256k-character commit message took 1.3 s
+    where a line of short words that long took 0.1 s, on a hook that runs before every tool
+    call, and a heredoc holding one stray apostrophe is exactly such an argument.
+    `read_token` (the same in every Python this plugin supports) only ever assigns the
+    token, extends it, tests it for truth and compares it with `''`, and those four are what
+    this answers; anything else raises, and `_tokens` reads the line with the stock lexer.
+    """
+
+    __slots__ = ("_parts",)
+
+    def __init__(self, text: str = "") -> None:
+        self._parts = [text] if text else []
+
+    def __iadd__(self, text: str) -> _Token:
+        if text:
+            self._parts.append(text)
+        return self
+
+    def __bool__(self) -> bool:
+        return bool(self._parts)
+
+    def __eq__(self, other: object) -> bool:
+        return str(self) == other
+
+    def __str__(self) -> str:
+        return "".join(self._parts)
+
+
+class _Lexer(shlex.shlex):
+    """`shlex.shlex` building each word in a `_Token`, and handing back a plain str."""
+
+    @property
+    def token(self) -> _Token:
+        return self._token
+
+    @token.setter
+    def token(self, value: str | _Token) -> None:
+        self._token = value if isinstance(value, _Token) else _Token(value)
+
+    def read_token(self) -> str | None:
+        word = super().read_token()
+        return None if word is None else str(word)
 
 
 def _unwrap(argv: list[str]) -> list[str]:

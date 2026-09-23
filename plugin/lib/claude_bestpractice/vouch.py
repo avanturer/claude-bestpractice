@@ -31,6 +31,7 @@ Three rules keep a predicate from becoming a bypass:
 
 from __future__ import annotations
 
+import functools
 import re
 from pathlib import Path
 
@@ -609,9 +610,16 @@ def _from_our_install(argv: list[str]) -> bool:
     resolved through PATH, and a `claude-bp` on PATH belonging to some other install must
     not answer for this one.
     """
+    return _in_our_bin(argv[0] if argv else "")
+
+
+# Once per name per hook call. Every segment of a line asks, the ceiling's escape and the
+# vouch both, and `shutil.which` walks every directory on PATH each time: a chain of
+# thousands of `echo`s walked it thousands of times.
+@functools.lru_cache(maxsize=64)
+def _in_our_bin(token: str) -> bool:
     import shutil
 
-    token = argv[0] if argv else ""
     if not token:
         return False
     found = token if ("/" in token or "\\" in token) else (shutil.which(token) or "")
