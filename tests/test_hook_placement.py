@@ -37,6 +37,12 @@ class HookCase(RepoCase):
             capture_output=True, text=True, cwd=str(cwd or self.repo), timeout=180,
         )
 
+    def ours(self, path: Path) -> bool:
+        """Whether a hook of this plugin's sits at `path`, read the way anyone would read it."""
+        from claude_bestpractice import ci
+
+        return path.is_file() and ci.MARKER in path.read_text()
+
     def push(self, repo: Path) -> subprocess.CompletedProcess:
         """Push `repo`'s main to a fresh bare remote, the way the founder's push goes."""
         bare = self.tmp / f"{repo.name}-remote.git"
@@ -164,6 +170,103 @@ class TestATildeIsTheHomeDirectory(HookCase):
         theirs.write_text("#!/bin/sh\necho mine\n")
         migrate.repair(self.ctx())
         self.assertEqual("#!/bin/sh\necho mine\n", theirs.read_text())
+
+
+class TestSessionsThatArmTheGateTogether(HookCase):
+    """Three to eight sessions start at once, and each one arms the gate.
+
+    Looking at the hook's path and moving what was there were two steps. A session that
+    looked before a sibling wrote its hook then moved THAT hook onto the founder's: their
+    hook was gone, and ours was chained to itself, so the next push forked `sh` until it
+    was killed. Measured with eight real `ensure()` calls released together: 2 of 25.
+    """
+
+    FOUNDERS = "#!/bin/sh\necho FOUNDERS-OWN-HOOK\n"
+
+    def setUp(self) -> None:
+        super().setUp()
+        from claude_bestpractice import ci
+
+        self.hook = ci.hook_path(self.ctx())
+        self.chained = self.hook.parent / ci.DISPLACED_NAME
+
+    def founders_hook(self) -> None:
+        self.hook.parent.mkdir(parents=True, exist_ok=True)
+        self.hook.write_text(self.FOUNDERS)
+        self.hook.chmod(0o755)
+
+    def a_session_that_looked_too_early(self) -> tuple:
+        """The second session, acting on a look taken before the first one wrote."""
+        from claude_bestpractice import ci
+
+        with mock.patch.object(ci, "installed", return_value=False):
+            return ci.install(self.ctx())
+
+    def test_the_founders_hook_survives_a_session_that_looked_too_early(self):
+        from claude_bestpractice import ci
+
+        self.founders_hook()
+        ci.install(self.ctx())
+        self.a_session_that_looked_too_early()
+        self.assertEqual(self.FOUNDERS, self.chained.read_text(), "the founder's hook was destroyed")
+        self.assertTrue(self.ours(self.hook))
+
+    def test_our_hook_is_never_the_one_moved_aside(self):
+        """With no hook of the founder's at all, the same race chained ours to ours."""
+        from claude_bestpractice import ci
+
+        ci.install(self.ctx())
+        self.a_session_that_looked_too_early()
+        self.assertFalse(self.ours(self.chained), "our hook is chained to itself")
+
+    def test_a_hook_of_ours_chained_as_theirs_is_never_run(self):
+        """What that race left in repositories that ran it: the hook no longer runs a chained
+        copy of itself. The copy here only leaves a mark, so that failing this cannot fork."""
+        from claude_bestpractice import ci
+
+        ci.install(self.ctx())
+        ran = self.tmp / "chained-copy-ran"
+        self.chained.write_text(f"#!/bin/sh\n{ci.MARKER}\ntouch '{ran}'\n")
+        self.chained.chmod(0o755)
+        subprocess.run(["sh", str(self.hook)], cwd=str(self.repo), capture_output=True,
+                       text=True, timeout=120)
+        self.assertFalse(ran.exists(), "the hook ran a copy of itself")
+
+    def test_an_upgrade_removes_that_copy_and_removal_never_restores_it(self):
+        from claude_bestpractice import ci
+
+        ci.install(self.ctx())
+        self.chained.write_text(self.hook.read_text())
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
+        self.assertFalse(self.chained.exists())
+
+        self.chained.write_text(self.hook.read_text())
+        ci.remove(self.ctx())
+        self.assertFalse(self.hook.exists(), "our own hook was put back as the founder's")
+
+    def test_two_different_hooks_of_theirs_are_both_kept(self):
+        """Chaining the one at the path would overwrite the one already chained. Neither is
+        this plugin's to lose, so nothing is installed and the note says which to remove."""
+        from claude_bestpractice import ci
+
+        self.founders_hook()
+        self.chained.write_text("#!/bin/sh\necho AN-OLDER-HOOK\n")
+        changed, note = ci.install(self.ctx())
+        self.assertFalse(changed)
+        self.assertEqual(self.FOUNDERS, self.hook.read_text())
+        self.assertIn("AN-OLDER-HOOK", self.chained.read_text())
+        self.assertIn("claude-bp-ci local", note)
+
+    def test_a_hook_their_tool_rewrote_is_chained_as_before(self):
+        """husky and lefthook rewrite the hook they own: the same hook, already chained."""
+        from claude_bestpractice import ci
+
+        self.founders_hook()
+        self.chained.write_text(self.FOUNDERS)
+        changed, _ = ci.install(self.ctx())
+        self.assertTrue(changed)
+        self.assertTrue(self.ours(self.hook))
+        self.assertEqual(self.FOUNDERS, self.chained.read_text())
 
 
 if __name__ == "__main__":

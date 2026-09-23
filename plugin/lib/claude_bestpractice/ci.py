@@ -199,9 +199,10 @@ fi
 
 # A pre-push hook that was already here runs first, with the same stdin and arguments
 # git gave us, and its refusal is still a refusal. Displacing a husky or lefthook hook
-# without running it would switch off a check you rely on.
+# without running it would switch off a check you rely on. Never a hook of ours, though:
+# chained under that name it runs itself, and a push became `sh` forking until killed.
 _original="$(dirname "$0")/{DISPLACED_NAME}"
-if [ -x "$_original" ]; then
+if [ -x "$_original" ] && ! grep -q '{MARKER}' "$_original" 2>/dev/null; then
     "$_original" "$@" || exit $?
 fi
 
@@ -509,8 +510,13 @@ def installed(ctx: GitContext) -> bool:
     DISPLACES it — chaining `exec make check` in front of a body that then runs the suite
     a second time. Worse than the staleness it was trying to fix.
     """
+    return our_hook(hook_path(ctx))
+
+
+def our_hook(path: Path) -> bool:
+    """Whether the file at `path` is a hook this plugin wrote, in either spelling of its name."""
     try:
-        text = hook_path(ctx).read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return False
     return MARKER in text or FOUNDER_OS_MARKER in text
@@ -569,21 +575,42 @@ def ensure(ctx: GitContext) -> tuple[bool, str]:
 
     SessionStart is the event that reliably fires, so it is the one that arms this. The
     work is skipped outright once the hook is there, which is every session after the
-    first, and the create is O_EXCL, so eight sessions starting at once produce one hook
-    and seven no-ops rather than a torn file.
+    first, and it is done holding the install lock, so eight sessions starting at once
+    produce one hook and seven no-ops rather than a hook that chains itself.
     """
     if shared_hooks(ctx):
         # Nothing of this repository's goes where every repository reads hooks, and nothing
         # is said about it at a session start either: `claude-bp-ci status` and `local` do.
         return False, ""
-    if installed(ctx):
-        # Installed, but possibly by an older plugin. An upgrade that fixes the hook has to
-        # reach the repositories that already have one, or the fix ships to nobody who was
-        # already using it.
-        return (True, "refreshed") if refresh(ctx) else (False, "")
-    if declined(ctx):
+    from . import store
+
+    try:
+        with _installing(ctx):
+            if installed(ctx):
+                # Installed, but possibly by an older plugin. An upgrade that fixes the hook
+                # has to reach the repositories that already have one, or the fix ships to
+                # nobody who was already using it.
+                return (True, "refreshed") if refresh(ctx) else (False, "")
+            if declined(ctx):
+                return False, ""
+            return _arm(ctx)
+    except (store.LockTimeout, OSError):
+        # A sibling has held the lock for as long as a start will wait: it is arming this
+        # same gate, and the next session start finds its hook.
         return False, ""
-    return install(ctx)
+
+
+# `ensure` and `install` hold this while they look at the hooks directory and change it.
+# Looking and moving were separate steps, and three to eight sessions start at once: one
+# that looked before a sibling wrote its hook then moved that hook onto the founder's —
+# their hook gone, and ours chained to itself, so the next push forked `sh` until killed.
+INSTALL_LOCK = "pre-push-install.lock"
+
+
+def _installing(ctx: GitContext):
+    from . import store
+
+    return store.file_lock(store.tier_b(ctx, INSTALL_LOCK))
 
 
 def install(ctx: GitContext) -> tuple[bool, str]:
@@ -591,32 +618,40 @@ def install(ctx: GitContext) -> tuple[bool, str]:
     shared = shared_hooks(ctx)
     if shared:
         return False, _shared_note(ctx, shared)
-    path = hook_path(ctx)
     # Asking for it back is consent, and it has to clear the opt-out or `claude-bp-ci local`
     # would appear to work and be undone by the next session start.
     with contextlib.suppress(OSError):
         _declined_path(ctx).unlink(missing_ok=True)
-    if installed(ctx):
-        return _update(ctx)
+    from . import store
 
+    try:
+        with _installing(ctx):
+            return _update(ctx) if installed(ctx) else _arm(ctx)
+    except store.LockTimeout:
+        return False, "another session is installing the pre-push hook right now; run this again"
+
+
+def _arm(ctx: GitContext) -> tuple[bool, str]:
+    """Write our hook, chaining whatever is at its path. Called holding the install lock."""
+    path = hook_path(ctx)
     displaced = ""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.is_symlink() or path.exists():
-            # `path.exists()` follows symlinks and `write_text` writes THROUGH them, so a
-            # hooks directory that symlinks pre-push at a script in the working tree —
-            # husky and lefthook both do this — had our body written over that tracked
-            # source file. `git status` showed the founder's own script modified, and the
-            # undo could not put it back because it restored a hook, not the file.
-            #
-            # Move, never copy: the link itself is what has to go, so what remains is a
-            # real file we own. `os.replace` moves a symlink as a symlink.
-            target = path.parent / DISPLACED_NAME
-            path.replace(target)
+            if our_hook(path):
+                # Written since this session looked, by one that does not take the lock — an
+                # older copy of this plugin still running in another session. Displacing it
+                # is how ours came to be chained to itself.
+                return False, f"pre-push hook already installed: {path}"
+            displaced = _displace(path)
+            if not displaced:
+                return False, (
+                    f"not installed: {path} and {DISPLACED_NAME} beside it are two different "
+                    "hooks of yours, and chaining the first would overwrite the second. Remove "
+                    "the one you no longer need, then: claude-bp-ci local"
+                )
             with contextlib.suppress(OSError):
-                _make_executable(target)
-            displaced = target.name
-
+                _make_executable(path.parent / displaced)
         _write_new_file(path, hook_body(ctx))
     except OSError as exc:
         return False, f"could not install the pre-push hook: {exc}"
@@ -628,6 +663,54 @@ def install(ctx: GitContext) -> tuple[bool, str]:
             "before these checks. Nothing it used to refuse is allowed through."
         )
     return True, f"installed {path}"
+
+
+def _displace(path: Path) -> str:
+    """Move the hook at `path` to where ours chains it. Its new name, or "" when that would
+    overwrite a different hook already chained there.
+
+    `path.exists()` follows symlinks and `write_text` writes THROUGH them, so a hooks
+    directory that symlinks pre-push at a script in the working tree — husky and lefthook
+    both do this — had our body written over that tracked source file. So move, never copy:
+    the link itself is what has to go, and a hard link of a symlink is a symlink.
+
+    And never over anything. `os.replace` overwrote the target, and two sessions arming at
+    once each moved what they found at the hook's path: the second moved the first one's
+    hook onto the founder's. `os.link` refuses a target that exists.
+    """
+    target = path.parent / DISPLACED_NAME
+    if our_hook(target):
+        # Ours, chained as the founder's — what that race left behind: a hook that runs
+        # itself. Nothing of theirs is in it to keep.
+        target.unlink()
+    elif _same_hook(path, target):
+        # Already chained. husky and lefthook rewrite the hook they own, and what was moved
+        # aside last time is this same hook.
+        path.unlink()
+        return target.name
+    try:
+        os.link(path, target, follow_symlinks=False)
+    except FileExistsError:
+        return ""
+    except (NotImplementedError, OSError):
+        # No hard links here. Looked at, then moved: the install lock is what keeps a
+        # sibling out of the gap between the two.
+        if target.is_symlink() or target.exists():
+            return ""
+        os.replace(path, target)
+        return target.name
+    path.unlink()
+    return target.name
+
+
+def _same_hook(one: Path, other: Path) -> bool:
+    """Whether two entries are the same hook: one link target, or one content."""
+    try:
+        if one.is_symlink() or other.is_symlink():
+            return one.is_symlink() and other.is_symlink() and os.readlink(one) == os.readlink(other)
+        return one.read_bytes() == other.read_bytes()
+    except OSError:
+        return False
 
 
 def _update(ctx: GitContext) -> tuple[bool, str]:
@@ -678,6 +761,10 @@ def take_out(ctx: GitContext) -> str:
     path.unlink(missing_ok=True)
 
     displaced = path.parent / DISPLACED_NAME
+    if our_hook(displaced):
+        # Ours chained as theirs, by two sessions arming at once before that was locked.
+        # Put back, it would be this hook again — calling itself.
+        displaced.unlink()
     if displaced.is_symlink() or displaced.exists():
         displaced.replace(path)
         return f"removed, and put your original {HOOK_NAME} back"

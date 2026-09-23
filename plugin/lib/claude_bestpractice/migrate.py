@@ -976,6 +976,24 @@ def _take_the_push_gate_out_of_shared_hooks(ctx: GitContext) -> str:
     return f"took this plugin's pre-push hook out of {where}, which every repository reads"
 
 
+def _unchain_a_hook_that_calls_itself(ctx: GitContext) -> str:
+    """A copy of this plugin's own hook at the name it chains the founder's hook under.
+
+    Sessions that started together each armed the gate, and looking and moving were not
+    one step: a session that looked before a sibling wrote the hook moved that hook onto
+    the founder's. Their hook was gone from that moment, and what was left ran itself on
+    every push — `sh` forking until somebody killed it. The hook no longer runs a chained
+    copy of itself, and this takes the copy away; there is nothing of theirs left to restore.
+    """
+    from . import ci
+
+    chained = ci.hooks_dir(ctx) / ci.DISPLACED_NAME
+    if not ci.our_hook(chained):
+        return ""
+    chained.unlink()
+    return f"removed {chained.name}: a copy of this plugin's own pre-push hook it was chaining as yours"
+
+
 def _drop_the_hook_under_a_literal_tilde(ctx: GitContext) -> str:
     """The pre-push hook written into a directory literally named `~` inside a tree.
 
@@ -1037,6 +1055,7 @@ _REPAIRS = {
     "0019-put-back-a-config-set-aside": (1, _put_back_a_config_set_aside),
     "0020-push-gate-out-of-shared-hooks": (1, _take_the_push_gate_out_of_shared_hooks),
     "0021-drop-the-hook-under-a-literal-tilde": (1, _drop_the_hook_under_a_literal_tilde),
+    "0022-unchain-a-hook-that-calls-itself": (1, _unchain_a_hook_that_calls_itself),
 }
 
 
