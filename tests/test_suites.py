@@ -384,5 +384,52 @@ class TestAFailureIsNotRediscoveredFourTimes(SuiteCase):
         self.assertTrue(self.verdict().ok)
 
 
+class TestARedRecordKeepsItsOwnSuitesNumbers(SuiteCase):
+    """`web/` went red after `backend/` had, and inherited `backend/`'s high-water marks.
+
+    Six tests executed and six declared, carried from another suite onto the record of a
+    suite of two: `web/` then passed both of them every turn and never cleared its record,
+    the merge gate went on saying "that same command passing clears it", and every board
+    went on saying RED SUITE.
+    """
+
+    UNITTEST = "python3 -m unittest discover -s tests -t ."
+
+    def a_suite(self, where: str, tests: int) -> None:
+        self.write(f"{where}app.py", "def value():\n    return 1\n")
+        self.write(f"{where}tests/__init__.py", "")
+        self.write(f"{where}tests/test_{where.strip('/')}.py", (
+            "import unittest\n\nfrom app import value\n\n\nclass T(unittest.TestCase):\n"
+            + "".join(f"    def test_{n}(self):\n        self.assertEqual(value(), 1)\n"
+                      for n in range(tests))))
+
+    def stop(self):
+        return self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                               "stop_hook_active": False})
+
+    def test_a_suite_that_passes_again_clears_its_own_record(self):
+        from helpers import git
+
+        self.configure(require_task=False, manage_pull_requests=False, detect_suites=False,
+                       test_commands={"backend/": self.UNITTEST, "web/": self.UNITTEST})
+        self.a_suite("backend/", 6)
+        self.a_suite("web/", 2)
+        self.commit("two suites")
+
+        self.write("backend/app.py", "def value():\n    return 2\n")
+        self.assertEqual(2, self.stop().returncode, "precondition: backend/ has to go red")
+        git(["checkout", "--", "backend/app.py"], self.repo)
+        self.write("web/app.py", "def value():\n    return 2\n")
+        self.assertEqual(2, self.stop().returncode, "precondition: web/ has to go red")
+        record = evidence.red(self.ctx())
+        self.assertEqual("web/", record["path"])
+        self.assertLessEqual(record["executed"], 2, "web/'s record carries backend/'s count")
+
+        self.write("web/app.py", "def value():\n    return 1  # fixed\n")
+        proc = self.stop()
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIsNone(evidence.red(self.ctx()), "web/ passed again and stayed red")
+
+
 if __name__ == "__main__":
     unittest.main()

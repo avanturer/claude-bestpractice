@@ -1565,8 +1565,8 @@ def record_red(ctx: GitContext, command: list[str], tail: str, suite=None, tree:
     has committed the state directory on, this is a local file and no more. Saying it
     "travels with the branch" flatly was a promise the code does not keep.
 
-    `first_seen` is preserved across re-observations so the board can say how long it has
-    been broken, which is the number that makes it embarrassing enough to fix.
+    `first_seen` is preserved across re-observations of the same suite so the board can say
+    how long it has been broken, which is the number that makes it embarrassing enough to fix.
 
     `shared_with` is what stops this being broadcast as a repository-wide stop on the
     strength of a run nobody can reproduce. See `_shared_environment`.
@@ -1576,13 +1576,14 @@ def record_red(ctx: GitContext, command: list[str], tail: str, suite=None, tree:
     if not isinstance(previous, dict):
         previous = {}
 
-    # The HIGH-WATER MARK of tests seen executing on this branch, not just this run's.
-    # This is what makes the record hard to clear by shrinking the suite: the agent can
-    # rewrite `command`, rewrite a Makefile recipe behind an unchanged command, or delete
-    # the failing test outright — but it cannot make a narrower run look like it executed
-    # more tests than the wider one did.
+    # The HIGH-WATER MARK of tests seen executing on this branch, in this suite, not just
+    # this run's. This is what makes the record hard to clear by shrinking the suite: the
+    # agent can rewrite `command`, rewrite a Makefile recipe behind an unchanged command, or
+    # delete the failing test outright — but it cannot make a narrower run look like it
+    # executed more tests than the wider one did.
     executed = max(_executed_from_output(tail), 0)
     declared = testcount.count_tree(_root_of(ctx, suite), _skipped(ctx))
+    mine = _this_suites_record(previous, suite)
     store.write_json(
         path,
         {
@@ -1593,12 +1594,12 @@ def record_red(ctx: GitContext, command: list[str], tail: str, suite=None, tree:
             # on an older record, which reads as the whole repository on an unknown tree.
             "path": "" if suite is None else suite.path,
             "tree_hash": tree,
-            "executed": max(executed, int(previous.get("executed") or 0)),
+            "executed": max(executed, int(mine.get("executed") or 0)),
             # What the TREE declared when it went red, counted by this gate rather
             # than reported by the run. Deleting the failing test to go green has to
             # get past this number, and stdout cannot move it.
-            "declared": max(declared, int(previous.get("declared") or 0)),
-            "first_seen": previous.get("first_seen", time.time()),
+            "declared": max(declared, int(mine.get("declared") or 0)),
+            "first_seen": mine.get("first_seen", time.time()),
             "last_seen": time.time(),
             "branch": ctx.branch,
             # WHERE it was seen, and whether that tree's database was its own. Both are
@@ -1611,6 +1612,18 @@ def record_red(ctx: GitContext, command: list[str], tail: str, suite=None, tree:
         },
         mode=0o644,
     )
+
+
+def _this_suites_record(previous: dict, suite) -> dict:
+    """The earlier red record when it was about this same suite, and nothing when it was not.
+
+    Its high-water marks and its start date are that suite's own. Carried onto a record about
+    another suite, `web/`'s two tests inherited `backend/`'s six: `web/` then passed both on
+    every turn and could never clear its own record, and the board said how long a suite had
+    been failing by the date a different one broke.
+    """
+    same = str(previous.get("path") or "") == ("" if suite is None else suite.path)
+    return previous if same else {}
 
 
 def _shared_environment(ctx: GitContext, previous: dict) -> str:
