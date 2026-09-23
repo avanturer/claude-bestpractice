@@ -256,6 +256,15 @@ class TestThePluginsOwnCommandsNeedNoPermission(VouchCase):
         else here writes only this plugin's own state."""
         self.assertSilent(f"{self.own('claude-bp')} adopt")
 
+    def test_the_push_hooks_bookkeeping_is_never_vouched_for(self):
+        """`record-green` and `record-run` write down a run the pre-push hook watched. No
+        refusal names them, and a session that calls one is asserting an observation nobody
+        made — approved, it was a green on record for a suite that was red (decision 0013)."""
+        for verb in ("record-green", "record-run"):
+            with self.subTest(verb=verb):
+                self.assertSilent(f"{self.own('claude-bp-ci')} {verb} 'make check'")
+        self.assertVouched(f"{self.own('claude-bp-ci')} status", vouch.OWN)
+
     def test_it_still_travels_with_the_rest_of_the_line(self):
         """One unvouched segment takes the line with it, own command or not."""
         self.assertVouched(f"{self.own('claude-bp')} status && git log --oneline -3")

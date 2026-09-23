@@ -127,6 +127,10 @@ def main() -> int:
 
     if args.command == "off":
         _, note = ci.remove(ctx)
+        # Spent on use, like every word of the founder's: one `pre_push off` takes the gate
+        # out once, and a session wanting it out again asks again (decision 0006). From
+        # their own terminal there is nothing to spend; `pre-tool` never sees that call.
+        config.clear_switch(ctx, config.PUSH_GATE)
         print(note)
         return 0
 

@@ -349,6 +349,12 @@ EVIDENCE_KEYS = {"test_command", "test_commands", "artifact_globs", "clean_rerun
 # about the repository.
 SWITCH_REQUESTS = "switch-requests.json"
 
+# A switch with no key in `config.json`. Whether this clone's pushes are gated is a fact
+# about the clone — the hook is per-clone and never committed, and so is the decision to be
+# rid of it (`ci.declined`) — so its door is `claude-bp-ci off` rather than `claude-bp set`,
+# and its key is the founder's word, read here like every other one (decision 0006).
+PUSH_GATE = "pre_push"
+
 # `scope_drift_block off`, `require_worktree: false`, `task_idle_hours = 4`. Deliberately
 # narrow: the key is a literal this plugin printed for them to repeat, so there is no
 # prose to interpret and no way for an agent to phrase its way into a match.
@@ -434,9 +440,14 @@ def switches_in(text: str) -> dict[str, str]:
             out[key] = _spoken_value(key, found["value"])
     for found in _SWITCH.finditer(text or ""):
         key = found["key"].lower()
-        if key in _EXPECTED and key not in EVIDENCE_KEYS:
+        if _a_switch(key):
             out[key] = found["value"].lower()
     return out
+
+
+def _a_switch(key: str) -> bool:
+    """A key the founder throws by saying it: a settable config key, or the push gate."""
+    return key == PUSH_GATE or (key in _EXPECTED and key not in EVIDENCE_KEYS)
 
 
 # The founder's acceptance of work, in the same store and on the same terms as a switch:
@@ -576,9 +587,7 @@ def is_only_a_switch(text: str) -> bool:
 
 
 def _blank_if_ours(found: "re.Match[str]") -> str:
-    key = found["key"].lower()
-    settable = key in _EXPECTED and key not in EVIDENCE_KEYS
-    return " " if settable else found.group(0)
+    return " " if _a_switch(found["key"].lower()) else found.group(0)
 
 
 def switch_advice(key: str, value: Any) -> str:

@@ -34,7 +34,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from . import shellcmd
+from . import ci, shellcmd
 from .gitctx import GitContext
 
 WORKTREE = (
@@ -425,7 +425,13 @@ _OWN_BIN = Path(__file__).resolve().parents[2] / "bin"
 # here writes only this plugin's own state, or — in `policy`'s case — facts it re-derives
 # from the repository. Rewriting somebody else's configuration is not in that family and
 # is left to the permission layer on purpose.
-_NOT_OURS_TO_VOUCH = {"adopt"}
+#
+# Nor is the pre-push hook's bookkeeping. It writes this plugin's own state, but what it
+# writes is an OBSERVATION — a run the hook watched — and no refusal names it, because no
+# session has a reason to call it. Vouched, it put a green on record for a red suite
+# (decision 0013); `pre-tool` refuses it outright, and this keeps it from ever being the
+# plugin's own word that it was fine.
+_NOT_OURS_TO_VOUCH = {"adopt", *ci.HOOK_ONLY}
 
 
 def own_command(line: str) -> bool:

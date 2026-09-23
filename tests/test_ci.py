@@ -1284,3 +1284,95 @@ class TestTheEvidenceCommandsSayWhatTheyDid(CICase):
     def test_green_covers_tree_says_which_way_it_went(self):
         self.make_check(0)
         self.assertIn("not covered", self.ci("green-covers-tree").stdout)
+
+
+class TestASessionCannotSpeakForThePushGate(CICase):
+    """The push gate's bookkeeping and its off switch, reached through the plugin's own
+    command — which `pre-tool` approved without asking anybody, as it approves every
+    command of this plugin's.
+
+    `record-green` and `record-run` are what the pre-push hook calls once it has watched
+    the checks run, and `git push` is what starts the hook: no tool call of a session's
+    ever does. Called by a session after a red Stop, `record-green '<the red command>'`
+    was approved, cleared the failure, and `claude-bp-ship` said "Tests: green (observed
+    by the gate)" — and the hook, which skips a tree already on record as green, let
+    `git push` through a red `make check`. A pass remembered without being observed
+    (decision 0013). And `claude-bp-ci off` was approved in the same breath as
+    `rm .git/hooks/pre-push` was refused: the gated session switching its own gate off
+    (decision 0006).
+    """
+
+    def bash(self, command: str) -> subprocess.CompletedProcess:
+        return self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse",
+            "tool_name": "Bash", "tool_input": {"command": command},
+        })
+
+    def founder_says(self, prompt: str) -> None:
+        self.run_hook("prompt-capture", {
+            "session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": prompt,
+        })
+
+    def test_a_session_cannot_record_a_green_nobody_observed(self):
+        """Every spelling that names the program: on PATH, behind a `cd`, and the
+        interpreter-and-path form the hook itself uses — the first thing a session reading
+        the hook would copy."""
+        from claude_bestpractice import evidence
+
+        self.make_check(exit_code=1)
+        evidence.record_red(self.ctx(), ["make", "check"], "1 failed")
+        for line in (f"{CLI} record-green 'make check'",
+                     f"{sys.executable} {CLI} record-green 'make check'",
+                     f"cd {self.repo} && {CLI} record-green 'make check'"):
+            with self.subTest(line=line):
+                self.assertEqual("deny", self.hook_decision(self.bash(line)))
+
+    def test_nor_a_run_it_did_not_watch(self):
+        self.assertEqual("deny", self.hook_decision(self.bash(f"{CLI} record-run 'make check'")))
+
+    def test_the_refusal_names_what_does_count(self):
+        """Decision 0020: a refusal leaves a command that runs here. The run that counts is
+        one this plugin watched — the Stop gate's, or the hook's on a push."""
+        self.write("Makefile", "test:\n\t@true\n")
+        self.commit("a project with a suite")
+        said = self.hook_reason(self.bash(f"{CLI} record-green 'make test'"))
+        self.assertIn("git push", said)
+        self.assertIn("make test", said)
+
+    def test_switching_the_gate_off_is_the_founders_word(self):
+        proc = self.bash(f"{CLI} off")
+        self.assertEqual("deny", self.hook_decision(proc))
+        self.assertIn("`pre_push off`", self.hook_reason(proc))
+
+    def test_the_founders_word_opens_that_door_once(self):
+        """The mechanism every other switch uses: their line, captured by the hook that reads
+        their messages, then the session carries it out — and the word is spent on use."""
+        from claude_bestpractice import ci
+
+        self.founder_says("pre_push off")
+        self.assertNotEqual("deny", self.hook_decision(self.bash(f"{CLI} off")))
+
+        self.cli("off")
+        self.assertTrue(ci.declined(self.ctx()))
+        self.assertEqual("deny", self.hook_decision(self.bash(f"{CLI} off")),
+                         "one word switched the gate off twice")
+
+    def test_pasting_the_refusal_back_is_not_the_word(self):
+        """The refusal carries the literal it asks for. Read naively, the founder showing it
+        back would BE the word — the message saying it is missing becoming the grant."""
+        said = self.hook_reason(self.bash(f"{CLI} off"))
+        self.founder_says(f"what does this mean?\n{said}")
+        self.assertEqual("deny", self.hook_decision(self.bash(f"{CLI} off")))
+
+    def test_looking_and_arming_need_nobodys_word(self):
+        """`status` reads, and `local` puts the gate back — the direction nobody gates."""
+        for verb in ("status", "local"):
+            with self.subTest(verb=verb):
+                self.assertEqual("allow", self.hook_decision(self.bash(f"{CLI} {verb}")))
+
+    def test_the_word_is_a_switch_and_not_a_task(self):
+        """A message that is only the founder's word on a gate is not a statement of work."""
+        from claude_bestpractice import config
+
+        self.assertEqual({"pre_push": "off"}, config.switches_in("pre_push off"))
+        self.assertTrue(config.is_only_a_switch("pre_push off"))

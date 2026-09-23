@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -63,6 +64,77 @@ FOUNDER_OS_DISPLACED_NAME = "pre-push.founder-os-original"
 DECLINED_NAME = "pre-push-declined"
 CI_VARIABLE = "CLAUDE_BESTPRACTICE_CI"
 WORKFLOW = ".github/workflows/check.yml"
+
+# The verbs only the hook may call. `git push` starts the hook and the hook calls these once
+# it has watched the checks run; no tool call of a session's ever starts the hook, so a
+# session calling one is writing down an observation nobody made. It was approved as one of
+# this plugin's own commands, and a green recorded that way cleared a red suite's record and
+# let this hook, which skips a tree on record as green, wave a red `make check` out (decision
+# 0013: a failure may be remembered, a pass never).
+HOOK_ONLY = ("record-green", "record-run")
+
+# How the program is spelled on a command line: bare on PATH, by path, or behind the
+# interpreter the hook itself uses — `python3 …/claude-bp-ci record-green`, the spelling a
+# session reading the hook would copy first.
+_PROGRAM_NAMES = {"claude-bp-ci", "claude-bp-ci.cmd"}
+
+# For a line the tokeniser declines: the program and the first word after its flags.
+_VERB_IN_TEXT = re.compile(
+    r"claude-bp-ci(?:\.cmd)?[\"']?\s+(?:-\S*\s+)*[\"']?(?P<verb>[a-z][a-z-]*)"
+)
+
+
+def verbs_run(command: str) -> list[str]:
+    """The `claude-bp-ci` verbs a shell line runs, whichever way it names the program.
+
+    Asked of what the line RUNS, never of its text: `grep record-green` and a commit
+    message about `claude-bp-ci off` run neither (shellcmd, #76). A line the tokeniser
+    cannot read falls back to the text, which is the direction every gate here fails in.
+    """
+    from . import shellcmd
+
+    if not shellcmd.commands(command):
+        return [found["verb"] for found in _VERB_IN_TEXT.finditer(command or "")]
+    verbs = []
+    for argv in shellcmd.acting(command):
+        named = [i for i, token in enumerate(argv)
+                 if token.replace("\\", "/").rsplit("/", 1)[-1] in _PROGRAM_NAMES]
+        if named:
+            rest = [token for token in argv[named[0] + 1:] if not token.startswith("-")]
+            # argparse's own default, so a bare `claude-bp-ci` reads as the look it is.
+            verbs.append(rest[0] if rest else "status")
+    return verbs
+
+
+def forged_refusal(verb: str, test_command: list[str]) -> str:
+    """What a session is told when it calls one of the hook's own verbs."""
+    import shlex
+
+    run = shlex.join(test_command) if test_command else ""
+    return (
+        f"claude-bestpractice: `claude-bp-ci {verb}` is the pre-push hook's bookkeeping, "
+        "called once the hook has watched this project's checks run. From a session it "
+        "records a run nobody observed — and a green on record is what lets that hook skip "
+        "the suite on the next push.\n"
+        "  A run counts when this plugin watched it: the Stop gate runs the suite when this "
+        "turn ends, and a push runs it in the hook.\n"
+        + (f"  {run}\n" if run else "")
+        + "  git push"
+    )
+
+
+# The founder's word for the one switch that lives in this clone rather than in
+# `config.json`. On the line that carries it, "gate is switched by the founder": a founder
+# pasting this refusal back is showing it, not saying it (`config._OUR_VOICE`).
+OFF_REFUSAL = (
+    "claude-bestpractice: `claude-bp-ci off` takes out the pre-push hook, which is the gate "
+    "on this session's own pushes, and a gate the gated party can switch off is a "
+    "suggestion.\n"
+    "  This gate is switched by the founder, not by the session it is enforcing. If they "
+    "want it off, one line from them — `pre_push off` — is the whole of it, and then: "
+    "claude-bp-ci off\n"
+    "  `claude-bp-ci status` says what runs where, and needs nobody's word."
+)
 
 # `make check` when the project has one, because that is the command the founder already
 # maintains and the one CI runs. The doctor otherwise, which needs no project setup at

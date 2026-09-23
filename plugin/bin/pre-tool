@@ -1228,6 +1228,19 @@ def main() -> None:
                     "restart. Do not work around this by editing the file another way."
                 )
 
+    # The push gate's own verbs, and whose they are. The hook's bookkeeping records runs the
+    # hook watched, and `git push` is what starts it — never a tool call — so a session
+    # calling it is writing down an observation nobody made (decision 0013). `off` is the
+    # founder's switch on the gate over this session's own pushes: `rm` of the hook is
+    # refused below, and this plugin's own command was the same act, approved (decision 0006).
+    if event.tool_name == "Bash":
+        verbs = ci.verbs_run(str(ti.get("command", "")))
+        forged = [verb for verb in verbs if verb in ci.HOOK_ONLY]
+        if forged:
+            deny(ctx, rec, ci.forged_refusal(forged[0], cfg.test_command))
+        if "off" in verbs and config.asked_for(ctx, config.PUSH_GATE) != "off":
+            deny_for_founder(ctx, rec, ci.OFF_REFUSAL)
+
     if event.tool_name in WRITE_TOOLS or event.tool_name == "Bash":
         # A gate whose settings the gated party may rewrite is a suggestion. `config.json`
         # names the command the Stop gate runs as its evidence, and it lives in committed
