@@ -192,7 +192,7 @@ def atomic_write(path: Path, data: str, mode: int = 0o600, follow_symlink: bool 
     try:
         fd = os.open(str(tmp), os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
         try:
-            os.write(fd, data.encode("utf-8"))
+            _write_all(fd, data.encode("utf-8"))
             os.fsync(fd)
         finally:
             os.close(fd)
@@ -200,6 +200,24 @@ def atomic_write(path: Path, data: str, mode: int = 0o600, follow_symlink: bool 
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    """Every byte, or an exception — never a short file that passes for a whole one.
+
+    `os.write` may write less than it was handed and say so only in its return value; a
+    nearly full disk does, and so does a file-size limit. Every writer here ignored that
+    value, so `atomic_write` fsynced a truncated temp file and renamed it over the good one
+    without raising anything, and `read_json` then read the damage as absent: a config
+    back at every default, reproduced under RLIMIT_FSIZE, which is how a full disk looks
+    to write(2). The remainder is retried, and a write that makes no progress raises.
+    """
+    view = memoryview(data)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError(errno.ENOSPC, f"write stopped with {len(view)} byte(s) unwritten")
+        view = view[written:]
 
 
 def read_json(path: Path, default: Any = None) -> Any:
@@ -266,7 +284,7 @@ def append_jsonl(path: Path, obj: Any, mode: int = 0o600) -> None:
         path.unlink()
     fd = os.open(str(path), os.O_CREAT | os.O_WRONLY | os.O_APPEND | nofollow, mode)
     try:
-        os.write(fd, line.encode("utf-8"))
+        _write_all(fd, line.encode("utf-8"))
     finally:
         os.close(fd)
 
@@ -428,7 +446,13 @@ def file_lock(
         try:
             fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             try:
-                os.write(fd, payload)
+                _write_all(fd, payload)
+            except OSError:
+                # Ours, and naming nobody: a holder that cannot be identified is only
+                # reclaimed by age, so every sibling would wait out the mtime backstop
+                # for a lock this process never went on to use.
+                lock_path.unlink(missing_ok=True)
+                raise
             finally:
                 os.close(fd)
             break

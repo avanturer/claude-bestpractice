@@ -221,6 +221,59 @@ class TestAtomicWrite(RepoCase):
         self.assertEqual([p for p in path.parent.iterdir() if p.name.endswith(".tmp")], [])
 
 
+class TestAShortWriteIsNeverTakenForAWholeOne(RepoCase):
+    """`os.write` may write less than it is handed and say so only in what it returns. It was
+    ignored everywhere, so a nearly full disk fsynced a truncated temp file and renamed it
+    over the good one with nothing raised — and the reader took the damage for an absent
+    file, putting a founder's whole config back at its defaults.
+    """
+
+    @staticmethod
+    def dribbling(limit: int = 7):
+        """`os.write` as a kernel that writes at most `limit` bytes per call."""
+        from unittest import mock
+
+        real = os.write
+        return mock.patch.object(os, "write", lambda fd, data: real(fd, bytes(data[:limit])))
+
+    def test_a_write_cut_short_is_finished(self):
+        path = store.tier_b(self.ctx(), "long.json")
+        with self.dribbling():
+            store.write_json(path, {"items": list(range(200))})
+        self.assertEqual({"items": list(range(200))}, store.read_json(path))
+
+    def test_an_append_cut_short_is_finished(self):
+        path = store.tier_b(self.ctx(), "log.jsonl")
+        with self.dribbling():
+            store.append_jsonl(path, {"reason": "x" * 300})
+        self.assertEqual([{"reason": "x" * 300}], store.read_jsonl(path))
+
+    @unittest.skipUnless(os.name == "posix", "RLIMIT_FSIZE is how a full disk looks to write(2)")
+    def test_a_full_disk_raises_and_the_good_record_survives(self):
+        """The real kernel, not a stand-in: a file-size limit makes write(2) come back
+        short exactly as a full disk does."""
+        from helpers import LIB
+
+        path = store.tier_b(self.ctx(), "record.json")
+        store.write_json(path, {"keep": "the good one"})
+        child = (
+            "import json, resource, sys\n"
+            f"sys.path.insert(0, {str(LIB)!r})\n"
+            "from pathlib import Path\n"
+            "from claude_bestpractice import store\n"
+            "resource.setrlimit(resource.RLIMIT_FSIZE, (1000, resource.RLIM_INFINITY))\n"
+            "try:\n"
+            f"    store.write_json(Path({str(path)!r}), list(range(400)))\n"
+            "except OSError:\n"
+            "    sys.exit(3)\n"
+        )
+        proc = subprocess.run([sys.executable, "-c", child], capture_output=True, text=True,
+                              timeout=60)
+        self.assertEqual(3, proc.returncode, proc.stderr)
+        self.assertEqual({"keep": "the good one"}, store.read_json(path))
+        self.assertEqual([], [p.name for p in path.parent.iterdir() if p.name.endswith(".tmp")])
+
+
 class TestJsonl(RepoCase):
     def test_append_and_read(self):
         ctx = self.ctx()
