@@ -37,8 +37,10 @@ def main() -> None:
 
     # Local checks are the DEFAULT, installed here rather than offered. An opt-in check
     # that nobody opted into is the same as no check, and hosted minutes are a metered
-    # budget that three to eight parallel sessions spend like a small team.
-    hook_installed, hook_note = ci.install(ctx)
+    # budget that three to eight parallel sessions spend like a small team. `ensure`, not
+    # `install`: a founder who switched the gate off in this clone said so, and `install`
+    # clears that — a repository set up again is not one that asked for the hook back.
+    hook_installed, hook_note = ci.ensure(ctx)
 
     # Told to auto mode once, here, because this is the derivation moment for everything
     # else too. Facts about this repository only — never a grant — so this cannot widen

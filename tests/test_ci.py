@@ -225,6 +225,34 @@ class TestLocalIsTheDefault(CICase):
         self.assertIn("pre-push", proc.stdout)
 
 
+class TestOffSticksThroughInitAndSetup(CICase):
+    """The README says the removal sticks. `claude-bp init` and the Setup hook both called
+    `install`, which clears the opt-out because asking for the hook by name is consent —
+    so `claude-bp-ci off` followed by `init --force` printed "checks now run before every
+    push" and the gate the founder had switched off was back.
+    """
+
+    def test_init_leaves_a_switched_off_gate_off(self):
+        from claude_bestpractice import ci
+
+        ci.remove(self.ctx())
+        for args in (["init"], ["init", "--force"]):
+            with self.subTest(args=args):
+                said = subprocess.run([sys.executable, str(BIN / "claude-bp"), *args],
+                                      capture_output=True, text=True, cwd=str(self.repo),
+                                      timeout=180).stdout
+                self.assertFalse(ci.installed(self.ctx()), "init re-armed a gate switched off")
+                self.assertIn("stays off", said)
+        self.assertTrue(ci.declined(self.ctx()))
+
+    def test_setup_leaves_it_off_too(self):
+        from claude_bestpractice import ci
+
+        ci.remove(self.ctx())
+        self.run_hook("setup", {"session_id": "s1", "hook_event_name": "Setup"})
+        self.assertFalse(ci.installed(self.ctx()), "setup re-armed a gate switched off")
+
+
 class TestHostedCICostsNothingUntilAskedFor(CICase):
     def workflow(self, gated: bool) -> None:
         path = self.repo / ".github" / "workflows" / "check.yml"

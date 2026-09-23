@@ -219,9 +219,16 @@ def cmd_init(ctx, force: bool) -> int:
     else:
         print("\nknowledge layer already present (use --force to regenerate)")
 
-    changed, note = ci.install(ctx)
+    # `ensure`, which honours an `off`; `install` clears it, because asking for the hook by
+    # name is consent. Asking for a knowledge layer is not asking for the push gate back, and
+    # the README promises that its removal sticks.
+    changed, note = ci.ensure(ctx)
     if changed:
-        print(f"\nchecks now run before every push: {note}")
+        print("\nthe pre-push hook was updated to this version" if note == "refreshed"
+              else f"\nchecks now run before every push: {note}")
+    elif ci.declined(ctx):
+        print("\nthe pre-push hook stays off, as it was switched off here "
+              "(`claude-bp-ci local` puts it back)")
 
     gaps = onboard.unanswered(ctx)
     if gaps:
