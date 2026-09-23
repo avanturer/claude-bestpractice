@@ -384,6 +384,67 @@ class TestAFailureIsNotRediscoveredFourTimes(SuiteCase):
         self.assertTrue(self.verdict().ok)
 
 
+class TestAGuessThatCannotStartIsDropped(SuiteCase):
+    """Decision 0012: a guessed suite that cannot run is dropped for the repository-wide one.
+
+    It was not dropped, it was fatal. The plan held `web/` (detected; jest not installed) and
+    the repository's own command; the repository's run passed, `web/` could not start, and
+    the whole plan was thrown away — the wide command was not run again because it already
+    had been, so the finish was refused over "No machine-readable test artifact found". The
+    same turn with detection switched off finished.
+    """
+
+    def a_web_app_with_no_runner_installed(self) -> None:
+        self.write("web/package.json", json.dumps({"scripts": {"test": "jest"}}))
+        self.write("web/src/app.test.js", "test('one', () => {});\n")
+        self.write("web/src/app.js", "module.exports = () => 1;\n")
+        self.write("app.py", "X = 1\n")
+
+    def test_the_repository_wide_pass_still_answers(self):
+        from claude_bestpractice import store
+
+        self.a_web_app_with_no_runner_installed()
+        cfg = self.cfg(require_task=False, manage_pull_requests=False, test_command=PASSES)
+        self.commit("a web app whose runner is not installed here")
+        changed = ["app.py", "web/src/app.js"]
+        plan = suites.for_changes(self.ctx(), cfg, changed)
+        self.assertEqual([("web/", False), ("", True)], [(s.path, s.declared) for s in plan],
+                         "precondition: a guess and the repository's own command")
+        self.write("app.py", "X = 2\n")
+        self.write("web/src/app.js", "module.exports = () => 2;\n")
+
+        proc = self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                               "stop_hook_active": False})
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual([], store.read_jsonl(store.tier_b(self.ctx(), "unverified.jsonl")),
+                         "the guess made the finish unverified where no guess leaves it verified")
+
+    def test_with_no_repository_command_what_ran_answers(self):
+        """Nothing is owed a turn when there is nothing to stand in for the guess."""
+        self.a_web_app_with_no_runner_installed()
+        self.a_mobile_app()
+        cfg = self.cfg(test_command=[])
+        self.commit("two subprojects")
+        plan = [suites.Suite("web/", ("npm", "test", "--silent"), False),
+                suites.Suite("mobile/", tuple(PASSES), True)]
+        verdict = evidence.verify(self.ctx(), cfg.artifact_globs, ["web/src/app.js"],
+                                  cfg.test_command, plan)
+        self.assertTrue(verdict.ok, verdict.reason)
+        self.assertFalse(verdict.unverified, verdict.reason)
+
+    def test_a_declared_suite_that_cannot_start_is_not_dropped(self):
+        """The founder's word about how those files are tested; it does not quietly lapse."""
+        self.a_web_app_with_no_runner_installed()
+        cfg = self.cfg(test_command=PASSES)
+        self.commit("a web app")
+        plan = [suites.Suite("web/", ("definitely-not-an-installed-runner",), True),
+                suites.Suite("", tuple(PASSES), True)]
+        verdict = evidence.verify(self.ctx(), cfg.artifact_globs, ["web/src/app.js", "app.py"],
+                                  cfg.test_command, plan)
+        self.assertFalse(verdict.ok and not verdict.unverified,
+                         "a declared suite nobody could run was answered for by another")
+
+
 class TestARedRecordKeepsItsOwnSuitesNumbers(SuiteCase):
     """`web/` went red after `backend/` had, and inherited `backend/`'s high-water marks.
 

@@ -388,7 +388,7 @@ def verify(ctx: GitContext, globs: list[str], changed: list[str], command: list[
 
     wide = list(command or ())
     if plan:
-        settled = _verify_the_plan(ctx, globs, changed, plan, deadline)
+        settled = _verify_the_plan(ctx, globs, changed, plan, deadline, bool(wide))
         if settled is not None:
             return settled
         if any(not suite.path for suite in plan):
@@ -405,8 +405,8 @@ def verify(ctx: GitContext, globs: list[str], changed: list[str], command: list[
 
 
 def _verify_the_plan(ctx: GitContext, globs: list[str], changed: list[str], plan: list,
-                     deadline: float | None = None) -> Verdict | None:
-    """Run the suites this change touched. None when none of them could be witnessed.
+                     deadline: float | None = None, stand_in: bool = False) -> Verdict | None:
+    """Run the suites this change touched. None when the plan could not answer for them.
 
     A hard failure in any suite settles the turn immediately — there is nothing a later
     suite can say that makes a failing one pass. An unverified answer does not settle it,
@@ -418,10 +418,14 @@ def _verify_the_plan(ctx: GitContext, globs: list[str], changed: list[str], plan
     comes after that deadline is not started: every run is floored at a few seconds, so a long
     plan would carry the gate past the hook's own budget, where the harness kills it and
     nobody is told anything. It is named instead, and the finish is unverified.
+
+    A suite that could not be witnessed at all is weighed by `_plan_answered`; `stand_in` is
+    whether a repository-wide command exists to answer for one when nothing here already has.
     """
     deadline = time.time() + witness.timeout_for() if deadline is None else deadline
     answers: list = []
     unreached: list = []
+    unwitnessed: list = []
     for suite in plan:
         if time.time() >= deadline:
             unreached.append(suite)
@@ -429,11 +433,29 @@ def _verify_the_plan(ctx: GitContext, globs: list[str], changed: list[str], plan
         verdict = _verify_one(ctx, globs, changed, suite, deadline)
         if verdict is not None and not verdict.ok:
             return verdict
-        if verdict is not None:
-            answers.append((suite, verdict))
-    if not answers or len(answers) + len(unreached) != len(plan):
+        (unwitnessed if verdict is None else answers).append((suite, verdict))
+    if not _plan_answered(answers, unwitnessed, stand_in):
         return None
     return _plan_verdict(answers, unreached)
+
+
+def _plan_answered(answers: list, unwitnessed: list, stand_in: bool) -> bool:
+    """Whether the suites that ran answer for the plan without the ones that could not start.
+
+    A DETECTED suite that cannot start is a guess, and by decision 0012 it is dropped in
+    favour of the repository-wide command — the finish must come out exactly as it would
+    have had nobody guessed. It did not: one `web/` suite whose jest was not installed threw
+    away the repository-wide run that had just passed, and the finish was refused over "No
+    machine-readable test artifact found", while the same turn with detection off finished.
+    So when that command has already answered here, or when there is none to answer, what
+    ran is the answer; only a command that exists and has not run yet is still owed a turn.
+
+    A DECLARED suite that cannot start is the founder's promise unmet, and is never dropped:
+    the plan does not answer, and the caller falls back as it always has.
+    """
+    if not answers or any(suite.declared for suite, _ in unwitnessed):
+        return False
+    return not unwitnessed or any(not suite.path for suite, _ in answers) or not stand_in
 
 
 def _plan_verdict(answers: list, unreached: list) -> Verdict:
