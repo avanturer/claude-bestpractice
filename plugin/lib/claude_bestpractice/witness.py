@@ -157,13 +157,26 @@ def detect(root: Path) -> str:
 
 # What makes a shared config file pytest's, rather than a file that merely exists:
 # `pyproject.toml` configures Black and Ruff in plenty of repositories with no Python test
-# in them. Empty means the file is pytest's by its name alone.
+# in them. Empty means the file is pytest's by its name alone. In pytest's own order of
+# precedence, because `_pytest_config` pins the first of them that carries its section.
 _PYTEST_SECTIONS = {
+    "pytest.toml": "",
+    ".pytest.toml": "",
     "pytest.ini": "",
+    ".pytest.ini": "",
     "pyproject.toml": "[tool.pytest",
     "tox.ini": "[pytest]",
     "setup.cfg": "[tool:pytest]",
 }
+
+
+def _carries_pytest(root: Path, name: str) -> bool:
+    """Whether `name` here is pytest's configuration, rather than a file that exists."""
+    try:
+        text = (root / name).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return _PYTEST_SECTIONS[name] in text
 
 
 def _has_python_tests(root: Path) -> bool:
@@ -176,13 +189,8 @@ def _has_python_tests(root: Path) -> bool:
     whose `python3` can import pytest. A Node session spent its whole turn budget on that
     refusal; in a Go repository with a `test/` directory it also stood in front of `go`.
     """
-    for name, section in _PYTEST_SECTIONS.items():
-        try:
-            text = (root / name).read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        if section in text:
-            return True
+    if any(_carries_pytest(root, name) for name in _PYTEST_SECTIONS):
+        return True
     return testcount.declares(root, ".py")
 
 
@@ -238,10 +246,18 @@ def _pytest_config(root: Path, scratch: Path) -> Path:
     repository's parent directory, a file the founder will never see in any diff, silently
     configured the run this gate was driving. Pinning the config to something inside the
     repository keeps every knob that shapes the run inside the thing being reviewed.
+
+    The file pinned is the first to CARRY pytest's section, in pytest's own order. The first
+    that merely existed used to win, so a `pyproject.toml` holding only `[tool.black]` was
+    pinned over the `setup.cfg` or `tox.ini` that configured pytest: `pythonpath = src` was
+    never read, every import failed, and a suite that passes was filed red. A file without
+    the section is still pinned when none carries one — pytest reads it as empty, as it
+    would itself, and the rootdir stays in the repository rather than moving to ours.
     """
-    for name in ("pytest.ini", "pyproject.toml", "tox.ini", "setup.cfg"):
-        if (root / name).is_file():
-            return root / name
+    present = [name for name in _PYTEST_SECTIONS if (root / name).is_file()]
+    present.sort(key=lambda name: not _carries_pytest(root, name))
+    if present:
+        return root / present[0]
     empty = scratch / "pytest.ini"
     empty.write_text("[pytest]\n", encoding="utf-8")
     return empty

@@ -265,3 +265,55 @@ class TestPytestIsDrivenOnlyWherePythonIsTested(RepoCase):
         self.assertFalse(verdict.ok)
         self.assertIn("FAILS", verdict.reason)
         self.assertIsNotNone(evidence.red(self.ctx()))
+
+
+class TestTheConfigPinnedIsTheOnePytestReads(RepoCase):
+    """`-c` pins the gate's run to a file inside the repository, and it has to be pytest's.
+
+    The first candidate that merely existed was pinned, so a `pyproject.toml` holding only
+    `[tool.black]` stood in front of the `setup.cfg` or `tox.ini` that configured pytest:
+    `pythonpath = src` was never read, every import failed at collection, and a suite that
+    passes for the founder was reported "FAILS … ModuleNotFoundError" and filed red.
+    """
+
+    IMPORTS_SRC = "from sample import f\n\n\ndef test_f():\n    assert f() == 1\n"
+
+    def witnessed(self, config: dict, test: str = IMPORTS_SRC):
+        """A src layout beside a pyproject that only formats, run by the gate itself."""
+        from claude_bestpractice import witness
+
+        self.write("pyproject.toml", "[tool.black]\nline-length = 100\n")
+        for name, body in config.items():
+            self.write(name, body)
+        self.write("src/sample/__init__.py", "def f():\n    return 1\n")
+        self.write("tests/test_sample.py", test)
+        self.commit("pytest configured beside a pyproject that only formats")
+        seen = witness.run(self.ctx())
+        self.assertIsNotNone(seen, "pytest was not driven at all")
+        return seen
+
+    def test_setup_cfg_is_read_past_a_pyproject_that_only_formats(self):
+        seen = self.witnessed({"setup.cfg": "[tool:pytest]\npythonpath = src\n"})
+        self.assertTrue(seen.passed, seen.tail)
+
+    def test_tox_ini_is_read_past_a_pyproject_that_only_formats(self):
+        seen = self.witnessed({"tox.ini": "[tox]\nenvlist = py\n\n[pytest]\npythonpath = src\n"})
+        self.assertTrue(seen.passed, seen.tail)
+
+    def test_the_order_is_pytests_own(self):
+        """`.pytest.ini` is pytest's by its name alone, and outranks every shared file."""
+        from claude_bestpractice import witness
+
+        self.write("setup.cfg", "[tool:pytest]\n")
+        self.write(".pytest.ini", "")
+        self.assertEqual(".pytest.ini", witness._pytest_config(self.repo, self.tmp).name)
+
+    def test_with_no_section_anywhere_the_run_still_stands_in_the_repository(self):
+        """pytest reads a file without its section as empty, and pinning that file keeps the
+        rootdir here. Pinned to an empty file of the gate's own instead, the rootdir moves to
+        the gate's temp directory, and every test that finds its data from it breaks."""
+        seen = self.witnessed({}, (
+            "from pathlib import Path\n\n\ndef test_rootdir(request):\n"
+            "    here = Path(__file__).resolve().parent.parent\n"
+            "    assert Path(str(request.config.rootpath)).resolve() == here\n"))
+        self.assertTrue(seen.passed, seen.tail)
