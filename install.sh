@@ -32,6 +32,14 @@ if command -v python3 >/dev/null 2>&1 &&
   PY=python3
 fi
 if [ -z "$PY" ]; then
+  # A python3 that is too old is not a missing one. Told "found \`python\` but not
+  # \`python3\`" over a 3.8 python3, the founder was handed a symlink that changes nothing:
+  # the old python3 is still the first one `env` finds.
+  if command -v python3 >/dev/null 2>&1; then
+    die "the first python3 on PATH is $(python3 --version 2>&1) at $(command -v python3), and
+  3.9 or newer is required. Every gate here is launched by \`env python3\`, so that is the
+  one that has to be new enough: put a newer python3 ahead of it on PATH, then run this again."
+  fi
   if command -v python >/dev/null 2>&1; then
     die "found \`python\` but not \`python3\`. Every gate here is launched by \`env python3\`,
   so they would install and then never run. Install python3, or symlink it:

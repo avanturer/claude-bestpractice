@@ -98,5 +98,20 @@ class TestARerunKeepsWorkOfYourOwn(InstallerCase):
         self.assertEqual("edited here, not committed\n", (self.installed / "NOTES").read_text())
 
 
+class TestTheInstallerNamesThePythonItFound(InstallerCase):
+    """With python3 at 3.8 and a `python` beside it, the installer said "found `python` but
+    not `python3`" and offered a symlink that could not help: the old python3 stays the
+    first one `env python3` finds."""
+
+    def test_an_old_python3_is_named_as_old_not_as_missing(self):
+        self.stub("python3", '#!/bin/sh\n[ "$1" = --version ] && echo "Python 3.8.10" && exit 0\nexit 1\n')
+        self.stub("python", '#!/bin/sh\necho "Python 3.11.2"\n')
+        path = os.pathsep.join([str(self.stubs), str(Path(shutil.which("git")).parent), "/usr/bin", "/bin"])
+        proc = self.install(path)
+        self.assertNotEqual(0, proc.returncode)
+        self.assertIn("Python 3.8.10", proc.stderr)
+        self.assertNotIn("but not `python3`", proc.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
