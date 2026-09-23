@@ -436,20 +436,66 @@ def _carry_the_displaced_hook(ctx: GitContext) -> None:
             old.rename(new)
 
 
+# The scopes whose core.hooksPath names a directory that belongs to this repository. Git
+# reads the setting from every scope, and a GLOBAL one points every repository on the
+# machine at one directory: the hook this module bakes for one repository — its runner, its
+# suite — was written there by `claude-bp-ci local`, `init`, setup and every session start,
+# and the next push from an unrelated Node repository ran `python3 -m pytest` and was
+# refused. The system scope is the same directory for every user as well.
+_OWN_SCOPES = ("local", "worktree")
+
+
+def _hooks_setting(ctx: GitContext) -> tuple[str, str]:
+    """core.hooksPath as git resolves it here: (scope, path), or ("", "") when unset.
+
+    `--type=path` because git expands a leading `~/` in this value when it runs hooks and a
+    plain `--get` does not: `~/.githooks` put the hook in a directory literally named `~`
+    inside the repository, which git never reads and `git status` then listed as untracked.
+    """
+    proc = subprocess.run(
+        ["git", "config", "--show-scope", "--type=path", "--get", "core.hooksPath"],
+        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=30,
+    )
+    scope, _, value = proc.stdout.rstrip("\n").partition("\t")
+    return (scope, value) if proc.returncode == 0 and value else ("", "")
+
+
 def hooks_dir(ctx: GitContext) -> Path:
     """Honour core.hooksPath, or a repo that configured one gets a hook nothing reads.
 
     Worktrees share the common directory's hooks, which is what we want: the gate should
     not depend on which checkout the push happens from.
     """
-    configured = subprocess.run(
-        ["git", "config", "--get", "core.hooksPath"],
-        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=30,
-    ).stdout.strip()
+    _, configured = _hooks_setting(ctx)
     if configured:
         path = Path(configured)
         return path if path.is_absolute() else ctx.worktree_root / path
     return ctx.common_dir / "hooks"
+
+
+def shared_hooks(ctx: GitContext) -> str:
+    """The scope of a core.hooksPath that is not this repository's own, or "".
+
+    Where it is, git runs the hooks in that directory for every repository that reads the
+    same config, and nothing written for this one belongs there.
+    """
+    scope, configured = _hooks_setting(ctx)
+    return scope if configured and scope not in _OWN_SCOPES else ""
+
+
+def _shared_note(ctx: GitContext, scope: str) -> str:
+    """Why the hook was not installed, and the two commands that give this repository one."""
+    from shlex import quote
+
+    return (
+        f"not installed: core.hooksPath comes from your {scope} git config "
+        f"({hooks_dir(ctx)}), so git runs the hooks in that one directory for every "
+        "repository that reads it — and this hook carries this repository's own checks.\n"
+        "  To check this repository's pushes, give it a hooks directory of its own (copy in "
+        "any of the shared hooks it still needs first), then install:\n"
+        f"    git config core.hooksPath {quote(str(ctx.common_dir / 'hooks'))}\n"
+        "    claude-bp-ci local"
+    )
 
 
 def hook_path(ctx: GitContext) -> Path:
@@ -526,6 +572,10 @@ def ensure(ctx: GitContext) -> tuple[bool, str]:
     first, and the create is O_EXCL, so eight sessions starting at once produce one hook
     and seven no-ops rather than a torn file.
     """
+    if shared_hooks(ctx):
+        # Nothing of this repository's goes where every repository reads hooks, and nothing
+        # is said about it at a session start either: `claude-bp-ci status` and `local` do.
+        return False, ""
     if installed(ctx):
         # Installed, but possibly by an older plugin. An upgrade that fixes the hook has to
         # reach the repositories that already have one, or the fix ships to nobody who was
@@ -538,26 +588,16 @@ def ensure(ctx: GitContext) -> tuple[bool, str]:
 
 def install(ctx: GitContext) -> tuple[bool, str]:
     """Put the hook in place, chaining any hook already there. Returns (changed, note)."""
+    shared = shared_hooks(ctx)
+    if shared:
+        return False, _shared_note(ctx, shared)
     path = hook_path(ctx)
     # Asking for it back is consent, and it has to clear the opt-out or `claude-bp-ci local`
     # would appear to work and be undone by the next session start.
     with contextlib.suppress(OSError):
         _declined_path(ctx).unlink(missing_ok=True)
     if installed(ctx):
-        # Installed is not current. `ensure()` has upgraded a stale hook since #33; this
-        # path predates it and short-circuited on existence, so the one command whose whole
-        # purpose is "run the checks locally" was the one that declined to update the
-        # checks — and a founder who ran it after an upgrade reasonably believed they now
-        # had the shipped gate. They had whatever their last session start wrote (#85).
-        #
-        # Not routed through `ensure()`, which honours the opt-out: asking for the hook
-        # back is consent, and that is cleared just above.
-        from . import __version__
-
-        before = stamped_version(ctx) or "unknown"
-        if refresh(ctx):
-            return True, f"pre-push hook updated {before} -> {__version__}"
-        return False, f"pre-push hook already current ({__version__})"
+        return _update(ctx)
 
     displaced = ""
     try:
@@ -590,10 +630,28 @@ def install(ctx: GitContext) -> tuple[bool, str]:
     return True, f"installed {path}"
 
 
+def _update(ctx: GitContext) -> tuple[bool, str]:
+    """`install` over a hook that is already ours. Returns (changed, note).
+
+    Installed is not current. `ensure()` has upgraded a stale hook since #33; this path
+    predates it and short-circuited on existence, so the one command whose whole purpose is
+    "run the checks locally" was the one that declined to update the checks — and a founder
+    who ran it after an upgrade reasonably believed they now had the shipped gate. They had
+    whatever their last session start wrote (#85).
+
+    Not routed through `ensure()`, which honours the opt-out: asking for the hook back is
+    consent, and `install` has cleared it by the time this runs.
+    """
+    from . import __version__
+
+    before = stamped_version(ctx) or "unknown"
+    if refresh(ctx):
+        return True, f"pre-push hook updated {before} -> {__version__}"
+    return False, f"pre-push hook already current ({__version__})"
+
+
 def remove(ctx: GitContext) -> tuple[bool, str]:
     """Take the hook out and put back whatever was there before it."""
-    path = hook_path(ctx)
-
     # Recorded before the unlink, and recorded even when there was nothing to remove, so
     # that `off` means "stay off". Without this, SessionStart re-arms what the founder
     # just switched off and the only way to keep it off is to keep running `off` — which
@@ -606,13 +664,23 @@ def remove(ctx: GitContext) -> tuple[bool, str]:
 
     if not installed(ctx):
         return False, "no claude-bestpractice pre-push hook installed"
+    return True, take_out(ctx)
 
+
+def take_out(ctx: GitContext) -> str:
+    """Unlink our hook and put back what it displaced. Returns what was done, for a person.
+
+    Apart from `remove` because not every removal is somebody declining the gate: a hook in
+    a directory every repository reads was only ever in the wrong place, and an opt-out
+    recorded for it would leave this repository unguarded once it has hooks of its own.
+    """
+    path = hook_path(ctx)
     path.unlink(missing_ok=True)
 
     displaced = path.parent / DISPLACED_NAME
     if displaced.is_symlink() or displaced.exists():
         displaced.replace(path)
-        return True, f"removed, and put your original {HOOK_NAME} back"
+        return f"removed, and put your original {HOOK_NAME} back"
 
     # The old shape, still honoured so an install from before the chaining change can be
     # undone by a plugin from after it.
@@ -621,8 +689,8 @@ def remove(ctx: GitContext) -> tuple[bool, str]:
         path.write_text(backup.read_text(encoding="utf-8", errors="replace"), encoding="utf-8")
         _make_executable(path)
         backup.unlink(missing_ok=True)
-        return True, f"removed, and restored the previous {HOOK_NAME}"
-    return True, "removed. Nothing checks your pushes from this machine now."
+        return f"removed, and restored the previous {HOOK_NAME}"
+    return "removed. Nothing checks your pushes from this machine now."
 
 
 def workflow_state(ctx: GitContext) -> str:
@@ -695,8 +763,12 @@ def set_hosted(ctx: GitContext, on: bool) -> tuple[bool, str]:
 
 def status_lines(ctx: GitContext) -> list[str]:
     """What runs where, in the terms a founder cares about: cost and coverage."""
-    local = installed(ctx)
+    shared = shared_hooks(ctx)
+    local = installed(ctx) and not shared
     out = [f"local pre-push: {'ON — ' + str(hook_path(ctx)) if local else 'OFF'}"]
+    if shared:
+        out[0] += (f" — core.hooksPath comes from your {shared} git config, which every "
+                   "repository reads, so no hook of this repository's goes there")
 
     state = workflow_state(ctx)
     if state == "absent":
@@ -721,5 +793,6 @@ def status_lines(ctx: GitContext) -> list[str]:
 
     if not local:
         out.append("")
-        out.append("Nothing checks a push from this machine. `claude-bp-ci local` fixes that.")
+        fix = "says how to give this repository hooks of its own" if shared else "fixes that"
+        out.append(f"Nothing checks a push from this machine. `claude-bp-ci local` {fix}.")
     return out

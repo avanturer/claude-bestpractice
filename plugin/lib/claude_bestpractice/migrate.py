@@ -955,6 +955,66 @@ def _put_back_a_config_set_aside(ctx: GitContext) -> str:
             "if it still does not parse, the board says so")
 
 
+def _take_the_push_gate_out_of_shared_hooks(ctx: GitContext) -> str:
+    """This plugin's pre-push hook, in a hooks directory every repository reads.
+
+    A global core.hooksPath was honoured as if it named this repository's own hooks, so
+    `claude-bp-ci local`, `init`, setup, every session start — and the doctor, which the
+    installer runs before it registers anything — wrote a hook carrying ONE repository's
+    checks where git runs hooks for ALL of them, moving the founder's own hook aside. Every
+    other repository's push then ran this one's suite and was refused on it.
+
+    Taken out and the founder's hook put back, as `claude-bp-ci off` would, but without the
+    opt-out `off` records: nobody declined the gate, it was only ever in the wrong place.
+    """
+    from . import ci
+
+    if not ci.shared_hooks(ctx) or not ci.installed(ctx):
+        return ""
+    where = ci.hooks_dir(ctx)
+    ci.take_out(ctx)
+    return f"took this plugin's pre-push hook out of {where}, which every repository reads"
+
+
+def _drop_the_hook_under_a_literal_tilde(ctx: GitContext) -> str:
+    """The pre-push hook written into a directory literally named `~` inside a tree.
+
+    `core.hooksPath=~/.githooks` was read without expanding the tilde, so the hook went to
+    `<tree>/~/.githooks/pre-push`: a file git never runs, which `claude-bp-ci status` reported
+    as the gate being ON and `git status` listed as untracked. The reader expands it now and
+    installs where git looks; this takes away what the old one left, and only that.
+    """
+    from . import ci
+
+    raw = _git_out(ctx.worktree_root, ["config", "--get", "core.hooksPath"]).strip()
+    if not raw.startswith("~"):
+        return ""
+    removed = [tree for tree in _trees_of(ctx) if _drop_stray_hook(tree, tree / raw / ci.HOOK_NAME)]
+    if not removed:
+        return ""
+    return f"removed the pre-push hook written into a directory named {raw} in {len(removed)} tree(s)"
+
+
+def _drop_stray_hook(tree: Path, hook: Path) -> bool:
+    """Delete one hook of ours and the directories it alone kept, up to the tree. True when done."""
+    from . import ci
+
+    try:
+        if ci.MARKER not in hook.read_text(encoding="utf-8", errors="replace"):
+            return False
+        hook.unlink()
+    except OSError:
+        return False
+    for directory in (hook.parent, *hook.parent.parents):
+        if directory == tree or not directory.is_relative_to(tree):
+            break
+        try:
+            directory.rmdir()
+        except OSError:
+            break
+    return True
+
+
 _REPAIRS = {
     "0001-task-paths": (1, _backfill_task_paths),
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
@@ -975,6 +1035,8 @@ _REPAIRS = {
     "0017-finish-removals-done-by-hand": (1, _finish_removals_done_by_hand),
     "0018-put-back-what-reindex-stranded": (1, _put_back_what_a_reindex_stranded),
     "0019-put-back-a-config-set-aside": (1, _put_back_a_config_set_aside),
+    "0020-push-gate-out-of-shared-hooks": (1, _take_the_push_gate_out_of_shared_hooks),
+    "0021-drop-the-hook-under-a-literal-tilde": (1, _drop_the_hook_under_a_literal_tilde),
 }
 
 
