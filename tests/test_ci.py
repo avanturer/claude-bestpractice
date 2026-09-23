@@ -461,6 +461,24 @@ class TestTheStatusLineIsTrue(CICase):
         self.assertIn("gated on", lines)
         self.assertNotIn("of your own", lines)
 
+    def test_no_line_offers_a_workflow_nothing_writes(self):
+        """`claude-bp-ci github` switches a gated workflow on and writes none. Status and
+        setup both said it "adds one", and it refused with "no .github/workflows/check.yml"."""
+        from claude_bestpractice import ci
+
+        self.write(".github/workflows/deploy.yml", "on: push\njobs: {}\n")
+        self.assertNotIn("claude-bp-ci github", "\n".join(ci.status_lines(self.ctx())))
+        said = self.run_hook("setup", {"session_id": "s1", "hook_event_name": "Setup"}).stdout
+        self.assertIn("before every push", said)
+        self.assertNotIn("claude-bp-ci github", said)
+
+    def test_setup_names_it_where_there_is_a_gated_run_to_switch(self):
+        from claude_bestpractice import ci
+
+        self.write(ci.WORKFLOW, f"on: push\n# {ci.CI_VARIABLE}\n")
+        said = self.run_hook("setup", {"session_id": "s1", "hook_event_name": "Setup"}).stdout
+        self.assertIn("`claude-bp-ci github` switches the hosted run on", said)
+
 
 class TestLookingDoesNotWrite(CICase):
     """A command named `status` was creating a file and leaving it untracked."""

@@ -916,10 +916,9 @@ def status_lines(ctx: GitContext) -> list[str]:
         # output contradicting each other, and the wrong one sounded authoritative.
         others = _foreign_workflows(ctx)
         if others:
-            out.append(
-                f"hosted CI:      {others} workflow(s) of your own, none of them ours — "
-                "`claude-bp-ci github` adds one"
-            )
+            # Not "`claude-bp-ci github` adds one": that command switches a workflow gated on
+            # CLAUDE_BESTPRACTICE_CI and writes none, so it refused the very step this named.
+            out.append(f"hosted CI:      {others} workflow(s) of your own, none of them ours")
         else:
             out.append("hosted CI:      no workflow in this repository")
     elif state == "always":

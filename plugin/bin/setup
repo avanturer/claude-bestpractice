@@ -50,9 +50,13 @@ def main() -> None:
 
     lines = [f"claude-bestpractice is set up. Detected stage: {resolved}."]
     if hook_installed:
+        # `github` switches a workflow gated on CLAUDE_BESTPRACTICE_CI and writes none, so it
+        # is named only where there is one to switch — offered everywhere as the way "to add
+        # hosted CI", it refused with "no .github/workflows/check.yml in this repository".
+        hosted = ("; `claude-bp-ci github` switches the hosted run on"
+                  if ci.workflow_state(ctx) == "gated" else "")
         lines.append(
-            "Checks now run locally before every push (`claude-bp-ci status` to see, "
-            "`claude-bp-ci github` to add hosted CI)."
+            f"Checks now run locally before every push (`claude-bp-ci status` to see{hosted})."
         )
         # `hook_note` was computed and thrown away, so displacing the founder's own
         # pre-push hook — husky's, lefthook's — happened without a word. It chains
