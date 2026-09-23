@@ -188,6 +188,9 @@ class Delta:
     # Blocks this plugin wrote for repositories that are no longer on disk. Counted here
     # so the dry run and the board can say so; dropped only by `prune`.
     vanished: list[str] = field(default_factory=list)
+    # The file exists and does not parse, so nothing above can be written into it and
+    # nothing may be said to have been.
+    unreadable: bool = False
 
     @property
     def in_sync(self) -> bool:
@@ -195,7 +198,8 @@ class Delta:
 
 
 def delta(ctx: GitContext, test_command: list[str], home: Path | None = None) -> Delta:
-    settings = read(home)
+    loaded = for_update(home)
+    settings = loaded or {}
     mark = marker(ctx)
     current = [line for line in _entries(settings, ENVIRONMENT) if line.startswith(mark)]
     wanted = facts(ctx, test_command)
@@ -204,6 +208,7 @@ def delta(ctx: GitContext, test_command: list[str], home: Path | None = None) ->
         remove=[line for line in current if line not in wanted],
         dead=dead_rules(settings),
         vanished=sorted(_gone(settings)),
+        unreadable=loaded is None,
     )
 
 
@@ -345,6 +350,9 @@ def refresh(ctx: GitContext, test_command: list[str], home: Path | None = None) 
     # decision 0008 draws everywhere else: the plugin holds the pen on facts, never grants.
     dropped = prune(home)
     found = apply(ctx, test_command, home)
+    if found.unreadable:
+        return (f"\nauto-mode policy: {settings_path(home)} is not valid JSON, so nothing was "
+                "written to it. Claude Code names the error at its next start.")
     if found.in_sync and not found.dead and not dropped:
         return ""
     parts = []

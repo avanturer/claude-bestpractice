@@ -394,6 +394,10 @@ def cmd_policy(ctx, write: bool, prune: bool) -> int:
 
     heading("AUTO-MODE POLICY")
     print(f"  settings: {policy.settings_path()}")
+    if found.unreadable:
+        print("  not valid JSON, so nothing was written to it — fix the file (Claude Code names")
+        print("  the error at its next start), then run this again.")
+        return 1 if write else 0
     if found.in_sync:
         print("  facts about this repository are current")
     for entry in found.add:

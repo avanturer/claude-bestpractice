@@ -157,9 +157,17 @@ class TestItConverges(PolicyCase):
             self.settings.write_text(body, encoding="utf-8")
             found = policy.apply(self.ctx(), self.checks(), self.home)
             self.assertFalse(found.in_sync, "the delta is still worth reporting")
+            self.assertTrue(found.unreadable)
             self.assertEqual(body, self.settings.read_text(encoding="utf-8"), body)
             self.assertEqual([], policy.prune(self.home))
             self.assertEqual(body, self.settings.read_text(encoding="utf-8"), body)
+
+    def test_the_board_does_not_claim_a_refresh_it_did_not_write(self):
+        """It said "refreshed 4 fact(s)" over a file it had just declined to touch."""
+        self.settings.write_text("{ not json", encoding="utf-8")
+        said = policy.refresh(self.ctx(), self.checks(), self.home)
+        self.assertNotIn("refreshed", said)
+        self.assertIn("not valid JSON", said)
 
     def test_a_byte_order_mark_is_read_and_carried_through(self):
         """How several Windows editors save UTF-8. The founder's keys survive the write."""
