@@ -1897,6 +1897,58 @@ class TestTheGateFurnishesItsTreeLikeTheHook(PolicyCase):
         self.assertLess(time.time() - started, 10, "the gate waited for the project's setup")
 
 
+class TestWhatWorktreeincludeNamesReachesTheTree(RepoCase):
+    """Claude Code copies the gitignored files `.worktreeinclude` names into every tree it
+    makes — and processes none of it once a `WorktreeCreate` hook is installed: "copy the
+    files inside the hook script". So with this plugin a project's `.worktreeinclude` did
+    nothing at all, in any tree."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.write(".gitignore", ".env.local\nconfig/\nnode_modules/\n")
+        self.write(".worktreeinclude", "# what a fresh checkout lacks\n.env.local\nconfig/secrets.json\n")
+        self.commit("ignore what is local")
+        self.write(".env.local", "LOCAL_TOKEN=1\n")
+        self.write("config/secrets.json", '{"key": "local"}\n')
+        self.write("config/unasked.json", "{}\n")
+        self.write("node_modules/pkg/.env.local", "NOT_THIS=1\n")
+
+    def assert_carried(self, tree: Path) -> None:
+        self.assertEqual("LOCAL_TOKEN=1\n", (tree / ".env.local").read_text(encoding="utf-8"))
+        self.assertTrue((tree / "config" / "secrets.json").is_file())
+        self.assertFalse((tree / "config" / "unasked.json").exists(), "copied what was not named")
+        self.assertFalse((tree / "node_modules").exists(), "walked a directory nothing reaches")
+
+    def test_the_hook_s_tree_gets_what_it_names(self):
+        made = self.run_hook("worktree-create", {"session_id": "s1",
+                                                 "hook_event_name": "WorktreeCreate"})
+
+        self.assert_carried(Path(made.stdout.strip()))
+
+    def test_the_gate_s_tree_gets_it_too(self):
+        import time
+
+        from claude_bestpractice import worktree
+
+        tree = worktree.provision(self.ctx(), "the next thing", "s1")
+
+        deadline = time.time() + 30
+        while not (tree / "config" / "secrets.json").exists() and time.time() < deadline:
+            time.sleep(0.1)
+        self.assert_carried(tree)
+
+    def test_a_file_the_tree_already_has_is_left_as_it_is(self):
+        from claude_bestpractice import worktree
+
+        tree = self.add_worktree("feat/own-config")
+        (tree / ".env.local").write_text("MINE=1\n", encoding="utf-8")
+
+        worktree.copy_included(self.ctx(), tree)
+
+        self.assertEqual("MINE=1\n", (tree / ".env.local").read_text(encoding="utf-8"))
+        self.assertTrue((tree / "config" / "secrets.json").is_file())
+
+
 class TestABareCloneKeepsItsTreesBesideIt(RepoCase):
     """`main_checkout` answers with the first tree git lists, and in a clone made as a bare
     repository with working trees beside it, that is the git directory itself: every tree

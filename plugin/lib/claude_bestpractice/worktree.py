@@ -19,8 +19,10 @@ do not race on one dev server.
 from __future__ import annotations
 
 import contextlib
+import fnmatch
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -1588,22 +1590,175 @@ def furnish(ctx: GitContext, tree: Path, database: str, later: bool = False) -> 
         isolate_database(tree, url, seed_from=main_checkout(ctx))
     if not later:
         settle(ctx, tree, url, cfg.worktree_setup)
-    elif url or cfg.worktree_setup:
+    elif url or cfg.worktree_setup or _include_rules(main_checkout(ctx)):
         _settle_later(ctx, tree, url, cfg.worktree_setup)
 
 
 def settle(ctx: GitContext, tree: Path, url: str, setup: list[str]) -> None:
-    """The slow half of a new tree: the project's own setup, then whether its database is there.
+    """The slow half of a new tree: its included files, the project's own setup, then
+    whether its database is there.
 
-    `worktree_setup` runs for EVERY tree, database or not. It is the founder's per-tree
-    line, and a project reaches for it for `npm ci` as often as for `createdb`; run only
-    where a DATABASE_URL existed, a repository without one never had it run at all. The
-    database is asked about AFTER the project has had its turn, because `worktree_setup` is
-    where a project creates it and the answer before it ran would be about nothing.
+    What `.worktreeinclude` names comes first, because the setup is what needs it — an
+    `.npmrc`, a local config. `worktree_setup` runs for EVERY tree, database or not. It is
+    the founder's per-tree line, and a project reaches for it for `npm ci` as often as for
+    `createdb`; run only where a DATABASE_URL existed, a repository without one never had
+    it run at all. The database is asked about AFTER the project has had its turn, because
+    `worktree_setup` is where a project creates it and the answer before it ran would be
+    about nothing.
     """
+    copy_included(ctx, tree)
     run_setup(tree, setup)
     if url:
         note_database(ctx, tree, url)
+
+
+INCLUDE_FILE = ".worktreeinclude"
+
+
+def copy_included(ctx: GitContext, tree: Path) -> list[str]:
+    """Copy into a new tree the gitignored files `.worktreeinclude` names. What was copied.
+
+    Claude Code does this for every tree it makes — and not for one a `WorktreeCreate` hook
+    makes: "Because the hook replaces the default behavior entirely, `.worktreeinclude` is
+    not processed … do it inside your hook script." So installing this plugin switched off
+    every project's `.worktreeinclude`, in every tree, with nothing said.
+
+    Claude Code's own rules: `.gitignore` syntax in the main checkout's file, only files
+    that match AND are gitignored, and a wholly ignored directory entered only where the
+    pattern could name something inside it — so `.env` never walks `node_modules/`. Never
+    over a file the tree already has.
+    """
+    source = main_checkout(ctx)
+    rules = _include_rules(source)
+    copied = []
+    for rel in _ignored_files_to_include(source, rules) if rules else []:
+        if _copy_new(source / rel, tree / rel):
+            copied.append(rel)
+    return copied
+
+
+def _include_rules(root: Path) -> list[tuple]:
+    """`.worktreeinclude` as (pattern, regex, negated, directories only), in file order."""
+    try:
+        lines = (root / INCLUDE_FILE).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    rules = []
+    for line in lines:
+        text = line.strip()
+        if not text or text.startswith("#"):
+            continue
+        negated = text.startswith("!")
+        pattern = text[1:] if negated else text
+        body = pattern.rstrip("/").lstrip("/")
+        anywhere = "/" not in pattern.rstrip("/")
+        regex = re.compile(("(?:.*/)?" if anywhere else "") + _glob(body))
+        rules.append((body, regex, negated, pattern.endswith("/")))
+    return rules
+
+
+_GLOB_TOKEN = re.compile(r"\*\*/|\*\*|\*|\?|\[[^\]]*\]|\\.|.")
+_GLOB_REGEX = {"**/": "(?:.*/)?", "**": ".*", "*": "[^/]*", "?": "[^/]"}
+
+
+def _glob(pattern: str) -> str:
+    """A gitignore glob as a regular expression over a slash-separated path."""
+    out = []
+    for token in _GLOB_TOKEN.findall(pattern):
+        if token in _GLOB_REGEX:
+            out.append(_GLOB_REGEX[token])
+        elif token.startswith("[") and len(token) > 1:
+            out.append("[" + ("^" + token[2:-1] if token[1] == "!" else token[1:-1]) + "]")
+        else:
+            out.append(re.escape(token[-1]))
+    return "".join(out)
+
+
+def _included(rules: list[tuple], rel: str) -> bool:
+    """Does `.worktreeinclude` take this path? The last rule to match decides, as in gitignore.
+
+    A pattern that names a directory takes everything in it, which is why the path's
+    parents are asked as well as the path.
+    """
+    parts = rel.split("/")
+    names = ["/".join(parts[:depth]) for depth in range(1, len(parts) + 1)]
+    taken = False
+    for _pattern, regex, negated, directories in rules:
+        if any(regex.fullmatch(name) for name in (names[:-1] if directories else names)):
+            taken = not negated
+    return taken
+
+
+def _reaches_into(pattern: str, directory: str) -> bool:
+    """Could a pattern name something inside this wholly ignored directory?
+
+    Claude Code's rule, which is what keeps a `.env` pattern from walking `node_modules/`:
+    one that starts with `**/` — or names no directory at all, which means the same — only
+    when its first name is one of the directory's own; any other only when its leading
+    names match the directory's.
+    """
+    wanted, have = pattern.split("/"), directory.split("/")
+    if len(wanted) == 1 or wanted[0] == "**":
+        return wanted[-1 if len(wanted) == 1 else 1] in have
+    for mine, theirs in zip(have, wanted):
+        if theirs == "**":
+            return True
+        if not fnmatch.fnmatchcase(mine, theirs):
+            return False
+    return len(have) < len(wanted)
+
+
+def _ignored_files_to_include(root: Path, rules: list[tuple]) -> list[str]:
+    """The gitignored files under `root` that the rules take."""
+    found: list[str] = []
+    for entry in _ignored_entries(root):
+        if entry.endswith("/"):
+            found.extend(_included_under(root, rules, entry.rstrip("/")))
+        elif _included(rules, entry):
+            found.append(entry)
+    return found
+
+
+def _ignored_entries(root: Path) -> list[str]:
+    """What git ignores under `root`, asked once: files, and whole directories ending "/".
+
+    `--directory`, so a wholly ignored directory is one entry rather than every file in
+    it — `node_modules/` is not walked to find out that nobody asked for it.
+    """
+    listed = subprocess.run(
+        ["git", "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"],
+        cwd=str(root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=60,
+    )
+    return [entry for entry in listed.stdout.split("\0") if entry] if listed.returncode == 0 else []
+
+
+def _included_under(root: Path, rules: list[tuple], directory: str) -> list[str]:
+    """The files in a wholly ignored directory that the rules take, if any rule reaches it."""
+    if not (_included(rules, directory)
+            or any(_reaches_into(rule[0], directory) for rule in rules if not rule[2])):
+        return []
+    return [rel for rel in _files_under(root, directory) if _included(rules, rel)]
+
+
+def _files_under(root: Path, directory: str) -> list[str]:
+    """Every file below a directory, as paths relative to `root`."""
+    out = []
+    for where, _dirs, files in os.walk(root / directory):
+        base = Path(where).relative_to(root).as_posix()
+        out.extend(f"{base}/{name}" for name in files)
+    return out
+
+
+def _copy_new(source: Path, target: Path) -> bool:
+    """Copy one file where nothing is yet. False when something was, or the copy failed."""
+    if target.exists() or target.is_symlink():
+        return False
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target, follow_symlinks=False)
+    except OSError:
+        return False
+    return True
 
 
 # What `_settle_later` runs. Handed this library's own directory, so the process imports
