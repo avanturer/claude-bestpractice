@@ -146,6 +146,30 @@ def _is_expression(value: str) -> bool:
     return bool(_BRACKETED.search(value))
 
 
+# An address is where a credential is SENT, not the credential. `TOKEN_URL =
+# "https://oauth2.googleapis.com/token"` names the endpoint every OAuth client posts to, and
+# was refused as an assigned secret. Only a bare one: a URL carrying userinfo is
+# `url-credentials`' to judge, and one carrying a query may carry a token in it.
+_ADDRESS = re.compile(r"(?i)^https?://[^\s/?#@]+(?:/[^\s?#@]*)?$")
+
+
+def _is_address(value: str) -> bool:
+    return bool(_ADDRESS.match(value.strip()))
+
+
+def _is_development_default(name: str, value: str) -> bool:
+    """The assignment form of the default `_is_local_default` already lets through.
+
+    `postgres://postgres:postgres@localhost` passed as a URL while `POSTGRES_PASSWORD:
+    postgres` — the same default, spelled as the variable the image reads — was refused in
+    a compose file. The same two shapes, judged the same way: a placeholder word, or a
+    value that only repeats the name of what it unlocks, which is the user-equals-password
+    of this form.
+    """
+    word = value.strip().lower()
+    return _is_placeholder(word) or word in name.lower().replace("-", "_").split("_")
+
+
 def _is_not_a_secret(match: "re.Match") -> bool:
     """Values the assignment form matches that cannot be credentials.
 
@@ -159,7 +183,9 @@ def _is_not_a_secret(match: "re.Match") -> bool:
     protects nothing at all.
     """
     value = match.group("value")
-    if _is_indirection(value) or _is_measurement(value):
+    if _is_indirection(value) or _is_measurement(value) or _is_address(value):
+        return True
+    if _is_development_default(match.group("name"), value):
         return True
     if match.group("quote"):
         return False

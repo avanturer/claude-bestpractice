@@ -341,7 +341,7 @@ def promotes_to_production(command: str, cwd: Path) -> bool:
     """
     scannable = _QUOTED.sub(lambda m: " " * len(m.group(0)),
                             _HEREDOC.sub(lambda m: " " * len(m.group(0)), command))
-    for _segment, literal, _here in _segments_with_cwd(scannable, cwd, command):
+    for _segment, literal, _here, _start in _segments_with_cwd(scannable, cwd, command):
         commands = _commands_in(literal)
         if not commands:
             words = _WORD.findall(literal)
@@ -756,6 +756,7 @@ def _segments_with_cwd(scannable: str, cwd: Path, literal: str = ""):
     scan can be trusted on, and the raw one, which is the only copy where an interpreter's
     quoted path survives at all. Blanking preserves LENGTH, so one set of offsets cuts
     both, and the raw half is no longer scanned whole against a cwd the `cd`s have moved.
+    The offset comes back too, for a caller cutting the same span out of a third copy.
     """
     here = cwd
     raw = literal or scannable
@@ -776,7 +777,7 @@ def _segments_with_cwd(scannable: str, cwd: Path, literal: str = ""):
             moved_to = _resolve(here, moved)
             here = moved_to if moved_to is not None else here
             continue
-        yield segment, raw[start:end], here
+        yield segment, raw[start:end], here, start
 
 
 def _commands_in(segment: str) -> list[list[str]]:
@@ -863,7 +864,7 @@ def worktree_removals(command: str, cwd: Path) -> list[Path]:
     """
     scannable = _QUOTED.sub(lambda m: " " * len(m.group(0)), command)
     out: list[Path] = []
-    for segment, literal, here in _segments_with_cwd(scannable, cwd, command):
+    for segment, literal, here, _start in _segments_with_cwd(scannable, cwd, command):
         found = _GIT_VERB.search(segment)
         if not found:
             continue
@@ -883,7 +884,7 @@ def git_tree_targets(command: str, cwd: Path) -> list[tuple[Path, bool]]:
     """
     scannable = _QUOTED.sub(lambda m: " " * len(m.group(0)), command)
     out: list[tuple[Path, bool]] = []
-    for segment, literal, here in _segments_with_cwd(scannable, cwd, command):
+    for segment, literal, here, _start in _segments_with_cwd(scannable, cwd, command):
         found = _GIT_VERB.search(segment)
         if not found:
             continue
@@ -1045,6 +1046,17 @@ def bash_write_targets(command: str, cwd: Path) -> list[Path]:
     write lands in, and a path that has already been forced relative to one root cannot
     answer that.
     """
+    return bash_writes(command, cwd)[0]
+
+
+def bash_writes(command: str, cwd: Path) -> tuple[list[Path], str]:
+    """Where a shell command writes, and the part of its text that lands there.
+
+    The text is the command with everything blanked but the segments that write their own
+    words into a file — a redirect or `tee`, `sed -i`, an interpreter's inline `open` — and,
+    in those, the environment set in front of each command. Length and line breaks are
+    kept, so a line a caller reports from it is the command's own line.
+    """
     # Blank out quoted spans first. `echo "a > b"` and `grep -q "x>y" f` contain no
     # redirect, but a naive scan read one and claimed a lease on a path that does not
     # exist — which denies a sibling session for a file nobody is editing.
@@ -1052,51 +1064,80 @@ def bash_write_targets(command: str, cwd: Path) -> list[Path]:
     scannable = _QUOTED.sub(lambda m: " " * len(m.group(0)), scannable)
 
     out: list[Path] = []
+    written = [char if char == "\n" else " " for char in command]
 
-    for segment, literal, here in _segments_with_cwd(scannable, cwd, command):
-        # On the RAW segment, because `_QUOTED` blanks quoted spans and an interpreter's
-        # path is always quoted — scanning the blanked copy would find nothing, every time.
-        # Per SEGMENT rather than over the whole line, because the whole line carries no
-        # `cd`: `cd /tmp/scratch && python3 -c "open('out.txt','w')…"` was resolved against
-        # the repository root and refused as a write into the main checkout, for a file in
-        # /tmp the command never went near (#203).
-        run = _INTERPRETER_WRITE.finditer(literal) if _runs_inline_code(literal) else ()
-        for match in run:
-            resolved = _resolve(here, match.group("a") or match.group("b") or "")
-            if resolved is not None and resolved not in out:
-                out.append(resolved)
+    for segment, literal, here, start in _segments_with_cwd(scannable, cwd, command):
+        carried = _writes_its_words(segment, literal, here)
+        for path in carried + _writes_by_moving(segment, here):
+            if path not in out:
+                out.append(path)
+        if carried:
+            written[start:start + len(literal)] = _without_environment(literal, segment)
+    return out, "".join(written)
 
-        raws = [m.group("path") for m in BASH_WRITE_TARGETS.finditer(segment)]
-        raws += _edited_in_place(segment, literal)
 
-        # ...and every path a destructive verb names. `rm` is not a redirect, so none of
-        # these commands produced a target at all, and every rule keyed on "what does this
-        # write" was one `rm` away from irrelevant.
-        for match in BASH_REMOVES.finditer(segment):
-            raws += [a for a in _ARG.findall(match.group("args")) if not a.startswith("-")]
+def _writes_its_words(segment: str, literal: str, here: Path) -> list[Path]:
+    """The files this segment writes its own text into."""
+    # On the RAW segment, because `_QUOTED` blanks quoted spans and an interpreter's
+    # path is always quoted — scanning the blanked copy would find nothing, every time.
+    # Per SEGMENT rather than over the whole line, because the whole line carries no
+    # `cd`: `cd /tmp/scratch && python3 -c "open('out.txt','w')…"` was resolved against
+    # the repository root and refused as a write into the main checkout, for a file in
+    # /tmp the command never went near (#203).
+    run = _INTERPRETER_WRITE.finditer(literal) if _runs_inline_code(literal) else ()
+    coded = [_resolve(here, match.group("a") or match.group("b") or "") for match in run]
+    raws = [m.group("path") for m in BASH_WRITE_TARGETS.finditer(segment)]
+    raws += _edited_in_place(segment, literal)
+    return [path for path in coded + [_named(raw, here) for raw in raws] if path is not None]
 
-        # Destination only. The sources are reads, and refusing a read is how a guard
-        # stops being about safety and starts being about obedience.
-        for match in BASH_COPIES.finditer(segment):
-            operands = [a for a in _ARG.findall(match.group("args")) if not a.startswith("-")]
-            if operands:
-                raws.append(operands[-1])
 
-        for raw in raws:
-            token = raw.strip("\"'")
-            # `2>&1`, `> 0`, `>1`: file descriptors and comparisons, never filenames.
-            if not token or token.startswith("/dev/") or token.isdigit():
-                continue
-            # A token with no name in it is not a file. The arg pattern accepts `@`, `~`,
-            # `+` and `-` so that real names carrying them survive, and on their own they
-            # are what is left of an operator some scan read through — the refusal that
-            # named `@` as the file this session was working on came out here (#205).
-            if not token.strip("@+~-."):
-                continue
-            resolved = _resolve(here, raw)
-            if resolved is not None and resolved not in out:
-                out.append(resolved)
-    return out
+def _writes_by_moving(segment: str, here: Path) -> list[Path]:
+    """The files this segment removes, or copies and moves others onto."""
+    raws: list[str] = []
+    # ...and every path a destructive verb names. `rm` is not a redirect, so none of
+    # these commands produced a target at all, and every rule keyed on "what does this
+    # write" was one `rm` away from irrelevant.
+    for match in BASH_REMOVES.finditer(segment):
+        raws += [a for a in _ARG.findall(match.group("args")) if not a.startswith("-")]
+
+    # Destination only. The sources are reads, and refusing a read is how a guard
+    # stops being about safety and starts being about obedience.
+    for match in BASH_COPIES.finditer(segment):
+        operands = [a for a in _ARG.findall(match.group("args")) if not a.startswith("-")]
+        if operands:
+            raws.append(operands[-1])
+    return [path for path in (_named(raw, here) for raw in raws) if path is not None]
+
+
+def _named(raw: str, here: Path) -> Path | None:
+    """The file a scanned token names, or None for a token that names no file."""
+    token = raw.strip("\"'")
+    # `2>&1`, `> 0`, `>1`: file descriptors and comparisons, never filenames.
+    if not token or token.startswith("/dev/") or token.isdigit():
+        return None
+    # A token with no name in it is not a file. The arg pattern accepts `@`, `~`,
+    # `+` and `-` so that real names carrying them survive, and on their own they
+    # are what is left of an operator some scan read through — the refusal that
+    # named `@` as the file this session was working on came out here (#205).
+    if not token.strip("@+~-."):
+        return None
+    return _resolve(here, raw)
+
+
+# `NAME=value` in front of a command is the environment it runs with, not words it writes
+# anywhere: `JWT_SECRET=testsecret npm test 2>&1 | tee test.log` puts npm's output in the
+# log, and the assignment was what the credential scan refused it for.
+_ENVIRONMENT = re.compile(r"""\s*(?:env\s+)?(?:[A-Za-z_]\w*=(?:"[^"]*"|'[^']*'|[^\s"'|;&<>])*\s+)+""")
+
+
+def _without_environment(literal: str, segment: str) -> str:
+    """This segment with the assignments in front of each of its commands blanked out."""
+    out = list(literal)
+    for start in [0] + [match.end() for match in re.finditer(r"\|", segment)]:
+        found = _ENVIRONMENT.match(literal, start)
+        if found:
+            out[found.start():found.end()] = " " * (found.end() - found.start())
+    return "".join(out)
 
 
 def main() -> None:
@@ -1153,6 +1194,8 @@ def main() -> None:
     # neither — and the third is none of this gate's business.
     session_cwd = Path(event.cwd) if event.cwd else ctx.worktree_root
     absolute: list[Path] = []
+    # What a shell command puts INTO those files, for the credential scan below.
+    shell_writes = ""
 
     if event.tool_name in WRITE_TOOLS and ti.get("file_path"):
         raw = str(ti["file_path"])
@@ -1169,7 +1212,7 @@ def main() -> None:
             except ValueError:
                 target = ""
     elif event.tool_name == "Bash":
-        absolute = bash_write_targets(str(ti.get("command", "")), session_cwd)
+        absolute, shell_writes = bash_writes(str(ti.get("command", "")), session_cwd)
         # Repo-relative is what the leases, the board and the protected-state refusal all
         # speak, so the ones inside our tree are converted and the rest stay out of it.
         for path in absolute:
@@ -1744,7 +1787,13 @@ def main() -> None:
         # written: `cat > .env <<EOF` carried a live key straight past a gate whose
         # whole purpose is to stop that, silently, while the doctor reported 23/23.
         content = proposed_content(event)
-        hits = [] if _a_credential_belongs_here(ctx, absolute) else redact.find(content)
+        # For a shell command, only the words it writes into a file. The scan is for a
+        # credential reaching a file a commit will carry, and it read every command whole:
+        # `PGPASSWORD=postgres psql …`, `docker run -e POSTGRES_PASSWORD=postgres …` and
+        # `JWT_SECRET=testsecret npm test` — the suite the Stop gate demands — were each
+        # refused as "this write" with nothing being written anywhere.
+        scanned = shell_writes if event.tool_name == "Bash" else content
+        hits = [] if _a_credential_belongs_here(ctx, absolute) else redact.find(scanned)
         if hits:
             # WHERE, not just what. Naming the detector alone left a founder deleting
             # lines they suspected, being refused again, and having no way to learn what
@@ -1753,7 +1802,7 @@ def main() -> None:
             # would put it in the transcript, which is the thing being prevented.
             where = "\n".join(
                 f"  line {number}: {excerpt}  [{name}]"
-                for name, number, excerpt in redact.locate(content)[:5]
+                for name, number, excerpt in redact.locate(scanned)[:5]
             )
             deny(
                 ctx, rec,

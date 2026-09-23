@@ -427,6 +427,47 @@ class TestBashIsAWriteTool(DisarmCase):
             with self.subTest(command=command[:24]):
                 self.assertTrue(self.bash(command), "a shell write carried a credential through")
 
+    def test_a_command_is_scanned_only_for_what_it_writes(self):
+        """The scan exists to stop a credential reaching a file a commit will carry, and it
+        read every command whole — so these were refused as "this write" with nothing being
+        written, the last of them the very suite the Stop gate demands."""
+        self.start()
+        for command in (
+            "PGPASSWORD=postgres psql -h localhost -U postgres -c 'select 1'",
+            "docker run -d -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:16",
+            "SECRET_KEY=test-secret-key python manage.py test",
+            "JWT_SECRET=testsecret npm test 2>&1 | tee test.log",
+        ):
+            with self.subTest(command=command[:24]):
+                self.assertFalse(self.bash(command), "a command that writes nothing was scanned")
+
+    def test_the_line_named_is_the_commands_own(self):
+        """The scan reads a copy of the command with everything else blanked, and a line
+        number from it has to still be a line of what the session typed."""
+        self.start()
+        proc = self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+            "tool_input": {"command": f"JWT_SECRET=x npm test\necho '{SECRET}' >> conf.py"},
+        })
+        self.assertEqual("deny", self.hook_decision(proc))
+        self.assertIn("line 2: echo", self.hook_reason(proc))
+
+    def test_a_development_default_and_an_endpoint_are_not_credentials(self):
+        """`psql postgresql://postgres:postgres@localhost` passed, and the compose file
+        naming the same default was refused; so was the address of an OAuth endpoint."""
+        self.start()
+        for name, content in (
+            ("docker-compose.yml",
+             "services:\n  db:\n    image: postgres:16\n    environment:\n"
+             "      POSTGRES_PASSWORD: postgres\n"),
+            ("settings.py", 'TOKEN_URL = "https://oauth2.googleapis.com/token"\n'),
+        ):
+            proc = self.run_hook("pre-tool", {
+                "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Write",
+                "tool_input": {"file_path": str(self.repo / name), "content": content},
+            })
+            self.assertNotEqual("deny", self.hook_decision(proc), name)
+
     def test_a_shell_write_respects_another_session_s_lease(self):
         self.write("app.py", "x = 1\n")
         self.commit()

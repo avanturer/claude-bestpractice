@@ -177,5 +177,30 @@ class TestACodeReferenceIsNotACredential(unittest.TestCase):
         self.assertEqual(line, redact.scrub(line))
 
 
+class TestTheAssignmentFormOfADevelopmentDefault(unittest.TestCase):
+    """`postgres://postgres:postgres@localhost` was exempt as a URL (#75) while the same
+    default in the variable the image reads was refused, and so was the address of an
+    endpoint whose name happened to contain TOKEN."""
+
+    def test_a_default_that_names_what_it_unlocks_is_not_a_secret(self):
+        for text in ("POSTGRES_PASSWORD: postgres", '"postgres_password": "postgres"',
+                     "RABBITMQ_PASSWORD=rabbitmq", "PASSWORD=password"):
+            self.assertEqual([], redact.find(text), text)
+
+    def test_a_bare_address_is_not_a_secret(self):
+        for text in ('TOKEN_URL = "https://oauth2.googleapis.com/token"',
+                     "TOKEN_URL=https://oauth2.googleapis.com/token"):
+            self.assertEqual([], redact.find(text), text)
+
+    def test_the_same_shapes_still_catch_the_real_thing(self):
+        """Narrow on purpose, like the URL rule: a default under another service's name,
+        an address carrying a query or a login, and a value that is only test-flavoured."""
+        for text in ("PROD_DB_PASSWORD=postgres",
+                     'CALLBACK_TOKEN_URL = "https://hooks.example.com/cb?token=abcdef123456"',
+                     'API_TOKEN = "https://deploy:s3cretpw@registry.example.com/"',
+                     "SECRET_KEY=test-secret-key"):
+            self.assertIn("assigned-secret", redact.find(text), text)
+
+
 if __name__ == "__main__":
     unittest.main()
