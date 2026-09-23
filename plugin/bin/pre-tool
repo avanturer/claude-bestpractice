@@ -1631,27 +1631,36 @@ def main() -> None:
             # removing, that tree IS `ctx`, and every git call takes it as a working
             # directory — asked afterwards, the success message itself raised
             # FileNotFoundError, and this gate fails closed. The Stop gate learned the same.
-            where = worktree.main_checkout(ctx)
+            where = shlex.quote(str(worktree.main_checkout(ctx)))
+            kept: list[str] = []
             try:
                 # `--force` only where the session typed it: it is the session's own act
                 # being carried out somewhere it survives, not a judgement this gate makes
                 # about whose work may be discarded.
                 forced = bool(_WORKTREE_FORCE.search(str(ti.get("command", ""))))
-                released = worktree.release_now(ctx, rec.session_id, force=forced)
+                released = worktree.release_now(ctx, rec.session_id, force=forced, kept=kept)
             except Exception:  # noqa: BLE001 - a refusal is better than a crashing gate
                 released = None
             if released is not None:
                 path, branch, also = released
                 carried = f"\n  With it: {'; '.join(also)}." if also else ""
+                # What git did with the branch, not what was asked of it: "and so is <it>"
+                # was said over a branch `git branch` still listed with its commits on it.
+                what = (
+                    f"{path} is removed. {branch} is kept: its commits are not in the trunk, "
+                    f"and `git -C {where} log --oneline -5 {shlex.quote(branch)}` shows them — tell the "
+                    "founder before deleting it." if kept else
+                    f"{path} is removed" + (f" and so is {branch}." if branch else ".")
+                )
                 deny(
                     ctx, rec,
-                    f"claude-bestpractice: done — {path} is removed and so is {branch}."
+                    f"claude-bestpractice: done — {what}"
                     f"{carried}\n"
                     "  Run from the main checkout rather than from inside the tree, because "
                     "removing the directory this shell stands in leaves Claude Code refusing "
                     "every later git call as isolated in a worktree that no longer exists.\n"
-                    f"  The shell is now in a directory that is gone — `cd "
-                    f"{shlex.quote(str(where))}`. There is nothing else to clean up."
+                    f"  The shell is now in a directory that is gone — `cd {where}`."
+                    + ("" if kept else " There is nothing else to clean up.")
                 )
             deny(
                 ctx, rec,

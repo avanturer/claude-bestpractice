@@ -1045,7 +1045,10 @@ class TestWorktreeNamesAndCleanup(PolicyCase):
         )
         body = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
         self.assertIn("removed 1 unused worktree", body)
-        self.assertIn("branches are kept", body)
+        self.assertIn("nothing committed is gone", body)
+        # Said as it is true: the branch of this very tree was merged and went with it.
+        self.assertNotIn("branches are kept", body)
+        self.assertIn("only where its work is already in the trunk", body)
 
     def test_it_says_nothing_when_it_swept_nothing(self):
         """Which is nearly every session, and the context budget is 400 tokens."""
