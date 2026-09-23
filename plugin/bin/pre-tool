@@ -228,7 +228,11 @@ def signature(event: hookio.HookEvent) -> str:
     if isinstance(edits, list):
         anchors.extend(str(e.get("old_string", "")) for e in edits if isinstance(e, dict))
     seed = "\u0000".join([str(target), *(a for a in anchors if a)])
-    return f"{event.tool_name}:{hashlib.sha256(seed.encode('utf-8', 'surrogateescape')).hexdigest()[:24]}"
+    # `surrogatepass`, not `surrogateescape`: the second only round-trips the surrogates
+    # that decoding bytes produces, and a paste can carry any lone one. `echo "\ud800"`
+    # raised here, before any rule had looked at the call, and a fail-closed gate turned
+    # that into a refusal of a command that writes nothing.
+    return f"{event.tool_name}:{hashlib.sha256(seed.encode('utf-8', 'surrogatepass')).hexdigest()[:24]}"
 
 
 def _spawn_target(event: hookio.HookEvent) -> str:
@@ -537,13 +541,19 @@ def _resolve(base: Path, raw: str) -> Path | None:
     then refused by the main-checkout rule, for a file the command never went near.
     Reported as issue #37: deleting stray files under `~/.claude/projects/` came back as
     "this is the main checkout, not a worktree".
+
+    None, too, for a path no filesystem call can take: a NUL byte raises ValueError rather
+    than OSError, and a Write naming one crashed this gate — which fails closed — instead
+    of reaching the tool that refuses the path itself. A lone surrogate raised the same
+    way, and is judged as the name it becomes on disk: the harness encodes it as U+FFFD.
     """
     try:
-        candidate = Path(raw.strip("\"'")).expanduser()
+        name = raw.strip("\"'").encode("utf-16", "surrogatepass").decode("utf-16", "replace")
+        candidate = Path(name).expanduser()
         if not candidate.is_absolute():
             candidate = base / candidate
         return candidate.resolve()
-    except (OSError, RuntimeError):
+    except (OSError, RuntimeError, ValueError):
         return None
 
 

@@ -338,7 +338,15 @@ def ignored_by_git(tree: Path, target: Path) -> bool:
 
     if _run(["check-ignore", "--", relative.as_posix()], tree, check=False).strip():
         return True
-    if not target.exists():
+    # A name the filesystem refuses to look up — longer than it allows, or under a
+    # directory it may not read — raises from `exists()` rather than answering, and this
+    # runs inside a gate that fails closed: `echo x > <300 characters>.txt` was a crash.
+    # Such a file is not present, which is all this line is asking.
+    try:
+        present = target.exists()
+    except OSError:
+        present = False
+    if not present:
         return False
     return not _run(
         ["ls-files", "--error-unmatch", "--", relative.as_posix()], tree, check=False

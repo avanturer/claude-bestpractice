@@ -139,6 +139,35 @@ class TestHostileHookInput(RepoCase):
         self.assertNotIn("Traceback", proc.stderr)
         self.assertNotIn("UnicodeEncodeError", proc.stderr)
 
+    def pre_tool(self, tool: str, tool_input: dict):
+        return self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "cwd": str(self.repo),
+            "tool_name": tool, "tool_input": tool_input,
+        })
+
+    def test_a_name_the_filesystem_refuses_is_decided_rather_than_crashed_on(self):
+        """Each of these raised out of the gate, and raising means refusing: a surrogate
+        no codec takes, a file name longer than the filesystem allows, a NUL byte. The
+        first two are in commands that write nothing a rule here objects to."""
+        for tool, tool_input in (
+            ("Bash", {"command": "echo \ud800"}),
+            ("Bash", {"command": "echo x > " + "a" * 300 + ".txt"}),
+            ("Write", {"file_path": str(self.repo / "a\u0000b.txt"), "content": "x"}),
+        ):
+            with self.subTest(tool=tool, tool_input=str(tool_input)[:40]):
+                proc = self.pre_tool(tool, tool_input)
+                self.assertEqual(0, proc.returncode, proc.stderr)
+                self.assertNotEqual("deny", self.hook_decision(proc), self.hook_reason(proc))
+
+    def test_a_surrogate_in_a_path_is_judged_as_the_name_written(self):
+        """Not waved through for being unreadable: the harness writes the file as U+FFFD,
+        and that file lands in the main checkout like any other."""
+        self.configure(require_worktree=True, protect_trunk=True)
+        proc = self.pre_tool("Write", {"file_path": str(self.repo / "b\ud800.py"), "content": "x"})
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual("deny", self.hook_decision(proc))
+        self.assertIn("main checkout", self.hook_reason(proc))
+
 
 if __name__ == "__main__":
     unittest.main()
