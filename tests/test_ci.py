@@ -16,6 +16,7 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from helpers import BIN, REPO_ROOT, RepoCase, git
 
@@ -266,6 +267,26 @@ class TestHostedCICostsNothingUntilAskedFor(CICase):
         self.workflow(gated=True)
         self.assertEqual(ci.workflow_state(self.ctx()), "gated")
         self.assertTrue(any("gated" in line for line in ci.status_lines(self.ctx())))
+
+    def test_a_gh_that_never_answers_is_unknown_and_not_a_traceback(self):
+        """`claude-bp status` waited a minute on a hung `gh`, then printed a TimeoutExpired
+        traceback and nothing else. What it cannot find out, it says it cannot."""
+        from claude_bestpractice import ci
+
+        self.workflow(gated=True)
+        stub = self.repo.parent / "hung-gh"
+        stub.mkdir()
+        (stub / "gh").write_text("#!/bin/sh\nexec sleep 600\n")
+        (stub / "gh").chmod(0o755)
+        path = {"PATH": f"{stub}{os.pathsep}{os.environ.get('PATH', '')}"}
+        with mock.patch.dict(os.environ, path), \
+                mock.patch.object(ci, "_GH_LOOK_SECONDS", 1, create=True), \
+                mock.patch.object(ci, "_GH_SET_SECONDS", 1, create=True):
+            lines = "\n".join(ci.status_lines(self.ctx()))
+            switched, note = ci.set_hosted(self.ctx(), on=True)
+        self.assertIn("currently unknown", lines)
+        self.assertFalse(switched)
+        self.assertIn(f"gh variable set {ci.CI_VARIABLE} --body on", note)
 
     def test_an_ungated_workflow_is_called_out_as_spending_minutes(self):
         from claude_bestpractice import ci

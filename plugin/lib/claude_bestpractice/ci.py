@@ -858,14 +858,25 @@ def _foreign_workflows(ctx: GitContext) -> int:
         return 0
 
 
+# How long `gh` may take to answer. It talks to the network, and a `gh` that hung held
+# `claude-bp status` for a minute and then ended it in a TimeoutExpired traceback, with not
+# one line of the view printed. Unknown is an answer; a traceback is not.
+_GH_LOOK_SECONDS = 10
+_GH_SET_SECONDS = 30
+
+
 def hosted_enabled(ctx: GitContext) -> bool | None:
     """Whether the hosted workflow is switched on. None when it cannot be determined."""
     if not shutil.which("gh"):
         return None
-    proc = subprocess.run(
-        ["gh", "variable", "list", "--json", "name,value"],
-        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=60,
-    )
+    try:
+        proc = subprocess.run(
+            ["gh", "variable", "list", "--json", "name,value"],
+            cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape",
+            timeout=_GH_LOOK_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
     if proc.returncode != 0:
         return None
     import json
@@ -884,16 +895,20 @@ def set_hosted(ctx: GitContext, on: bool) -> tuple[bool, str]:
     """Flip the repository variable the workflow is gated on."""
     if workflow_state(ctx) == "absent":
         return False, f"no {WORKFLOW} in this repository"
-    if not shutil.which("gh"):
-        return False, (
-            f"gh is not installed, so set it by hand:\n"
-            f"    gh variable set {CI_VARIABLE} --body {'on' if on else 'off'}\n"
-            "or Settings -> Secrets and variables -> Actions -> Variables."
-        )
-    proc = subprocess.run(
-        ["gh", "variable", "set", CI_VARIABLE, "--body", "on" if on else "off"],
-        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=120,
+    by_hand = (
+        f"    gh variable set {CI_VARIABLE} --body {'on' if on else 'off'}\n"
+        "or Settings -> Secrets and variables -> Actions -> Variables."
     )
+    if not shutil.which("gh"):
+        return False, f"gh is not installed, so set it by hand:\n{by_hand}"
+    try:
+        proc = subprocess.run(
+            ["gh", "variable", "set", CI_VARIABLE, "--body", "on" if on else "off"],
+            cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape",
+            timeout=_GH_SET_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"gh did not answer ({type(exc).__name__}), so set it by hand:\n{by_hand}"
     if proc.returncode != 0:
         return False, f"gh refused: {(proc.stderr or proc.stdout).strip()[:300]}"
     return True, f"hosted CI is now {'on' if on else 'off'} for this repository"
