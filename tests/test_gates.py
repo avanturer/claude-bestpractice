@@ -1597,6 +1597,14 @@ class TestDoctorAndReindex(GateCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("All", proc.stdout)
 
+    def test_help_says_what_it_is_and_runs_nothing(self):
+        """`--help` ran the whole doctor, twenty seconds of it, and said nothing about itself."""
+        proc = subprocess.run([sys.executable, str(BIN / "claude-bp-doctor"), "--help"],
+                              capture_output=True, text=True, timeout=600)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn("usage:", proc.stdout)
+        self.assertNotIn("checks passed", proc.stdout)
+
     def test_reindex_rebuilds_tier_b(self):
         self.start()
         from claude_bestpractice import store

@@ -103,6 +103,15 @@ class TestTheStatusLineItself(RepoCase):
         self.assertEqual(0, proc.returncode)
         self.assertTrue(proc.stdout.strip())
 
+    def test_help_is_an_answer_and_not_a_status_line(self):
+        """`--help` read stdin for a payload and printed "claude-bestpractice"."""
+        proc = subprocess.run(
+            [sys.executable, str(BIN / "claude-bp-statusline"), "--help"],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, cwd=str(self.repo), timeout=120,
+        )
+        self.assertEqual(0, proc.returncode)
+        self.assertIn("usage:", proc.stdout)
+
     def test_unparseable_input_is_not_a_crash(self):
         proc = subprocess.run(
             [sys.executable, str(BIN / "claude-bp-statusline")],

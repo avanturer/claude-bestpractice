@@ -15,6 +15,7 @@ Exit 0 when every check passes, 1 otherwise.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -1635,6 +1636,12 @@ def check_a_pull_request_is_merged_or_reported(repo: Path) -> Result:
 
 
 def main() -> int:
+    # `--help` ran the whole doctor: twenty seconds of throwaway repositories, and not a
+    # word about what it is. `--version` is what every other command here answers (#210).
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--version", action="version", version=__version__)
+    parser.parse_args()
+
     print(f"{DIM}claude-bp doctor {__version__}{OFF}")
     print(f"{DIM}Proving gates by attempting known-bad actions, not by reading config.{OFF}\n")
 
