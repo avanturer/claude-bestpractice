@@ -247,7 +247,7 @@ def cmd_init(ctx, force: bool) -> int:
     return 0
 
 
-def cmd_doctor(_ctx) -> int:
+def cmd_doctor() -> int:
     return subprocess.run([sys.executable, str(BIN / "claude-bp-doctor")]).returncode
 
 
@@ -362,13 +362,15 @@ def cmd_set(ctx, key: str, value: str) -> int:
     return 0
 
 
-def cmd_statusline(_ctx, install: bool) -> int:
+def cmd_statusline(install: bool) -> int:
     """Show, or wire in, the one route by which this session learns its own limits.
 
     Claude Code hands the account's five-hour and weekly usage to exactly one consumer —
     the `statusLine` command, on stdin. Hooks never see it, there is no `usage` subcommand
     and nothing on disk holds it. So the status line is not decoration here: it is the
     bridge, and without it the board simply says nothing.
+
+    It touches `~/.claude/settings.json` and no repository, so it runs from anywhere.
     """
     from claude_bestpractice import limits
 
@@ -398,7 +400,23 @@ def cmd_statusline(_ctx, install: bool) -> int:
     return 0
 
 
-def cmd_policy(ctx, write: bool, prune: bool) -> int:
+def cmd_prune() -> int:
+    """Drop this plugin's own policy blocks for repositories that are no longer on disk.
+
+    A question about this machine's settings file, never about the repository the command
+    happens to be run from — so it is not refused for being run from outside one.
+    """
+    dropped = policy.prune()
+    heading("AUTO-MODE POLICY")
+    print(f"  settings: {policy.settings_path()}")
+    if not dropped:
+        print("  no blocks name a repository that is gone")
+    for path in dropped:
+        print(f"  dropped the block for {path} — not on disk")
+    return 0
+
+
+def cmd_policy(ctx, write: bool) -> int:
     """Keep the derivable half of the auto-mode policy current, without the founder.
 
     Two layers answer "may this proceed unattended" — the classifier from prose in the
@@ -409,16 +427,6 @@ def cmd_policy(ctx, write: bool, prune: bool) -> int:
     from anything the agent says: running this cannot widen what may proceed. Grants are
     not written here at all.
     """
-    if prune:
-        dropped = policy.prune()
-        heading("AUTO-MODE POLICY")
-        print(f"  settings: {policy.settings_path()}")
-        if not dropped:
-            print("  no blocks name a repository that is gone")
-        for path in dropped:
-            print(f"  dropped the block for {path} — not on disk")
-        return 0
-
     cfg = config.load(ctx)
     found = policy.apply(ctx, cfg.test_command) if write else policy.delta(ctx, cfg.test_command)
 
@@ -559,12 +567,20 @@ def main() -> int:
     switch.add_argument("value", help="on/off, a number, or a string")
 
     args = parser.parse_args()
+
+    # Commands about this machine rather than a repository: the doctor builds throwaway
+    # repositories of its own, and the status line and the prune touch only the settings in
+    # the home directory. Each refused outside a repository, which none of them needs.
+    if args.command == "doctor":
+        return cmd_doctor()
+    if args.command == "statusline":
+        return cmd_statusline(args.install)
+    if args.command == "policy" and args.prune:
+        return cmd_prune()
     ctx = resolve_for_cli()
 
     if args.command == "init":
         return cmd_init(ctx, args.force)
-    if args.command == "doctor":
-        return cmd_doctor(ctx)
     if args.command == "dismiss":
         return cmd_dismiss(ctx, args.detector, args.path)
     if args.command == "adopt":
@@ -575,10 +591,8 @@ def main() -> int:
         return cmd_database(ctx)
     if args.command == "set":
         return cmd_set(ctx, args.key, args.value)
-    if args.command == "statusline":
-        return cmd_statusline(ctx, args.install)
     if args.command == "policy":
-        return cmd_policy(ctx, args.apply, args.prune)
+        return cmd_policy(ctx, args.apply)
     return cmd_status(ctx)
 
 

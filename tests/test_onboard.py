@@ -352,6 +352,44 @@ class TestStatusCommand(RepoCase):
         self.assertIn("waiting on you", proc.stdout)
 
 
+class TestTheMachineWideCommandsRunAnywhere(unittest.TestCase):
+    """`claude-bp doctor`, `statusline` and `policy --prune` are about this machine: the
+    doctor builds throwaway repositories of its own, and the other two touch only the
+    settings in the home directory. Each refused with "not inside a git repository"."""
+
+    def setUp(self) -> None:
+        import shutil
+        import tempfile
+        from pathlib import Path
+
+        self.tmp = Path(tempfile.mkdtemp(prefix="claude-bestpractice-anywhere-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.home = self.tmp / "home"
+        self.nowhere = self.tmp / "not-a-repository"
+        self.home.mkdir()
+        self.nowhere.mkdir()
+
+    def claude_bp(self, *args: str, timeout: int = 120) -> subprocess.CompletedProcess:
+        import os
+
+        return subprocess.run([sys.executable, str(BIN / "claude-bp"), *args],
+                              capture_output=True, text=True, cwd=str(self.nowhere),
+                              timeout=timeout, env={**os.environ, "HOME": str(self.home)})
+
+    def test_the_status_line_and_the_prune(self):
+        for args in (["statusline"], ["statusline", "--install"], ["policy", "--prune"]):
+            with self.subTest(args=args):
+                proc = self.claude_bp(*args)
+                self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
+        settings = json.loads((self.home / ".claude" / "settings.json").read_text())
+        self.assertIn("claude-bp-statusline", settings["statusLine"]["command"])
+
+    def test_the_doctor(self):
+        proc = self.claude_bp("doctor", timeout=600)
+        self.assertNotIn("not inside a git repository", proc.stderr)
+        self.assertIn("checks passed", proc.stdout)
+
+
 class TestSlopChecker(RepoCase):
     def slop(self, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
