@@ -174,6 +174,23 @@ class TestCli(RepoCase):
     def test_out_of_range_index_is_refused(self):
         self.assertEqual(self.run_cli("accept", "9").returncode, 1)
 
+    def test_two_worktrees_accepting_a_draft_each_get_two_numbers(self):
+        """Decisions are committed per branch and were numbered per tree, so both wrote
+        `0001-…md` — two records answering to one number once the branches merged."""
+        from claude_bestpractice import knowledge
+        from claude_bestpractice.gitctx import resolve
+
+        numbers = []
+        for name, said in (("billing", "We decided to keep rates per tenant"),
+                           ("landing", "We decided to keep the hero static")):
+            tree = self.add_worktree(name)
+            drafts.record(resolve(tree), drafts.extract([said], name, "s1", []))
+            proc = subprocess.run([sys.executable, str(BIN / "claude-bp-decide"), "accept", "1"],
+                                  capture_output=True, text=True, cwd=str(tree), timeout=120)
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            numbers += [path.name[:4] for path in knowledge.decision_files(resolve(tree))]
+        self.assertEqual(["0001", "0002"], numbers)
+
 
 class TestGateIntegration(RepoCase):
     def test_stop_gate_harvests_drafts(self):
