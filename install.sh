@@ -50,10 +50,13 @@ if [ -d "$INSTALL_DIR/.git" ]; then
   # git error and exit 128 — on a re-run whose only purpose was to re-register a copy
   # that was already on disk and perfectly usable. Being unable to reach the network is
   # not a reason to refuse to install what has already been downloaded.
+  #
+  # Fast-forward only. A hard reset to origin/HEAD came first here, and it threw away a
+  # commit and an uncommitted edit made in this directory with nothing said but
+  # "updating". Whatever git will not fast-forward over is kept, and said to be.
   if git -C "$INSTALL_DIR" fetch --quiet origin 2>/dev/null; then
-    git -C "$INSTALL_DIR" reset --quiet --hard origin/HEAD 2>/dev/null \
-      || git -C "$INSTALL_DIR" pull --quiet --ff-only 2>/dev/null \
-      || dim "could not fast-forward; installing the checkout as it stands"
+    git -C "$INSTALL_DIR" pull --quiet --ff-only 2>/dev/null \
+      || dim "work of your own in $INSTALL_DIR does not fast-forward to origin — kept, and installing the checkout as it stands"
   else
     dim "offline or origin unreachable — installing the copy already here"
   fi
