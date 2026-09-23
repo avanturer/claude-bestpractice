@@ -22,6 +22,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 from helpers import BIN, RepoCase, session_record_for, sid
 
@@ -170,6 +171,50 @@ class TestTheQueue(RepoCase):
         self.assertEqual(0, inbox.drain(ctx, "peer", env=listener.env()))
         self.assertEqual([], listener.received)
         self.assertTrue(json.loads(path.read_text())[0]["stale"])
+
+    def test_a_fact_retired_unsent_can_still_be_told(self):
+        """Retired as stale, the note was never delivered — and it held the same claim back
+        for the six-hour cooldown while it was still true, so it was never said at all."""
+        listener = Listener()
+        self.addCleanup(listener.close)
+        ctx = self.ctx()
+        fact = "another session is editing src/a.py too, on feat/x"
+        inbox.post(ctx, "peer", fact)
+        path = inbox._path(ctx, "peer")
+        waited = json.loads(path.read_text())
+        waited[0]["created_at"] -= inbox.STALE_SECONDS + 60
+        path.write_text(json.dumps(waited))
+        inbox.drain(ctx, "peer", env=listener.env())
+
+        self.assertTrue(inbox.post(ctx, "peer", fact), "the retired note still blocked it")
+        self.assertEqual(1, inbox.drain(ctx, "peer", env=listener.env()))
+        listener.settle(1)
+        self.assertIn(fact, listener.frames()[-1]["message"]["content"])
+
+    def test_a_receiver_lost_mid_drain_keeps_what_already_arrived(self):
+        """One failed send threw away the marks of the sends before it, and the next drain
+        delivered the same fact a second time."""
+        listener = Listener()
+        self.addCleanup(listener.close)
+        ctx = self.ctx()
+        inbox.post(ctx, "peer", "fact one: the suite is red on api/")
+        inbox.post(ctx, "peer", "fact two: main moved")
+        real = inbox._send
+        tried = []
+
+        def then_gone(address, token, text):
+            tried.append(text)
+            if len(tried) > 1:
+                raise ConnectionRefusedError("the recipient restarted")
+            return real(address, token, text)
+
+        with mock.patch.object(inbox, "_send", then_gone):
+            self.assertEqual(1, inbox.drain(ctx, "peer", env=listener.env()))
+        self.assertEqual(1, inbox.drain(ctx, "peer", env=listener.env()))
+        listener.settle(2)
+        told = [f["message"]["content"] for f in listener.frames() if f.get("type") == "user"]
+        self.assertEqual(1, sum("fact one" in text for text in told), told)
+        self.assertEqual(1, sum("fact two" in text for text in told), told)
 
     def test_a_burst_does_not_become_a_wall_of_turns(self):
         listener = Listener()

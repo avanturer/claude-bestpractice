@@ -156,7 +156,10 @@ def _queue(ctx: GitContext, recipient: str, text: str, sender: str, asks: bool =
     with store.guarded_json(_path(ctx, recipient), default=[]) as box:
         notes = _notes(box[0])
         for note in notes:
-            if note.get("key") != key:
+            # A note retired as stale was never delivered, so it is not the fact reaching
+            # them. Counted as one, it held the same claim back for the whole cooldown: still
+            # true when the recipient came back from lunch, and never said at all.
+            if note.get("key") != key or note.get("stale"):
                 continue
             delivered = note.get("delivered_at")
             if delivered is None or now - float(delivered) < COOLDOWN_SECONDS:
@@ -298,7 +301,14 @@ def _deliver(notes: list[dict], address: str, token: str, now: float) -> int:
             note["delivered_at"] = now
             note["stale"] = True
             continue
-        if _send(address, token, f"{PREFIX} {note.get('text', '')}"):
+        try:
+            arrived = _send(address, token, f"{PREFIX} {note.get('text', '')}")
+        except OSError:
+            # The receiver went away part-way through. What already arrived stays marked:
+            # raised out of here, the error reached `guarded_json` before its write, every
+            # mark was thrown away, and the next drain sent the same fact a second time.
+            break
+        if arrived:
             note["delivered_at"] = now
             sent += 1
     return sent
