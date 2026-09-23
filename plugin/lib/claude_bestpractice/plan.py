@@ -1126,7 +1126,7 @@ def complete(ctx: GitContext, task_id: str, session_id: str = "") -> tuple[Task 
 
     live = {s.session_id for s in sessions.live_sessions(ctx)}
     for waiting in load_all(ctx):
-        if task_id in waiting.after and waiting.owner in live and not blockers(ctx, waiting):
+        if task.id in waiting.after and waiting.owner in live and not blockers(ctx, waiting):
             inbox.post(
                 ctx, waiting.owner,
                 f"{task_id} is done — {waiting.id} is no longer blocked.",

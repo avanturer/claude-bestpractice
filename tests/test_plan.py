@@ -840,6 +840,28 @@ class TestTasksThatAreNotIndependent(PlanCase):
         startable = {t.title for t in plan.startable(ctx)}
         self.assertEqual({"lands first", "independent"}, startable)
 
+    def test_the_waiter_is_told_whichever_way_the_id_was_typed(self):
+        """`claude-bp-plan done 7` is how the id is typed and `0007` is how `after` files it.
+        The unpadded one was compared as typed, so the session waiting on the card was told
+        nothing, while `done 0007` told it at once."""
+        from claude_bestpractice import inbox
+
+        ctx = self.ctx()
+        first = plan.add(ctx, "lands first", done_when="stated", paths=["src/app.py"])
+        second = plan.add(ctx, "comes after", after=[first.id], done_when="stated",
+                          paths=["src/other.py"])
+        self.session("waiter")
+        plan.claim(ctx, second.id, "waiter", "main")
+
+        done = subprocess.run(
+            [sys.executable, str(BIN / "claude-bp-plan"), "done", first.id.lstrip("0")],
+            capture_output=True, text=True, cwd=str(self.repo), timeout=120,
+        )
+
+        self.assertEqual(0, done.returncode, done.stderr)
+        told = [n["text"] for n in inbox.pending(ctx, "waiter")]
+        self.assertTrue(any("no longer blocked" in text for text in told), told)
+
 
 class TestTheOrderIsVisibleWithoutOpeningTheTask(PlanCase):
     def plan_cli(self, *args) -> subprocess.CompletedProcess:
