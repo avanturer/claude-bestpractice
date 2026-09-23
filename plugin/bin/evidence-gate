@@ -237,10 +237,11 @@ def _give_up(ctx, rec: sessions.SessionRecord, reason: str, changed: list) -> No
 # the `/compact` they had just typed. The note at the top of `plugin/bin/checkpoint`
 # carries the measurement.
 #
-# Marked with an INT, and that is load-bearing rather than incidental: `pre-tool` rewrites
-# `tool_signatures` on every allowed call and keeps only the integer-valued keys, so a
-# marker stored as a string or a bool is dropped by the session's next tool call — and a
-# once-per-session ask whose mark evaporates is an ask every turn.
+# Marked under a `_` name, and that is load-bearing rather than incidental: `pre-tool`
+# rewrites `tool_signatures` on every allowed call and keeps the signature counts and this
+# gate's own `_` keys, nothing else — so a marker under any other name is dropped by the
+# session's next tool call, and a once-per-session ask whose mark evaporates is an ask every
+# turn.
 NOTES_ASKED = "_notes_asked"
 
 

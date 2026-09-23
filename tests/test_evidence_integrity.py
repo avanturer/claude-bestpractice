@@ -516,6 +516,28 @@ class TestTheCeilingCarriesTheReason(RepoCase):
             "no subjects, so this warning can never be retired when the code is rewritten",
         )
 
+    def test_a_tool_call_between_blocks_keeps_what_they_were_about(self):
+        """What a real session does between blocks: it looks. `pre-tool` rewrote the record on
+        that call and kept integers only, so the reason, the files and the tree were gone by
+        the time the ceiling needed them — #31 again, everywhere but in the test above."""
+        import json
+
+        from claude_bestpractice import attempts, evidence, store
+
+        self.seed_red()
+        for _ in range(evidence.MAX_CONSECUTIVE_BLOCKS + 1):
+            self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                            "stop_hook_active": True, "cwd": str(self.repo)})
+            self.run_hook("pre-tool", {"session_id": "s1", "hook_event_name": "PreToolUse",
+                                       "tool_name": "Bash", "tool_input": {"command": "cat a.py"},
+                                       "cwd": str(self.repo)})
+
+        rows = store.tier_b(self.ctx(), "unverified.jsonl").read_text(encoding="utf-8")
+        self.assertIn("suite FAILS", json.loads(rows.strip().splitlines()[-1])["reason"])
+        items = store.tier_b(self.ctx(), "open-items.jsonl").read_text(encoding="utf-8")
+        self.assertTrue(json.loads(items.strip().splitlines()[-1]).get("subject_paths"))
+        self.assertTrue(attempts.load_all(self.ctx()), "the unverified finish filed no attempt")
+
 
 class TestAMissingRunnerIsNotACodeFailure(RepoCase):
     """"The suite FAILS on the code as it stands" is a claim about the CODE.

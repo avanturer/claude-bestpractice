@@ -2263,6 +2263,16 @@ class TestTheCeilingCountsALoopNotAnAfternoon(GateCase):
         self.age_the_last_block(600)
         self.assertIn(f"[2/{ceiling}]", self.stop().stderr)
 
+    def test_the_clock_survives_the_sessions_next_tool_call(self):
+        """`pre-tool` kept integers only, so the first call after a block took the block's
+        time with it and the streak could never age — in any session that did anything."""
+        ceiling = self.blocked_work()
+        self.stop()
+        self.age_the_last_block(6 * 3600)
+        self.gate("pre-tool", {"session_id": "s1", "hook_event_name": "PreToolUse",
+                               "tool_name": "Bash", "tool_input": {"command": "git status"}})
+        self.assertIn(f"[1/{ceiling}]", self.stop().stderr)
+
     def test_a_record_written_before_this_existed_is_not_reset(self):
         """No timestamp means an in-flight streak from an older version; keep counting."""
         from claude_bestpractice import sessions

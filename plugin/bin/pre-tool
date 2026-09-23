@@ -1208,7 +1208,13 @@ def main() -> None:
     history.append(sig)
     history = history[-SIGNATURE_HISTORY:]
 
-    counts = {k: v for k, v in rec.tool_signatures.items() if k != "_history" and isinstance(v, int)}
+    # The signature counts, and the Stop gate's own `_` bookkeeping whatever its type. Keeping
+    # integers only threw away the block memory — its reason, paths, tree and time — on the
+    # first tool call after every block, which is every real session: the ceiling then filed
+    # "continuation ceiling reached" with no reason and no files (#31 again), and the streak
+    # never reset after an hour's silence because its clock was always gone.
+    counts = {k: v for k, v in rec.tool_signatures.items()
+              if k != "_history" and (isinstance(v, int) or k.startswith("_"))}
     counts[sig] = counts.get(sig, 0) + 1
 
     ti = event.tool_input
