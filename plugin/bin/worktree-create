@@ -83,21 +83,11 @@ def main() -> None:
 
     # The port and database name were derived here since v1.14.0 and read by NOTHING —
     # a promise this hook's own docstring made and the code never kept. They reach the
-    # tree now, because isolation that is only computed is not isolation (#164).
-    from claude_bestpractice import config
-
-    cfg = config.load(ctx)
-    if cfg.isolate_databases:
-        url = worktree.dsn_for(ctx, str(body.get("database") or ""))
-        worktree.isolate_database(target, url, seed_from=worktree.main_checkout(ctx))
-        # Only where there is a database: `dsn_for` answers "" for a project that
-        # configures none, and there is then nothing to create and nothing to ask about.
-        if url:
-            worktree.run_setup(target, cfg.worktree_setup)
-            # AFTER the project has had its turn, because `worktree_setup` is where a
-            # project creates the database and the answer before it ran would be about
-            # nothing. What this learns reaches the session on its first board.
-            worktree.note_database(ctx, target, url)
+    # tree now, because isolation that is only computed is not isolation (#164). Through
+    # the one sequence the gate's trees get too, which is how the two stopped differing.
+    # In this process, not later: the harness waits for the path, and a subagent started
+    # in a tree still being set up would be working in half a tree.
+    worktree.furnish(ctx, target, str(body.get("database") or ""))
 
     # The harness takes the path from stdout. Everything else is a side effect.
     sys.stdout.write(absolute)

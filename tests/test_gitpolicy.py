@@ -1834,6 +1834,69 @@ class TestTheStandingInstructionNamesTheTree(RepoCase):
         self.assertNotIn("never in this main checkout", body)
 
 
+class TestTheGateFurnishesItsTreeLikeTheHook(PolicyCase):
+    """The tree a session refused in the main checkout is sent to got no `.env` and no
+    database of its own, while the record beside it named one — so the session ran with no
+    config, copied the main checkout's `.env` by hand and shared its database, which is
+    #164 and #182 arriving through the gate's door instead of the hook's."""
+
+    def the_gate_makes_one(self) -> Path:
+        self.decision()
+        tree = self.provisioned()
+        self.assertIsNotNone(tree, "precondition: the refusal provisioned a tree")
+        return tree
+
+    def a_setup_that_leaves_a_mark(self, wait: float = 0.0) -> None:
+        """A `worktree_setup` that is not about a database at all, as `npm ci` is not."""
+        code = f"import time; time.sleep({wait}); open('set-up.txt', 'w').write('done')"
+        self.configure(worktree_setup=[sys.executable, "-c", code])
+
+    def test_it_gets_the_main_checkout_s_env_on_a_database_of_its_own(self):
+        from claude_bestpractice import worktree
+
+        self.write(".env", "DATABASE_URL=postgres://u:p@localhost:5432/shop_dev\nSTRIPE_KEY=sk_1\n")
+
+        tree = self.the_gate_makes_one()
+
+        self.assertIn("STRIPE_KEY=sk_1", (tree / ".env").read_text(encoding="utf-8"))
+        _record, body = worktree.record_for(self.ctx(), tree)
+        self.assertEqual(f"postgres://u:p@localhost:5432/{body['database']}",
+                         worktree.database_of(tree))
+
+    def test_its_setup_runs_where_there_is_no_database(self):
+        import time
+
+        self.a_setup_that_leaves_a_mark()
+
+        mark = self.the_gate_makes_one() / "set-up.txt"
+
+        deadline = time.time() + 30
+        while not mark.exists() and time.time() < deadline:
+            time.sleep(0.1)
+        self.assertTrue(mark.exists(), "worktree_setup never ran in the gate's tree")
+
+    def test_the_hook_s_tree_runs_it_too(self):
+        self.a_setup_that_leaves_a_mark()
+
+        made = self.run_hook("worktree-create", {"session_id": "s1",
+                                                 "hook_event_name": "WorktreeCreate"})
+
+        self.assertTrue((Path(made.stdout.strip()) / "set-up.txt").exists(), made.stderr)
+
+    def test_a_slow_setup_does_not_hold_the_gate_past_its_timeout(self):
+        """A PreToolUse hook that runs out of time lets the call through, and the call here
+        is the write into the main checkout that the gate exists to refuse."""
+        import time
+
+        self.a_setup_that_leaves_a_mark(wait=20)
+
+        started = time.time()
+        verdict, _reason = self.decision()
+
+        self.assertEqual("deny", verdict)
+        self.assertLess(time.time() - started, 10, "the gate waited for the project's setup")
+
+
 class TestABareCloneKeepsItsTreesBesideIt(RepoCase):
     """`main_checkout` answers with the first tree git lists, and in a clone made as a bare
     repository with working trees beside it, that is the git directory itself: every tree

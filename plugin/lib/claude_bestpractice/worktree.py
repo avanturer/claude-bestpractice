@@ -24,6 +24,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from . import store
@@ -279,10 +280,11 @@ def create_database(url: str) -> tuple[bool, str]:
 
 
 def run_setup(tree: Path, command: list[str]) -> bool:
-    """Let the project bring its own database into existence. False when it could not.
+    """Let the project set up a new tree its own way. False when it could not.
 
-    The command is the project's, because creating a database is the one part of this a
-    plugin cannot know: `createdb` is Postgres, and hardcoding it breaks the first
+    Its database above all, but not only: the same line installs what a fresh checkout does
+    not have. The command is the project's, because creating a database is the one part of
+    this a plugin cannot know: `createdb` is Postgres, and hardcoding it breaks the first
     repository that is not. It lives in `config.json`, which `pre-tool` refuses to the
     session — so it is the founder's line, not one an agent rewrites when it is in the way.
 
@@ -1558,8 +1560,71 @@ def provision(ctx: GitContext, task: str = "", session_id: str = "") -> Path | N
     if not target.is_dir() and not add_tree(ctx, absolute, branch):
         return None
 
-    record(ctx, slug, absolute, branch, trust(absolute), session_id)
+    body = record(ctx, slug, absolute, branch, trust(absolute), session_id)
+    furnish(ctx, target, str(body.get("database") or ""), later=True)
     return target
+
+
+def furnish(ctx: GitContext, tree: Path, database: str, later: bool = False) -> None:
+    """Everything a new tree needs besides its files, the same whichever way it was made.
+
+    The gate's trees got none of it. `WorktreeCreate` seeded `.env` and gave its tree a
+    database of its own; `provision`, which makes the tree a session refused in the main
+    checkout is sent to, made the directory and stopped — so that session ran with no config
+    at all, copied the main checkout's `.env` by hand (#42) and shared its database (#164,
+    #182), while the record beside it named a database nothing pointed at.
+
+    First the main checkout's `.env`, on this tree's own DATABASE_URL where there is one to
+    rename and never an invented one; then `settle`. `later` sends `settle` to a process of
+    its own: the gate calls this inside a PreToolUse hook with fifteen seconds to answer,
+    and a hook that runs out of time lets the refused write through — a project's `npm ci`
+    would have opened the very gate it was run behind.
+    """
+    from . import config
+
+    cfg = config.load(ctx)
+    url = dsn_for(ctx, database) if cfg.isolate_databases else ""
+    if cfg.isolate_databases:
+        isolate_database(tree, url, seed_from=main_checkout(ctx))
+    if not later:
+        settle(ctx, tree, url, cfg.worktree_setup)
+    elif url or cfg.worktree_setup:
+        _settle_later(ctx, tree, url, cfg.worktree_setup)
+
+
+def settle(ctx: GitContext, tree: Path, url: str, setup: list[str]) -> None:
+    """The slow half of a new tree: the project's own setup, then whether its database is there.
+
+    `worktree_setup` runs for EVERY tree, database or not. It is the founder's per-tree
+    line, and a project reaches for it for `npm ci` as often as for `createdb`; run only
+    where a DATABASE_URL existed, a repository without one never had it run at all. The
+    database is asked about AFTER the project has had its turn, because `worktree_setup` is
+    where a project creates it and the answer before it ran would be about nothing.
+    """
+    run_setup(tree, setup)
+    if url:
+        note_database(ctx, tree, url)
+
+
+# What `_settle_later` runs. Handed this library's own directory, so the process imports
+# this copy of the plugin and not whichever one is first on its path.
+_SETTLE = (
+    "import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); "
+    "from claude_bestpractice import gitctx, worktree; "
+    "worktree.settle(gitctx.resolve(sys.argv[2]), Path(sys.argv[3]), sys.argv[4], sys.argv[5:])"
+)
+
+
+def _settle_later(ctx: GitContext, tree: Path, url: str, setup: list[str]) -> None:
+    """`settle`, in a detached process nobody waits on. Nothing here may cost the gate its answer."""
+    library = Path(__file__).resolve().parent.parent
+    with contextlib.suppress(OSError):
+        subprocess.Popen(
+            [sys.executable, "-c", _SETTLE, str(library), str(ctx.worktree_root), str(tree),
+             url, *setup],
+            cwd=str(tree), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, start_new_session=True,
+        )
 
 
 def _base_of(ctx: GitContext) -> str:
