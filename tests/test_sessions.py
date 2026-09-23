@@ -571,13 +571,16 @@ class TestALeaseSurvivesItsHooksExiting(RepoCase):
 
 
 class TestTheGateJudgesTheTreeTheSessionWorksIn(RepoCase):
-    """Issue #213. A hook is handed the harness's working directory, and `cd` inside a
-    Bash call moves the shell and not the harness — so a session sent into a worktree goes
-    on reporting the main checkout, and the Stop gate ran the suite, counted the diff and
-    read the scope in a checkout the session was forbidden to write in and every sibling
-    shares. It reported a failing test from somebody else's stale tree and 335 changed
-    files belonging to nobody present, and the only way to clear it was to touch a tree
-    this plugin's own rule says not to touch.
+    """Issue #213. A session standing in the main checkout with its work in its own tree
+    was judged where it stood: the Stop gate ran the suite, counted the diff and read the
+    scope in a checkout the session was forbidden to write in and every sibling shares. It
+    reported a failing test from somebody else's stale tree and 335 changed files belonging
+    to nobody present, and the only way to clear it was to touch a tree this plugin's own
+    rule says not to touch.
+
+    Claude Code now reports the tree as the hook's directory once the session has `cd`-ed
+    into it (2.1.280, 2.1.281), so the redirect is needed only while the session stands in
+    the main checkout — and it must survive the session being a second identity in the tree.
     """
 
     def a_session_with_a_tree(self):
@@ -614,6 +617,45 @@ class TestTheGateJudgesTheTreeTheSessionWorksIn(RepoCase):
         self.assertEqual(
             self.repo.resolve(), worktree.working_context(self.ctx(), "s1").worktree_root
         )
+
+    def one_session_in_both(self):
+        """The tree made for the id the session had in the main checkout, and the session
+        now registered under the tree's id as well — one process, as `resolve_owner` finds
+        one CLI."""
+        from claude_bestpractice import worktree
+        from claude_bestpractice.gitctx import resolve
+
+        tree = worktree.provision(self.ctx(), "the work", sid(self.repo, "s1"))
+        for where in (self.repo, tree):
+            sessions.register(resolve(where), record(resolve(where), sid(where, "s1")))
+        return tree
+
+    def test_standing_in_the_main_checkout_it_is_still_judged_in_its_tree(self):
+        from claude_bestpractice import worktree
+
+        tree = self.one_session_in_both()
+        moved = worktree.working_context(self.ctx(), sid(self.repo, "s1"))
+        self.assertEqual(tree.resolve(), moved.worktree_root)
+
+    def test_standing_in_its_tree_it_is_judged_there(self):
+        from claude_bestpractice import worktree
+        from claude_bestpractice.gitctx import resolve
+
+        tree = self.one_session_in_both()
+        here = worktree.working_context(resolve(tree), sid(tree, "s1"))
+        self.assertEqual(tree.resolve(), here.worktree_root)
+
+    def test_standing_in_some_other_tree_it_is_judged_there_and_not_sent_back(self):
+        """Known under every id it has had, a session in a tree it went into by itself
+        would otherwise be judged in the tree it was handed and left."""
+        from claude_bestpractice import worktree
+        from claude_bestpractice.gitctx import resolve
+
+        self.one_session_in_both()
+        elsewhere = self.add_worktree("elsewhere")
+        sessions.register(resolve(elsewhere), record(resolve(elsewhere), sid(elsewhere, "s1")))
+        judged = worktree.working_context(resolve(elsewhere), sid(elsewhere, "s1"))
+        self.assertEqual(elsewhere.resolve(), judged.worktree_root)
 
 
 class TestTheDiffIsWhatThisSessionChanged(RepoCase):

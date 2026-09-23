@@ -34,7 +34,7 @@ from dataclasses import dataclass, asdict, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from . import store
+from . import hookio, store
 from .gitctx import GitContext, worktree_paths
 
 # Older than this and the board stops calling the session active. It is a DISPLAY
@@ -470,6 +470,45 @@ def my_pid(ctx: GitContext, session_id: str) -> int:
     if record is None or record.pid_trust != PID_TRUST_OWNER or record.pid <= 0:
         return 0
     return record.pid
+
+
+def _process_of(record: SessionRecord) -> tuple[str, int, str] | None:
+    """(harness id, CLI pid, its start time): what makes two records one running session.
+
+    None where any half is unknown — an id that was not composed here, an anonymous one, or
+    a pid never resolved to the CLI itself, which `my_pid` refuses for the same reason.
+    """
+    harness = hookio.harness_of(record.session_id, record.worktree)
+    if not harness or record.pid_trust != PID_TRUST_OWNER or record.pid <= 0:
+        return None
+    return harness, record.pid, record.pid_fingerprint
+
+
+def identities(ctx: GitContext, session_id: str) -> set[str]:
+    """Every id this ONE session is registered under: its own, and the ones it left behind.
+
+    Identity is (harness id, worktree), and Claude Code reports the tree as a hook's working
+    directory from the first call after `cd` or `EnterWorktree` into it (measured on
+    2.1.280 and 2.1.281). So a session that files and claims its card in the main checkout
+    and then enters the tree this plugin made for it is a second identity from its first
+    call there, while the record it left behind stays live — it names the same process.
+    Every rule asking "is that card, that lease, that record mine?" then answered no about
+    the session doing the asking: its own card was a stranger's, `claim` refused it as held
+    by a live session that was itself, and `git add -A` in its own tree was refused over
+    its own paths.
+
+    United on BOTH halves, never on one. `claude -p` children inherit one harness id and are
+    separate processes — the reason the tree is in the identity at all — so the process has
+    to match too, start time included, or a recycled pid would be taken for this session.
+    Subagents share both halves: they are this session's own hands, and count as it.
+    """
+    me = get(ctx, session_id) if session_id else None
+    process = _process_of(me) if me is not None else None
+    if process is None:
+        return {session_id} if session_id else set()
+    return {session_id} | {
+        record.session_id for record in load_all(ctx) if _process_of(record) == process
+    }
 
 
 # --------------------------------------------------------------------------- leases

@@ -414,9 +414,11 @@ def open_for(ctx: GitContext, statement: str, session_id: str, opener: str = "")
     if not statement.strip():
         return None
     opener = opener or session_id
-    for task in load_all(ctx, DOING):
-        if task.owner == session_id:
-            return None
+    # Held under any id this session has had. Claimed in the main checkout and spoken to
+    # again from its own tree, it is one session on one card — and the founder's next line
+    # filed a second card for work already on the board, the drift #131 describes.
+    if held_by(ctx, session_id):
+        return None
     said = statement.strip().splitlines()[0][:120]
     mine = opened_for(ctx, opener)
     if mine is not None:
@@ -753,9 +755,14 @@ def _still_on_it(ctx: GitContext, task: Task) -> bool:
     holder = sessions.get(ctx, task.owner) if task.owner else None
     if holder is None or not sessions.is_live(ctx, holder):
         return False
+    # The owner under every id it has had. It claims in the main checkout and works in its
+    # own tree, where every touch lands on the tree's id — read from the id the card names,
+    # a session that never stopped looked idle from the moment it moved.
+    records = [sessions.get(ctx, one) for one in sessions.identities(ctx, task.owner)]
+    working = [record for record in records if record is not None]
     if not task.paths:
-        return not sessions.is_idle(holder)
-    return any(touched in task.paths for touched in holder.last_touched)
+        return not all(sessions.is_idle(record) for record in working)
+    return any(touched in task.paths for record in working for touched in record.last_touched)
 
 
 def sweep_idle(ctx: GitContext, hours: float = IDLE_HOURS) -> list[Task]:
@@ -993,12 +1000,24 @@ def _unplanned(task: Task) -> str:
     )
 
 
-def claim(ctx: GitContext, task_id: str, session_id: str, branch: str) -> tuple[Task | None, str]:
-    """Take ownership. Returns (task, error). A task owned by a LIVE session is refused.
+def _held_elsewhere(ctx: GitContext, task: Task, mine: set[str]) -> str:
+    """Why a LIVE session other than this one holds `task`, or "" when none does.
 
     Liveness is checked rather than assumed: a claim held by a crashed session is taken
     over, which is the difference between a work ledger and a graveyard.
     """
+    from . import sessions
+
+    if not task.owner or task.owner in mine:
+        return ""
+    holder = sessions.get(ctx, task.owner)
+    if holder is None or not sessions.is_live(ctx, holder):
+        return ""
+    return f"task {task.id} is held by live session {task.owner[:8]}"
+
+
+def _claimable(ctx: GitContext, task_id: str, session_id: str) -> tuple[Task | None, str]:
+    """The card as it stands now, when this session may take it. (None, why not) otherwise."""
     from . import sessions
 
     task = find(ctx, task_id)
@@ -1006,12 +1025,13 @@ def claim(ctx: GitContext, task_id: str, session_id: str, branch: str) -> tuple[
         return None, f"no task {task_id}"
     if task.state == DONE:
         return None, f"task {task.id} is already done"
-
-    if task.owner and task.owner != session_id:
-        holder = sessions.get(ctx, task.owner)
-        if holder and sessions.is_live(ctx, holder):
-            return None, f"task {task.id} is held by live session {task.owner[:8]}"
-
+    mine = sessions.identities(ctx, session_id)
+    # This session's already, under the id it had where it claimed it: in the main
+    # checkout, before it entered its own tree. Handed to the id it has now, never refused
+    # as a live sibling's — that sibling is itself, and the only other way out was filing
+    # the same work twice (#131). Its plan was demanded when it was first claimed.
+    if task.owner in mine:
+        return task, ""
     # The plan, demanded where the plan has to exist. `pre-tool` already refuses a write
     # that no claimed card covers, so requiring it HERE is what makes "no code without a
     # plan" binding — and it costs the founder nothing, where the harness's own plan mode
@@ -1019,11 +1039,15 @@ def claim(ctx: GitContext, task_id: str, session_id: str, branch: str) -> tuple[
     #
     # At `claim` and not at `add`: filing a rough card has to stay a single line, or the
     # board stops being written to. Starting one is the moment the plan is owed.
-    if task.owner != session_id:
-        unplanned = _unplanned(task)
-        if unplanned:
-            return None, unplanned
+    refused = _held_elsewhere(ctx, task, mine) or _unplanned(task)
+    return (None, refused) if refused else (task, "")
 
+
+def claim(ctx: GitContext, task_id: str, session_id: str, branch: str) -> tuple[Task | None, str]:
+    """Take ownership. Returns (task, error). A task owned by a LIVE session is refused."""
+    task, error = _claimable(ctx, task_id, session_id)
+    if task is None:
+        return None, error
     return _move(task, DOING, owner=session_id, branch=branch), ""
 
 
@@ -1105,9 +1129,9 @@ def settle_delivered(ctx: GitContext, session_id: str, delivered: list[str],
                      what: str) -> list[Task]:
     """Close this session's cards whose files the delivery carried. Returns what closed.
 
-    Owned by THIS session only. A sibling's card over the same files is its own to close:
-    it may be mid-change on top of what just landed, and taking its row off the board is
-    the same lie in the other direction.
+    Owned by THIS session only, under any id it has had (`held_by`). A sibling's card over
+    the same files is its own to close: it may be mid-change on top of what just landed,
+    and taking its row off the board is the same lie in the other direction.
 
     What closed it is written into the card before it moves, because a closure nobody can
     account for is worse than a card left open — the founder reads outcomes, and "who
@@ -1117,9 +1141,7 @@ def settle_delivered(ctx: GitContext, session_id: str, delivered: list[str],
         return []
     closed: list[Task] = []
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    for task in load_all(ctx, DOING):
-        if task.owner != session_id:
-            continue
+    for task in held_by(ctx, session_id):
         carried = carried_by(task, delivered)
         if not carried:
             continue
@@ -1133,8 +1155,28 @@ def settle_delivered(ctx: GitContext, session_id: str, delivered: list[str],
 
 
 def held_by(ctx: GitContext, session_id: str) -> list[Task]:
-    """The cards this session is holding in `doing`."""
-    return [task for task in load_all(ctx, DOING) if task.owner == session_id]
+    """The cards this session is holding in `doing`, under any id it has had.
+
+    A session that claims its card in the main checkout and then enters its own tree is a
+    second identity there (`sessions.identities`), and the card is still its own. Asked by
+    id alone, the gates told it nothing on the board said it was working, and the remedy
+    they named — claim it — was refused as a live session's, which was itself.
+    """
+    return _owned(ctx, session_id, DOING)
+
+
+def closed_by(ctx: GitContext, session_id: str) -> list[Task]:
+    """The cards this session has closed, under any id it has had. `done` keeps the owner
+    precisely so this can be asked (#220)."""
+    return _owned(ctx, session_id, DONE)
+
+
+def _owned(ctx: GitContext, session_id: str, state: str) -> list[Task]:
+    """The cards in `state` whose owner is this session by any of its ids."""
+    from . import sessions
+
+    owners = sessions.identities(ctx, session_id)
+    return [task for task in load_all(ctx, state) if task.owner in owners]
 
 
 def closure_demand(tasks: list[Task]) -> str:

@@ -246,6 +246,10 @@ def _holds_a_card(ctx, session_id: str) -> bool:
     Split out because the answer is now wanted about a call that names no path at all —
     `_ledger_covers` reads `touched`, and `all()` over an empty list is True, so asking it
     about a `git merge` would have answered yes for every session on the machine.
+
+    By any id this session has had (`plan.held_by`, `plan.closed_by`): it claims in the
+    main checkout and then works in its own tree, where it is a second identity with the
+    same card.
     """
     from claude_bestpractice import plan
 
@@ -253,10 +257,7 @@ def _holds_a_card(ctx, session_id: str) -> bool:
     # that then says "nothing on the board says this session is working" punishes the
     # session for doing it — the only way to stay quiet was to leave the card open until
     # the session ended (#220).
-    return any(
-        t.owner == session_id
-        for t in plan.load_all(ctx, plan.DOING) + plan.load_all(ctx, plan.DONE)
-    )
+    return bool(plan.held_by(ctx, session_id) or plan.closed_by(ctx, session_id))
 
 
 def _ledger_covers(ctx, session_id: str, touched: list[str]) -> bool:
@@ -1114,6 +1115,11 @@ def main() -> None:
         removals = worktree_removals(str(ti.get("command", "")), session_cwd) if own else []
         if own and any(path == own.resolve() for path in removals if path is not None):
             released = None
+            # Before the removal, never after: when the session stands in the tree it is
+            # removing, that tree IS `ctx`, and every git call takes it as a working
+            # directory — asked afterwards, the success message itself raised
+            # FileNotFoundError, and this gate fails closed. The Stop gate learned the same.
+            where = worktree.main_checkout(ctx)
             try:
                 # `--force` only where the session typed it: it is the session's own act
                 # being carried out somewhere it survives, not a judgement this gate makes
@@ -1133,7 +1139,7 @@ def main() -> None:
                     "removing the directory this shell stands in leaves Claude Code refusing "
                     "every later git call as isolated in a worktree that no longer exists.\n"
                     f"  The shell is now in a directory that is gone — `cd "
-                    f"{worktree.main_checkout(ctx)}`. There is nothing else to clean up."
+                    f"{where}`. There is nothing else to clean up."
                 )
             deny(
                 ctx, rec,

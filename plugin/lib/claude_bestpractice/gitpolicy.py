@@ -390,19 +390,26 @@ def foreign_refusal(target: Path, owner: Path, ctx: GitContext) -> str:
 
 
 def _provisioned_trees(ctx: GitContext, session_id: str) -> list[Path]:
-    """Every working tree this plugin made for THIS session."""
+    """Every working tree this plugin made for THIS session, under any id it has had.
+
+    The tree is recorded for the id the session had when it was refused in the main
+    checkout, and the session is a new id wherever else it stands (`sessions.identities`).
+    `worktree.mine` answers the same question the same way: two readers of this one fact
+    that disagree are how #89 and #100 happened.
+    """
     if not session_id:
         return []
-    from . import store
+    from . import sessions, store
 
     try:
         records = sorted(store.tier_b(ctx, "worktrees").glob("*.json"))
     except OSError:
         return []
+    mine = sessions.identities(ctx, session_id)
     out: list[Path] = []
     for path in records:
         body = store.read_json(path, default={}) or {}
-        if not body.get("provisioned_by_plugin") or body.get("session_id") != session_id:
+        if not body.get("provisioned_by_plugin") or body.get("session_id") not in mine:
             continue
         try:
             out.append(Path(str(body.get("path") or "")).resolve())

@@ -828,6 +828,23 @@ class TestWorkThatStoppedMoving(PlanCase):
         self.assertEqual([], plan.sweep_idle(self.ctx(), 24.0))
         self.assertEqual([task.id], [t.id for t in plan.sweep_idle(self.ctx(), 2.0)])
 
+    def test_a_session_working_on_it_from_its_own_tree_keeps_it(self):
+        """Claimed in the main checkout, worked on from the tree it was sent to: every
+        touch lands on the tree's id, and the id the card names never moves again."""
+        from claude_bestpractice.gitctx import resolve
+
+        from helpers import session_record_for
+
+        task = self.claimed_by(sid(self.repo, "s1"), touching=[], paths=["app.py"])
+        tree = self.add_worktree("feat-x")
+        there = session_record_for(resolve(tree), sid(tree, "s1"))
+        there.last_touched = ["app.py"]
+        sessions.register(resolve(tree), there)
+        self.aged(task, 30)
+
+        self.assertEqual([], plan.sweep_idle(self.ctx(), 24.0))
+        self.assertEqual(plan.DOING, plan.find(self.ctx(), task.id).state)
+
 
 class TestTheBoardLearnsTheTaskWhenItArrives(RepoCase):
     """The demand fired at the first WRITE, so between "the founder gave a task" and "the

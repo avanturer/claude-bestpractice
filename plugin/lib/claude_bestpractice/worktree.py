@@ -317,6 +317,11 @@ def session_on_this_database(ctx: GitContext, session_id: str = "") -> tuple[str
     asking about are the ones a session is standing in, which the registry already knows.
     Trees nobody is in are `shared_database`'s question, and it is asked where the cost of
     a git call is paid once rather than per tool call.
+
+    Never this session under an id it left behind. A session that started in the main
+    checkout and moved into its own tree leaves a live record there, and that record was
+    this gate's "session already using the database" — the session refused over itself,
+    for a tree whose `.env` was seeded from the checkout it had just walked out of.
     """
     from . import sessions
 
@@ -324,12 +329,13 @@ def session_on_this_database(ctx: GitContext, session_id: str = "") -> tuple[str
     if not here:
         return None
     mine = ctx.worktree_root.resolve()
+    me = sessions.identities(ctx, session_id)
     for other in sessions.live_sessions(ctx, exclude=session_id):
         try:
             tree = Path(other.worktree).resolve()
         except (OSError, TypeError, ValueError):
             continue
-        if tree == mine:
+        if tree == mine or other.session_id in me:
             continue
         if database_of(tree) == here:
             return other.session_id, split_dsn(here)[1] or here
@@ -1098,7 +1104,7 @@ def _board_is_clear(ctx: GitContext, session_id: str, branch: str) -> bool:
         return False
     if branch and any(task.branch == branch for task in plan.load_all(ctx, plan.PAUSED)):
         return False
-    return any(task.owner == session_id for task in plan.load_all(ctx, plan.DONE))
+    return bool(plan.closed_by(ctx, session_id))
 
 
 def _in_the_trunk(tree: Path) -> tuple[str, str, bool] | None:
@@ -1282,45 +1288,65 @@ def mine(ctx: GitContext, session_id: str) -> Path | None:
 
     The registry is the record of what was provisioned and for whom, so this asks it
     rather than re-deriving a name that has since changed.
+
+    For whom means the SESSION, under any id it has had. The tree is recorded for the id it
+    was refused under in the main checkout, and standing in the tree makes it a new one
+    (`sessions.identities`) — so from inside, where a session asks to remove its own tree,
+    this found nothing: `git worktree remove` was approved and run by the shell standing in
+    the directory, which is the stranding decision 0022 intercepts it to prevent. The
+    record made for this exact id still answers first.
     """
     if not session_id:
         return None
-    from . import store
+    from . import sessions
 
+    ours = _provisioned(ctx)
+    owners = sessions.identities(ctx, session_id) if ours else set()
+    for body in sorted(ours, key=lambda body: body.get("session_id") != session_id):
+        candidate = Path(str(body.get("path") or ""))
+        if body.get("session_id") in owners and candidate.is_dir():
+            return candidate
+    return None
+
+
+def _provisioned(ctx: GitContext) -> list[dict]:
+    """Every record this plugin wrote for a tree it provisioned, in the registry's order."""
     try:
         records = sorted(store.tier_b(ctx, "worktrees").glob("*.json"))
     except OSError:
-        return None
-    for path in records:
-        body = store.read_json(path, default={}) or {}
-        if not body.get("provisioned_by_plugin") or body.get("session_id") != session_id:
-            continue
-        candidate = Path(str(body.get("path") or ""))
-        if candidate.is_dir():
-            return candidate
-    return None
+        return []
+    bodies = [store.read_json(path, default={}) or {} for path in records]
+    return [body for body in bodies if body.get("provisioned_by_plugin")]
 
 
 def working_context(ctx: GitContext, session_id: str) -> GitContext:
     """The context of the tree this session actually works in, from wherever it is asked.
 
-    A hook is handed the harness's working directory, and the harness's working directory
-    is the one the chat started in — the main checkout, in every session this plugin sends
-    into a worktree, because `cd` inside a Bash call moves the shell and not the harness.
-    So the Stop gate ran the suite, counted the diff and read the scope in a checkout the
-    session had been forbidden to write in, and which in a repository with three to eight
-    sessions is shared by all of them: it reported a failing test from somebody else's
-    stale tree and 335 changed files belonging to nobody present, and the only way to
-    clear it was to commit or update a tree this plugin's own rule says not to touch (#213).
+    A hook is handed the directory the session is standing in, and that is not always the
+    tree its work is in. Claude Code reports the tree itself once the session has `cd`-ed
+    or used `EnterWorktree` into it (measured on 2.1.280 and 2.1.281), and then there is
+    nothing to redirect. But a session can still stand in the main checkout with its work
+    in the tree this plugin made for it — written there by absolute path, or through a
+    `(cd <tree> && …)` that leaves the shell where it was. Judged where it stood, the Stop
+    gate ran the suite, counted the diff and read the scope in a checkout the session had
+    been forbidden to write in, and which in a repository with three to eight sessions is
+    shared by all of them: it reported a failing test from somebody else's stale tree and
+    335 changed files belonging to nobody present, and the only way to clear it was to
+    commit or update a tree this plugin's own rule says not to touch (#213).
 
     Only ever redirects to a tree THIS PLUGIN provisioned for THIS session and that git
     still has registered. A tree that is gone, or one nobody recorded, leaves the context
     exactly where it was — a gate that guesses which checkout to judge is worse than one
     that judges the wrong one loudly.
+
+    And only ever away from the main checkout, which is the one place a tree is provisioned
+    from. A session standing in any worktree is judged where it stands: that is where its
+    work went. `mine` knows the session under every id it has had, so without this a session
+    that went into some other tree would have been judged in the one it was handed and left.
     """
     from .gitctx import GitError, resolve, worktree_paths
 
-    tree = mine(ctx, session_id)
+    tree = None if ctx.is_worktree else mine(ctx, session_id)
     if tree is None:
         return ctx
     try:

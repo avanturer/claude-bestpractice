@@ -260,7 +260,7 @@ def _nothing_written_down(ctx, rec: sessions.SessionRecord) -> bool:
     try:
         if any(a.session_id == rec.session_id for a in attempts.load_all(ctx)):
             return False
-        mine = [t for t in plan.load_all(ctx) if t.owner == rec.session_id]
+        mine = plan.held_by(ctx, rec.session_id) + plan.closed_by(ctx, rec.session_id)
         # `plan.NO_DETAIL` is what `add` writes when the card was filed without one, so it
         # is the absence of a body rather than a body. Compared against the constant and
         # not against its spelling: every card this session ever filed reads as written
@@ -282,7 +282,7 @@ def _notes_demand(ctx, rec: sessions.SessionRecord, changed: list) -> str:
     """
     from claude_bestpractice import plan
 
-    mine = [t for t in plan.load_all(ctx, plan.DOING) if t.owner == rec.session_id]
+    mine = plan.held_by(ctx, rec.session_id)
     if mine:
         learned = (f'claude-bp-plan update {mine[0].id} --note "<what this window learned '
                    'that the code does not say>"\n              (REPLACES the card body, '
@@ -412,11 +412,11 @@ def _refuse_to_end_on_an_unanswered_block(ctx, rec, pending: dict) -> None:
 def main() -> None:
     event = hookio.read_event()
     # The tree this session works in, which is not always the directory the harness hands
-    # us: `cd` inside a Bash call moves the shell and not the harness, so a session sent
-    # into a worktree goes on reporting the main checkout. Judging a turn there means
-    # judging a checkout this session was forbidden to write in and every sibling shares
-    # (#213). `working_context` only ever redirects to a tree this plugin provisioned for
-    # this session and git still has registered.
+    # us: Claude Code reports the tree once the session has `cd`-ed into it, but a session
+    # can still stand in the main checkout with its work in its own tree. Judging a turn
+    # there means judging a checkout this session was forbidden to write in and every
+    # sibling shares (#213). `working_context` only ever redirects to a tree this plugin
+    # provisioned for this session and git still has registered.
     ctx = worktree.working_context(hookio.repo(event.cwd or os.getcwd()), event.session_id)
     cfg = config.load(ctx)
 
@@ -643,11 +643,14 @@ def main() -> None:
             # changed are the files the base branch now carries.
             plan.settle_delivered(ctx, rec.session_id, everything, "the base branch")
 
-        mine = [t for t in plan.load_all(ctx, plan.DOING) if t.owner == rec.session_id]
+        # Under any id this session has had: it claims in the main checkout and works in
+        # its own tree, where the card it holds was otherwise nobody's it knew, and this
+        # demand sent it to `add` the same work a second time (#131).
+        mine = plan.held_by(ctx, rec.session_id)
         # And the ones it has already closed. The demand below is "say what you are doing";
         # a card this session added, claimed, did and closed answers it, and refusing on it
         # made closing the card the thing that triggered the refusal (#220).
-        closed = [t for t in plan.load_all(ctx, plan.DONE) if t.owner == rec.session_id]
+        closed = plan.closed_by(ctx, rec.session_id)
         if mine and delivered:
             # What the closure above could not account for: a card whose named files are
             # not in this session's diff at all. Refused rather than noted, because a note
