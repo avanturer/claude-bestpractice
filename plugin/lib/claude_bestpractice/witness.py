@@ -48,7 +48,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import hookio
+from . import hookio, testcount
 from .gitctx import GitContext
 
 # Floor and margin, not a ceiling. The ceiling is DERIVED from what the harness gives the
@@ -105,6 +105,10 @@ def _stop_hook_budget() -> float:
     return FLOOR
 
 
+# pytest's own exit status for "no tests were collected".
+PYTEST_NO_TESTS = 5
+
+
 @dataclass
 class Witnessed:
     """A run this gate performed itself, counted from its own report."""
@@ -118,6 +122,16 @@ class Witnessed:
     @property
     def passed(self) -> bool:
         return self.returncode == 0 and self.failed == 0 and self.executed > 0
+
+    @property
+    def ran_nothing(self) -> bool:
+        """Nothing executed and nothing broke — which pytest reports as exit status 5.
+
+        Read as a failure, that status was filed as a red suite: "0 failing of 0", a record
+        no fix to the code could clear, because nothing about the code had been observed.
+        """
+        quiet = (0, PYTEST_NO_TESTS) if self.runner == "pytest" else (0,)
+        return self.executed == 0 and self.failed == 0 and self.returncode in quiet
 
 
 def _python_has_pytest() -> bool:
@@ -141,11 +155,35 @@ def detect(root: Path) -> str:
     return ""
 
 
+# What makes a shared config file pytest's, rather than a file that merely exists:
+# `pyproject.toml` configures Black and Ruff in plenty of repositories with no Python test
+# in them. Empty means the file is pytest's by its name alone.
+_PYTEST_SECTIONS = {
+    "pytest.ini": "",
+    "pyproject.toml": "[tool.pytest",
+    "tox.ini": "[pytest]",
+    "setup.cfg": "[tool:pytest]",
+}
+
+
 def _has_python_tests(root: Path) -> bool:
-    for name in ("pytest.ini", "tox.ini", "pyproject.toml", "setup.cfg"):
-        if (root / name).exists():
+    """Whether pytest has anything here to run: its own configuration, or a Python test.
+
+    A directory called `test` or `tests` used to be enough, and it is not evidence of
+    Python: it is where Node's built-in runner, Cargo's integration tests and Go's end-to-end
+    suites live too. Driven over one of those, pytest collected nothing and exited 5, and the
+    gate reported "the suite FAILS — 0 failing of 0" over correct work, on every machine
+    whose `python3` can import pytest. A Node session spent its whole turn budget on that
+    refusal; in a Go repository with a `test/` directory it also stood in front of `go`.
+    """
+    for name, section in _PYTEST_SECTIONS.items():
+        try:
+            text = (root / name).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if section in text:
             return True
-    return (root / "tests").is_dir() or (root / "test").is_dir()
+    return testcount.declares(root, ".py")
 
 
 def run(ctx: GitContext, env: dict[str, str] | None = None,

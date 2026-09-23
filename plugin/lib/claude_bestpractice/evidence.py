@@ -831,7 +831,7 @@ def _judge_witnessed(ctx: GitContext, seen: witness.Witnessed, suite=None, tree:
     """A run this gate drove itself. The only path here that reads no project-authored number."""
     command = [seen.runner]
     root = _root_of(ctx, suite)
-    if seen.failed or seen.returncode != 0:
+    if not seen.ran_nothing and (seen.failed or seen.returncode != 0):
         record_red(ctx, command, seen.tail, suite, tree)
         return Verdict(
             False,

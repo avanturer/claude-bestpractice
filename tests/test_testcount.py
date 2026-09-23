@@ -172,3 +172,96 @@ class TestTheGateDrivesTheRunnerItself(RepoCase):
         self.commit("c project")
         self.assertEqual(witness.detect(self.repo), "")
         self.assertIsNone(witness.run(self.ctx()))
+
+
+class TestItCountsOnlyThisTree(RepoCase):
+    """The floor is only a floor while it is this tree's number and nobody else's."""
+
+    def test_sibling_trees_inside_the_checkout_are_not_its_tests(self):
+        """The trees this plugin provisions live under `.claude/worktrees/` IN the checkout.
+
+        Counted from there, every sibling's copy of the suite became the main checkout's
+        own, and a run of its real suite read as a narrowed one.
+        """
+        self.write("tests/test_a.py", "def test_x():\n    pass\n")
+        self.write(".claude/worktrees/feat/tests/test_a.py", "def test_x():\n    pass\n\ndef test_y():\n    pass\n")
+        self.write("wt-by-hand/.git", "gitdir: /elsewhere\n")
+        self.write("wt-by-hand/tests/test_a.py", "def test_x():\n    pass\n")
+        self.assertEqual(testcount.count_tree(self.repo), 1)
+
+    def test_a_repository_under_a_directory_named_like_a_build_output_still_counts(self):
+        """`build` and `vendor` are judged inside the tree, never in the path leading to it."""
+        from helpers import make_repo
+
+        nested = make_repo(self.tmp / "build", "project")
+        (nested / "tests").mkdir()
+        (nested / "tests" / "test_a.py").write_text("def test_x():\n    pass\n")
+        self.assertEqual(testcount.count_tree(nested), 1)
+
+    def test_declares_answers_for_one_language(self):
+        self.write("test/a.test.js", "test('a', () => {})\n")
+        self.assertTrue(testcount.declares(self.repo, ".js"))
+        self.assertFalse(testcount.declares(self.repo, ".py"))
+
+
+class TestPytestIsDrivenOnlyWherePythonIsTested(RepoCase):
+    """A `test/` directory is where half the ecosystems keep their suites.
+
+    Found by running a real session on a Node project: pytest was importable, the gate drove
+    it over `test/*.test.js`, collected nothing, and refused the finish as "the suite FAILS —
+    0 failing of 0" until the session ran out of turns.
+    """
+
+    def test_a_node_suite_is_not_pytests(self):
+        from claude_bestpractice import witness
+
+        self.write("package.json", '{"scripts": {"test": "node --test"}}\n')
+        self.write("test/a.test.js", "import { test } from 'node:test';\ntest('a', () => {});\n")
+        self.assertFalse(witness._has_python_tests(self.repo))
+
+    def test_a_cargo_or_go_layout_is_not_pytests(self):
+        from claude_bestpractice import witness
+
+        self.write("Cargo.toml", "[package]\nname = \"x\"\n")
+        self.write("tests/integration.rs", "#[test]\nfn works() {}\n")
+        self.write("go.mod", "module example.com/x\n")
+        self.write("test/e2e_test.go", "package e2e\n")
+        self.assertFalse(witness._has_python_tests(self.repo))
+
+    def test_a_pyproject_that_only_configures_a_formatter_is_not_pytests(self):
+        from claude_bestpractice import witness
+
+        self.write("pyproject.toml", "[tool.black]\nline-length = 100\n")
+        self.assertFalse(witness._has_python_tests(self.repo))
+
+    def test_python_tests_or_pytest_configuration_still_are(self):
+        from claude_bestpractice import witness
+
+        self.write("tests/test_a.py", "def test_x():\n    pass\n")
+        self.assertTrue(witness._has_python_tests(self.repo))
+        for name, body in (("pytest.ini", "[pytest]\n"),
+                           ("pyproject.toml", "[tool.pytest.ini_options]\ntestpaths = ['t']\n"),
+                           ("setup.cfg", "[tool:pytest]\n"), ("tox.ini", "[pytest]\n")):
+            bare = self.tmp / f"only-{name}"
+            bare.mkdir()
+            (bare / name).write_text(body)
+            self.assertTrue(witness._has_python_tests(bare), name)
+
+    def test_pytest_collecting_nothing_is_not_a_red_suite(self):
+        """Exit status 5 observed nothing about the code, so it must not be filed as red."""
+        from claude_bestpractice import evidence, witness
+
+        seen = witness.Witnessed(witness.PYTEST_NO_TESTS, 0, 0, "no tests ran in 0.01s", "pytest")
+        verdict = evidence._judge_witnessed(self.ctx(), seen)
+        self.assertFalse(verdict.ok)
+        self.assertIn("executed NOTHING", verdict.reason)
+        self.assertIsNone(evidence.red(self.ctx()))
+
+    def test_a_failing_run_is_still_red(self):
+        from claude_bestpractice import evidence, witness
+
+        seen = witness.Witnessed(1, 3, 1, "1 failed, 2 passed in 0.1s", "pytest")
+        verdict = evidence._judge_witnessed(self.ctx(), seen)
+        self.assertFalse(verdict.ok)
+        self.assertIn("FAILS", verdict.reason)
+        self.assertIsNotNone(evidence.red(self.ctx()))
