@@ -77,7 +77,7 @@ def _with_database(text: str, url: str) -> str:
     return "\n".join(out).strip() + "\n"
 
 
-def _seed_for(tree: Path, seed_from: Path | None) -> str:
+def _seed_for(tree: Path, seed_from: Path | None, examples: bool = True) -> str:
     """The dotenv body a new tree should start from.
 
     Its own file first. Then the MAIN CHECKOUT's, because a fresh `git worktree add`
@@ -85,30 +85,38 @@ def _seed_for(tree: Path, seed_from: Path | None) -> str:
     — so without this the tree is born with a database name and nothing else: no host, no
     keys, no credentials, and the isolation is the thing that broke the session.
 
-    `.env.example` last, for a repository whose main checkout has no `.env` either.
+    `.env.example` last, for a repository whose main checkout has no `.env` either — and
+    only when there is a database to name, because a template is where that URL is taken
+    from, not a file a tree needs for its own sake.
     """
     for candidate in (tree / ENV_FILE, (seed_from / ENV_FILE) if seed_from else None):
         if candidate is not None and candidate.is_file():
             return candidate.read_text(encoding="utf-8", errors="surrogateescape")
-    for name in ENV_EXAMPLE:
+    for name in ENV_EXAMPLE if examples else ():
         if (tree / name).is_file():
             return (tree / name).read_text(encoding="utf-8", errors="surrogateescape")
     return ""
 
 
 def isolate_database(tree: Path, url: str, seed_from: Path | None = None) -> bool:
-    """Give this worktree its own DATABASE_URL. False when nothing could be written.
+    """Give this worktree the main checkout's `.env`, on its own DATABASE_URL when it has one.
 
     Worktrees isolate files and nothing else: every one of them points at the same
     database daemon, so one session's `idle in transaction` blocks every sibling's tests
     on its locks. Measured on a real repository: seventy seconds became twenty minutes,
     and the transaction holding it had been open for nearly a day (#164).
 
-    Only the database NAME changes; see `_seed_for` for where the rest comes from.
+    Only the database NAME changes; see `_seed_for` for where the rest comes from. An empty
+    `url` means no database is configured, and then nothing is added to what is copied.
+    False when nothing was written.
     """
     try:
-        body = _seed_for(tree, seed_from)
-        (tree / ENV_FILE).write_text(_with_database(body, url), encoding="utf-8")
+        body = _seed_for(tree, seed_from, examples=bool(url))
+        if url:
+            body = _with_database(body, url)
+        if not body.strip():
+            return False
+        (tree / ENV_FILE).write_text(body, encoding="utf-8")
     except OSError:
         return False
     return True
@@ -121,23 +129,40 @@ def split_dsn(url: str) -> tuple[str, str, str]:
     how every managed Postgres is reached, and rebuilding the URL without it produces a
     tree that cannot connect at all — a worse failure than the one isolation prevents.
     """
-    head, _, tail = url.rpartition("/")
-    name, mark, query = tail.partition("?")
+    # The query first: `?sslrootcert=/etc/ssl/ca.pem` carries a slash of its own, and
+    # splitting the whole URL on its last one renamed the certificate instead of the
+    # database — leaving the tree on the shared database with a broken CA path.
+    base, mark, query = url.partition("?")
+    head, _, name = base.rpartition("/")
     return head, name, mark + query
 
 
 def dsn_for(ctx: GitContext, database: str) -> str:
-    """This tree's DSN, keeping whatever the main checkout already points at.
+    """This tree's DSN, keeping whatever the main checkout already points at. "" for none.
 
-    Host, port, user and password come from the founder's own `.env`; only the database
-    NAME is replaced. Inventing a connection string would be this plugin guessing
-    credentials it has never seen, and the guess would be wrong everywhere.
+    Host, port, user and password come from the founder's own `.env`, or the template the
+    repository ships; only the database NAME is replaced. Inventing a connection string
+    would be this plugin guessing credentials it has never seen — and it did exactly that:
+    a project with no database at all got `postgresql://localhost:5432/<tree>` written
+    into an untracked `.env` in every tree, which then stood in `git status` and in the
+    paths the Stop gate asked a session to claim.
     """
-    existing = database_of(main_checkout(ctx))
-    if not existing or "/" not in existing:
-        return f"postgresql://localhost:5432/{database}"
+    root = main_checkout(ctx)
+    existing = database_of(root) or next(
+        (found for found in (database_url_in(_read(root / name)) for name in ENV_EXAMPLE) if found),
+        "",
+    )
+    if "/" not in existing:
+        return ""
     head, _name, query = split_dsn(existing)
     return f"{head}/{database}{query}"
+
+
+def _read(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="surrogateescape")
+    except OSError:
+        return ""
 
 
 # The scheme this plugin knows how to ask about. Everything else is `worktree_setup`'s,
@@ -1246,10 +1271,8 @@ def _give_back_recorded_database(ctx: GitContext, database: str, tree: Path) -> 
     is already gone, so the only trees that can still be pointing at it are the ones that
     were never ours.
     """
-    if not database:
-        return ""
-    url = dsn_for(ctx, database)
-    if _points_at(ctx, url, tree):
+    url = dsn_for(ctx, database) if database else ""
+    if not url or _points_at(ctx, url, tree):
         return ""
     return drop_database(url, database)
 

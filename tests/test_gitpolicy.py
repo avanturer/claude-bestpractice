@@ -1567,6 +1567,21 @@ class TestWorktreeCreateMakesTheTreeItNames(RepoCase):
         """The unique slug must not replace a name the caller gave."""
         self.assertIn("doctor-feature", self.create(branch="doctor-feature"))
 
+    def test_the_name_the_harness_sends_is_the_tree_it_gets(self):
+        """`name` is the field this event documents: `claude --worktree feature-auth`, or
+        one the harness generated. It was never read, so every tree was `agent-work-…`,
+        and the subagents of one session — which share its session id — all got ONE."""
+        def named(name: str) -> str:
+            return self.run_hook("worktree-create", {
+                "session_id": "a1", "hook_event_name": "WorktreeCreate",
+                "cwd": str(self.repo), "name": name,
+            }).stdout.strip()
+
+        first, second = named("feature-auth"), named("bold-oak-a3f2")
+        self.assertTrue(first.endswith("/.claude/worktrees/feature-auth"), first)
+        self.assertTrue(second.endswith("/.claude/worktrees/bold-oak-a3f2"), second)
+        self.assertEqual("worktree-feature-auth", git(["-C", first, "branch", "--show-current"], self.repo))
+
 
 class TestOneDatabasePerSession(RepoCase):
     """Worktrees isolate files and nothing else. Every tree points at the same daemon, so
@@ -1695,6 +1710,36 @@ class TestOneDatabasePerSession(RepoCase):
         self.assertTrue(theirs, "the new tree was born with no DATABASE_URL")
         self.assertNotEqual(worktree.database_of(self.repo), theirs)
         self.assertIn("user:pw@localhost:5432", theirs, "credentials were invented rather than kept")
+
+    def test_a_project_with_no_database_gets_no_invented_one(self):
+        """Every tree of every project used to be born with an untracked `.env` naming
+        `postgresql://localhost:5432/<tree>` — found in a real session on a library with no
+        database, where it stood in `git status` and in the paths the Stop gate asked the
+        session to claim."""
+        made = Path(self.run_hook("worktree-create", {
+            "session_id": "a1", "hook_event_name": "WorktreeCreate", "cwd": str(self.repo),
+        }).stdout.strip())
+        self.assertTrue(made.is_dir())
+        self.assertFalse((made / ".env").exists(), (made / ".env").read_text() if (made / ".env").exists() else "")
+        self.assertEqual("", git(["status", "--porcelain"], made))
+
+    def test_an_env_without_a_database_is_carried_as_it_is(self):
+        (self.repo / ".env").write_text("API_KEY=abc\n", encoding="utf-8")
+        made = Path(self.run_hook("worktree-create", {
+            "session_id": "a1", "hook_event_name": "WorktreeCreate", "cwd": str(self.repo),
+        }).stdout.strip())
+        self.assertEqual("API_KEY=abc\n", (made / ".env").read_text(encoding="utf-8"))
+
+    def test_a_query_that_carries_a_path_keeps_it(self):
+        """`?sslrootcert=/etc/ssl/ca.pem` is how managed Postgres is reached; splitting on
+        the URL's last slash renamed the certificate instead of the database."""
+        from claude_bestpractice import worktree
+
+        url = "postgres://u:p@db.example.com:5432/shop?sslmode=verify-full&sslrootcert=/etc/ssl/ca.pem"
+        self.assertEqual(
+            ("postgres://u:p@db.example.com:5432", "shop",
+             "?sslmode=verify-full&sslrootcert=/etc/ssl/ca.pem"),
+            worktree.split_dsn(url))
 
     def psql_that_answers(self, answer: str = "", code: int = 0) -> Path:
         """A `psql` on PATH that records what it was asked and says what the test says.

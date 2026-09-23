@@ -41,12 +41,20 @@ def main() -> None:
 
     requested = str(event.raw.get("path") or event.raw.get("worktreePath") or "")
     asked = str(event.raw.get("branch") or event.raw.get("ref") or "").strip()
+    # `name` is the field the harness documents for this event — the `feature-auth` of
+    # `claude --worktree feature-auth`, or one it generated such as `bold-oak-a3f2`. Read
+    # last of all it was not read at all, and every tree came out `agent-work-<session>`:
+    # the name the founder or the model asked for was dropped, and the subagents of one
+    # session, which share its session id, were all sent into ONE tree (#148 again).
+    named = worktree.slugify(str(event.raw.get("name") or ""), fallback="")
     # `or "work"` was here, and it is the bug `session_slug` was written to fix arriving
-    # through the other door: every caller that names no branch — which is every
-    # `isolation: "worktree"` agent — got the literal `.claude/worktrees/work`, so two
-    # agents in one message asked for the same path (#148).
-    branch = asked or f"agent/{worktree.session_slug('', event.session_id)}"
-    slug = worktree.slugify(branch)
+    # through the other door: every caller that names no branch got the literal
+    # `.claude/worktrees/work`, so two agents in one message asked for the same path (#148).
+    # The harness's own default for a named tree is `worktree-<name>`, kept so its docs
+    # still describe what the founder sees.
+    branch = asked or (f"worktree-{named}" if named else
+                       f"agent/{worktree.session_slug('', event.session_id)}")
+    slug = named or worktree.slugify(branch)
 
     target = Path(requested) if requested else worktree.target_for(ctx, slug)
     # Before the tree exists, so it is never visible as untracked work even for the moment
@@ -76,11 +84,14 @@ def main() -> None:
     if cfg.isolate_databases:
         url = worktree.dsn_for(ctx, str(body.get("database") or ""))
         worktree.isolate_database(target, url, seed_from=worktree.main_checkout(ctx))
-        worktree.run_setup(target, cfg.worktree_setup)
-        # AFTER the project has had its turn, because `worktree_setup` is where a project
-        # creates the database and the answer before it ran would be about nothing. What
-        # this learns reaches the session on its first board, and is not asked again.
-        worktree.note_database(ctx, target, url)
+        # Only where there is a database: `dsn_for` answers "" for a project that
+        # configures none, and there is then nothing to create and nothing to ask about.
+        if url:
+            worktree.run_setup(target, cfg.worktree_setup)
+            # AFTER the project has had its turn, because `worktree_setup` is where a
+            # project creates the database and the answer before it ran would be about
+            # nothing. What this learns reaches the session on its first board.
+            worktree.note_database(ctx, target, url)
 
     # The harness takes the path from stdout. Everything else is a side effect.
     sys.stdout.write(absolute)
