@@ -14,6 +14,7 @@ point between those two failures.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 import sys
 from pathlib import Path
@@ -29,20 +30,43 @@ def slug(text: str) -> str:
     return "-".join(words) or "decision"
 
 
+def draft_id(item: dict) -> str:
+    """A draft's name, which stays its own while other sessions file and settle drafts.
+
+    Positions in the list were the names, newest first, so a draft a sibling filed between
+    `list` and `discard 2` moved every number along by one: the Postgres draft went while
+    the founder was looking at the floats one, and all that was printed was "discarded".
+    Derived from what makes two drafts the same draft, so it needs nothing stored.
+    """
+    key = drafts.draft_key(str(item.get("quote", "")))
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:6]
+
+
+def _named(ctx, wanted: str) -> dict | None:
+    """The pending draft `wanted` names, or None having said why."""
+    items = drafts.pending(ctx)
+    for item in items:
+        if draft_id(item) == wanted.strip().lower():
+            return item
+    print(f"no pending draft {wanted}; there are {len(items)} — `claude-bp-decide list` "
+          "names them", file=sys.stderr)
+    return None
+
+
 def cmd_list(ctx) -> int:
     items = drafts.pending(ctx)
     if not items:
         print("no pending drafts")
         return 0
     print(f"{len(items)} pending draft(s):\n")
-    for i, item in enumerate(items, start=1):
+    for item in items:
         # The repeat count, not the repeats. A correction the founder has made four times
         # is one they mean, and fifteen copies of it is a list nobody reads.
         seen = int(item.get("seen", 1) or 1)
         again = f" ×{seen}" if seen > 1 else ""
-        print(f"  [{i}] ({item.get('marker')}){again} {item.get('quote', '')[:150]}")
-    print("\nAccept one with: claude-bp-decide accept <n>")
-    print("Discard one with: claude-bp-decide discard <n>")
+        print(f"  [{draft_id(item)}] ({item.get('marker')}){again} {item.get('quote', '')[:150]}")
+    print("\nAccept one with: claude-bp-decide accept <id>")
+    print("Discard one with: claude-bp-decide discard <id>")
     return 0
 
 
@@ -66,17 +90,16 @@ def _report_collisions(ctx, draft: dict, just_written: str) -> None:
     for number, title, _ in clashing:
         print(f"  [{number}] {title}")
     numbers = ",".join(number for number, _, _ in clashing)
-    print(f"If this replaces them: claude-bp-decide accept <n> --supersedes {numbers}")
+    print(f"If this replaces them: claude-bp-decide accept <id> --supersedes {numbers}")
     print("They stay live, and stay in every session's context, until something retires them.")
 
 
-def cmd_accept(ctx, index: int, supersedes: str = "") -> int:
-    items = drafts.pending(ctx)
-    if not 1 <= index <= len(items):
-        print(f"no draft {index}; there are {len(items)}", file=sys.stderr)
+def cmd_accept(ctx, wanted: str, supersedes: str = "") -> int:
+    found = _named(ctx, wanted)
+    if found is None:
         return 1
 
-    draft = dict(items[index - 1])
+    draft = dict(found)
     if supersedes:
         draft["supersedes"] = supersedes
     number = drafts.next_number(ctx)
@@ -90,6 +113,7 @@ def cmd_accept(ctx, index: int, supersedes: str = "") -> int:
     index_path.parent.mkdir(parents=True, exist_ok=True)
     index_path.write_text(knowledge.build_index(ctx), encoding="utf-8")
 
+    print(f"accepted: {draft.get('quote', '')[:150]}")
     print(f"wrote {path.relative_to(ctx.worktree_root)}")
     print("Fill in the title, Decision and Rejected sections — the quote is already in Why.")
     if supersedes:
@@ -99,13 +123,13 @@ def cmd_accept(ctx, index: int, supersedes: str = "") -> int:
     return 0
 
 
-def cmd_discard(ctx, index: int) -> int:
-    items = drafts.pending(ctx)
-    if not 1 <= index <= len(items):
-        print(f"no draft {index}; there are {len(items)}", file=sys.stderr)
+def cmd_discard(ctx, wanted: str) -> int:
+    found = _named(ctx, wanted)
+    if found is None:
         return 1
-    drafts.resolve(ctx, items[index - 1].get("quote", ""))
-    print("discarded")
+    drafts.resolve(ctx, found.get("quote", ""))
+    # What went, in its own words: "discarded" alone could not show it was the wrong one.
+    print(f"discarded: {found.get('quote', '')[:150]}")
     return 0
 
 
@@ -118,21 +142,21 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("list", help="show pending drafts (default)")
     accept = sub.add_parser("accept", help="promote a draft into a decision record")
-    accept.add_argument("index", type=int)
+    accept.add_argument("id", help="the id `list` shows beside the draft")
     accept.add_argument(
         "--supersedes", default="",
         help="decision number(s) this one retires, comma separated — they stop being injected",
     )
     discard = sub.add_parser("discard", help="drop a draft")
-    discard.add_argument("index", type=int)
+    discard.add_argument("id", help="the id `list` shows beside the draft")
 
     args = parser.parse_args()
     ctx = resolve_for_cli()
 
     if args.command == "accept":
-        return cmd_accept(ctx, args.index, args.supersedes)
+        return cmd_accept(ctx, args.id, args.supersedes)
     if args.command == "discard":
-        return cmd_discard(ctx, args.index)
+        return cmd_discard(ctx, args.id)
     return cmd_list(ctx)
 
 
