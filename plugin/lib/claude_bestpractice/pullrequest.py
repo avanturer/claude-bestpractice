@@ -64,6 +64,16 @@ _MERGES_TOOL = re.compile(r"(?:^|__)merge_pull_request$")
 _OPENS_SHELL = re.compile(r"\bgh\s+pr\s+create\b")
 _MERGES_SHELL = re.compile(r"\bgh\s+pr\s+merge\b(?:\s+(?P<number>\d+))?")
 
+# Closing without merging, the discharge nothing recorded: `CLOSED` was defined and never
+# written, so a pull request closed and its branch deleted stayed OPEN on every board for the
+# thirty days `outstanding` keeps a record, as "ready to merge". The structured tool has no
+# close of its own; it is `update_pull_request` with `state: closed`.
+_CLOSES_TOOL = re.compile(r"(?:^|__)update_pull_request$")
+_CLOSES_SHELL = re.compile(r"\bgh\s+pr\s+close\b(?:\s+(?P<number>\d+))?")
+
+# The flags of `gh pr close` that take a value, so the value is not read as what to close.
+_CLOSE_FLAGS_WITH_VALUES = ("-c", "--comment", "-R", "--repo")
+
 
 def _gh_subcommand(command: str, verb: str, pattern: "re.Pattern[str]"):
     """The argv of `gh pr <verb>` in this line, or None.
@@ -206,21 +216,110 @@ def landed(ctx: GitContext, record: dict[str, Any]) -> bool:
 
 
 def reconcile(ctx: GitContext, branch: str = "") -> list[str]:
-    """Settle every open record whose work is already on the trunk. The branches settled.
+    """Settle every open record whose work is already on the trunk, or whose branch is gone.
+    The branches settled.
 
     Called by the surfaces that ACT on an open pull request — the Stop gate and the status
-    line — rather than from `outstanding`, so reading the board never writes to it. One
-    branch when named, because the Stop gate only ever asks about the one it is standing
-    on, and `landed`'s content test can only answer for that tree anyway.
+    line — rather than from `outstanding`, so reading the board never writes to it. The
+    trunk test runs for one branch when named, because the Stop gate only ever asks about
+    the one it is standing on, and `landed`'s content test can only answer for that tree.
+
+    A branch this clone no longer has anywhere — not as a branch, not as a remote-tracking
+    ref — is asked of every record, because that answer is the same from any tree. It is
+    what a pull request closed on the website, or merged there with its branch deleted,
+    leaves behind: a nine-day-old record for a deleted branch was on every session start as
+    "no movement" and on the board as "ready to merge", and nothing could clear it. What it
+    cannot tell apart is a branch that only ever existed on GitHub and was never fetched.
     """
     settled: list[str] = []
-    for record in outstanding(ctx):
-        if branch and record.get("branch") != branch:
+    live = outstanding(ctx)
+    present = _branches_here(ctx) if live else None
+    for record in live:
+        name = str(record.get("branch") or "")
+        if present is not None and name not in present:
+            settle(ctx, name, CLOSED)
+        elif (not branch or name == branch) and landed(ctx, record):
+            settle(ctx, name, MERGED)
+        else:
             continue
-        if landed(ctx, record):
-            settle(ctx, str(record.get("branch") or ""), MERGED)
-            settled.append(str(record.get("branch") or ""))
+        settled.append(name)
     return settled
+
+
+def _branches_here(ctx: GitContext) -> set[str] | None:
+    """Every branch name this clone knows, local or remote-tracking. None when git cannot say.
+
+    One call for every record, and None rather than an empty set on failure: an unreadable
+    ref store must not read as every branch deleted.
+    """
+    from .gitctx import _status
+
+    code, listed = _status(
+        ["for-each-ref", "--format=%(refname)", "refs/heads/", "refs/remotes/"], ctx.worktree_root
+    )
+    if code != 0:
+        return None
+    names: set[str] = set()
+    for ref in listed.splitlines():
+        if ref.startswith("refs/heads/"):
+            names.add(ref[len("refs/heads/"):])
+        elif ref.startswith("refs/remotes/"):
+            # refs/remotes/<remote>/<branch>, and the branch keeps any slashes of its own.
+            names.add(ref.split("/", 3)[-1])
+    return names
+
+
+def closes(ctx: GitContext, tool_name: str, command: str, tool_input: dict[str, Any],
+           cwd: str = "") -> str:
+    """The branch whose open pull request this call closes without merging, or "".
+
+    `gh pr close` names what it closes by number, by URL, by branch, or not at all — which
+    is the current branch, the same way `gh pr merge` reads it. A number only resolves
+    through a record that learned it; one that did not is left to `reconcile`, which finds it
+    once the branch is deleted.
+    """
+    if _CLOSES_TOOL.search(tool_name):
+        if str(tool_input.get("state") or "").lower() != "closed":
+            return ""
+        return _numbered(ctx, _as_number(tool_input.get("pullNumber")))
+    found = _gh_subcommand(command, "close", _CLOSES_SHELL)
+    if found is None:
+        return ""
+    selector = _closing_selector(found)
+    if not selector:
+        return _branch_of(_directory_of(command) or cwd) or ctx.branch
+    number = int(selector) if selector.isdigit() else number_in(selector)
+    return _numbered(ctx, number) if number else selector
+
+
+def _closing_selector(found) -> str:
+    """What `gh pr close` was told to close: a number, a URL, a branch, or "" for this one."""
+    if not isinstance(found, list):
+        return found.group("number") or ""
+    tokens = iter(found[3:])
+    for token in tokens:
+        if token in _CLOSE_FLAGS_WITH_VALUES:
+            next(tokens, None)
+        elif not token.startswith("-"):
+            return token
+    return ""
+
+
+def _as_number(raw: Any) -> int:
+    try:
+        return int(raw or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _numbered(ctx: GitContext, number: int) -> str:
+    """The branch of the open obligation carrying this pull request number, or ""."""
+    if number <= 0:
+        return ""
+    for name, record in _records(ctx).items():
+        if record.get("state") == OPEN and _as_number(record.get("number")) == number:
+            return name
+    return ""
 
 
 def outstanding(ctx: GitContext) -> list[dict[str, Any]]:

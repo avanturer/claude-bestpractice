@@ -509,6 +509,11 @@ def main() -> None:
     # applied by one command.
     repaired = migrate.repair(ctx)
 
+    # Settled before the board names them. A pull request closed on the website, or merged
+    # there with its branch deleted, was read out at every session start for thirty days,
+    # because only the Stop gate and the status line ever reconciled one.
+    pullrequest.reconcile(ctx, ctx.branch)
+
     cfg, complaints = config.load_checked(ctx)
     # Work that stopped moving. `reap` covers the session that DIED; this covers the
     # commoner case — a live chat that claimed 0007, moved on, and left it reading `doing`

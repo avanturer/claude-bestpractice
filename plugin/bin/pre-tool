@@ -1444,6 +1444,13 @@ def main() -> None:
             pullrequest.opened(ctx, head, base, event.session_id)
             if pullrequest.about_this_repository(ctx, event.tool_name, ti, command):
                 pr_vouch = vouch.PULL_REQUEST
+        else:
+            # Closed without merging: the other way an obligation ends, and the one nothing
+            # wrote down — a closed pull request stayed on every board as "ready to merge"
+            # for thirty days. Recorded on the way through, as a merge is.
+            closed = pullrequest.closes(ctx, event.tool_name, command, ti, session_cwd)
+            if closed:
+                pullrequest.settle(ctx, closed, pullrequest.CLOSED)
 
     # Entering a worktree is the move this gate ORDERS. Making the founder authorise it
     # through a permission prompt is the plugin interrupting them with its own

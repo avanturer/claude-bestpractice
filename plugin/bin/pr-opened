@@ -10,6 +10,11 @@ happened to be standing in, and refused with that branch's problems (#135).
 This event is the only one that carries the answer. It writes exactly one field onto a
 record that already exists, blocks nothing, and is silent.
 
+It is also the only event that sees the structured tool close one. PreToolUse is matched on
+the built-in tools, so `update_pull_request` with `state: closed` reaches this hook and no
+other — and a pull request closed without merging used to stay OPEN on every board for
+thirty days. Here the close has already succeeded, so it is settled rather than guessed.
+
 Fails open. A number that did not get learned costs a numbered merge its judgement, which
 is the conservative direction; a hook that raised would cost the founder a tool call.
 """
@@ -28,10 +33,14 @@ from claude_bestpractice import hookio, pullrequest  # noqa: E402
 def main() -> None:
     event = hookio.read_event()
     command = str(event.tool_input.get("command", "")) if event.tool_name == "Bash" else ""
+    ctx = hookio.repo(event.cwd or os.getcwd())
     if not pullrequest.opens_a_pull_request(event.tool_name, command):
+        closed = pullrequest.closes(ctx, event.tool_name, command, event.tool_input,
+                                    event.cwd or os.getcwd())
+        if closed:
+            pullrequest.settle(ctx, closed, pullrequest.CLOSED)
         hookio.emit_silent()
 
-    ctx = hookio.repo(event.cwd or os.getcwd())
     number = pullrequest.number_in(event.raw.get("tool_response"))
     if number:
         # The same branch the obligation was filed under, derived the same way, or the

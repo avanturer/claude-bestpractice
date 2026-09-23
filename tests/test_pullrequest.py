@@ -514,6 +514,100 @@ class TestAPullRequestIsNeverLeftHanging(PRCase):
         self.assertEqual(0, self.stop().returncode)
 
 
+class TestAPullRequestClosedWithoutMergingIsDischarged(PRCase):
+    """`CLOSED` was defined and never written. A pull request closed on the website, or with
+    `gh pr close`, stayed OPEN: a nine-day-old record for a deleted branch was named at every
+    session start as "no movement" and on the board as "ready to merge", for the thirty days
+    a record is kept, and no command cleared it."""
+
+    def states(self) -> dict:
+        return {branch: row["state"] for branch, row in pullrequest._records(self.ctx()).items()}
+
+    def closing_with_the_tool(self, state: str):
+        return self.gate("pr-opened", {
+            "session_id": "s1", "hook_event_name": "PostToolUse",
+            "tool_name": "mcp__github__update_pull_request",
+            "tool_input": {"owner": "o", "repo": "r", "pullNumber": PRCase.PR_NUMBER,
+                           "state": state},
+            "tool_response": {"url": f"https://github.com/o/r/pull/{PRCase.PR_NUMBER}"},
+        })
+
+    def a_record_of(self, branch: str, age_in_days: float) -> None:
+        store.append_jsonl(store.tier_b(self.ctx(), pullrequest.PR_FILE), {
+            "branch": branch, "base": "main", "number": 41, "url": "", "session_id": "gone",
+            "opened_at": time.time() - age_in_days * 86400, "state": "open", "handed_off_at": 0.0,
+        })
+
+    def test_closing_this_branchs_one_from_the_shell_discharges_it(self):
+        self.start()
+        self.tool("Bash", {"command": "gh pr create --fill"})
+        self.tool("Bash", {"command": "gh pr close --delete-branch --comment 'not needed'"})
+        self.assertEqual({"feat/x": pullrequest.CLOSED}, self.states())
+
+    def test_closing_one_by_its_number_discharges_that_one(self):
+        self.start()
+        self.open_a_pr()
+        self.tool("Bash", {"command": f"gh pr close {PRCase.PR_NUMBER}"})
+        self.assertEqual({"feat/x": pullrequest.CLOSED}, self.states())
+
+    def test_closing_another_branchs_by_name_leaves_this_ones_open(self):
+        self.start()
+        self.tool("Bash", {"command": "gh pr create --fill"})
+        pullrequest.opened(self.ctx(), "feat/y", "main", "s2")
+        self.tool("Bash", {"command": "gh pr close feat/y"})
+        self.assertEqual({"feat/x": pullrequest.OPEN, "feat/y": pullrequest.CLOSED}, self.states())
+
+    def test_writing_about_closing_one_closes_nothing(self):
+        self.start()
+        self.open_a_pr()
+        self.tool("Bash", {"command": f"echo 'gh pr close {PRCase.PR_NUMBER}'"})
+        self.assertEqual({"feat/x": pullrequest.OPEN}, self.states())
+
+    def test_the_tool_that_closes_one_discharges_it_once_it_has_run(self):
+        self.start()
+        self.open_a_pr()
+        self.closing_with_the_tool("open")
+        self.assertEqual({"feat/x": pullrequest.OPEN}, self.states(), "a retitle closed it")
+        self.closing_with_the_tool("closed")
+        self.assertEqual({"feat/x": pullrequest.CLOSED}, self.states())
+
+    def test_the_close_tool_reaches_that_hook(self):
+        """PreToolUse is matched on the built-in tools, so this is the one event that sees it."""
+        import re
+
+        hooks = json.loads((BIN.parent / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+        matcher = hooks["hooks"]["PostToolUse"][0]["matcher"]
+        for tool in ("mcp__github__update_pull_request", "mcp__GitHub__create_pull_request"):
+            self.assertTrue(re.search(matcher, tool), f"{tool} never reaches pr-opened")
+
+    def test_a_record_whose_branch_is_gone_leaves_the_board_at_the_next_stop(self):
+        self.a_record_of("feat/abandoned", age_in_days=9)
+        self.assertIn("feat/abandoned", pullrequest.line(self.ctx()))
+
+        self.gate("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop"})
+
+        self.assertEqual({"feat/abandoned": pullrequest.CLOSED}, self.states())
+        later = self.gate("session-start", {"session_id": "s2", "hook_event_name": "SessionStart"})
+        self.assertNotIn("feat/abandoned", later.stdout)
+
+    def test_a_session_start_does_not_name_one_whose_branch_is_gone(self):
+        self.a_record_of("feat/abandoned", age_in_days=9)
+        proc = self.gate("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
+        self.assertNotIn("feat/abandoned", proc.stdout)
+
+    def test_a_branch_that_still_exists_keeps_its_record(self):
+        """Here, or only as a remote-tracking ref: either way the pull request may be open."""
+        git(["branch", "feat/kept"], self.repo)
+        git(["update-ref", "refs/remotes/origin/feat/pushed", "HEAD"], self.repo)
+        for branch in ("feat/kept", "feat/pushed"):
+            self.a_record_of(branch, age_in_days=9)
+
+        pullrequest.reconcile(self.ctx(), self.ctx().branch)
+
+        self.assertEqual({"feat/kept": pullrequest.OPEN, "feat/pushed": pullrequest.OPEN},
+                         self.states())
+
+
 class TestItCanBeTurnedOff(PRCase):
     """A human with root can disable everything here, and should be able to."""
 

@@ -101,9 +101,12 @@
           "",
           "Matched on the structured tools only. Adding `Bash` here would spawn a process",
           "on every shell call to catch `gh pr create`, and an unlearned number now means",
-          "'do not judge', which is the safe direction."
+          "'do not judge', which is the safe direction.",
+          "",
+          "`update_pull_request` because closing one without merging is `state: closed` on",
+          "it, and nothing else sees that call: `gh pr close` is read by pre-tool instead."
         ],
-        "matcher": ".*create_pull_request",
+        "matcher": ".*(create|update)_pull_request",
         "hooks": [
           {
             "type": "command",
