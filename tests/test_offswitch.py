@@ -148,6 +148,93 @@ class TestOnlyTheFounderThrowsIt(OffCase):
         self.assertEqual("deny", self.hook_decision(proc))
 
 
+class TestNothingInTheConfigCanTakeTheSwitchAway(OffCase):
+    """`config.load` raised on values a hand edit or a stray tool produces, and every gate
+    calls it first. `{"subagent_fanout": "inf"}` refused every tool call in the repository
+    with "gate failed (OverflowError…)", and the two commands that could have helped —
+    `claude-bp status` and `claude-bp set enabled off` — died on the same traceback. The
+    off switch was behind the thing it had to switch off.
+    """
+
+    CONFIG = ".claude/claude-bestpractice/config.json"
+
+    # Each of these raised out of the reader. None is a directory where a file belongs.
+    SHAPES = (
+        ("a quoted infinity", CONFIG, '{"subagent_fanout": "inf"}'),
+        ("a literal past the float range", CONFIG, '{"subagent_fanout": 1e999}'),
+        ("not a number", CONFIG, '{"max_repeat_signature": "nan"}'),
+        ("an integer too long for a float", CONFIG, '{"notes_after_calls": 1' + "0" * 400 + "}"),
+        ("test scripts as a list", "package.json", '{"scripts": ["test"]}'),
+        ("a test script that is a number", "package.json", '{"scripts": {"test": 1}}'),
+        ("a manifest that is not an object", "package.json", '["test"]'),
+        ("a directory where the config belongs", CONFIG, None),
+        ("a directory where local settings belong", ".claude/settings.local.json", None),
+    )
+
+    def shaped(self, index: int, rel: str, content) -> Path:
+        """A repository of its own for one shape, so no two of them can interact."""
+        from helpers import make_repo
+
+        repo = make_repo(self.tmp, f"shape-{index}", relax_git_policy=True)
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.is_file():
+            path.unlink()
+        if content is None:
+            path.mkdir()
+        else:
+            path.write_text(content, encoding="utf-8")
+        return repo
+
+    def test_no_shape_makes_the_reader_raise(self):
+        """The cause, asked of the reader itself, and of the switch built on it."""
+        from claude_bestpractice.gitctx import resolve
+
+        for index, (label, rel, content) in enumerate(self.SHAPES):
+            with self.subTest(label):
+                ctx = resolve(self.shaped(index, rel, content))
+                self.assertIsInstance(config.load(ctx), config.Config)
+                self.assertTrue(config.enforcing(ctx)[0])
+
+    def test_no_shape_makes_the_write_gate_fail_closed(self):
+        """What the founder met: every Write refused, whatever it was."""
+        for index, (label, rel, content) in enumerate(self.SHAPES):
+            with self.subTest(label):
+                repo = self.shaped(index, rel, content)
+                proc = self.tool("Write", {"file_path": str(repo / "a.py"), "content": "x = 1\n"},
+                                 cwd=repo)
+                self.assertNotIn("gate failed", proc.stdout + proc.stderr)
+
+    def test_a_number_that_is_not_finite_is_the_default(self):
+        """Where it did not raise it was worse: `"inf"` was taken as a lease that never
+        expires, and `"nan"` compares false with everything, so a sweep read it as off."""
+        self.configure(lease_ttl_seconds="inf", task_idle_hours="nan", subagent_fanout=1e999)
+        cfg, complaints = config.load_checked(self.ctx())
+        self.assertEqual((1800.0, 24.0, 3),
+                         (cfg.lease_ttl_seconds, cfg.task_idle_hours, cfg.subagent_fanout))
+        self.assertEqual(3, len(complaints), complaints)
+
+    def test_status_and_the_switch_still_work_beside_a_bad_value(self):
+        """The two doors the founder had, through the command line they would use."""
+        import subprocess
+        import sys
+
+        self.configure(subagent_fanout="inf")
+
+        def cli(*args):
+            return subprocess.run([sys.executable, str(BIN / "claude-bp"), *args],
+                                  cwd=str(self.repo), capture_output=True, text=True, timeout=120)
+
+        status = cli("status")
+        self.assertEqual(0, status.returncode, status.stderr)
+        self.run_hook("prompt-capture", {
+            "session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": "enabled off",
+        })
+        switched = cli("set", "enabled", "off")
+        self.assertEqual(0, switched.returncode, switched.stderr)
+        self.assertFalse(config.enforcing(self.ctx())[0])
+
+
 class TestTheIsolationGateDoesNotBlockItsOwnCure(OffCase):
     """#216. The refusal reads "set DATABASE_URL in .env to a database name nobody else
     holds, then `claude-bp database`" — and refused that write with the same message. The

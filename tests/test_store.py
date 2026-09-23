@@ -196,6 +196,14 @@ class TestAtomicWrite(RepoCase):
         path.write_text("{ this is not json")
         self.assertEqual(store.read_json(path, default={"fallback": True}), {"fallback": True})
 
+    def test_a_directory_where_a_file_belongs_reads_as_default(self):
+        """`IsADirectoryError` is an OSError, not a decode error, so it went straight past
+        this reader — into the config every gate reads first, where a directory named
+        `config.json` refused every tool call in the repository."""
+        path = store.tier_b(self.ctx(), "d.json")
+        path.mkdir(parents=True)
+        self.assertEqual(store.read_json(path, default={"fallback": True}), {"fallback": True})
+
     def test_failed_write_leaves_no_partial_file(self):
         ctx = self.ctx()
         path = store.tier_b(ctx, "fail.json")

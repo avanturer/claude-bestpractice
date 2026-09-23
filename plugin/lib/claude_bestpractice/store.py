@@ -203,14 +203,19 @@ def atomic_write(path: Path, data: str, mode: int = 0o600, follow_symlink: bool 
 
 
 def read_json(path: Path, default: Any = None) -> Any:
-    """Tolerate a torn or absent file by returning `default`.
+    """Tolerate a torn, absent or unreadable file by returning `default`.
 
     A single corrupt record must never make the whole store unreadable — that failure
     mode is why one widely-used memory server can be bricked by one bad line.
+
+    Any OSError, not only a missing file. A directory where the file belongs raised
+    `IsADirectoryError` straight past this reader and into the config every gate reads
+    first, so one `mkdir` refused every tool call in the repository — and the command that
+    switches the plugin off died on the same traceback.
     """
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError):
+    except (OSError, ValueError):
         return default
 
 

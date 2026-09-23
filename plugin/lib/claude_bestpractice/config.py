@@ -12,6 +12,7 @@ plugin exists to prevent.
 from __future__ import annotations
 
 import json
+import math
 import re
 import shlex
 from dataclasses import dataclass, field
@@ -234,16 +235,8 @@ def detect_test_command(root: Path) -> list[str]:
     for marker, runner, command in _TEST_RUNNERS:
         if not (root / marker).exists():
             continue
-        if runner == "npm":
-            # A package.json without a test script, or with the npm placeholder that
-            # exits 1, is not a test command.
-            try:
-                pkg = json.loads((root / "package.json").read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError, UnicodeDecodeError):
-                continue
-            script = (pkg.get("scripts") or {}).get("test", "")
-            if not script or "no test specified" in script:
-                continue
+        if runner == "npm" and not _npm_has_test(root):
+            continue
         if runner == "pytest" and marker == "pyproject.toml" and not _has_tests(root):
             continue
         if runner == "make" and not _make_has_test(root):
@@ -252,6 +245,24 @@ def detect_test_command(root: Path) -> list[str]:
     if _has_tests(root):
         return ["python3", "-m", "pytest", "-q"]
     return []
+
+
+def _npm_has_test(root: Path) -> bool:
+    """A package.json with a test script in it — not absent, and not npm's placeholder.
+
+    A package.json without a test script, or with the placeholder that exits 1, is not a
+    test command. Its SHAPE is checked rather than assumed, because the file is the
+    project's and not ours: `"scripts": ["test"]` and `"test": 1` each raised inside the
+    config reader every gate calls first, so one malformed manifest refused every tool
+    call in the repository and crashed the command that switches this plugin off.
+    """
+    try:
+        pkg = json.loads((root / "package.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    scripts = pkg.get("scripts") if isinstance(pkg, dict) else None
+    script = scripts.get("test") if isinstance(scripts, dict) else None
+    return isinstance(script, str) and bool(script) and "no test specified" not in script
 
 
 def _has_tests(root: Path) -> bool:
@@ -641,9 +652,15 @@ def _as_number(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         return None
     try:
-        return float(value)
-    except ValueError:
+        number = float(value)
+    except (ValueError, OverflowError):
         return None
+    # Finite, or not a number at all. `"inf"`, `"nan"` and `1e999` all parse as floats, and
+    # the first whole-number key handed one raised — `int(inf)` is an OverflowError — inside
+    # the reader every gate calls first, so every tool call was refused. Where nothing
+    # raised it was quieter and no better: an infinite lease never expires, and NaN
+    # compares false with everything, so a sweep asked "is this above zero" read it as off.
+    return number if math.isfinite(number) else None
 
 
 def _as_int(value: Any) -> int | None:
