@@ -1366,6 +1366,24 @@ class TestTheGateDoesNotRefuseTheTreeItHandedOver(PolicyCase):
         self.assertEqual("deny", decision)
         self.assertIn("another session", reason)
 
+    def test_a_write_into_it_from_the_main_checkout_still_needs_a_card(self):
+        """Relative to the main checkout, the handed tree lives under `.claude/`, which
+        exempts the gate's own bookkeeping — so from there no write into it ever needed a
+        card, while the same write with the hook in the tree was refused for want of one."""
+        self.decision()
+        handed = self.provisioned()
+        self.run_hook("prompt-capture", {
+            "session_id": "s1", "hook_event_name": "UserPromptSubmit",
+            "prompt": "Add the payment module and cover it with tests",
+        })
+        decision, reason = self.write_into(handed)
+        self.assertEqual("deny", decision, reason)
+        self.assertIn("working on pay.py", reason)
+        self.assertNotEqual("deny", self.write_into(handed, ".claude/notes.md")[0],
+                            "the tree's own bookkeeping lost its exemption")
+        self.claim_a_task("s1", "pay.py")
+        self.assertNotEqual("deny", self.write_into(handed)[0])
+
 
 class TestEnteringAWorktreeIsNeverAQuestion(PolicyCase):
     """The founder was shown a permission prompt for the move this gate had just ordered.

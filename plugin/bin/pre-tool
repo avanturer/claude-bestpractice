@@ -305,11 +305,48 @@ def _ledger_covers(ctx, session_id: str, touched: list[str]) -> bool:
     Exempt paths too: a turn that only touches `.claude/` needs no card for the same
     reason it needs no test run — the gate's own bookkeeping is not the founder's work.
     """
-    from claude_bestpractice import store
-
-    if all(rel.startswith(store.TIER_A_DIRNAME) or rel.startswith(".claude/") for rel in touched):
+    if all(_bookkeeping(rel) for rel in touched):
         return True
     return _holds_a_card(ctx, session_id, touched)
+
+
+def _bookkeeping(rel: str) -> bool:
+    """Is this path, relative to the tree it is in, the gate's own rather than the work?"""
+    return rel.startswith(store.TIER_A_DIRNAME) or rel.startswith(".claude/")
+
+
+def _landed(ctx, absolute: list[Path]) -> list[tuple[Path, str]]:
+    """Each write inside this checkout: the tree it lands in, and its path inside that tree.
+
+    Relative to the tree a write LANDS in, never to the one the hook runs from. From the
+    main checkout, a write into the tree this plugin provisioned is `.claude/worktrees/<t>/
+    src/app.py` — under `.claude/`, which exempts the gate's own bookkeeping — so every
+    write into the tree needed no card at all, while the very same write with the hook
+    standing in the tree was refused for want of one.
+    """
+    root = ctx.worktree_root.resolve()
+    home = worktree.HOME.parts
+    out: list[tuple[Path, str]] = []
+    for path in absolute:
+        try:
+            parts = path.relative_to(root).parts
+        except ValueError:
+            continue
+        inside = len(home) + 1
+        if parts[:len(home)] == home and len(parts) > inside:
+            out.append((root.joinpath(*parts[:inside]), "/".join(parts[inside:])))
+        else:
+            out.append((root, "/".join(parts)))
+    return out
+
+
+def _unlisted(ctx, session_id: str, absolute: list[Path]) -> str:
+    """The first of these writes no card on the board covers, as a card would name it."""
+    landed = _landed(ctx, absolute)
+    if _ledger_covers(ctx, session_id, [rel for _tree, rel in landed]):
+        return ""
+    owed = [rel for _tree, rel in landed if not _bookkeeping(rel)]
+    return owed[0] if owed else ""
 
 
 # What a session is to do with a block from this plugin, said at the block itself
@@ -1528,18 +1565,17 @@ def main() -> None:
         # shell one above; a session whose first prompt was a paste still gets the Stop
         # demand, and is the narrow case left open deliberately.
         if cfg.require_task and rec.task_statement and writing_now:
-            from claude_bestpractice import plan
-
-            if not _ledger_covers(ctx, event.session_id, writing_now):
+            unlisted = _unlisted(ctx, event.session_id, absolute)
+            if unlisted:
                 deny(
                     ctx, rec,
                     f"claude-bestpractice: nothing on the board says this session is working "
-                    f"on {writing_now[0]}.\n"
+                    f"on {unlisted}.\n"
                     "  Every sibling session reads the board to decide what is safe to "
                     "touch, and unlisted work is invisible to all of them — so this is "
                     "asked BEFORE the write, while there is still something to protect.\n"
                     f'  claude-bp-plan add "<what you are about to do>" --paths '
-                    f"{shlex.quote(writing_now[0])}\n"
+                    f"{shlex.quote(unlisted)}\n"
                     "  then: claude-bp-plan claim <id>   (or claim the task you are on)"
                 )
 
