@@ -216,8 +216,16 @@ def cmd_init(ctx, force: bool) -> int:
             print("\ncreated, but nothing could be derived — they say what they need:")
             for rel in empty:
                 print(f"  {rel}")
-    else:
-        print("\nknowledge layer already present (use --force to regenerate)")
+    elif not force:
+        print("\nknowledge layer already present (--force regenerates what you have not answered)")
+    # Said, because `--force` reads as "all of it": what it left alone is what holds answers.
+    kept = [rel for rel in onboard.LAYER
+            if force and rel not in written and (ctx.worktree_root / rel).exists()]
+    if kept:
+        print("\nkept, because they carry your answers — delete one and run this again to "
+              "start it over:")
+        for rel in kept:
+            print(f"  {rel}")
 
     # `ensure`, which honours an `off`; `install` clears it, because asking for the hook by
     # name is consent. Asking for a knowledge layer is not asking for the push gate back, and

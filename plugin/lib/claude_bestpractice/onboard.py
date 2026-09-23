@@ -217,8 +217,22 @@ def render_glossary(found: Findings) -> str:
     return "\n".join(lines) + "\n"
 
 
+# The files the layer is, relative to the repository, in the order they are written.
+LAYER = (
+    f"{knowledge.RULES_DIR}/{knowledge.PRODUCT}",
+    f"{knowledge.DOMAIN_DIR}/{knowledge.ENTITIES}",
+    f"{knowledge.RULES_DIR}/{knowledge.GLOSSARY}",
+)
+
+
 def write(ctx: GitContext, force: bool = False) -> list[str]:
-    """Write what is missing. Never overwrites a file the founder has already answered."""
+    """Write what is missing. Never overwrites a file the founder has already answered.
+
+    `force` regenerates what carries no answer yet, and still never a file that does.
+    `claude-bp init` offered it as "use --force to regenerate", and it replaced an answered
+    product.md and glossary with placeholders, keeping no copy: the one part of this layer
+    that cannot be derived again, gone on the plugin's own suggestion.
+    """
     root = ctx.worktree_root
     found = detect(ctx)
     written: list[str] = []
@@ -229,7 +243,7 @@ def write(ctx: GitContext, force: bool = False) -> list[str]:
         (root / knowledge.RULES_DIR / knowledge.GLOSSARY, render_glossary(found)),
     ]
     for path, content in targets:
-        if path.exists() and not force:
+        if path.exists() and (not force or answered(path, content)):
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
@@ -241,6 +255,27 @@ def write(ctx: GitContext, force: bool = False) -> list[str]:
 
     (root / knowledge.DECISIONS_DIR).mkdir(parents=True, exist_ok=True)
     return written
+
+
+def answered(path: Path, fresh: str) -> bool:
+    """Whether the file at `path` carries anything a person wrote.
+
+    A line is this plugin's when it is blank, the detected-stack comment, or a line one of
+    its templates writes — `fresh`, what would be written now, or the empty entities one —
+    with nothing but the slots still unfilled. Anything else is somebody's answer, including
+    a derived line that has since gone stale: this may keep a file it could have
+    regenerated, and never loses one it should have kept.
+    """
+    ours = {_unslotted(line) for line in f"{fresh}\n{_ENTITIES_EMPTY}".splitlines()}
+    for line in _read(path).splitlines():
+        text = line.strip()
+        if text and not text.startswith("<!--") and _unslotted(text) not in ours:
+            return True
+    return False
+
+
+def _unslotted(line: str) -> str:
+    return knowledge.PLACEHOLDER.sub("<>", line.strip())
 
 
 def awaiting_you(ctx: GitContext, written: list[str]) -> list[str]:
@@ -295,11 +330,7 @@ def unanswered(ctx: GitContext) -> list[str]:
     """Placeholders still waiting on a human. Surfaced, never invented."""
     root = ctx.worktree_root
     out: list[str] = []
-    for rel in (
-        f"{knowledge.RULES_DIR}/{knowledge.PRODUCT}",
-        f"{knowledge.DOMAIN_DIR}/{knowledge.ENTITIES}",
-        f"{knowledge.RULES_DIR}/{knowledge.GLOSSARY}",
-    ):
+    for rel in LAYER:
         text = _read(root / rel)
         count = knowledge.placeholders(text)
         if count:

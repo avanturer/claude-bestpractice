@@ -90,12 +90,43 @@ class TestWriting(RepoCase):
             "My real answer", (self.repo / knowledge.RULES_DIR / knowledge.PRODUCT).read_text()
         )
 
-    def test_force_regenerates(self):
-        self.write(f"{knowledge.RULES_DIR}/{knowledge.PRODUCT}", "# Product\n\nstale\n")
+    def test_force_regenerates_what_nobody_answered(self):
+        """A template whose slots are all still slots, derived from a repository that has
+        since grown code: nothing in it is anybody's, and `--force` brings it up to date."""
+        onboard.write(self.ctx())
+        entities = self.repo / knowledge.DOMAIN_DIR / knowledge.ENTITIES
+        self.assertNotIn("Invoice", entities.read_text())
+        self.seed_code()
         onboard.write(self.ctx(), force=True)
-        self.assertIn(
-            "ANSWER THIS", (self.repo / knowledge.RULES_DIR / knowledge.PRODUCT).read_text()
-        )
+        self.assertIn("Invoice", entities.read_text())
+        self.assertIn("3 source files", (self.repo / knowledge.RULES_DIR / knowledge.PRODUCT).read_text())
+
+    def test_force_never_takes_an_answer(self):
+        """`claude-bp init` said "use --force to regenerate", and `--force` replaced an
+        answered product.md and glossary with placeholders, keeping no copy."""
+        self.seed_code()
+        onboard.write(self.ctx())
+        product = self.repo / knowledge.RULES_DIR / knowledge.PRODUCT
+        glossary = self.repo / knowledge.RULES_DIR / knowledge.GLOSSARY
+        product.write_text(product.read_text().replace(
+            "<ANSWER THIS. One or two sentences: the thing a user gets, not the tech.>",
+            "Payroll for bakeries."))
+        # Half a line is an answer too: the definition is theirs, the synonyms still a slot.
+        glossary.write_text(glossary.read_text().replace("Invoice — <definition>.",
+                                                         "Invoice — what a bakery bills."))
+        onboard.write(self.ctx(), force=True)
+        self.assertIn("Payroll for bakeries.", product.read_text())
+        self.assertIn("what a bakery bills", glossary.read_text())
+
+    def test_init_force_names_what_it_kept(self):
+        subprocess.run([sys.executable, str(BIN / "claude-bp"), "init"],
+                       capture_output=True, text=True, cwd=str(self.repo), timeout=180)
+        product = self.repo / knowledge.RULES_DIR / knowledge.PRODUCT
+        product.write_text(product.read_text() + "\nSold to bakeries.\n")
+        said = subprocess.run([sys.executable, str(BIN / "claude-bp"), "init", "--force"],
+                              capture_output=True, text=True, cwd=str(self.repo), timeout=180).stdout
+        self.assertIn("kept, because they carry your answers", said)
+        self.assertIn(f"{knowledge.RULES_DIR}/{knowledge.PRODUCT}", said.split("kept,")[1])
 
     def test_product_is_not_invented(self):
         """A fabricated product description is worse than none: the agent believes it."""
