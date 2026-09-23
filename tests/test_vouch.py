@@ -19,14 +19,20 @@ import unittest
 
 from helpers import BIN, RepoCase, sid
 
-from claude_bestpractice import vouch, worktree
+from claude_bestpractice import config, vouch, worktree
+from claude_bestpractice.gitctx import resolve
 
 
 class VouchCase(RepoCase):
     """A session standing in its own tree, which is where the measured noise came from."""
 
     def vouches(self, line: str, test_command=("make", "test")) -> str:
-        return vouch.for_bash(self.ctx(), line, list(test_command), self.repo)
+        # The switches as `pre-tool` hands them over: this fixture's own config, which
+        # relaxes the main-checkout and trunk rules unless the case says otherwise.
+        cfg = config.load(self.ctx())
+        return vouch.for_bash(self.ctx(), line, list(test_command), self.repo,
+                              require_worktree=cfg.require_worktree,
+                              protect_trunk=cfg.protect_trunk)
 
     def assertVouched(self, line: str, expected: str = "", **kw):
         reason = self.vouches(line, **kw)
@@ -82,6 +88,82 @@ class TestTheProjectsChecksInAnySpelling(VouchCase):
 
     def test_a_test_target_that_fetches_somebody_elses_code_is_not_this_project(self):
         self.assertSilent("go test github.com/evil/pkg")
+
+
+class TestAFormatterIsACheckOnlyWhenItIsToldToCheck(VouchCase):
+    """`black src/` and `ruff check --fix src/` in the main checkout on the trunk were vouched
+    as "this project's checks" while `sed -i` there was refused — the same rewrite of a
+    checkout every session shares, approved for being spelled as a tool."""
+
+    def test_a_formatter_that_would_rewrite_the_files_is_not_a_check(self):
+        for line in ("black src/", "python3 -m black .", "uv run black .", "isort src/",
+                     "ruff format src/", "cargo fmt"):
+            self.assertSilent(line)
+
+    def test_the_same_formatter_told_to_check_still_is_one(self):
+        """The fix must not cost the founder the prompts this module exists to remove."""
+        for line in ("black --check src/", "black --diff .", "python3 -m black --check .",
+                     "isort --check-only src/", "ruff format --check src/",
+                     "cargo fmt --check", "cargo fmt -- --check"):
+            self.assertVouched(line, "evidence gate")
+
+    def test_a_linter_told_to_fix_is_not_a_check(self):
+        for line in ("ruff check --fix src/", "ruff check --fix-only .", "eslint --fix .",
+                     "npm run lint -- --fix", "cargo clippy --fix", "npx jest -u",
+                     "go test ./... -update"):
+            self.assertSilent(line)
+
+    def test_a_linter_that_only_reports_still_is_one(self):
+        for line in ("ruff check src/", "ruff check --no-fix src/", "eslint --fix-dry-run .",
+                     "cargo clippy"):
+            self.assertVouched(line, "evidence gate")
+
+
+class TestACommitIsNotVouchedWhereAWriteIsRefused(VouchCase):
+    """`git commit -am` in the main checkout on the trunk was vouched as "the working tree
+    this session occupies", in the checkout where `sed -i` was refused.
+
+    The default policy, unrelaxed: a main checkout on its trunk is the state both rules are
+    written for.
+    """
+
+    relax_git_policy = False
+
+    def test_committing_to_the_shared_trunk_is_left_to_the_permission_layer(self):
+        for line in ('git commit -am "Validate empty input in the parser"',
+                     "git add -A", "git commit -m fix"):
+            self.assertSilent(line)
+
+    def test_a_commit_in_a_tree_of_its_own_on_a_branch_still_needs_no_prompt(self):
+        tree = self.add_worktree("feat-parser")
+        self.assertEqual(vouch.WRITE, vouch.for_bash(
+            resolve(tree), 'git commit -am "Validate empty input in the parser"',
+            ["make", "test"], tree, require_worktree=True, protect_trunk=True))
+
+    def test_with_both_rules_switched_off_there_is_nothing_to_withhold(self):
+        self.assertEqual(vouch.WRITE, vouch.for_bash(
+            self.ctx(), "git commit -m fix", ["make", "test"], self.repo,
+            require_worktree=False, protect_trunk=False))
+
+    def test_the_real_hook_approves_neither_the_rewrite_nor_the_commit(self):
+        """Driven the way the harness drives it. Silence, not a refusal: nothing here is
+        against a rule, it is only not the plugin's to approve on the founder's behalf."""
+        self.write("src/app.py", "x = ( 1,2 )\n")
+        self.commit("add the app")
+        self.write("src/app.py", "x = (1, 2)\n")
+
+        def decided(line: str):
+            proc = self.run_hook("pre-tool", {
+                "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+                "tool_input": {"command": line}})
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            return self.hook_decision(proc)
+
+        for line in ("black src/", "ruff check --fix src/",
+                     'git commit -am "Validate empty input in the parser"'):
+            self.assertIsNone(decided(line), line)
+        self.assertEqual("deny", decided("sed -i s/1/2/ src/app.py"),
+                         "the fixture proves nothing: a write here is not refused")
 
 
 class TestCompoundCommands(VouchCase):

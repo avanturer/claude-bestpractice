@@ -126,6 +126,23 @@ _CHECK_SCRIPTS = {
 }
 _SCRIPT_RUNNERS = {"npm", "pnpm", "yarn", "bun"}
 
+# A formatter REWRITES what it is pointed at unless it is told to check instead, and the
+# families above named black and isort as though running one were running a test. `black
+# src/` and `ruff check --fix src/` in the main checkout on the trunk were vouched as "this
+# project's checks", while `sed -i` there was refused — the same edit to a checkout every
+# session shares, approved for being spelled as a tool. So a formatter is a check only with
+# its own non-writing flag on the line...
+_CHECK_MODE = {
+    "black": {"--check", "--diff"},
+    "isort": {"--check-only", "--check", "-c", "--diff", "--df"},
+    "ruff format": {"--check", "--diff"},
+    "cargo fmt": {"--check"},
+}
+# ...and a linter, or a runner that rewrites expectations, is one only WITHOUT the flag that
+# makes it fix: `--fix`, a snapshot update, Go's golden-file `-update`. Matched whole, never
+# by prefix: `--fix-dry-run` and `--no-fix` are the reports they sound like.
+_FIXES = {"--fix", "--fix-only", "--add-noqa", "-u", "--update", "-update", "--updateSnapshot"}
+
 # What this plugin will not vouch for reading, whatever the program. The boundary names
 # these explicitly rather than trusting "it is inside the repository": a credential in the
 # tree is still a credential, and putting it in the transcript is the loss.
@@ -291,7 +308,26 @@ def _checks(root: Path, here: Path, argv: list[str], test_command: list[str]) ->
     )
     if not named:
         return _make_check(argv, test_command)
-    return _paths_are_ours(root, here, argv)
+    return _paths_are_ours(root, here, argv) and not _rewrites(argv)
+
+
+def _tool(argv: list[str]) -> tuple[str, list[str]]:
+    """The program that actually runs and its own arguments: `python -m black` is black."""
+    if _module_check(argv):
+        return argv[2], argv[3:]
+    return _program(argv), argv[1:]
+
+
+def _rewrites(argv: list[str]) -> bool:
+    """Would this check change the files it names — a formatter without its check flag,
+    or anything told to fix?"""
+    name, args = _tool(argv)
+    if _FIXES.intersection(args):
+        return True
+    # `ruff format` and `cargo fmt` are formatters by subcommand; `ruff check` is not.
+    subcommand = [arg for arg in args if not arg.startswith("-")][:1]
+    modes = _CHECK_MODE.get(" ".join([name, *subcommand])) or _CHECK_MODE.get(name)
+    return modes is not None and not modes.intersection(args)
 
 
 def _delegated(root: Path, here: Path, argv: list[str], test_command: list[str]) -> bool:
@@ -337,8 +373,14 @@ def _walk(here: Path, root: Path, argv: list[str], clone: Path | None = None) ->
     return moved if _inside(root, moved) or (clone and _inside(clone, moved)) else None
 
 
-def for_bash(ctx: GitContext, line: str, test_command: list[str], cwd: Path | None = None) -> str:
-    """Why this shell line needs no prompt, or "" to leave the decision where it was."""
+def for_bash(ctx: GitContext, line: str, test_command: list[str], cwd: Path | None = None, *,
+             require_worktree: bool, protect_trunk: bool) -> str:
+    """Why this shell line needs no prompt, or "" to leave the decision where it was.
+
+    `require_worktree` and `protect_trunk` are the founder's switches as the caller holds
+    them: the rules that refuse a file written in the main checkout and on the trunk, which
+    a commit is by another spelling.
+    """
     parsed = shellcmd.segments(line)
     if not parsed:
         return ""
@@ -351,10 +393,11 @@ def for_bash(ctx: GitContext, line: str, test_command: list[str], cwd: Path | No
         clone = ctx.common_dir.parent.resolve()
     except OSError:
         clone = None
+    may_commit = _may_commit(ctx, parsed, require_worktree, protect_trunk)
 
     reasons: list[str] = []
     for argv in parsed:
-        here, reason = _judge(root, here, clone, argv, test_command)
+        here, reason = _judge(root, here, clone, argv, test_command, may_commit)
         if here is None:
             return ""
         if reason and reason not in reasons:
@@ -366,23 +409,47 @@ def for_bash(ctx: GitContext, line: str, test_command: list[str], cwd: Path | No
     return "\n".join(reasons) if reasons else MOVE
 
 
+def _may_commit(ctx: GitContext, parsed: list[list[str]], require_worktree: bool,
+                protect_trunk: bool) -> bool:
+    """Would this plugin let a file be written in the tree this line commits in?
+
+    A commit is a write by another spelling. `sed -i` in the main checkout on the trunk was
+    refused while `git commit -am` there was vouched for as "the working tree this session
+    occupies" — the same change to a checkout every session shares, approved for being
+    spelled as git. So this asks what `gitpolicy.violations` asks of a write, without its
+    side effect: that one provisions a tree on its way to no.
+
+    Only of a line that commits, because `on_trunk` asks git and nothing else here does.
+    """
+    from . import gitpolicy
+
+    if not any(_git_arguments(argv)[:1] in (["add"], ["commit"]) for argv in parsed):
+        return True
+    if not gitpolicy.has_history(ctx):
+        return True
+    if require_worktree and not ctx.is_worktree:
+        return False
+    return not (protect_trunk and gitpolicy.on_trunk(ctx))
+
+
 def _judge(root: Path, here: Path, clone: Path | None, argv: list[str],
-           test_command: list[str]) -> tuple:
+           test_command: list[str], may_commit: bool) -> tuple:
     """One segment: where the next one runs, and why this one needs no permission.
 
     `(None, "")` ends the vouch for the whole line — one unqualified segment takes the
     line with it, because `allow_tool` approves the line and there is no half of it to
-    approve.
+    approve. A commit is judged only where `may_commit` says a write would be allowed.
     """
     if not _accountable(argv):
         return None, ""
     if _program(argv) in _NAVIGATION:
         return _walk(here, root, argv, clone), ""
-    reason = _classify(root, here, argv, test_command)
+    reason = _classify(root, here, argv, test_command, may_commit)
     return (here, reason) if reason else (None, "")
 
 
-def _classify(root: Path, here: Path, argv: list[str], test_command: list[str]) -> str:
+def _classify(root: Path, here: Path, argv: list[str], test_command: list[str],
+              may_commit: bool) -> str:
     if _own_command(argv):
         return OWN
     if _orders_a_worktree(argv):
@@ -391,7 +458,7 @@ def _classify(root: Path, here: Path, argv: list[str], test_command: list[str]) 
         return READ
     if _checks(root, here, argv, test_command):
         return SUITE
-    if _commits_here(root, here, argv):
+    if may_commit and _commits_here(root, here, argv):
         return WRITE
     return ""
 
@@ -526,9 +593,10 @@ def surface(ctx: GitContext, test_command: list[str]) -> list[str]:
     detected = " ".join(test_command) if test_command else "none detected"
     return [
         f"reads inside {ctx.worktree_root.name}/ that write nothing (git log/diff/status, cat, grep)",
-        f"this project's checks in any spelling (detected: {detected})",
+        f"this project's checks in any spelling (detected: {detected}); a formatter only "
+        "with --check or --diff, and nothing told to --fix",
         "git worktree add/remove/list, entering and leaving one, and writes and commits "
-        "in this session's own tree",
+        "in this session's own tree — never a commit where a write would be refused",
         "opening a pull request, and merging one this gate has just found no blockers for",
         "this plugin's own commands, which are what its refusals tell you to run",
         "moving around inside this repository: cd, pwd, and doing nothing at all",
