@@ -983,9 +983,9 @@ def main() -> None:
     # is what this plugin sends every session into — never meets it (#220).
     if event.tool_name == "Bash" and gitpolicy.stages_everything(str(ti.get("command", ""))):
         # Asked of the tree the COMMAND will run in, which is the tree this plugin sent the
-        # session into — not the harness's working directory, which is the shared checkout in
-        # every session it sends anywhere. Judged there, a session staging its own clean tree
-        # would be refused over fifty files it cannot even see.
+        # session into — the harness's working directory once the session stands in it, and
+        # not while it works there from the shared checkout. Judged in the checkout, a
+        # session staging its own clean tree would be refused over fifty files it cannot see.
         foreign, mine = gitpolicy.whose_work_is_in_the_way(
             worktree.working_context(ctx, event.session_id), rec.session_id)
         if foreign:

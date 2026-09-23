@@ -649,10 +649,12 @@ def _release_many(ctx: GitContext, session_ids: set[str]) -> int:
     return removed
 
 
-def leases_held_by(ctx: GitContext, session_id: str) -> list[str]:
+def leases_held_by(ctx: GitContext, session_id: str, tree: Path | None = None) -> list[str]:
+    """The paths this session holds — in `tree` alone when one is named, since a lease is a
+    claim on a file in ONE tree and the same name in another tree is another file (#163)."""
     table = _lease_table(store.read_json(_leases_path(ctx), default={}))
-    return sorted(split_lease_key(k)[1] for k, h in table.items()
-                  if h.get("session_id") == session_id)
+    held = [split_lease_key(k) for k, h in table.items() if h.get("session_id") == session_id]
+    return sorted(path for where, path in held if tree is None or where == str(tree))
 
 
 def elsewhere_on(ctx: GitContext, relpath: str, session_id: str) -> list[str]:

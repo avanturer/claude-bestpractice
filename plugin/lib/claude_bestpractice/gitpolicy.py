@@ -685,16 +685,11 @@ def whose_work_is_in_the_way(ctx: GitContext, session_id: str) -> tuple[list[str
     everybody. Everything else is this session's, because a gate that has to guess whose a
     file is should be deciding in the session's favour.
     """
-    from . import sessions
-
     dirty = _dirty_paths(ctx)
     if not dirty:
         return [], []
-    claimed: set[str] = set()
     try:
-        for record in sessions.live_sessions(ctx, exclude=session_id):
-            claimed.update(sessions.leases_held_by(ctx, record.session_id))
-            claimed.update(path for path in record.task_paths if path)
+        claimed = _claimed_here(ctx, session_id)
     except Exception:  # noqa: BLE001 - a refusal must never come out of a crashed read
         return [], []
     foreign = [
@@ -702,6 +697,32 @@ def whose_work_is_in_the_way(ctx: GitContext, session_id: str) -> tuple[list[str
         if path.startswith(_LEDGER_PREFIX) or any(_under(path, claim) for claim in claimed)
     ]
     return sorted(foreign), sorted(path for path in dirty if path not in set(foreign))
+
+
+def _claimed_here(ctx: GitContext, session_id: str) -> set[str]:
+    """What the live sessions standing in THIS tree have leased or named — other than this one.
+
+    This tree only, because a file of the same name in another tree is another file: two
+    sessions in two trees each staging their own `README.md` is a merge later, never one
+    commit carrying the other's work (#163). Counting every tree refused a session's
+    `git add -A` in its own tree over a sibling's lease in the sibling's tree.
+
+    Never this session's, under any id it has had. It files its card in the main checkout
+    and then moves into its own tree, which makes it a second identity with the first one
+    still live — and that first record, naming the very paths being staged, was read as a
+    sibling's, refusing the ordinary commit in the tree this plugin sent it to.
+    """
+    from . import sessions
+
+    here = ctx.worktree_root.resolve()
+    mine = sessions.identities(ctx, session_id)
+    claimed: set[str] = set()
+    for record in sessions.live_sessions(ctx):
+        if record.session_id in mine or Path(record.worktree).resolve() != here:
+            continue
+        claimed.update(sessions.leases_held_by(ctx, record.session_id, here))
+        claimed.update(path for path in record.task_paths if path)
+    return claimed
 
 
 def _under(path: str, claim: str) -> bool:

@@ -199,6 +199,45 @@ class TestASiblingIsStillASibling(MovedSession):
         self.assertTrue(self.tree.is_dir(), "the gate removed another process's tree")
 
 
+class TestStagingItsOwnTree(MovedSession):
+    """`git add -A` counted every live session's claims in every tree, this session's own
+    earlier id included: the ordinary commit step in the tree this plugin sent it to was
+    refused as carrying "somebody else's" work."""
+
+    def test_the_commit_step_in_its_own_tree_is_not_refused_over_its_own_paths(self):
+        self.edit_in_tree()
+        for command in ("git add -A", "git add .", 'git commit -am "Reject empty input"'):
+            proc = self.bash(command)
+            self.assertNotEqual("deny", self.hook_decision(proc), f"{command}: {proc.stdout}")
+
+    def test_a_sibling_in_another_tree_is_a_merge_not_a_refusal(self):
+        """Its lease and its founder's paths name a file in ITS tree. Two trees are two
+        files, and what comes of it is a merge (#163)."""
+        theirs = self.tmp / "theirs"
+        git(["worktree", "add", "-q", "-b", "feat/theirs", str(theirs)], self.repo)
+        other = self.a_sibling(theirs, "B", paths=["src/app.py"])
+        self.assertIsNone(sessions.acquire_lease(resolve(theirs), other, "src/app.py"))
+        self.edit_in_tree()
+        proc = self.bash("git add -A")
+        self.assertNotEqual("deny", self.hook_decision(proc), proc.stdout)
+
+    def test_a_sibling_standing_in_this_tree_still_refuses_the_sweep(self):
+        other = self.a_sibling(self.tree, "B", paths=["src/app.py"])
+        self.assertIsNone(sessions.acquire_lease(resolve(self.tree), other, "src/app.py"))
+        self.edit_in_tree()
+        proc = self.bash("git add -A")
+        self.assertEqual("deny", self.hook_decision(proc))
+        self.assertIn("src/app.py", self.hook_reason(proc))
+
+    def test_its_own_lease_in_the_tree_is_never_somebody_elses(self):
+        """Staged from the main checkout, into its tree: the lease it took while standing
+        in the tree is under the tree's id, which is this session all the same."""
+        self.assertIsNone(sessions.acquire_lease(resolve(self.tree), sid(self.tree, "S"),
+                                                 "src/app.py"))
+        self.edit_in_tree()
+        proc = self.bash(f"cd {self.tree} && git add -A", cwd=self.repo)
+        self.assertNotEqual("deny", self.hook_decision(proc), proc.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
