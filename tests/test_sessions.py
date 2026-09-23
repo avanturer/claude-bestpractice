@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import json
+import os
+import signal
+import subprocess
+import sys
 import time
 import unittest
 
-from helpers import LIB, RepoCase, git, session_record_for, sid
+from helpers import BIN, LIB, RepoCase, git, session_record_for, sid
 
-from claude_bestpractice import sessions, store
+from claude_bestpractice import sessions, store, worktree
 
 
 record = session_record_for
@@ -701,3 +706,124 @@ class TestTheDiffIsWhatThisSessionChanged(RepoCase):
         self.write("src/mine.py", "print('mine')\n")
         self.commit("this session's work")
         self.assertIn("src/mine.py", changed_files(self.ctx(), baseline))
+
+
+def backdate(ctx, session_id: str, seconds: float) -> None:
+    """Make a registered session's last heartbeat `seconds` old, as silence would."""
+    path = store.tier_b(ctx, sessions.SESSIONS_DIR, f"{sessions.safe_id(session_id)}.json")
+    raw = store.read_json(path)
+    raw["heartbeat_at"] = time.time() - seconds
+    store.write_json(path, raw)
+
+
+class TestAWeekendAwayIsNotADeath(RepoCase):
+    """A session left open over a weekend was reaped by the first one started on Monday.
+
+    The heartbeat ceiling was checked after the pid proof and overruled it: a CLI still
+    running, resolved as the owner, with the start time it registered with, was declared
+    dead at 36 hours of silence — and the sweep that follows a reap removed its tree while
+    the CLI was standing in it. The ceiling is the backstop for a pid that cannot speak
+    for itself. That one could.
+    """
+
+    def a_cli_left_running(self, harness_id: str) -> subprocess.Popen:
+        """A process named `claude` that registers through the real SessionStart, one shell
+        down as the harness runs hooks, and then simply stays up."""
+        home = self.tmp / "cli"
+        home.mkdir(exist_ok=True)
+        cli = home / "claude"
+        cli.write_text(f'#!/bin/sh\n"{sys.executable}" "$@"\n', encoding="utf-8")
+        cli.chmod(0o755)
+        event = {"session_id": harness_id, "cwd": str(self.repo),
+                 "hook_event_name": "SessionStart", "source": "startup"}
+        stays_up = home / "session.py"
+        stays_up.write_text(
+            "import subprocess, sys, time\n"
+            f"hook = sys.executable + ' ' + {str(BIN / 'session-start')!r} + '; exit 0'\n"
+            f"subprocess.run(['sh', '-c', hook], input={json.dumps(event)!r}, text=True,"
+            " capture_output=True)\n"
+            "print('registered', flush=True)\n"
+            "time.sleep(120)\n",
+            encoding="utf-8",
+        )
+        proc = subprocess.Popen([str(cli), str(stays_up)], stdout=subprocess.PIPE, text=True,
+                                env={**os.environ, "PYTHONPATH": str(LIB)}, start_new_session=True)
+        self.addCleanup(proc.stdout.close)
+        self.addCleanup(proc.wait)
+        self.addCleanup(os.killpg, proc.pid, signal.SIGKILL)
+        self.assertEqual("registered", proc.stdout.readline().strip(), "the stand-in CLI never ran")
+        return proc
+
+    @unittest.skipUnless(os.path.isdir("/proc/self"), "the owner walk reads /proc")
+    def test_a_cli_quiet_past_the_ceiling_keeps_its_record_and_its_tree(self):
+        cli = self.a_cli_left_running("weekend")
+        ctx = self.ctx()
+        me = sid(self.repo, "weekend")
+        rec = sessions.get(ctx, me)
+        self.assertEqual((cli.pid, sessions.PID_TRUST_OWNER), (rec.pid, rec.pid_trust),
+                         "precondition: the record names the CLI itself")
+        tree = worktree.provision(ctx, "the csv export", me)
+        backdate(ctx, me, sessions.HEARTBEAT_DEAD_SECONDS + 27 * 3600)
+
+        self.run_hook("session-start", {"session_id": "monday", "hook_event_name": "SessionStart",
+                                        "source": "startup"})
+
+        self.assertIsNotNone(sessions.get(ctx, me), "a running session was reaped")
+        self.assertTrue(tree.is_dir(), "its tree was removed with the CLI standing in it")
+
+    def test_a_record_that_outlived_a_reboot_still_falls_to_the_ceiling(self):
+        """The backstop the ceiling was kept for: after a reboot the same pid, even with a
+        matching start time, can be a stranger."""
+        ctx = self.ctx()
+        sessions.register(ctx, record(ctx, "before-the-reboot"))
+        rec = sessions.get(ctx, "before-the-reboot")
+        if not (rec.boot_id and rec.pid_fingerprint):
+            self.skipTest("the kernel names neither the boot nor a start time here")
+        rec.heartbeat_at = time.time() - (sessions.HEARTBEAT_DEAD_SECONDS + 60)
+        self.assertTrue(sessions.is_live(ctx, rec), "precondition: on this boot it is live")
+
+        rec.boot_id = "a-boot-that-is-over"
+        self.assertFalse(sessions.is_live(ctx, rec))
+
+
+class TestAPidFromAnotherNamespaceProvesNothing(RepoCase):
+    """A session in a container sharing the checkout was reaped by one on the host.
+
+    Its record said pid 2, owner — and on the host pid 2 is `kthreadd`, whose start time
+    does not match, which read as a recycled pid: positive evidence of death. The board
+    said `OTHER LIVE SESSIONS: none`, and the sweep removed the tree the container session
+    was still working in. `store.lock_identity` already guarded the locks against exactly
+    this; the registry never asked.
+    """
+
+    ELSEWHERE = "another-host/pid:[4026532263]"
+
+    def a_session_in_a_container(self, ctx) -> sessions.SessionRecord:
+        """Registered in another pid namespace, under a pid that here is nobody."""
+        sessions.register(ctx, record(ctx, "in-a-container"))
+        rec = sessions.get(ctx, "in-a-container")
+        rec.pid, rec.pid_fingerprint, rec.pid_identity = 999_999_999, "4242", self.ELSEWHERE
+        store.write_json(store.tier_b(ctx, sessions.SESSIONS_DIR, "in-a-container.json"),
+                         rec.to_dict())
+        return rec
+
+    def test_it_is_live_from_here(self):
+        ctx = self.ctx()
+        self.assertTrue(sessions.is_live(ctx, self.a_session_in_a_container(ctx)))
+
+    def test_the_host_s_session_start_leaves_it_and_its_tree_alone(self):
+        ctx = self.ctx()
+        container = self.a_session_in_a_container(ctx)
+        tree = worktree.provision(ctx, "rate limiting", container.session_id)
+
+        self.run_hook("session-start", {"session_id": "on-the-host",
+                                        "hook_event_name": "SessionStart", "source": "startup"})
+
+        self.assertIsNotNone(sessions.get(ctx, container.session_id), "reaped from the host")
+        self.assertTrue(tree.is_dir(), "its tree was removed while it was working in it")
+
+    def test_the_ceiling_is_still_its_backstop(self):
+        ctx = self.ctx()
+        rec = self.a_session_in_a_container(ctx)
+        rec.heartbeat_at = time.time() - (sessions.HEARTBEAT_DEAD_SECONDS + 60)
+        self.assertFalse(sessions.is_live(ctx, rec))

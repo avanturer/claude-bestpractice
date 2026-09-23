@@ -15,7 +15,7 @@ working session looks like while a human reads.
 So death is: the process is gone, or the pid was recycled by a different process, or
 the worktree is no longer registered with git. A quiet heartbeat is grounds for death
 only past a ceiling far longer than any think, and only as a backstop against records
-that outlived a reboot.
+that outlived a reboot — never over a pid that still proves the session is running.
 
 The second worst defect was the mirror of the first, and it hid behind a green suite for
 five releases: the pid being watched was the wrong process. Claude Code runs hooks
@@ -44,8 +44,13 @@ HEARTBEAT_STALE_SECONDS = 900.0
 
 # The backstop for a record that outlived the process it describes — a hard reboot
 # reuses pids from 1 and can hand a stale record a live, unrelated pid. Long enough
-# that no amount of thinking, lunch, or an overnight pause reaches it.
+# that no amount of thinking, lunch, or an overnight pause reaches it. A weekend does,
+# which is why it only decides where the pid cannot: see `_pid_proves_life`.
 HEARTBEAT_DEAD_SECONDS = 36 * 3600.0
+
+# Where a boot names itself, on Linux. Elsewhere there is no fingerprint either, and the
+# ceiling decides exactly as it always did.
+BOOT_ID = Path("/proc/sys/kernel/random/boot_id")
 
 SESSIONS_DIR = "sessions"
 
@@ -85,6 +90,12 @@ class SessionRecord:
     heartbeat_at: float
     pid_fingerprint: str = ""
     pid_trust: str = ""
+    # Where the pid means what it says. A pid is a number in ONE pid namespace of ONE boot:
+    # read from a container sharing the checkout, pid 2 was the host's `kthreadd`, so its
+    # start time "mismatched" and a running session was reaped with its tree. Empty in a
+    # record written before these existed, which reads as it always did.
+    pid_identity: str = ""
+    boot_id: str = ""
     task_statement: str = ""
     task_paths: list[str] = field(default_factory=list)
     model: str = ""
@@ -171,6 +182,19 @@ def pid_fingerprint(pid: int) -> str:
         return ""
 
 
+def current_boot() -> str:
+    """This boot's own id, or "" where the kernel does not expose one.
+
+    What tells a record that outlived a reboot from one that did not. A start-time
+    fingerprint is boot-relative, so across a reboot it can match a stranger by chance —
+    which is exactly the case the heartbeat ceiling was kept for.
+    """
+    try:
+        return BOOT_ID.read_text(encoding="ascii").strip()
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
 def _proc_ppid(pid: int) -> int:
     fields = _proc_stat_fields(pid)
     try:
@@ -241,7 +265,12 @@ def _pid_says_dead(rec: SessionRecord) -> bool:
     before the walk existed, so its pid is a wrapper that the old code was reading as
     death on every pass; it decides only once the record has also fallen silent, which
     retires the corpses that bug left behind without touching a session still working.
+
+    A pid read in another pid namespace proves nothing either way: the same number here is
+    a different process, or none. That is "cannot tell", and cannot tell is live.
     """
+    if rec.pid_identity and rec.pid_identity != store.lock_identity():
+        return False
     gone = not pid_alive(rec.pid)
     if not gone:
         current = pid_fingerprint(rec.pid)
@@ -253,10 +282,32 @@ def _pid_says_dead(rec: SessionRecord) -> bool:
     return (time.time() - rec.heartbeat_at) > HEARTBEAT_STALE_SECONDS
 
 
+def _pid_proves_life(rec: SessionRecord) -> bool:
+    """Is the pid, beyond doubt, still the CLI that registered this record?
+
+    The CLI itself, read in this pid namespace, on this boot, with the start time it had
+    then. Every one of those is required, because each is a way for a live pid to be a
+    stranger — and where all of them hold, silence is a founder away for the weekend. The
+    ceiling overrode exactly that: a session idle for 63 hours, its CLI still running, was
+    reaped by the next sibling to start, and its tree — `.env`, build output and all — was
+    deleted with the CLI still standing in it.
+    """
+    return (
+        rec.pid_trust == PID_TRUST_OWNER
+        and bool(rec.pid_fingerprint and rec.boot_id)
+        and rec.boot_id == current_boot()
+        and rec.pid_identity == store.lock_identity()
+        and pid_fingerprint(rec.pid) == rec.pid_fingerprint
+    )
+
+
 def is_live(ctx: GitContext, rec: SessionRecord, known_worktrees: set[str] | None = None) -> bool:
     if _pid_says_dead(rec):
         return False
-    if (time.time() - rec.heartbeat_at) > HEARTBEAT_DEAD_SECONDS:
+    # The ceiling is the backstop for a pid that cannot speak for itself — one resolved
+    # to a wrapper, one with no fingerprint, one from before a reboot or from another pid
+    # namespace. Over a pid that can, it was overruling the evidence it exists to back up.
+    if (time.time() - rec.heartbeat_at) > HEARTBEAT_DEAD_SECONDS and not _pid_proves_life(rec):
         return False
     if known_worktrees is None:
         known_worktrees = {p.as_posix() for p in worktree_paths(ctx)}
@@ -289,6 +340,9 @@ def register(ctx: GitContext, rec: SessionRecord) -> None:
     # previous process's start time made is_live read its own record as a recycled pid —
     # positive evidence of death for a session that had just started.
     rec.pid_fingerprint = pid_fingerprint(rec.pid) or rec.pid_fingerprint
+    # Where that pid was read, for the same reason: it is this process that resolved it.
+    rec.pid_identity = store.lock_identity()
+    rec.boot_id = current_boot()
     store.write_json(_record_path(ctx, rec.session_id), rec.to_dict())
 
 
