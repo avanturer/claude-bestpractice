@@ -1077,6 +1077,52 @@ class TestAStaleHookIsBroughtUpToDate(RepoCase):
         self.assertIn("husky", displaced.read_text(encoding="utf-8"))
 
 
+class TestAModuleTheRunnerCannotImportIsAMissingRunner(CICase):
+    """A stdlib-unittest project and a python3 with no pytest in it.
+
+    Detection names `python3 -m pytest -q` for any `test_*.py`, and the hook checked only
+    that `python3` exists. So a green suite could not be pushed: every push was refused on
+    "No module named pytest", and recorded as a FAILED run of a suite that never started.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.write("tests/test_x.py", "import unittest\n\n\nclass T(unittest.TestCase):\n"
+                                      "    def test_x(self):\n        self.assertTrue(True)\n")
+        self.commit("a stdlib suite")
+        self.with_remote()
+        # A python3 that has its standard library and nothing installed beside it.
+        stub = self.repo.parent / "stdlib-only"
+        stub.mkdir()
+        (stub / "python3").write_text(f'#!/bin/sh\nexec "{sys.executable}" -S "$@"\n')
+        (stub / "python3").chmod(0o755)
+        self.env = {**os.environ, "PATH": f"{stub}{os.pathsep}{os.environ.get('PATH', '')}"}
+
+    def push(self) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "push", "origin", "main"], cwd=str(self.repo),
+                              capture_output=True, text=True, timeout=180, env=self.env)
+
+    def test_it_is_refused_as_a_runner_that_is_missing(self):
+        from claude_bestpractice import ci, evidence
+
+        ci.install(self.ctx())
+        pushed = self.push()
+        self.assertNotEqual(0, pushed.returncode)
+        self.assertIn("python3 cannot import pytest", pushed.stderr)
+        self.assertIn("python3 -m pip install pytest", pushed.stderr)
+        self.assertFalse(evidence._run_path(self.ctx()).exists(),
+                         "a suite that never started was recorded as a failed run")
+
+    def test_the_command_the_founder_declared_is_the_one_it_runs(self):
+        """Their door when detection is wrong: `test_command`, in the file no session may
+        write, which the Stop gate already honoured and the hook did not."""
+        self.configure(test_command=["python3", "-m", "unittest", "discover", "-s", "tests"])
+        self.commit("the founder names the suite")
+        self.cli("local")
+        pushed = self.push()
+        self.assertEqual(0, pushed.returncode, pushed.stderr)
+
+
 class TestTheRemedyTheHookNamesDoesSomething(CICase):
     """A hook whose baked runner is gone refuses the push and says "run 'claude-bp-ci local'
     if the runner changed". That command compared versions only, so over a hook of this

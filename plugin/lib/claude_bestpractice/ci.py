@@ -268,7 +268,20 @@ DETECTED_TIER = """# This project's own suite, detected when the hook was instal
 # rather than resolved at push time because git hands a hook a stripped environment
 # in which claude-bp is usually not on PATH. Re-run `claude-bp-ci` if the runner changes.
 _runner={runner}
-if command -v "$_runner" >/dev/null 2>&1; then
+# The module a Python runner is told to run, which is part of the runner: a python3 that
+# cannot import pytest is a missing runner, not a red suite. It was run anyway, so a green
+# stdlib-unittest project was refused on "No module named pytest", and the refusal was
+# recorded as a failed run of a suite that never started.
+_module={module}
+_missing=""
+_remedy="Fix the environment, run 'claude-bp-ci local' if the runner changed,"
+if ! command -v "$_runner" >/dev/null 2>&1; then
+    _missing="$_runner is not on PATH"
+elif [ -n "$_module" ] && ! "$_runner" -c "import $_module" >/dev/null 2>&1; then
+    _missing="$_runner cannot import $_module"
+    _remedy="Install it ($_runner -m pip install $_module), or name the command this project runs as test_command in .claude/claude-bestpractice/config.json and run 'claude-bp-ci local',"
+fi
+if [ -z "$_missing" ]; then
     # NOT `exec`. It replaced the shell, which was harmless while passing or failing was
     # this hook's only job — and silently dropped the second job the moment it had one.
     # #84 added recording to the two literal tiers of the template and never reached this
@@ -289,9 +302,9 @@ if command -v "$_runner" >/dev/null 2>&1; then
     exit "$_status"
 fi
 
-echo "claude-bestpractice: $_runner is not on PATH, so this project's suite could not" >&2
-echo "run. Refusing the push rather than reporting a check that never happened. Fix the" >&2
-echo "environment, run 'claude-bp-ci local' if the runner changed, or push with --no-verify." >&2
+echo "claude-bestpractice: $_missing, so this project's suite could not run." >&2
+echo "Refusing the push rather than reporting a check that never happened." >&2
+echo "$_remedy or push with --no-verify." >&2
 exit 1"""
 
 NO_RUNNER_TIER = "# (no test runner was detectable in this project at install time)"
@@ -361,9 +374,13 @@ def hook_body(ctx: GitContext | None = None) -> str:
 
     command = []
     if ctx is not None:
-        from .config import detect_test_command
+        from . import config
 
-        command = detect_test_command(ctx.worktree_root)
+        # The command the Stop gate runs: the founder's `test_command` when they declared
+        # one, detection when not. Detection alone was baked here, so the one door a founder
+        # has when detection is wrong — that key, in a file no session may write — reached
+        # every surface except the hook that refuses their push.
+        command = config.load(ctx).test_command
 
     from . import __version__
 
@@ -372,6 +389,7 @@ def hook_body(ctx: GitContext | None = None) -> str:
         joined = " ".join(quote(part) for part in command)
         rendered = DETECTED_TIER.format(
             runner=quote(command[0]),
+            module=quote(_module_run(command)),
             command=joined,
             quoted=quote(joined),
         )
@@ -380,6 +398,13 @@ def hook_body(ctx: GitContext | None = None) -> str:
     body = body.replace("__RECORD_RUN__", _run_recorder())
     body = body.replace("__GREEN_COVERS__", _green_check())
     return body.replace("__VERSION__", __version__)
+
+
+def _module_run(command: list[str]) -> str:
+    """The module a Python command runs with `-m` — `pytest` in `python3 -m pytest -q` —
+    or "" when it runs none."""
+    python = "python" in Path(command[0]).name
+    return command[2] if python and len(command) > 2 and command[1] == "-m" else ""
 
 
 def stamped_version(ctx: GitContext) -> str:

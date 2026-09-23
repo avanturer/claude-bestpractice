@@ -148,8 +148,6 @@ def _armed_line(ctx: GitContext) -> str:
     # `claude-bp-doctor` by name, finds neither on a marketplace user's PATH, and exits 0.
     # A promise larger than the fact is the exact failure this project is written against,
     # and it was this project making it. Reported from a real install.
-    from claude_bestpractice.config import detect_test_command
-
     makefile = ctx.worktree_root / "Makefile"
     if makefile.is_file() and any(
         line.startswith("check:") for line in makefile.read_text(
@@ -157,7 +155,8 @@ def _armed_line(ctx: GitContext) -> str:
     ):
         what = "`make check`"
     else:
-        command = detect_test_command(ctx.worktree_root)
+        # What the hook bakes: the founder's declared command, or detection.
+        command = config.load(ctx).test_command
         what = "`" + " ".join(command) + "`" if command else ""
 
     if not what:
