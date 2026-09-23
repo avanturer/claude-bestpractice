@@ -1834,6 +1834,48 @@ class TestTheStandingInstructionNamesTheTree(RepoCase):
         self.assertNotIn("never in this main checkout", body)
 
 
+class TestABareCloneKeepsItsTreesBesideIt(RepoCase):
+    """`main_checkout` answers with the first tree git lists, and in a clone made as a bare
+    repository with working trees beside it, that is the git directory itself: every tree
+    this plugin made went inside `proj.git/`, among its objects and refs."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.bare = self.tmp / "proj.git"
+        git(["clone", "-q", "--bare", str(self.repo), str(self.bare)], self.tmp)
+        self.main = self.tmp / "main"
+        git(["worktree", "add", "-q", str(self.main), "main"], self.bare)
+        self.home = (self.tmp / ".claude" / "worktrees").resolve()
+
+    def test_a_new_tree_is_made_beside_the_repository(self):
+        from claude_bestpractice import worktree
+        from claude_bestpractice.gitctx import resolve
+
+        made = worktree.provision(resolve(self.main), "the work", "s1")
+
+        self.assertEqual(self.home, made.resolve().parent)
+        self.assertNotIn(self.bare.resolve(), made.resolve().parents)
+
+    def test_one_made_inside_it_before_is_moved_out_on_upgrade(self):
+        """Every change ships its repair: the move-to-the-home step runs again, once, in a
+        clone that ran its earlier revision."""
+        from claude_bestpractice import migrate, store
+        from claude_bestpractice.gitctx import resolve
+
+        ctx = resolve(self.main)
+        inside = self.bare / ".claude" / "worktrees" / "old-work"
+        git(["worktree", "add", "-q", "-b", "feat/old-work", str(inside), "main"], self.bare)
+        store.write_json(store.tier_b(ctx, "worktrees", "old-work.json"), {
+            "path": str(inside), "branch": "feat/old-work", "session_id": "gone",
+            "provisioned_by_plugin": True})
+        migrate._mark(ctx, "0005-trees-into-the-no-prompt-zone", 2, "")
+
+        migrate.repair(ctx)
+
+        self.assertFalse(inside.is_dir(), "the tree is still inside the git directory")
+        self.assertTrue((self.home / "old-work").is_dir())
+
+
 class TestWorktreeCreateMakesTheTreeItNames(RepoCase):
     """The hook echoed a path it had never created — only the path's PARENT was made — so
     the harness refused every isolated agent with *"the hook must create the directory

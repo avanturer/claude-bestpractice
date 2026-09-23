@@ -652,7 +652,19 @@ def main_checkout(ctx: GitContext) -> Path:
 
 
 def home_of(ctx: GitContext) -> Path:
-    return main_checkout(ctx) / HOME
+    """Where this plugin's trees go: `.claude/worktrees/` in the main checkout.
+
+    A clone whose first entry is a BARE repository has no checkout to put them in, and
+    `main_checkout` answers with the git directory itself — so trees were made inside
+    `proj.git/`, among its objects and refs. They go beside it instead, which is where that
+    layout keeps every other working tree it has.
+    """
+    root = main_checkout(ctx)
+    try:
+        bare = root.resolve() == ctx.common_dir.resolve()
+    except OSError:
+        bare = False
+    return (root.parent if bare else root) / HOME
 
 
 def target_for(ctx: GitContext, slug: str) -> Path:

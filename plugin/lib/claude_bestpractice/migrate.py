@@ -368,6 +368,10 @@ def _move_trees_into_the_no_prompt_zone(ctx: GitContext) -> str:
     `git worktree move` and not a delete-and-recreate: it carries the branch and the
     uncommitted work with it, verified against a dirty tree. Without `--force`, so a locked
     tree or one with submodules is left alone rather than broken.
+
+    Revision 3: in a clone whose main entry is a bare repository the home moved from inside
+    the git directory to beside it (`worktree.home_of`), and the trees already made in there
+    follow it the same way.
     """
     from . import worktree
 
@@ -1113,7 +1117,7 @@ _REPAIRS = {
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
     "0003-absorb-scratch-todos": (1, _absorb_scratch_todos),
     "0004-lift-the-tool-call-ceiling": (2, _lift_the_tool_call_ceiling),
-    "0005-trees-into-the-no-prompt-zone": (2, _move_trees_into_the_no_prompt_zone),
+    "0005-trees-into-the-no-prompt-zone": (3, _move_trees_into_the_no_prompt_zone),
     "0006-drop-the-witness-timeout": (2, _drop_the_witness_timeout),
     "0007-forget-a-switch-taken-as-a-task": (1, _forget_a_statement_that_was_only_a_switch),
     "0008-collapse-the-decision-inbox": (1, _collapse_the_decision_inbox),
