@@ -921,6 +921,53 @@ class TestTheBoardLearnsTheTaskWhenItArrives(RepoCase):
         self.say("почини импортер")
         self.assertEqual(plan.FROM_THE_FOUNDER, self.board("next")[0].source)
 
+    def test_a_second_session_does_not_retitle_the_first_ones_card(self):
+        """Every session starts in the main checkout on the trunk, and the BRANCH used to
+        decide whose card this was: the second session's first message retitled the first
+        session's card, and the first session's work left the board."""
+        self.say("add a CSV export to the billing report", session="s1")
+        self.say("rewrite the login form validation", session="s2")
+        titles = sorted(t.title for t in self.board("next"))
+        self.assertEqual(["add a CSV export to the billing report",
+                          "rewrite the login form validation"], titles)
+
+    def test_the_card_follows_its_own_session_into_a_worktree(self):
+        """The harness id survives the move; the composed session id does not."""
+        from claude_bestpractice import plan
+
+        self.say("почини импортер", session="s1")
+        tree = self.add_worktree("feat-importer")
+        self.run_hook("prompt-capture", {
+            "session_id": "s1", "hook_event_name": "UserPromptSubmit",
+            "prompt": "а теперь почини импортер для пустого CSV",
+        }, cwd=tree)
+        cards = self.board("next")
+        self.assertEqual(1, len(cards), [c.title for c in cards])
+        self.assertIn("пустого CSV", cards[0].title)
+        self.assertEqual(cards[0].id, plan.opened_for(self.ctx(), "s1").id)
+
+    def test_a_transition_keeps_who_opened_the_card(self):
+        from claude_bestpractice import plan
+
+        self.say("почини импортер", session="s1")
+        card = self.board("next")[0]
+        moved, _ = plan.amend(self.ctx(), card.id, paths=["importer.py"], done_when="stated")
+        self.assertEqual("s1", moved.opened_by)
+        claimed, _ = plan.claim(self.ctx(), card.id, sid(self.repo, "s1"), self.ctx().branch)
+        self.assertEqual("s1", claimed.opened_by)
+        self.assertIsNone(plan.opened_for(self.ctx(), "s1"), "a claimed card is not unclaimed")
+
+    def test_the_finish_names_the_card_instead_of_asking_for_another(self):
+        """Told to `add`, a real session filed a duplicate and left its own card in NEXT
+        over finished work — an invitation to the next session to do the job again."""
+        self.say("почини импортер", session="s1")
+        card = self.board("next")[0]
+        self.write("importer.py", "x = 1\n")
+        proc = self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop"})
+        self.assertIn(f"claude-bp-plan claim {card.id}", proc.stderr)
+        self.assertIn(f"claude-bp-plan update {card.id} --paths importer.py", proc.stderr)
+        self.assertNotIn("claude-bp-plan add", proc.stderr)
+
 
 class TestDeliveryClosesTheCard(PlanCase):
     """The ledger had no closing half: `complete` had one caller, the CLI, so a card left

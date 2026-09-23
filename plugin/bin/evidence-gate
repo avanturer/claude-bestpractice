@@ -656,14 +656,30 @@ def main() -> None:
             # they accepted the merge (decision 0010).
             problems.append(plan.closure_demand(mine))
         if not mine and not closed and not delivered:
+            named = ",".join(changed[:3])
+            # The card the founder's message already opened for this session, when there is
+            # one. Sent to `add` instead, every session filed a duplicate of it and left the
+            # original sitting in NEXT over finished work — a card inviting the next session
+            # to do the same job again.
+            opened = plan.opened_for(ctx, str(event.raw.get("session_id") or ""))
+            if opened is not None:
+                how = (
+                    f"  Your founder's instruction is already on it as {opened.id} — plan it "
+                    "and claim it:\n"
+                    f'  claude-bp-plan update {opened.id} --paths {named} '
+                    '--done-when "<what has to become true>"\n'
+                    f"  then: claude-bp-plan claim {opened.id}"
+                )
+            else:
+                how = (
+                    f'  claude-bp-plan add "<what this turn is doing>" --paths {named}\n'
+                    "  then: claude-bp-plan claim <id>   (or claim the task you are already on)"
+                )
             problems.append(
                 f"Nothing on the board says this session is working: {len(changed)} file(s) "
                 "changed and no task in the ledger is claimed by it.\n"
                 "  Every sibling session reads the board to decide what is safe to touch, "
-                "and an unlisted change is invisible to all of them.\n"
-                '  claude-bp-plan add "<what this turn is doing>" --paths '
-                f"{','.join(changed[:3])}\n"
-                "  then: claude-bp-plan claim <id>   (or claim the task you are already on)"
+                "and an unlisted change is invisible to all of them.\n" + how
             )
 
     if cfg.compare_dependencies:

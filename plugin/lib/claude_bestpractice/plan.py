@@ -51,6 +51,9 @@ MAX_BODY_CHARS = 2_000
 # quietly answering yes for every card ever filed.
 NO_DETAIL = "(no detail)"
 
+# The front-matter key naming the session a founder's message opened a card for.
+OPENED_BY = "opened_by"
+
 
 @dataclass
 class Task:
@@ -87,6 +90,9 @@ class Task:
     # Empty when the task file is in THIS checkout. The sibling's directory name
     # otherwise, so the board can say where the work actually is.
     worktree: str = ""
+    # The harness session whose founder's message opened this card — the one session whose
+    # later messages may retitle it while it sits unclaimed. Empty on every other card.
+    opened_by: str = ""
 
     @property
     def number(self) -> int:
@@ -185,6 +191,7 @@ def _load(path: Path, state: str) -> Task | None:
         blocker=meta.get("blocker", ""),
         after=_ids(meta.get("after", "")),
         together=_ids(meta.get("with", "")),
+        opened_by=meta.get(OPENED_BY, ""),
     )
 
 
@@ -308,7 +315,8 @@ def slug(text: str) -> str:
 def _render(task_id: str, title: str, state: str, owner: str, branch: str, body: str,
             paths: list[str] | None = None, source: str = "",
             done_when: str = "", blocker: str = "", created_at: str = "",
-            after: list[str] | None = None, together: list[str] | None = None) -> str:
+            after: list[str] | None = None, together: list[str] | None = None,
+            opened_by: str = "") -> str:
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     lines = [
         "---",
@@ -319,6 +327,8 @@ def _render(task_id: str, title: str, state: str, owner: str, branch: str, body:
         f"branch: {branch}",
         f"paths: {', '.join(paths or [])}",
         f"source: {source}",
+        # Only on the cards it concerns, so every other card keeps the shape it has always had.
+        *([f"{OPENED_BY}: {opened_by}"] if opened_by else []),
         f"done_when: {done_when[:MAX_TITLE_CHARS]}",
         f"blocker: {blocker[:MAX_TITLE_CHARS]}",
         f"after: {', '.join(after or [])}",
@@ -368,7 +378,17 @@ ALLOC_LOCK = "plan-alloc.lock"
 FROM_THE_FOUNDER = "the founder's message"
 
 
-def open_for(ctx: GitContext, statement: str, session_id: str) -> Task | None:
+def opened_for(ctx: GitContext, opener: str) -> Task | None:
+    """The unclaimed card a founder's message opened for this session, if there is one."""
+    if not opener:
+        return None
+    for task in load_all(ctx, NEXT):
+        if task.source == FROM_THE_FOUNDER and task.opened_by == opener:
+            return task
+    return None
+
+
+def open_for(ctx: GitContext, statement: str, session_id: str, opener: str = "") -> Task | None:
     """Put the founder's instruction on the board the moment it arrives. None if one is.
 
     The demand fired at the first WRITE, so between "the founder gave a task" and "the
@@ -385,33 +405,40 @@ def open_for(ctx: GitContext, statement: str, session_id: str) -> Task | None:
 
     One per session. A founder who sends three messages about one task gets one card, not
     three, because the ledger is only worth reading while it does not drift.
+
+    `opener` is the harness session id, which survives the move into a worktree that
+    `session_id` does not. It used to be the BRANCH that decided whose card this was, and
+    every session starts in the main checkout on the trunk: the second session's first
+    message retitled the first session's card, and the first session's work left the board.
     """
     if not statement.strip():
         return None
+    opener = opener or session_id
     for task in load_all(ctx, DOING):
         if task.owner == session_id:
             return None
     said = statement.strip().splitlines()[0][:120]
-    for task in load_all(ctx, NEXT):
-        if task.source == FROM_THE_FOUNDER and task.branch == ctx.branch:
-            # FOLLOWS the founder while nobody has claimed it. Their first message is
-            # often a remark rather than the work — «потом как все задачи на доске
-            # доделаю» cleared the bar and sat on the board as a task, which is the drift
-            # the ledger exists not to have. The statement itself already follows them;
-            # the card had no reason not to (#170).
-            #
-            # Only while UNCLAIMED. Once a session has claimed it, that session wrote a
-            # plan — a `done_when` and the paths — and overwriting its title with whatever
-            # was said next would clobber work with conversation.
-            if task.title != said:
-                amend(ctx, task.id, title=said)
-            return None
-    return add(ctx, said, branch=ctx.branch, source=FROM_THE_FOUNDER)
+    mine = opened_for(ctx, opener)
+    if mine is not None:
+        # FOLLOWS the founder while nobody has claimed it. Their first message is often a
+        # remark rather than the work — «потом как все задачи на доске доделаю» cleared the
+        # bar and sat on the board as a task, which is the drift the ledger exists not to
+        # have. The statement itself already follows them; the card had no reason not to
+        # (#170).
+        #
+        # Only while UNCLAIMED. Once a session has claimed it, that session wrote a plan —
+        # a `done_when` and the paths — and overwriting its title with whatever was said
+        # next would clobber work with conversation.
+        if mine.title != said:
+            amend(ctx, mine.id, title=said)
+        return None
+    return add(ctx, said, branch=ctx.branch, source=FROM_THE_FOUNDER, opened_by=opener)
 
 
 def add(ctx: GitContext, title: str, body: str = "", branch: str = "",
         paths: list[str] | None = None, done_when: str = "", source: str = "",
-        after: list[str] | None = None, together: list[str] | None = None) -> Task:
+        after: list[str] | None = None, together: list[str] | None = None,
+        opened_by: str = "") -> Task:
     """Allocate an id and create the task under one lock.
 
     Scanning for the highest id and then writing the file is a read-modify-write, and
@@ -422,12 +449,13 @@ def add(ctx: GitContext, title: str, body: str = "", branch: str = "",
     first. The lock is held across both steps or it buys nothing.
     """
     return park(ctx, title, body=body, branch=branch, paths=paths or [], source=source,
-                done_when=done_when, after=after, together=together)
+                done_when=done_when, after=after, together=together, opened_by=opened_by)
 
 
 def park(ctx: GitContext, title: str, body: str = "", branch: str = "",
          paths: list[str] | None = None, source: str = "", done_when: str = "",
-         after: list[str] | None = None, together: list[str] | None = None) -> Task:
+         after: list[str] | None = None, together: list[str] | None = None,
+         opened_by: str = "") -> Task:
     """Hand a task to a session that has not happened yet.
 
     The scene this exists for: a chat with more work in it than belongs in one chat, and
@@ -441,7 +469,8 @@ def park(ctx: GitContext, title: str, body: str = "", branch: str = "",
         store.atomic_write(
             path,
             _render(task_id, title, NEXT, "", branch, body, paths, source,
-                    done_when=done_when, after=after, together=together),
+                    done_when=done_when, after=after, together=together,
+                    opened_by=opened_by),
             mode=0o644
         )
     return _load(path, NEXT)
@@ -685,6 +714,7 @@ def _move(task: Task, state: str, owner: str = "", branch: str = "",
         meta.get("created_at", ""),
         _ids(meta.get("after", "")),
         _ids(meta.get("with", "")),
+        opened_by=meta.get(OPENED_BY, ""),
     )
     store.atomic_write(target, updated, mode=0o644)
     if target != task.path:
@@ -935,6 +965,7 @@ def _amended(task: Task, note: str, paths: list[str] | None, done_when: str, tit
         meta.get("created_at", ""),
         task.after,
         task.together,
+        opened_by=meta.get(OPENED_BY, ""),
     )
 
 
@@ -1218,6 +1249,7 @@ def _move_to(path: Path, target_dir: Path, task: Task) -> None:
         [p.strip() for p in meta.get("paths", "").split(",") if p.strip()],
         meta.get("source", ""), meta.get("done_when", ""), "", meta.get("created_at", ""),
         _ids(meta.get("after", "")), _ids(meta.get("with", "")),
+        opened_by=meta.get(OPENED_BY, ""),
     )
     store.atomic_write(target_dir / path.name, updated, mode=0o644)
     if target_dir / path.name != path:
