@@ -1271,7 +1271,8 @@ def clean_rerun(ctx: GitContext, command: list[str], where: str = "",
         failed = _check_out_committed(ctx, target, until)
         if failed:
             return Verdict(False, f"could not create verification worktree: {failed}")
-        return _rerun_committed(ctx, command, target / where, until)
+        missing = _provide_submodules(ctx, target, until)
+        return _rerun_committed(ctx, command, target / where, until, missing)
     except witness.RanOutOfTime as killed:
         return _committed_tree_unchecked(command, killed.seconds)
     except OSError as exc:
@@ -1300,17 +1301,88 @@ def _check_out_committed(ctx: GitContext, target: Path, until: float) -> str:
     return "" if add.returncode == 0 else add.stderr.strip()
 
 
-def _rerun_committed(ctx: GitContext, command: list[str], where: Path, until: float) -> Verdict:
-    """The suite, in the checkout of the committed tree, in the time the Stop has left."""
+def _rerun_committed(ctx: GitContext, command: list[str], where: Path, until: float,
+                     missing: list[str]) -> Verdict:
+    """The suite, in the checkout of the committed tree, in the time the Stop has left.
+
+    `missing` is the submodules that checkout could not be given. A failure beside them is no
+    evidence about the committed tree — it is the tree without them — so it is inconclusive.
+    """
     left = until - time.time()
     if left <= 0:
         raise witness.RanOutOfTime(0)
     env = dict(os.environ)
     env[VERIFYING_ENV] = _issue_nonce(ctx)
     proc = witness.run_bounded(command, where, env, left)
-    if proc.returncode != 0:
-        return _judge_clean_failure(ctx, command, hookio.tail_of(proc.stdout + proc.stderr))
-    return Verdict(True, "clean-checkout re-run passed")
+    if proc.returncode == 0:
+        return Verdict(True, "clean-checkout re-run passed")
+    if missing:
+        return Verdict(
+            True,
+            f"clean re-run inconclusive: the committed tree's submodules {', '.join(missing)} "
+            "could not be checked out beside it, so its failure says nothing about the code. "
+            f"`git submodule update --init` and `{' '.join(command)}` in a fresh checkout of "
+            "HEAD answer it.",
+            unverified=True,
+        )
+    return _judge_clean_failure(ctx, command, hookio.tail_of(proc.stdout + proc.stderr))
+
+
+def _provide_submodules(ctx: GitContext, target: Path, until: float) -> list[str]:
+    """Give the committed tree its submodules. The ones it could not be given, by path.
+
+    A detached `worktree add` checks out a submodule as an empty directory, so a suite that
+    reads a committed submodule's file failed there and was reported as "passes in your
+    working tree but FAILS on the committed tree" — on every finish past prototype, in every
+    repository with a submodule its tests use.
+
+    From the checkouts THIS tree already has, never from the network: each submodule's URL
+    is pointed at its checkout here for this one command, so nothing is fetched, a commit
+    not yet pushed is still found, and nothing is written to the repository's own config —
+    the clone lands under the throwaway worktree's git directory and goes with it. A
+    submodule this tree never checked out is one the suite that passed here ran without,
+    and is named rather than fetched.
+    """
+    if not (target / ".gitmodules").is_file():
+        return []
+    wanted = _declared_submodules(target)
+    here = {name: path for name, path in wanted.items()
+            if (ctx.worktree_root / path / ".git").exists()}
+    if here and not _check_out_from_here(ctx, target, here, until):
+        return sorted(wanted.values())
+    # A submodule's OWN submodules are not given. Recursing would fetch them from wherever
+    # their URLs point, which is the network this deliberately stays off.
+    nested = [f"{path}/{inner}" for path in here.values()
+              for inner in _declared_submodules(target / path).values()]
+    return sorted([path for name, path in wanted.items() if name not in here] + nested)
+
+
+def _declared_submodules(root: Path) -> dict[str, str]:
+    """Name to path, for every submodule the `.gitmodules` at `root` declares."""
+    listed = subprocess.run(
+        ["git", "config", "-z", "-f", ".gitmodules", "--get-regexp", r"^submodule\..*\.path$"],
+        cwd=str(root), capture_output=True, encoding="utf-8", errors="surrogateescape",
+        timeout=30,
+    ).stdout
+    pairs = (entry.split("\n", 1) for entry in listed.split("\0") if "\n" in entry)
+    return {key[len("submodule."):-len(".path")]: path for key, path in pairs}
+
+
+def _check_out_from_here(ctx: GitContext, target: Path, here: dict[str, str], until: float) -> bool:
+    """Check these submodules out in `target`, cloned from this tree's own checkouts of them."""
+    urls = [part for name, path in here.items()
+            for part in ("-c", f"submodule.{name}.url={ctx.worktree_root / path}")]
+    try:
+        given = subprocess.run(
+            ["git", "-c", "protocol.file.allow=always", *urls, "submodule", "update", "--init",
+             "--", *here.values()],
+            cwd=str(target), capture_output=True, encoding="utf-8", errors="replace",
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            timeout=max(1.0, until - time.time()),
+        )
+    except subprocess.TimeoutExpired as killed:
+        raise witness.RanOutOfTime(killed.timeout) from None
+    return given.returncode == 0
 
 
 def _committed_tree_unchecked(command: list[str], seconds: float) -> Verdict:

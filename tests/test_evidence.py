@@ -211,6 +211,70 @@ class TestTheCleanRerunHasOnlyTheStopsTime(RepoCase):
                         "the server the suite started outlived the gate")
 
 
+# Says how many tests ran, so the gate's first tier is a witnessed green and the Stop goes
+# on to the clean re-run rather than finishing unverified before it.
+READS_THE_SUBMODULE = [
+    "python3", "-c",
+    "import json, sys; ok = json.load(open('shared/rates.json'))['vat'] == 20; "
+    "print('1 passed' if ok else '1 failed'); sys.exit(0 if ok else 1)",
+]
+
+
+class TestTheCleanRerunHasTheSubmodules(RepoCase):
+    """A detached worktree checks a submodule out as an empty directory, so a suite reading a
+    committed submodule's file failed there — "passes in your working tree but FAILS on the
+    committed tree" — on every finish past prototype, in any repository whose tests use one.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        from helpers import make_repo
+
+        library = make_repo(self.tmp, "fixtures-library", seed=False)
+        (library / "rates.json").write_text('{"vat": 20}\n', encoding="utf-8")
+        git(["add", "-A"], library)
+        git(["commit", "-qm", "rates"], library)
+        git(["-c", "protocol.file.allow=always", "submodule", "add", "-q", str(library), "shared"],
+            self.repo)
+        self.commit("shared fixtures")
+
+    def test_the_committed_tree_gets_them_from_the_checkouts_here(self):
+        config = (self.repo / ".git" / "config").read_text(encoding="utf-8")
+        verdict = evidence.clean_rerun(self.ctx(), READS_THE_SUBMODULE)
+        self.assertTrue(verdict.ok, verdict.reason)
+        self.assertFalse(verdict.unverified, verdict.reason)
+        self.assertEqual(config, (self.repo / ".git" / "config").read_text(encoding="utf-8"),
+                         "verifying the repository rewrote its configuration")
+
+    def test_without_the_network_or_the_original(self):
+        """From this tree's checkout, never the URL: the library is gone, and still found."""
+        import shutil
+
+        shutil.rmtree(self.tmp / "fixtures-library")
+        verdict = evidence.clean_rerun(self.ctx(), READS_THE_SUBMODULE)
+        self.assertTrue(verdict.ok, verdict.reason)
+        self.assertFalse(verdict.unverified, verdict.reason)
+
+    def test_one_it_could_not_be_given_makes_a_failure_inconclusive(self):
+        git(["submodule", "deinit", "-q", "-f", "shared"], self.repo)
+        verdict = evidence.clean_rerun(self.ctx(), READS_THE_SUBMODULE)
+        self.assertTrue(verdict.ok, "a failure beside a missing submodule was blamed on the code")
+        self.assertTrue(verdict.unverified)
+        self.assertIn("shared", verdict.reason)
+
+    def test_the_stop_gate_past_prototype_accepts_the_finish(self):
+        self.configure(require_task=False, manage_pull_requests=False, stage_override="traction",
+                       test_command=READS_THE_SUBMODULE)
+        self.commit("config")
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart",
+                                        "source": "startup"})
+        self.write("app.py", "X = 2\n")
+        self.commit("a change past prototype")
+        proc = self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                               "stop_hook_active": False})
+        self.assertEqual(0, proc.returncode, proc.stderr)
+
+
 class TestLoopDetection(unittest.TestCase):
     def test_detects_a_three_gram_repeated_three_times(self):
         sigs = ["Bash:a", "Read:b", "Edit:c"] * 3
