@@ -447,10 +447,10 @@ class TestBashIsAWriteTool(DisarmCase):
 class TestNoCachedVerdictOutlivesItsCause(RepoCase):
     """The result cache was the richest source of defects in the gate. There is none."""
 
-    def project(self, expected: int) -> None:
+    def project(self, expected: int, test_file: str = "test_impl.py") -> None:
         self.write("impl.py", f"def f():\n    return {expected}\n")
         self.write(
-            "test_impl.py", stdlib_test("impl", "f()", "2")
+            test_file, stdlib_test("impl", "f()", "2")
         )
         self.commit()
 
@@ -466,14 +466,18 @@ class TestNoCachedVerdictOutlivesItsCause(RepoCase):
         ).returncode
 
     def test_a_permissive_command_does_not_certify_the_tree_forever(self):
-        self.project(expected=1)
+        """About the DECLARED command, so its test is named where the gate's own runner does
+        not look. Named `test_impl.py`, the gate drives pytest itself wherever `python3` can
+        import it and never runs `true` at all — the first assertion then held on a machine
+        without pytest and failed on one with it, which is a fixture, not a finding."""
+        self.project(expected=1, test_file="check_impl.py")
         self.config(["true"])
         self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
         self.claim_a_task("s1", "impl.py")
         self.write("impl.py", "def f():\n    return 1  # edited\n")
         self.assertEqual(self.stop(), 0, "a permissive command should pass on its own terms")
 
-        self.config([sys.executable, *STDLIB_DISCOVER])
+        self.config([sys.executable, *STDLIB_DISCOVER[:-1], "check_*.py"])
         self.assertEqual(self.stop(), 2, "the earlier permissive pass survived the command change")
 
     def test_a_failure_clears_once_the_code_is_fixed(self):
