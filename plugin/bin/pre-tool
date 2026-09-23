@@ -341,11 +341,18 @@ def _landed(ctx, absolute: list[Path]) -> list[tuple[Path, str]]:
 
 
 def _unlisted(ctx, session_id: str, absolute: list[Path]) -> str:
-    """The first of these writes no card on the board covers, as a card would name it."""
+    """The first of these writes no card on the board covers, as a card would name it.
+
+    A path git ignores is owed no card. The board is how a sibling decides what is safe to
+    touch, and no commit will ever carry an ignored file to a sibling — so `pytest -q 2>&1
+    | tee test-output.log`, with `*.log` ignored, was refused for want of a card on a log.
+    Asked last and only of what is left: it costs git a call, the rest cost nothing.
+    """
     landed = _landed(ctx, absolute)
     if _ledger_covers(ctx, session_id, [rel for _tree, rel in landed]):
         return ""
-    owed = [rel for _tree, rel in landed if not _bookkeeping(rel)]
+    owed = [rel for tree, rel in landed
+            if not _bookkeeping(rel) and not gitpolicy.git_ignores(tree, rel)]
     return owed[0] if owed else ""
 
 

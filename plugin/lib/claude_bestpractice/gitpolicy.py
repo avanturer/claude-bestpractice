@@ -344,7 +344,7 @@ def ignored_by_git(tree: Path, target: Path) -> bool:
         return False
     from .gitctx import _run
 
-    if _run(["check-ignore", "--", relative.as_posix()], tree, check=False).strip():
+    if git_ignores(tree, relative.as_posix()):
         return True
     # A name the filesystem refuses to look up — longer than it allows, or under a
     # directory it may not read — raises from `exists()` rather than answering, and this
@@ -359,6 +359,27 @@ def ignored_by_git(tree: Path, target: Path) -> bool:
     return not _run(
         ["ls-files", "--error-unmatch", "--", relative.as_posix()], tree, check=False
     ).strip()
+
+
+def git_ignores(tree: Path, relative: str) -> bool:
+    """Does git in `tree` ignore this path, whether or not it exists yet?
+
+    Asked a second time with a trailing slash when nothing is there. A rule written for a
+    directory, `build/`, matches only what git can see is a directory, and one that does
+    not exist yet is not — so `rm -rf build`, with `build/` ignored and absent, was read as
+    a write to a path a commit would carry: refused in the main checkout, and a worktree
+    provisioned to hold nothing.
+    """
+    from .gitctx import _run
+
+    asked = [relative]
+    try:
+        absent = not (tree / relative).exists()
+    except OSError:
+        absent = True
+    if absent:
+        asked.append(relative.rstrip("/") + "/")
+    return bool(_run(["check-ignore", "--", *asked], tree, check=False).strip())
 
 
 def owned_by_session(ctx: GitContext, target: Path) -> bool:

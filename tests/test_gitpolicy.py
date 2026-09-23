@@ -1577,6 +1577,16 @@ class TestAnIgnoredPathHasNowhereElseToGo(PolicyCase):
         self.assertEqual("deny", decision, reason)
         self.assertIn("main checkout", reason)
 
+    def test_an_ignored_directory_that_is_not_there_yet_is_ignored_too(self):
+        """A `build/` rule matches only what git can see is a directory, and an absent one
+        is not — so `rm -rf build` was refused, with a worktree provisioned for nothing."""
+        (self.repo / ".gitignore").write_text("build/\n", encoding="utf-8")
+        git(["add", ".gitignore"], self.repo)
+        git(["commit", "-qm", "ignore builds"], self.repo)
+        decision, reason = self.rm(self.repo / "build")
+        self.assertEqual("allow", decision, reason)
+        self.assertFalse((self.repo / ".claude" / "worktrees").exists(), "provisioned for nothing")
+
 
 class TestTheRuleArrivesBeforeTheRefusal(PolicyCase):
     """Issue #81. `EnterWorktree` refuses to act on its own judgement — its description

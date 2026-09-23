@@ -1672,6 +1672,19 @@ class TestTheBoardIsDemandedBeforeAShellWrite(RepoCase):
         self.claim_a_task("s1", "src/billing.js")
         self.assertNotEqual("deny", self.decision(self.writing("sed -i 's/a/b/' src/billing.js")))
 
+    def test_a_path_git_ignores_is_owed_no_card(self):
+        """The board is how a sibling decides what is safe to touch, and no commit carries
+        an ignored file to one. A log `tee`d out of a test run was refused for want of a
+        card, and so was removing an ignored build directory that was not there yet — git
+        matches a `build/` rule only against what it can see is a directory."""
+        self.write(".gitignore", "*.log\nbuild/\n")
+        self.commit("ignore logs and builds")
+        self.working_on()
+        for command in ("pytest -q 2>&1 | tee test-output.log", "rm -rf build"):
+            self.assertNotEqual("deny", self.decision(self.writing(command)), command)
+        self.assertEqual("deny", self.decision(self.writing("rm -rf src")),
+                         "a path git would carry lost its card")
+
 
 if __name__ == "__main__":
     unittest.main()
