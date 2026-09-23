@@ -226,6 +226,42 @@ class TestPullRequestReadiness(DeliveryCase):
 
         self.assertIn("no commits on top of main", delivery.ready(self.ctx(), "main"))
 
+    def test_an_uncommitted_decision_record_blocks_it(self):
+        """`.claude/` holds the founder's decisions and settings beside this plugin's own
+        state, and the whole prefix was exempt: both read as a clean tree, and the pull
+        request opened without them."""
+        from claude_bestpractice import delivery
+
+        self.write(".claude/rules/decisions/0001-keep-the-importer.md", "decided\n")
+        self.assertIn("there are uncommitted changes", delivery.ready(self.ctx(), "main"))
+
+    def test_an_edited_settings_file_is_uncommitted_work(self):
+        from claude_bestpractice import delivery
+
+        self.write(".claude/settings.json", "{}\n")
+        self.commit("the project's settings")
+        self.write(".claude/settings.json", '{"enabledPlugins": {}}\n')
+        self.assertTrue(delivery.dirty(self.ctx()))
+
+    def test_the_plugins_own_state_is_still_not_the_founders_work(self):
+        from claude_bestpractice import delivery
+
+        self.write(".claude/claude-bestpractice/stage.json", "{}\n")
+        self.write(".claude/worktrees/feat-x/scratch.py", "x = 1\n")
+        self.assertFalse(delivery.dirty(self.ctx()))
+
+    def test_a_claude_directory_nothing_was_committed_from_is_looked_inside(self):
+        """Wholly untracked, `.claude/` is one line of `git status`, and that line is this
+        plugin's state until something of the founder's is in it."""
+        from claude_bestpractice import delivery
+
+        git(["rm", "-r", "-q", "--cached", ".claude"], self.repo)
+        git(["commit", "-qm", "nothing under .claude is committed here"], self.repo)
+        self.assertFalse(delivery.dirty(self.ctx()), "the plugin's own config read as work")
+
+        self.write(".claude/commands/deploy.md", "deploy it\n")
+        self.assertTrue(delivery.dirty(self.ctx()))
+
     def unverified_on(self, branch: str) -> None:
         from claude_bestpractice import store
 
