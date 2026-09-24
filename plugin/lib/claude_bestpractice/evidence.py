@@ -643,14 +643,21 @@ def _none_of_them_mine(failing: list[str], changed: list[str]) -> list[str]:
 
 
 def _differing_from(ctx: GitContext, trunk: str, files: list[str]) -> set[str]:
-    """Which of these files this tree holds differently from the trunk. Empty if unaskable."""
+    """Which of these files this tree holds differently from the trunk. Empty if unaskable.
+
+    Names read as git writes them with `-z`: whole, unquoted, never split at a space. Split
+    on whitespace and quoted, `src/my notes.py` came back as two names and `src/café.py` as
+    `"src/caf\\303\\251.py"` — neither matched, and the refusal told the session its failing
+    file was "identical to" a trunk it differed from.
+    """
     from .gitctx import _run
 
     try:
-        return set(_run(["diff", "--name-only", trunk, "--", *files],
-                        ctx.worktree_root, check=False).split())
+        listed = _run(["-c", "core.quotePath=false", "diff", "--name-only", "-z", trunk, "--",
+                       *files], ctx.worktree_root, check=False)
     except Exception:  # noqa: BLE001 - a diagnostic line must never fail a verdict
         return set()
+    return {name for name in listed.split("\0") if name}
 
 
 def _behind(ctx: GitContext, trunk: str) -> int:

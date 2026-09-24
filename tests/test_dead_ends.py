@@ -140,6 +140,21 @@ class TestARedSuiteIsJudgedAgainstTheTrunk(RepoCase):
     def test_it_says_nothing_when_no_failing_file_is_known(self):
         self.assertEqual("", evidence.not_this_trees_code(self.ctx(), [], ["src/mine.py"]))
 
+    def test_a_name_git_would_quote_or_split_is_compared_whole(self):
+        """Read split on spaces and quoted, these came back as names that match nothing, and
+        the refusal called the trunk red over files that differ from it."""
+        self.write("tests/test café.py", "def test_a():\n    assert True\n")
+        self.write("tests/test_naïve.py", "def test_a():\n    assert True\n")
+        self.commit("names git quotes")
+        git(["branch", "-f", "origin/main", "HEAD"], self.repo)
+        self.write("tests/test café.py", "def test_a():\n    assert False\n")
+        self.write("tests/test_naïve.py", "def test_a():\n    assert False\n")
+        self.commit("this tree's own edits to them")
+
+        said = evidence.not_this_trees_code(
+            self.ctx(), ["tests/test café.py", "tests/test_naïve.py"], ["src/mine.py"])
+        self.assertNotIn("identical to", said)
+
 
 class TestAFailingRunsOutputIsReadSafely(RepoCase):
     """The files a failure is about are read out of text the gated project printed."""
