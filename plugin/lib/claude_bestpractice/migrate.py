@@ -1269,6 +1269,37 @@ def _drop_the_shared_verification_token(ctx: GitContext) -> str:
     return "dropped the verification token every worktree shared; each run now has its own"
 
 
+def _scrub_what_was_captured_with_a_secret_in_it(ctx: GitContext) -> str:
+    """Signals and checkpoints written before the redaction knew every shape of a secret.
+
+    Both are text this plugin captured and scrubbed on its way to disk, and the scrub let
+    through a private key's body and END line, a URL password with no user in front of it,
+    and a credential an HTTP header carries by name. A batch of ingested signals kept a
+    production Redis password and an API key that way, in files that sit untracked in the
+    tree. Nothing but that captured text is in either kind of file, so the same pass is run
+    over them again; one that is already clean is left as it was.
+    """
+    from . import redact
+
+    rewritten = 0
+    for tree in _trees_of(ctx):
+        for folder in (tree / ".claude" / "signals", tree / store.TIER_A_DIRNAME / "checkpoints"):
+            for path in sorted(folder.glob("*.md")) if folder.is_dir() else []:
+                # A link is not a file this plugin wrote, whatever it is named.
+                if path.is_symlink():
+                    continue
+                try:
+                    text = path.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    continue
+                cleaned = redact.scrub(text)
+                if cleaned != text:
+                    store.atomic_write(path, cleaned, mode=0o644)
+                    rewritten += 1
+    return (f"took a credential the old redaction missed out of {rewritten} signal or "
+            "checkpoint file(s)") if rewritten else ""
+
+
 _REPAIRS = {
     "0001-task-paths": (1, _backfill_task_paths),
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
@@ -1301,6 +1332,7 @@ _REPAIRS = {
     "0028-drop-the-shared-verification-token": (1, _drop_the_shared_verification_token),
     "0029-unstamp-greens-a-changed-tracked-file-could-hide":
         (1, _unstamp_greens_a_changed_tracked_file_could_hide),
+    "0030-scrub-captured-secrets": (1, _scrub_what_was_captured_with_a_secret_in_it),
 }
 
 

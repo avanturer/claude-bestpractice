@@ -1571,3 +1571,39 @@ class TestTheSharedVerificationTokenIsTakenAway(RepoCase):
         changed = migrate.repair(self.ctx())
         self.assertFalse(path.exists())
         self.assertTrue([line for line in changed if "verification token" in line])
+
+
+class TestASecretTheOldRedactionMissedIsTakenOut(RepoCase):
+    """A batch of ingested signals kept a production Redis password and an API key, and a
+    captured turn could keep a private key's body: the redaction knew none of those shapes.
+    The fix changes what is written next; this is what had already been written."""
+
+    def signal_and_checkpoint(self):
+        signal = self.write(".claude/signals/redis1.md", (
+            "```text\nmessage: Error 111 connecting to "
+            "redis://:Prod-R3dis-Passw0rd-2026@redis-master:6379/0\n"
+            "X-Api-Key: 9f8e7d6c5b4a39281706f5e4d3c2b1a0\n```\n"))
+        checkpoint = store.tier_a(self.ctx(), "checkpoints", "20260901-000000-s1.md")
+        checkpoint.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint.write_text(
+            "## Recent turns\n\n- -----BEGIN RSA PRIVATE KEY-----\n"
+            "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun\n"
+            "-----END RSA PRIVATE KEY-----\n", encoding="utf-8")
+        return signal, checkpoint
+
+    def test_the_next_session_start_takes_it_out_and_says_so(self):
+        signal, checkpoint = self.signal_and_checkpoint()
+        proc = self.run_hook("session-start", {
+            "session_id": "s1", "hook_event_name": "SessionStart", "source": "startup"})
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        for secret in ("Prod-R3dis-Passw0rd-2026", "9f8e7d6c5b4a3928"):
+            self.assertNotIn(secret, signal.read_text(encoding="utf-8"))
+        self.assertNotIn("MIIEowIBAAKCAQEAu1SU1Lf", checkpoint.read_text(encoding="utf-8"))
+        self.assertIn("redis-master", signal.read_text(encoding="utf-8"), "only the secret goes")
+        self.assertIn("signal or checkpoint", proc.stdout, "a repair that rewrites files says so")
+
+    def test_a_clean_file_is_not_touched(self):
+        clean = self.write(".claude/signals/clean.md", "```text\nmessage: KeyError 'rate'\n```\n")
+        before = clean.stat().st_mtime_ns
+        self.assertFalse([line for line in migrate.repair(self.ctx()) if "0018" in line])
+        self.assertEqual(before, clean.stat().st_mtime_ns)
