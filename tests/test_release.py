@@ -545,6 +545,38 @@ class TestWindowsShims(unittest.TestCase):
         for shim in self.BIN.glob("*.cmd"):
             self.assertIn("%~dp0%~n0", shim.read_text(encoding="utf-8"), shim.name)
 
+    # What cmd.exe executes, in order. The launcher is chosen by `where`'s exit code and
+    # nothing else: `where /q py && (py -3 …) || (python …)` runs the `||` branch whenever
+    # anything before it fails — `py -3` included — so a gate that refused by exiting 2 ran
+    # a second time through `python`, with its stdin already read.
+    EXECUTED = [
+        "setlocal",
+        "where /q py",
+        "if %ERRORLEVEL% EQU 0 (",
+        'py -3 "%~dp0%~n0" %*',
+        ") else (",
+        'python "%~dp0%~n0" %*',
+        ")",
+        "exit /b %ERRORLEVEL%",
+    ]
+
+    def test_a_script_that_fails_is_never_run_a_second_time(self):
+        for shim in self.BIN.glob("*.cmd"):
+            lines = [line.strip() for line in shim.read_text(encoding="utf-8").splitlines()]
+            executed = [line for line in lines
+                        if line and not line.lower().startswith(("rem", "@echo off"))]
+            with self.subTest(shim=shim.name):
+                self.assertEqual(self.EXECUTED, executed)
+
+    def test_no_remark_carries_a_percent_sign_cmd_would_expand(self):
+        """cmd.exe expands `%` before it recognises a remark, and a malformed `%~` in a
+        comment aborts the batch before it runs anything."""
+        for shim in self.BIN.glob("*.cmd"):
+            remarks = [line for line in shim.read_text(encoding="utf-8").splitlines()
+                       if line.lower().startswith("rem")]
+            with self.subTest(shim=shim.name):
+                self.assertEqual([], [r for r in remarks if "%" in r.replace("%~n0", "")])
+
 
 class TestThisRepositoryRunsUnderItsOwnPlugin(unittest.TestCase):
     """The gates were never applied to the work that writes them.
