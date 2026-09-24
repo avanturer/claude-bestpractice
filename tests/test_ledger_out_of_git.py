@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import unittest
 
-from helpers import RepoCase, git, sid
+from helpers import RepoCase, add_origin, git, sid
 
 from claude_bestpractice import evidence, migrate, plan, store, worktree
 
@@ -274,6 +274,159 @@ class TestATreeBehindTheTrunkSaysSo(RepoCase):
         self.write("src/app.py", "x = 1\n")
         self.commit("first")
         self.assertEqual("", evidence.behind_the_trunk(self.ctx()))
+
+
+class TestAPullThatTookTheCardsGivesThemBack(RepoCase):
+    """To git, taking the ledger out of the index is deleting it. A clone that still tracked
+    its cards and pulled that commit lost every one of them from its disk: this repository's
+    own v1.69.0 did it to 81 cards, and its founder was asked to untrack them by hand first.
+    The next session start writes them back from history, whatever order things happened in,
+    and only where git took them: no clone is handed cards it never lost."""
+
+    def cards_in_git(self, *titles: str) -> list:
+        cards = [plan.add(self.ctx(), title, paths=["src/app.py"], done_when="stated")
+                 for title in titles]
+        git(["add", "-f", LEDGER], self.repo)
+        self.commit("the ledger in git, as this repository had it")
+        return cards
+
+    def origin(self):
+        if not git(["remote"], self.repo).strip():
+            add_origin(self.repo, self.tmp)
+        return self.tmp / "origin.git"
+
+    def a_clone(self):
+        clone = self.tmp / "clone"
+        git(["clone", "-q", str(self.origin()), str(clone)], self.tmp)
+        return clone
+
+    def untrack_upstream(self):
+        self.origin()
+        git(["rm", "-r", "-q", "--cached", LEDGER], self.repo)
+        git(["commit", "-qm", "take the ledger out of git"], self.repo)
+        git(["push", "-q", "origin", "main"], self.repo)
+
+    def a_clone_that_pulls_the_untracking(self):
+        clone = self.a_clone()
+        self.untrack_upstream()
+        git(["pull", "-q", "--ff-only"], clone)
+        return clone
+
+    def start(self, tree):
+        proc = self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart",
+                                               "source": "startup"}, cwd=tree)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        return proc
+
+    def test_the_next_session_start_writes_them_back(self):
+        cards = self.cards_in_git("parse the csv", "cover it with a test")
+        clone = self.a_clone_that_pulls_the_untracking()
+        lost = [clone / card.path.relative_to(self.repo) for card in cards]
+        self.assertFalse(any(path.exists() for path in lost), "precondition: the pull took them")
+
+        proc = self.start(clone)
+
+        for card, path in zip(cards, lost):
+            self.assertEqual(card.path.read_bytes(), path.read_bytes(), path.name)
+        self.assertEqual("", git(["status", "--porcelain"], clone).strip(), "not hidden from git")
+        self.assertEqual("", git(["ls-files", LEDGER], clone).strip(), "put back into git")
+        self.assertIn("2 ledger card(s)", proc.stdout)
+
+    def test_a_card_that_moved_since_is_not_written_twice(self):
+        first, second = self.cards_in_git("parse the csv", "cover it with a test")
+        clone = self.a_clone_that_pulls_the_untracking()
+        moved = clone / LEDGER / plan.DONE / first.path.name
+        moved.parent.mkdir(parents=True, exist_ok=True)
+        moved.write_bytes(first.path.read_bytes())
+
+        self.start(clone)
+
+        self.assertFalse((clone / first.path.relative_to(self.repo)).exists(), "written twice")
+        self.assertTrue((clone / second.path.relative_to(self.repo)).exists())
+
+    def test_two_cards_that_share_an_id_both_come_back(self):
+        """Two sessions in two trees once took the same id, and this repository's history
+        holds both cards 0060. Each is a card of its own, so neither stands for the other."""
+        (first,) = self.cards_in_git("parse the csv")
+        twin = first.path.with_name(f"{first.id}-another-card-under-that-id.md")
+        twin.write_bytes(first.path.read_bytes().replace(b"parse the csv", b"another card"))
+        git(["add", "-f", LEDGER], self.repo)
+        self.commit("a second card under the same id")
+        clone = self.a_clone_that_pulls_the_untracking()
+
+        self.start(clone)
+
+        for card in (first.path, twin):
+            self.assertEqual(card.read_bytes(), (clone / card.relative_to(self.repo)).read_bytes(),
+                             card.name)
+
+    def test_a_card_deleted_while_the_ledger_was_in_git_stays_deleted(self):
+        """Only a commit that leaves no card tracked took the ledger out. One card removed
+        on its own, with the rest still in git, was removed on purpose."""
+        kept, gone = self.cards_in_git("parse the csv", "an idea nobody wants")
+        clone = self.a_clone()
+        git(["rm", "-q", str(gone.path.relative_to(self.repo))], self.repo)
+        self.commit("drop a card")
+        self.untrack_upstream()
+        git(["pull", "-q", "--ff-only"], clone)
+
+        self.start(clone)
+
+        self.assertTrue((clone / kept.path.relative_to(self.repo)).exists())
+        self.assertFalse((clone / gone.path.relative_to(self.repo)).exists(), "brought back")
+
+    def test_a_clone_made_after_the_untracking_is_handed_no_ledger(self):
+        """The ledger is per clone (decision 0018). A clone made after the cards left git never
+        held them, and history's copy is a snapshot other clones have long moved past."""
+        self.cards_in_git("parse the csv", "cover it with a test")
+        self.untrack_upstream()
+        fresh = self.a_clone()
+
+        proc = self.start(fresh)
+
+        self.assertEqual([], list((fresh / LEDGER).glob("*/*.md")))
+        self.assertNotIn("ledger card(s)", proc.stdout)
+
+    def test_a_clone_that_pulled_the_cards_in_and_out_at_once_is_handed_none(self):
+        """Behind since before any card was committed, it never held one: the pull that
+        brought the cards in took them out again."""
+        clone = self.a_clone()
+        self.cards_in_git("parse the csv", "cover it with a test")
+        self.untrack_upstream()
+        git(["pull", "-q", "--ff-only"], clone)
+
+        self.start(clone)
+
+        self.assertEqual([], list((clone / LEDGER).glob("*/*.md")))
+
+    def test_a_pull_past_a_card_put_back_into_git_still_brings_the_rest_back(self):
+        """One card went back into git after the ledger left it. The pull that crossed both
+        wrote that one out and still took every other card off the disk."""
+        again, other = self.cards_in_git("parse the csv", "cover it with a test")
+        clone = self.a_clone()
+        self.untrack_upstream()
+        git(["add", "-f", str(again.path.relative_to(self.repo))], self.repo)
+        git(["commit", "-qm", "one card back into git"], self.repo)
+        git(["push", "-q", "origin", "main"], self.repo)
+        git(["pull", "-q", "--ff-only"], clone)
+
+        self.start(clone)
+
+        for card in (again, other):
+            self.assertEqual(card.path.read_bytes(),
+                             (clone / card.path.relative_to(self.repo)).read_bytes(), card.path.name)
+
+    def test_the_clone_that_untracked_the_ledger_keeps_a_card_deleted_since(self):
+        """A commit writes nothing out, so the clone that committed the untracking kept every
+        card on its disk. One deleted there afterwards was deleted by hand."""
+        kept, gone = self.cards_in_git("parse the csv", "an idea nobody wants")
+        git(["rm", "-r", "-q", "--cached", LEDGER], self.repo)
+        git(["commit", "-qm", "take the ledger out of git"], self.repo)
+        gone.path.unlink()
+
+        self.assertEqual("", migrate._restore_cards_a_pull_took(self.ctx()))
+        self.assertFalse(gone.path.exists(), "brought back")
+        self.assertTrue(kept.path.exists())
 
 
 if __name__ == "__main__":
