@@ -172,6 +172,40 @@ class TestATildeIsTheHomeDirectory(HookCase):
         self.assertEqual("#!/bin/sh\necho mine\n", theirs.read_text())
 
 
+class TestAGitThatCannotSayWhereASettingCameFrom(HookCase):
+    """`--show-scope` arrived in git 2.26. Older ones reject it, and a hooks path read as
+    unset there would put the hook where git never looks, beside husky's directory."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        real = subprocess.run(["sh", "-c", "command -v git"], capture_output=True,
+                              text=True, check=True).stdout.strip()
+        old = self.tmp / "old-git"
+        old.mkdir()
+        (old / "git").write_text(
+            "#!/bin/sh\nfor arg in \"$@\"; do\n  [ \"$arg\" = --show-scope ] && "
+            "{ echo \"error: unknown option \\`show-scope'\" >&2; exit 129; }\ndone\n"
+            f'exec "{real}" "$@"\n')
+        (old / "git").chmod(0o755)
+        patcher = mock.patch.dict(os.environ, {"PATH": f"{old}{os.pathsep}{os.environ['PATH']}"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_this_repositorys_own_hooks_directory_is_still_honoured(self):
+        from claude_bestpractice import ci
+
+        git(["config", "core.hooksPath", ".husky/_"], self.repo)
+        self.assertEqual(self.repo / ".husky" / "_", ci.hooks_dir(self.ctx()))
+        self.assertEqual("", ci.shared_hooks(self.ctx()))
+
+    def test_one_every_repository_reads_is_still_not_written_in(self):
+        from claude_bestpractice import ci
+
+        (self.home / ".gitconfig").write_text(f"[core]\n\thooksPath = {self.home / 'hooks'}\n")
+        self.assertEqual("global", ci.shared_hooks(self.ctx()))
+        self.assertFalse(ci.install(self.ctx())[0])
+
+
 class TestSessionsThatArmTheGateTogether(HookCase):
     """Three to eight sessions start at once, and each one arms the gate.
 

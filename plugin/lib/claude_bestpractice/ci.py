@@ -478,12 +478,36 @@ def _hooks_setting(ctx: GitContext) -> tuple[str, str]:
     plain `--get` does not: `~/.githooks` put the hook in a directory literally named `~`
     inside the repository, which git never reads and `git status` then listed as untracked.
     """
-    proc = subprocess.run(
-        ["git", "config", "--show-scope", "--type=path", "--get", "core.hooksPath"],
-        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=30,
-    )
+    proc = _read_hooks_path(ctx, "--show-scope", "--type=path")
+    if proc.returncode == _UNKNOWN_OPTION:
+        return _hooks_setting_scope_by_scope(ctx)
     scope, _, value = proc.stdout.rstrip("\n").partition("\t")
     return (scope, value) if proc.returncode == 0 and value else ("", "")
+
+
+# What git exits with for an option it does not know. `--show-scope` arrived in 2.26.
+_UNKNOWN_OPTION = 129
+
+
+def _hooks_setting_scope_by_scope(ctx: GitContext) -> tuple[str, str]:
+    """The same answer from a git older than 2.26, which cannot say where a value came from.
+
+    Treated as unset, a hooks directory this repository's own config names — husky's —
+    would be passed over for one git never reads. So this repository's config is asked
+    first, and a value only some other config holds is not this repository's to write in.
+    """
+    own = _read_hooks_path(ctx, "--local", "--path").stdout.strip()
+    if own:
+        return "local", own
+    other = _read_hooks_path(ctx, "--path").stdout.strip()
+    return ("global", other) if other else ("", "")
+
+
+def _read_hooks_path(ctx: GitContext, *flags: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", "config", *flags, "--get", "core.hooksPath"],
+        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=30,
+    )
 
 
 def hooks_dir(ctx: GitContext) -> Path:
