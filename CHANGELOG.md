@@ -1,5 +1,34 @@
 # Changelog
 
+## v1.69.1
+
+A pull no longer costs a clone its ledger.
+
+v1.69.0 took this repository's 81 cards out of git, and to git that is deleting them. A clone
+that still tracked them and pulled lost every card from its disk, so the release asked the
+founder to untrack them by hand first. Every session start since v1.69.0 untracks them too,
+but only a pull that came after one was safe.
+
+`0032-restore-cards-a-pull-took` runs on the next session start. A commit that took the ledger
+out of git is one that leaves no card tracked at all. Where git carried the checkout across
+such a commit, every card it removed that is missing from every state is written back from
+the commit before, hidden from git like every other card. A card that moved since is already
+on the disk and is not written twice. A card deleted on its own while the ledger was still in
+git stays deleted. The order of pull and session start no longer matters, and nothing has to
+be run by hand.
+
+Only a checkout git carried across gets anything back: HEAD moved over the untracking by
+anything but a commit, as HEAD's reflog records it. A clone made after the untracking never
+held the cards and is handed none, since a copy from history is a snapshot the other clones
+have long moved past. The clone that committed the untracking kept its cards on its disk, so
+a card deleted there by hand since stays deleted.
+
+A card is known by its file name, which never changes, and not by its id, which is not
+unique: two sessions once took 0060 in two trees. Replaying this repository's own pull on a
+clone of v1.68.0 writes back all 81 cards byte for byte, both cards 0060 included. A clone
+made at v1.69.0 gets none.
+
+
 ## v1.69.0
 
 What running the plugin for real found: real Claude Code sessions on real repositories, then

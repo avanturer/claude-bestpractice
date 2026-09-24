@@ -1314,6 +1314,133 @@ def _quote_the_status_line(_ctx: GitContext) -> str:
     return f"quoted the path of the status line, which a space in it split: {quoted}" if quoted else ""
 
 
+_CARD_NAME = re.compile(r"^\d{4,}-[^/]*\.md$")
+# HEAD's reflog subject for a commit, which records the disk as it is. Every other move of HEAD
+# (pull, merge, checkout, reset, rebase, and the commit that concludes a merge) may write out
+# the tree it moves to.
+_A_COMMIT = re.compile(r"^commit(?: \((?:amend|initial)\))?: ")
+
+
+def _restore_cards_a_pull_took(ctx: GitContext) -> str:
+    """Cards git deleted from the disk when a pull brought in the commit that untracked them.
+
+    To git, taking the ledger out of the index is deleting it, so a clone that still tracks
+    its cards and pulls that commit has every one of them removed from its disk. This
+    repository's own v1.69.0 untracked its 81 cards and asked the founder to untrack them by
+    hand before pulling. Every session start has done that since v1.69.0, but only a pull
+    after one was safe. Where git carried this checkout across such a commit, each card it
+    took that is missing from every state is written back from the commit before, hidden
+    from git like every other card, so the order stops mattering. A card that moved since is
+    on the disk already and is never written twice.
+    """
+    from . import plan, worktree
+
+    main = worktree.main_checkout(ctx)
+    lost = _cards_the_ledger_lost(main, _untrackings_this_checkout_crossed(main),
+                                  _card_names(plan.plan_dir(ctx)))
+    if not lost:
+        return ""
+    worktree.hide(ctx)
+    restored = 0
+    for commit, rel in lost:
+        body = _git_bytes(main, ["show", f"{commit}^:{rel}"])
+        target = main / rel
+        if body is None or target.exists():
+            continue
+        store.ensure_dir(target.parent)
+        store.atomic_write(target, body, mode=0o644)
+        restored += 1
+    return f"{restored} ledger card(s) a pull took off the disk written back from git's history" if restored else ""
+
+
+def _untrackings_this_checkout_crossed(main: Path) -> list[str]:
+    """Each commit that took the ledger out of git and was crossed here, newest first.
+
+    Such a commit removes cards and leaves none tracked; a card deleted on its own while the
+    ledger was still in git was deleted on purpose. Crossing one is what takes the cards off
+    a disk: HEAD moves over it from a commit that tracks the ledger, by any move but a
+    commit, and git rewrites the ledger to match. HEAD's reflog is the only record git keeps
+    of such a move.
+
+    A clone made after the untracking never held the cards, and the clone that committed the
+    untracking kept every card on its disk. Neither crossed it, so neither is handed cards it
+    never lost, and a card deleted there by hand since stays deleted.
+    """
+    log = [line.split("\t", 1)
+           for line in _git_out(main, ["reflog", "show", "--format=%H%x09%gs", "HEAD"]).splitlines()
+           if "\t" in line]
+    ledgers = _ledgers_in_git(main, [head for head, _ in log])
+    carried: set[str] = set()
+    for (new, how), (old, _) in zip(log, log[1:]):
+        if old in ledgers and ledgers.get(new) != ledgers[old] and not _A_COMMIT.match(how):
+            carried.update(_git_out(main, ["rev-list", new, f"^{old}"]).split())
+    if not carried:
+        return []
+    removals = _git_out(main, ["log", "--no-renames", "--diff-filter=D", "--format=%H", "--",
+                               _LEDGER_PATH]).split()
+    return [commit for commit in removals
+            if commit in carried
+            and not _git_out(main, ["ls-tree", "-r", "--name-only", commit, "--", _LEDGER_PATH]).strip()]
+
+
+def _ledgers_in_git(main: Path, commits: list[str]) -> dict[str, str]:
+    """The ledger's tree in each of these commits that tracks one, in one git call however long
+    HEAD's reflog has grown. Empty on any failure, which reads as nothing crossed."""
+    unique = list(dict.fromkeys(commits))
+    if not unique:
+        return {}
+    try:
+        done = subprocess.run(
+            ["git", "cat-file", "--batch-check"], cwd=str(main), capture_output=True,
+            input="".join(f"{commit}:{_LEDGER_PATH}\n" for commit in unique),
+            encoding="utf-8", errors="surrogateescape", timeout=60,
+        )
+    except OSError:
+        return {}
+    if done.returncode != 0:
+        return {}
+    answers = map(str.split, done.stdout.splitlines())
+    return {commit: fields[0] for commit, fields in zip(unique, answers) if fields[1:2] == ["tree"]}
+
+
+def _card_names(base: Path) -> set[str]:
+    """The file name of every card on the disk, whichever state it is in.
+
+    The name and not the id, because a card keeps its name for life (a transition moves the
+    file and an amendment rewrites it in place) while an id is not unique: two sessions in
+    two trees once took the same one, and this repository's history holds both cards 0060.
+    """
+    return {card.name for card in base.glob("*/*.md") if _CARD_NAME.match(card.name)}
+
+
+def _cards_the_ledger_lost(main: Path, untrackings: list[str],
+                           present: set[str]) -> list[tuple[str, str]]:
+    """(commit, path) for each card one of these commits removed that is not on the disk.
+
+    The newest removal of each card wins, since it carries the last version git had.
+    """
+    lost: list[tuple[str, str]] = []
+    seen = set(present)
+    for commit in untrackings:
+        names = _git_out(main, ["diff-tree", "-r", "-z", "--diff-filter=D", "--name-only",
+                                f"{commit}^", commit, "--", _LEDGER_PATH])
+        for rel in filter(None, names.split("\0")):
+            name = PurePosixPath(rel).name
+            if _CARD_NAME.match(name) and name not in seen:
+                seen.add(name)
+                lost.append((commit, rel))
+    return lost
+
+
+def _git_bytes(tree: Path, args: list[str]) -> bytes | None:
+    """One read-only git call whose output is kept byte for byte. None on any failure."""
+    try:
+        done = subprocess.run(["git", *args], cwd=str(tree), capture_output=True, timeout=60)
+    except OSError:
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
 _REPAIRS = {
     "0001-task-paths": (1, _backfill_task_paths),
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
@@ -1348,6 +1475,7 @@ _REPAIRS = {
         (1, _unstamp_greens_a_changed_tracked_file_could_hide),
     "0030-scrub-captured-secrets": (1, _scrub_what_was_captured_with_a_secret_in_it),
     "0031-quote-the-status-line": (1, _quote_the_status_line),
+    "0032-restore-cards-a-pull-took": (1, _restore_cards_a_pull_took),
 }
 
 
