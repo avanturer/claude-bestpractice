@@ -13,6 +13,7 @@ going quietly dead.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import socket
@@ -85,7 +86,14 @@ class Listener:
             time.sleep(0.02)
 
     def close(self) -> None:
+        # Shut down and joined, not only closed. A thread blocked in `accept` outlives a
+        # plain close, and once the next test's socket is handed the same descriptor number
+        # it accepts THAT test's connections into this listener — a frame the later test
+        # sent and never saw arrive, which read as a delivery the code had not made.
+        with contextlib.suppress(OSError):
+            self.server.shutdown(socket.SHUT_RDWR)
         self.server.close()
+        self.thread.join(timeout=5)
 
 
 class TestTheWire(unittest.TestCase):
