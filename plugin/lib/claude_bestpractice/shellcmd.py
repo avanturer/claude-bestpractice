@@ -23,7 +23,9 @@ import shlex
 # The operators bash uses to end one command and start another. `shlex` with
 # `punctuation_chars` emits these as their own tokens, and — the part that matters —
 # leaves them inside a token when they are quoted, so `echo 'a && b'` stays one command.
-_SEPARATORS = {"&&", "||", ";", "|", "|&", "&", "\n", ";;", ";&", ";;&",
+# A newline is the other one, and `shlex` reads it as a space: `_one_line` turns each that
+# ends a command into the `;` it is before this ever sees a token.
+_SEPARATORS = {"&&", "||", ";", "|", "|&", "&", ";;", ";&", ";;&",
               "(", ")", "<(", ">(", "`"}
 
 # The subset that bash requires a command on BOTH sides of. A line ending on one of these —
@@ -135,19 +137,97 @@ def _parsed(line: str) -> tuple[tuple[str, ...], ...]:
 
 
 def _tokens(line: str) -> list[str]:
+    text = _one_line(line)
     try:
-        return _lexed(_Lexer, line)
+        return _lexed(_Lexer, text)
     except (TypeError, AttributeError):
         # A Python whose `shlex` builds its token in a way `_Token` does not answer for: the
         # stock lexer reads the line exactly the same, only in quadratic time.
-        return _lexed(shlex.shlex, line)
+        return _lexed(shlex.shlex, text)
 
 
 def _lexed(lexer_class: type, line: str) -> list[str]:
     # The backtick is added to the default `();<>|&` so an unquoted one is its own token.
     lexer = lexer_class(line, posix=True, punctuation_chars="();<>|&`")
     lexer.whitespace_split = True
+    # Comments are `_one_line`'s. `shlex` starts one at a `#` in the MIDDLE of a word, where
+    # bash does not, and reads to the end of the line: `echo a#b && rm -rf src` came back
+    # as `echo a` alone, a read the vouch approved with the deletion riding along.
+    lexer.commenters = ""
     return list(lexer)
+
+
+# A line cut into the pieces that decide where a command ends: a quoted span, where a
+# newline is data; a backslash escape, where a newline joins two lines into one; a heredoc
+# operator, after which the next lines are a document and not commands; a comment, which
+# starts only where a word could; a newline; and everything else.
+_PIECE = re.compile(
+    r"""(?P<quoted>'[^']*'?|"(?:\\.|[^"\\])*"?)"""
+    r"""|(?P<escape>\\.?)"""
+    r"""|(?P<heredoc><<-?[ \t]*(?:'[^'\n]*'|"[^"\n]*"|\\?[^\s;&|<>()'"]+))"""
+    r"""|(?P<comment>(?<![^\s;&|()<>])#[^\n]*)"""
+    r"""|(?P<newline>\n)"""
+    r"""|(?P<plain><<<|[^'"\\<#\n]+|[<#])""",
+    re.S,
+)
+
+# A newline after one of these continues the command instead of ending it.
+_CONTINUED = ("&&", "||", "|", "|&")
+
+
+def _one_line(line: str) -> str:
+    """`line` with each newline that ends a command spelled as the `;` it is, and each
+    heredoc's document taken out.
+
+    `shlex` reads a newline as a space, so every command on a later line became arguments
+    of the first: `git log --oneline` + newline + `curl -X POST https://… -d @.env` was
+    vouched for as a read of the log, `git status` + newline + `rm -rf src` as a status,
+    and `git add -A` on its own line was never seen by the rule about staging everything.
+    A heredoc's lines stay out of it the other way: they are what a command reads, and a
+    script being written that contains `git add -A` is not the session staging anything.
+    """
+    out: list[str] = []
+    documents: list[str] = []
+    last = ""
+    at = 0
+    while at < len(line):
+        piece = _PIECE.match(line, at)
+        at = piece.end()
+        text = _spoken(piece)
+        if piece.lastgroup == "newline":
+            text = " " if last.endswith(_CONTINUED) else " ; "
+            at = _past_documents(line, at, documents)
+            documents = []
+        elif piece.lastgroup == "heredoc":
+            documents.append(_delimiter(text))
+        out.append(text)
+        last = text.rstrip() or last
+    return "".join(out)
+
+
+def _spoken(piece: re.Match) -> str:
+    """One piece as `shlex` should read it: a comment and a `\\`-newline gone, and an escaped
+    character quoted instead — so a `|` left at the end of the text is always the operator,
+    never the `\\|` that is a character of a word."""
+    text = piece.group()
+    if piece.lastgroup == "comment" or text == "\\\n":
+        return ""
+    if piece.lastgroup == "escape" and len(text) == 2:
+        return "\"'\"" if text[1] == "'" else f"'{text[1]}'"
+    return text
+
+
+def _delimiter(heredoc: str) -> str:
+    """`<<-'EOF'` → `EOF`, the line that ends the document."""
+    return heredoc.lstrip("<").lstrip("-").strip().strip("'\"").lstrip("\\")
+
+
+def _past_documents(line: str, at: int, documents: list[str]) -> int:
+    """Where the commands resume after the heredoc documents that start at `at`."""
+    for delimiter in documents:
+        end = re.compile(rf"^[ \t]*{re.escape(delimiter)}[ \t]*$", re.M).search(line, at)
+        at = end.end() + 1 if end else len(line)
+    return at
 
 
 class _Token:
