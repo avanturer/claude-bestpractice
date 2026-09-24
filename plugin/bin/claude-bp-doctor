@@ -214,6 +214,10 @@ def check_hooks_wiring() -> Result:
     at something absent, misnamed, or not marked executable. It fails silently: the
     harness logs and continues, and the gate simply never runs. Three shipped plugins
     found during research fail exactly here while their internal logic is fine.
+
+    Read the way sh reads it, from an install path with a space in it. Unquoted, the
+    placeholder split there and every gate exited 127, which blocks nothing; this check
+    read the last path segment and passed it.
     """
     import re
 
@@ -238,7 +242,16 @@ def check_hooks_wiring() -> Result:
                     problems.append(f"{event}: http handlers fail OPEN — never use for a gate")
                     continue
                 command = handler.get("command", "")
-                name = command.rsplit("/", 1)[-1]
+                spaced = "/an install path"
+                try:
+                    words = shlex.split(command.replace("${CLAUDE_PLUGIN_ROOT}", spaced))
+                except ValueError:
+                    words = []
+                if len(words) != 1 or not words[0].startswith(f"{spaced}/bin/"):
+                    problems.append(f"{event}: {command} does not survive a space in the "
+                                    "install path; quote the placeholder")
+                    continue
+                name = words[0].rsplit("/", 1)[-1]
                 target = BIN / name
                 if not target.exists():
                     problems.append(f"{event}: {name} does not exist")

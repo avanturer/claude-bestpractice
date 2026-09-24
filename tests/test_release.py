@@ -11,9 +11,12 @@ part no test exercises.
 from __future__ import annotations
 
 import json
+import os
 import re
+import shlex
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -261,6 +264,46 @@ class TestInstallPath(unittest.TestCase):
         self.assertIn(plugin["license"], text.replace(" License", ""))
         self.assertNotIn("[year]", text, "LICENSE still has a placeholder")
         self.assertNotIn("[fullname]", text, "LICENSE still has a placeholder")
+
+
+class TestTheGatesRunFromAnyInstallPath(unittest.TestCase):
+    """The harness hands each hook command to sh with `${CLAUDE_PLUGIN_ROOT}` in it.
+
+    Unquoted, an install path holding a space split the command in two. Measured on Claude
+    Code 2.1.281 with the plugin loaded from such a path: SessionStart, UserPromptSubmit and
+    Stop each exited 127 with `sh: …/space: not found`, which blocks nothing, so the session
+    ran with no gate at all and nothing said so. The CLI's own `claude plugin validate
+    --strict` refuses the manifest for the same reason.
+    """
+
+    ROOT = "/Users/Jane Doe/.claude/plugins/cache/claude-bestpractice"
+
+    def commands(self) -> list[tuple[str, str]]:
+        hooks = json.loads((BIN.parent / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+        return [(event, handler["command"])
+                for event, groups in hooks["hooks"].items()
+                for group in groups for handler in group["hooks"]]
+
+    def test_each_command_is_one_word_to_the_shell(self) -> None:
+        for event, command in self.commands():
+            with self.subTest(event=event):
+                words = shlex.split(command.replace("${CLAUDE_PLUGIN_ROOT}", self.ROOT))
+                self.assertEqual(1, len(words), command)
+                self.assertTrue(words[0].startswith(f"{self.ROOT}/bin/"), command)
+
+    def test_a_gate_runs_through_sh_from_such_a_path(self) -> None:
+        """With the root exported the way the harness exports it, and sh doing the rest."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "with a space"
+            root.symlink_to(BIN.parent, target_is_directory=True)
+            outside = Path(tmp) / "not a repository"
+            outside.mkdir()
+            proc = subprocess.run(
+                ["sh", "-c", dict(self.commands())["PermissionDenied"]],
+                input="{}", capture_output=True, text=True, cwd=str(outside), timeout=60,
+                env={**os.environ, "CLAUDE_PLUGIN_ROOT": str(root)},
+            )
+            self.assertEqual(0, proc.returncode, proc.stderr)
 
 
 class TestTranslationsStayInStep(unittest.TestCase):
