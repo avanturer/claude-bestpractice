@@ -430,7 +430,7 @@ def trust(path: str) -> bool:
 
     Under a lock, with the file re-read inside it, because trees are made several at once —
     parallel isolation agents, two sessions refused in the same second — and each of them
-    wrote back the file it had read: of four trusted together, one survived, and three
+    wrote back the file it had read: of six trusted at one instant, one survived, and five
     trees ran with their hooks switched off. Only this one key is changed; everything else
     is written back exactly as it was read under the lock.
     """
@@ -1154,7 +1154,11 @@ def _release(ctx: GitContext, tree: tuple, record_path: Path, notes: list[str] |
     if gone.returncode != 0:
         return False
 
-    if branch and not _delete_branch(where, branch, _trunk_of(where)) and kept is not None:
+    # Never the trunk under any of its names, as for the sweep: a tree a session had
+    # switched to `main` is no licence to delete the clone's own `main`.
+    trunk = _trunk_of(where)
+    if _sweepable(branch, set(), trunk) and not _delete_branch(where, branch, trunk) \
+            and kept is not None:
         kept.append(branch)
     if record_path.name:
         with contextlib.suppress(OSError):
@@ -1352,10 +1356,15 @@ def release_now(ctx: GitContext, session_id: str, force: bool = False,
     A tree removed over a branch whose work is not in the trunk leaves the branch, named in
     `kept`, which is the only way the caller can say so.
     """
+    from . import gitpolicy
+
     tree = mine(ctx, session_id)
     if tree is None:
         return None
+    # A tree switched onto the trunk has no branch of its own to take with it, and the
+    # clone's `main` is not one to report as taken or as kept.
     branch = _branch_in(tree)
+    branch = "" if branch in gitpolicy.TRUNK_NAMES else branch
     record_path, _body = record_for(ctx, tree)
     notes: list[str] = []
     if _release(ctx, (str(tree), branch), record_path, notes=notes, force=force, kept=kept):

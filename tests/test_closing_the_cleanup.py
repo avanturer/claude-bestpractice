@@ -231,6 +231,20 @@ class TestARemovalAskedForByHand(CleanupCase):
         self.assertNotIn("and so is", said)
         self.assertNotIn("nothing else to clean up", said)
 
+    def test_a_tree_switched_onto_the_trunk_leaves_the_trunk(self):
+        """The clone's own `main` is trivially in the trunk, so a proof by ancestry would
+        have taken it with a tree the session had switched onto it."""
+        tree, _branch = self.a_tree()
+        git(["switch", "-q", "-c", "elsewhere"], self.repo)
+        git(["switch", "-q", "main"], tree)
+        self.a_live_session(tree)
+
+        said = self.hook_reason(self.removing(tree))
+
+        self.assertFalse(tree.is_dir(), "precondition: the tree itself was removable")
+        self.assertIn("main", self.branches().split())
+        self.assertNotIn("so is main", said)
+
     def test_somebody_elses_tree_is_none_of_this(self):
         """The interception is only ever about the tree this session is standing in. Another
         session's tree is the cross-tree rule's business and reaches it unchanged."""
