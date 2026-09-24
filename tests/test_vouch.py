@@ -295,11 +295,17 @@ class TestLeavingTheTreeIsVouchedForToo(RepoCase):
         self.assertEqual("", self.exits(action="remove"))
 
     def test_the_plugins_own_state_is_not_the_founders_unfinished_work(self):
-        """Every session dirties `.claude/` within seconds, and counting it would make the
-        vouch unreachable in the steady state."""
-        (self.repo / ".claude").mkdir(exist_ok=True)
-        (self.repo / ".claude" / "scratch.json").write_text("{}\n")
+        """Every session dirties `.claude/claude-bestpractice/` within seconds, and counting
+        it would make the vouch unreachable in the steady state. The rest of `.claude/` is
+        the founder's — decisions, settings, commands — and leaving a tree loses it."""
+        (self.repo / ".claude" / "claude-bestpractice").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".claude" / "claude-bestpractice" / "scratch.json").write_text("{}\n")
         self.assertEqual(vouch.EXIT, self.exits(action="remove"))
+
+    def test_a_decision_the_founder_has_not_committed_is_left_to_the_permission_layer(self):
+        (self.repo / ".claude" / "rules" / "decisions").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".claude" / "rules" / "decisions" / "0001-keep-it.md").write_text("x\n")
+        self.assertEqual("", self.exits(action="remove"))
 
     def test_discarding_changes_is_never_vouched_for(self):
         self.assertEqual("", self.exits(action="remove", discard_changes=True))
