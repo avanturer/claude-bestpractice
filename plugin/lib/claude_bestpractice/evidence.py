@@ -41,7 +41,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from . import hookio, provenance, redact, store, suites, testcount, witness
+from . import __version__, hookio, provenance, redact, store, suites, testcount, witness
 from .gitctx import GitContext, changed_files
 
 # Consecutive Stop blocks before we stop blocking and leave a durable marker instead.
@@ -724,11 +724,16 @@ def _standing_failure(ctx: GitContext, suite, tree: str) -> Verdict | None:
     the same failure, four full runs, on a branch whose diff did not reach it and which this
     plugin had itself told to report the failure and stop (#206).
 
-    Bounded three ways, so a suite that is red for the environment rather than the code
+    Bounded four ways, so a suite that is red for the environment rather than the code
     cannot be held red by this: a dirty tree hashes to nothing and never matches, the
     record must name this same suite, and past `REASSERT_SECONDS` the suite runs again
     whatever the record says — a database that has since been fixed is then rediscovered
     within the hour rather than never.
+
+    And the record must be this gate's own. "The answer cannot differ" holds for the same
+    tree judged by the same gate, and an upgrade changes the gate: v1.69.2 fixed a run that
+    reported 226 failures over a green suite, and the upgraded gate went on repeating that
+    verdict on the tree it was reached on, word for word, at every Stop (#234).
     """
     entry = red(ctx)
     if not _the_same_run(entry, suite, tree):
@@ -747,7 +752,7 @@ def _standing_failure(ctx: GitContext, suite, tree: str) -> Verdict | None:
 
 def _the_same_run(entry: dict | None, suite, tree: str) -> bool:
     """Is this record the same suite, on the same tree, seen recently enough to stand?"""
-    if not entry or not tree:
+    if not entry or not tree or not _counted_by_this_gate(entry):
         return False
     if str(entry.get("tree_hash") or "") != tree:
         return False
@@ -758,6 +763,18 @@ def _the_same_run(entry: dict | None, suite, tree: str) -> bool:
     except (TypeError, ValueError):
         return False
     return time.time() - seen_at <= REASSERT_SECONDS
+
+
+def _counted_by_this_gate(entry: dict) -> bool:
+    """Whether a record's verdict and counts were reached by the gate that is running now.
+
+    Stamped with the plugin's version, because the version is what an upgrade changes and
+    nothing else in a record does. A session started before an upgrade keeps running the
+    hooks it started with, so an older gate can write a record after the one-shot repair
+    for it has already run; a record with no stamp predates the stamp. Neither is repeated
+    as this gate's verdict, and neither holds its own count against this gate's runs.
+    """
+    return str(entry.get("gate") or "") == __version__
 
 
 def _too_long_to_witness(
@@ -1858,6 +1875,7 @@ def record_red(ctx: GitContext, command: list[str], tail: str, suite=None, tree:
         executed = max(_executed_from_output(tail), 0)
     declared = testcount.count_tree(_root_of(ctx, suite), _skipped(ctx))
     mine = _this_suites_record(previous, suite)
+    counted = int(mine.get("executed") or 0) if _counted_by_this_gate(mine) else 0
     store.write_json(
         path,
         {
@@ -1868,13 +1886,15 @@ def record_red(ctx: GitContext, command: list[str], tail: str, suite=None, tree:
             # on an older record, which reads as the whole repository on an unknown tree.
             "path": "" if suite is None else suite.path,
             "tree_hash": tree,
-            "executed": max(executed, int(mine.get("executed") or 0)),
+            "executed": max(executed, counted),
             # What the TREE declared when it went red, counted by this gate rather
             # than reported by the run. Deleting the failing test to go green has to
             # get past this number, and stdout cannot move it.
             "declared": max(declared, int(mine.get("declared") or 0)),
             "first_seen": mine.get("first_seen", time.time()),
             "last_seen": time.time(),
+            # Which gate reached this verdict: see `_counted_by_this_gate`.
+            "gate": __version__,
             "branch": ctx.branch,
             # WHERE it was seen, and whether that tree's database was its own. Both are
             # read by the board rather than by any gate: the verdict on this turn is
@@ -2041,7 +2061,7 @@ def green_covers_tree(ctx: GitContext, branch: str = "") -> bool:
         # push runs the wide suite anyway — the direction this whole function is allowed to
         # be wrong in is "one more run than strictly needed".
         return False
-    return str(record.get("tree") or "") == here
+    return str(record.get("tree") or "") == here and _counted_by_this_gate(record)
 
 
 def record_green(ctx: GitContext, command: list[str], suite=None) -> bool:
@@ -2080,6 +2100,9 @@ def record_green(ctx: GitContext, command: list[str], suite=None) -> bool:
             # evidence this plugin uses everywhere else, and it fails safe: unreadable
             # means empty means re-run.
             "tree": tree_hash(ctx),
+            # A green another version of this gate reached is not this gate's green, and
+            # the stamp only ever lets a push skip its run (#234).
+            "gate": __version__,
             # WHICH suite passed. A scoped suite passing is a true fact about the files it
             # covers and NOT a licence to skip the repository's own suite before a push:
             # without this field, one green jest run in `mobile/` would have made the
@@ -2206,14 +2229,17 @@ def _covers_the_red_run(ctx: GitContext, entry: dict, executed: int | None) -> b
     `executed` is parsed from the run's own stdout, so the gated party writes both sides
     of it — `@echo '2 passed'` satisfies it for free. It is still worth having, because it
     catches the honest-looking narrowings: a recipe scoped to one file, a filter argument,
-    a directory skipped.
+    a directory skipped. Only against a mark this same gate took, though: an older one
+    counted differently — v1.69.0 counted 4594 over a suite that runs 4384 as configured —
+    and no run of this gate could reach its number (#234).
 
     The declared count is read off the test FILES by this gate. Moving it means writing
     real test declarations, which is a cost this plugin is content to impose on anyone who
     wants a red suite to go quiet. It is what stops "delete the failing test" — the single
     move a blocking Stop gate most incentivises — from being the cheapest way out.
     """
-    if executed is not None and executed < int(entry.get("executed") or 0):
+    reached = int(entry.get("executed") or 0) if _counted_by_this_gate(entry) else 0
+    if executed is not None and executed < reached:
         return False
     was = int(entry.get("declared") or 0)
     # In the subtree the record was written for, or the comparison is between two different

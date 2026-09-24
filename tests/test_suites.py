@@ -405,6 +405,101 @@ class TestAFailureIsNotRediscoveredFourTimes(SuiteCase):
         self.assertTrue(self.verdict().ok)
 
 
+class TestAVerdictIsTheGateVersionsOwn(SuiteCase):
+    """Issue #234. v1.69.2 fixed a run that reported 226 failures over a green suite, and after
+    the upgrade the gate went on repeating the old verdict, word for word, on the tree it was
+    reached on, at every Stop. A session started before an upgrade keeps running the hooks it
+    started with, so an older gate can write its record after the upgrade's one-shot repair
+    has already run. The same tree judged by a different gate is not the same run."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.write("src/app.py", "x = 1\n")
+        self.write("tests/test_app.py", "def test_a():\n    pass\n")
+        self.commit("the app")
+
+    def stamped(self, gate) -> None:
+        """Rewrite the red record as a gate of another version wrote it, or before stamps."""
+        path = evidence.store.tier_a(self.ctx(), "failing-suite.json")
+        record = json.loads(path.read_text())
+        record.pop("gate", None)
+        if gate:
+            record["gate"] = gate
+        evidence.store.write_json(path, record)
+
+    def verdict(self):
+        cfg = self.cfg(test_command=PASSES)
+        plan = suites.for_changes(self.ctx(), cfg, ["src/app.py"])
+        return evidence.verify(self.ctx(), cfg.artifact_globs, ["src/app.py"],
+                               cfg.test_command, plan)
+
+    def test_an_older_gates_failure_on_this_tree_is_run_again(self):
+        for gate in ("1.69.0", None):
+            with self.subTest(gate=gate):
+                evidence.record_red(self.ctx(), list(PASSES), "1 failed, 2 passed", None,
+                                    evidence.tree_hash(self.ctx()))
+                self.stamped(gate)
+                self.assertTrue(self.verdict().ok, "another gate's verdict was repeated")
+
+    def test_this_gates_own_failure_is_still_remembered(self):
+        evidence.record_red(self.ctx(), list(PASSES), "1 failed, 2 passed", None,
+                            evidence.tree_hash(self.ctx()))
+        self.assertFalse(self.verdict().ok)
+
+    def test_an_older_gates_count_does_not_hold_a_passing_run_back(self):
+        """Its mark came from a run that counted differently, 4594 over a suite that runs
+        4384 as configured, so no run of this gate could reach it and the suite stayed red
+        on every board after it passed."""
+        evidence.record_red(self.ctx(), ["pytest"], "24 failed, 4368 passed, 202 errors", None,
+                            evidence.tree_hash(self.ctx()), executed=4594)
+        self.stamped("1.69.0")
+        self.write("src/app.py", "x = 2\n")
+        self.commit("change it")
+        self.assertTrue(self.verdict().ok)
+        self.assertIsNone(evidence.red(self.ctx()), "a passing run left an older gate's red")
+
+    def test_a_failure_this_gate_records_does_not_inherit_an_older_gates_count(self):
+        """Carried over as this gate's own mark, 4594 would come straight back the first time
+        this gate saw the suite red for a reason of its own."""
+        evidence.record_red(self.ctx(), ["pytest"], "24 failed, 4368 passed, 202 errors", None,
+                            evidence.tree_hash(self.ctx()), executed=4594)
+        self.stamped("1.69.0")
+        evidence.record_red(self.ctx(), ["pytest"], "1 failed", None, "", executed=1)
+        self.assertEqual(1, evidence.red(self.ctx())["executed"])
+
+    def an_older_red_then_its_failing_test_deleted(self) -> None:
+        """An older gate saw the suite red with two tests declared, and one of them is gone."""
+        self.write("tests/test_more.py", "def test_b():\n    assert False\n")
+        self.commit("a failing test")
+        evidence.record_red(self.ctx(), ["pytest"], "1 failed, 1 passed", None,
+                            evidence.tree_hash(self.ctx()))
+        self.stamped("1.69.0")
+        (self.repo / "tests/test_more.py").unlink()
+        self.commit("delete the failing test")
+
+    def test_an_older_gates_record_still_holds_the_tests_the_tree_declared(self):
+        """The number an upgrade does not unbind. It is counted from the files, not taken from
+        a run, and it is what keeps deleting the failing test from clearing a red suite."""
+        self.an_older_red_then_its_failing_test_deleted()
+        self.assertFalse(evidence.clear_red(self.ctx(), ["pytest"], 99))
+        self.assertIsNotNone(evidence.red(self.ctx()))
+
+    def test_a_failure_this_gate_records_keeps_the_tests_an_older_one_counted(self):
+        """Dropped there, the first failure of this gate's own would let the deleted test go."""
+        self.an_older_red_then_its_failing_test_deleted()
+        evidence.record_red(self.ctx(), ["pytest"], "1 failed", None, "", executed=1)
+        self.assertEqual(2, evidence.red(self.ctx())["declared"])
+
+    def test_a_green_another_version_stamped_does_not_excuse_a_push(self):
+        evidence.record_green(self.ctx(), ["make", "test"])
+        self.assertTrue(evidence.green_covers_tree(self.ctx()), "precondition: this gate's green")
+        path = evidence._green_path(self.ctx())
+        record = json.loads(path.read_text())
+        record["gate"] = "1.69.0"
+        evidence.store.write_json(path, record)
+        self.assertFalse(evidence.green_covers_tree(self.ctx()))
+
+
 class TestAGuessThatCannotStartIsDropped(SuiteCase):
     """Decision 0012: a guessed suite that cannot run is dropped for the repository-wide one.
 

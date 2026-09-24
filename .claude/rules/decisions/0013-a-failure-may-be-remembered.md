@@ -9,9 +9,9 @@ The gate keeps no cache of a passing run and never will. It does re-assert a FAI
 already observed: when the red record names this suite and the tree it judged hashes to what
 is here now, the Stop gate returns that failure instead of running the suite again.
 
-Bounded three ways. A tree carrying uncommitted work hashes to nothing and never matches;
-the record must name the same suite; and after an hour the suite runs again whatever the
-record says.
+Bounded four ways. A tree carrying uncommitted work hashes to nothing and never matches;
+the record must name the same suite; it must have been reached by this version of the gate;
+and after an hour the suite runs again whatever the record says.
 
 ## Why
 The asymmetry is the whole argument. A remembered pass answers "the tests pass" without the
@@ -32,6 +32,8 @@ fourteen minutes of wall clock, on a branch this plugin had told to report and s
   a fixed environment rediscoverable.
 - **Trusting the record across a dirty tree.** Uncommitted content is not in the tree at
   all, so no hash can stand for it.
+- **Trusting it across an upgrade.** The same tree judged by a different gate can get a
+  different answer: v1.69.2 fixed a false red and went on repeating it (#234).
 
 ## Cost accepted
 A suite fixed by something OUTSIDE the tree — a database, an installed package — stays
