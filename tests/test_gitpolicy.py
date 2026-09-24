@@ -17,8 +17,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from claude_bestpractice.gitctx import worktree_paths
 from helpers import BIN, RepoCase, add_origin, git, make_repo, sid
+
+from claude_bestpractice.gitctx import worktree_paths
 
 
 def _verdict(proc) -> tuple[str, str]:
