@@ -334,6 +334,23 @@ class TestTheShippedWorkflowIsOptIn(unittest.TestCase):
         text = (REPO_ROOT / ci.WORKFLOW).read_text(encoding="utf-8")
         self.assertIn(f"vars.{ci.CI_VARIABLE} == 'on'", text)
 
+    def test_its_token_can_read_and_nothing_else(self):
+        """No `permissions:` block meant whatever the repository's default grants, which
+        can be write access to everything, for a job that only reads the code."""
+        import re
+
+        text = (REPO_ROOT / ".github" / "workflows" / "check.yml").read_text(encoding="utf-8")
+        self.assertRegex(text, re.compile(r"^permissions:\n  contents: read\n(?!  )", re.M))
+
+    def test_a_pull_request_is_checked_once(self):
+        """`push` to every branch AND `pull_request` both fired for a branch with a pull
+        request open: two runs of the same commit on every push to it."""
+        import re
+
+        text = (REPO_ROOT / ".github" / "workflows" / "check.yml").read_text(encoding="utf-8")
+        self.assertRegex(text, re.compile(r"^  pull_request:", re.M))
+        self.assertRegex(text, re.compile(r"^  push:\n    branches: \[main\]\n", re.M))
+
     def test_the_workflow_runs_the_same_gates_as_the_hook(self):
         """Two check surfaces that disagree is worse than one."""
         text = (REPO_ROOT / ".github" / "workflows" / "check.yml").read_text(encoding="utf-8")

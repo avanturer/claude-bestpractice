@@ -1,10 +1,18 @@
 name: check
 
+# A pull request is checked by `pull_request`, and the default branch by `push` once work
+# lands on it. `push` used to take every branch as well, so each push to a branch with a pull
+# request open ran this job twice over the same commit — minutes spent to learn nothing new.
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
   workflow_dispatch:
+
+# Read-only. The job checks the code out and runs the gates over it; nothing it does writes
+# back, so the token it is handed can write nothing either.
+permissions:
+  contents: read
 
 # The repo layer binds everyone, including a session running without the plugin.
 # That is the point of running the same gates here that run locally.
