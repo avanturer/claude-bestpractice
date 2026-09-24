@@ -13,7 +13,7 @@ import subprocess
 import sys
 import unittest
 
-from helpers import BIN, RepoCase, sid
+from helpers import BIN, RepoCase, harness_matches, sid
 
 from claude_bestpractice import sessions, subagents
 
@@ -185,7 +185,7 @@ class TheMatcherCarriesTheTool(unittest.TestCase):
         hooks = json.loads((BIN.parent / "hooks" / "hooks.json").read_text(encoding="utf-8"))
         matcher = hooks["hooks"]["PreToolUse"][0]["matcher"]
         for name in subagents.SPAWN_TOOLS:
-            self.assertIn(name, matcher.split("|"))
+            self.assertTrue(harness_matches(matcher, name), name)
 
 
 if __name__ == "__main__":

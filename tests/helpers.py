@@ -37,6 +37,23 @@ if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
 
+def harness_matches(matcher: str, value: str) -> bool:
+    """Whether Claude Code fires a hook with this `matcher` for `value` (a tool's name).
+
+    The rules as the hooks reference states them: "*", "" or none match everything; a
+    matcher of only letters, digits, `_`, `-`, spaces, `,` and `|` is a list of exact names;
+    anything else is an unanchored regular expression. A test that splits the matcher on `|`
+    instead asserts a rule the harness does not apply.
+    """
+    import re
+
+    if matcher in ("", "*"):
+        return True
+    if re.fullmatch(r"[A-Za-z0-9_\- ,|]+", matcher):
+        return value in {part.strip() for part in re.split(r"[|,]", matcher)}
+    return re.search(matcher, value) is not None
+
+
 def git(args: list[str], cwd: Path) -> str:
     proc = subprocess.run(
         ["git", *args], cwd=str(cwd), capture_output=True, text=True, timeout=60

@@ -8,7 +8,7 @@ import sys
 import time
 import unittest
 
-from helpers import BIN, RepoCase, git, sid
+from helpers import BIN, RepoCase, git, harness_matches, sid
 
 from claude_bestpractice import board, evidence, pullrequest, store
 
@@ -989,6 +989,41 @@ class TestPromotingToProductionTakesTheFoundersWord(PRCase):
         self.approve()
         self.deploying()
         self.assertEqual("deny", self.decision(self.deploying()))
+
+class TestTheHarnessSendsTheToolsMergeToTheGate(unittest.TestCase):
+    """The founder's `+merge` was asked of a GitHub-tool merge only in this file.
+
+    The PreToolUse matcher was a list of plain names, which the harness compares as exact
+    strings, and `mcp__github__merge_pull_request` is none of them: in a real session a merge
+    through the tool never reached `pre-tool`, so nothing asked for the word, ran the
+    blockers, settled the obligation or closed a card. Every test here called the gate
+    directly and could not see it (decision 0010).
+    """
+
+    def matcher(self) -> str:
+        hooks = json.loads((BIN.parent / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+        return hooks["hooks"]["PreToolUse"][0]["matcher"]
+
+    def test_a_pull_request_tool_of_any_server_reaches_the_gate(self):
+        for tool in ("mcp__github__merge_pull_request", "mcp__github__create_pull_request",
+                     "mcp__github__update_pull_request", "mcp__GitHub__merge_pull_request",
+                     "mcp__plugin_gh_github__merge_pull_request"):
+            with self.subTest(tool=tool):
+                self.assertTrue(harness_matches(self.matcher(), tool))
+
+    def test_every_tool_it_already_gated_still_reaches_it(self):
+        for tool in ("Write", "Edit", "MultiEdit", "NotebookEdit", "Bash", "EnterWorktree",
+                     "Agent", "Task"):
+            with self.subTest(tool=tool):
+                self.assertTrue(harness_matches(self.matcher(), tool))
+
+    def test_nothing_it_does_not_judge_is_sent_to_it(self):
+        """Every call it matches costs a process start, and a read is never its business."""
+        for tool in ("Read", "Glob", "Grep", "WebFetch", "TaskCreate", "NotebookRead",
+                     "mcp__github__pull_request_read", "mcp__github__get_pull_request"):
+            with self.subTest(tool=tool):
+                self.assertFalse(harness_matches(self.matcher(), tool))
+
 
 if __name__ == "__main__":
     unittest.main()
