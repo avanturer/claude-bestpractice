@@ -245,6 +245,28 @@ def hooks_at_once(name: str, events: list[dict], cwd, env: dict | None = None) -
     return said
 
 
+def a_gate_underway(name: str, event: dict, cwd) -> subprocess.Popen:
+    """A gate the harness has already started and handed its event, and not yet heard from.
+
+    For what can happen WHILE a gate runs: the founder's `+merge` recorded after the merge
+    it allows was asked for, and before the gate answered (#232).
+    """
+    gate = subprocess.Popen([sys.executable, str(BIN / name)], cwd=str(cwd),
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, text=True)
+    gate.stdin.write(json.dumps({"cwd": str(cwd), **event}))
+    gate.stdin.close()
+    return gate
+
+
+def answer_of(gate: subprocess.Popen) -> subprocess.CompletedProcess:
+    """What a gate started by `a_gate_underway` finally said: one small JSON on stdout."""
+    gate.wait(timeout=60)
+    with gate.stdout:
+        said = gate.stdout.read()
+    return subprocess.CompletedProcess(gate.args, gate.returncode, said, "")
+
+
 def session_record_for(ctx, session_id: str, pid: int | None = None):
     """Build a session record for an arbitrary context.
 

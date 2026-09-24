@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import time
 import unittest
 
-from helpers import BIN, RepoCase
+from helpers import BIN, RepoCase, a_gate_underway, answer_of
 
 
 class TestIngest(RepoCase):
@@ -174,18 +175,18 @@ class TestMigrationGate(GateCase):
         )
 
     def migration(self, body: str, session_id: str = "s1"):
-        return self.gate(
-            "pre-tool",
-            {
-                "session_id": session_id,
-                "hook_event_name": "PreToolUse",
-                "tool_name": "Write",
-                "tool_input": {
-                    "file_path": str(self.repo / "migrations" / "0002_change.sql"),
-                    "content": body,
-                },
+        return self.gate("pre-tool", self.writing_a_migration(body, session_id))
+
+    def writing_a_migration(self, body: str, session_id: str = "s1") -> dict:
+        return {
+            "session_id": session_id,
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {
+                "file_path": str(self.repo / "migrations" / "0002_change.sql"),
+                "content": body,
             },
-        )
+        }
 
     def test_destructive_ddl_is_denied_at_traction(self):
         self.reach_traction()
@@ -246,6 +247,20 @@ class TestMigrationGate(GateCase):
         self.say("checked the column, nothing reads it any more.\n+migration")
         self.assertNotEqual("deny", self.decision(self.migration("DROP TABLE users;")))
         self.assertTrue(self.refused_over_the_data(self.migration("DROP TABLE orders;")))
+
+    def test_the_word_recorded_while_the_write_waits_lets_it_through(self):
+        """The founder's message can reach the session before it is recorded (#232)."""
+        self.reach_traction()
+        self.start()
+        self.claim_a_task("s1", "migrations/0002_change.sql")
+        writing = a_gate_underway("pre-tool", self.writing_a_migration("DROP TABLE users;"),
+                                  self.repo)
+        time.sleep(2)
+        self.gate("prompt-capture", {"session_id": "s1", "hook_event_name": "UserPromptSubmit",
+                                     "prompt": "checked the column, nothing reads it any more.\n"
+                                               "+migration"})
+        proc = answer_of(writing)
+        self.assertNotEqual("deny", self.decision(proc), proc.stdout)
 
     def test_talking_about_a_migration_is_not_accepting_one(self):
         self.reach_traction()

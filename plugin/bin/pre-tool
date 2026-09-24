@@ -1385,15 +1385,23 @@ def main() -> None:
             # and the GitHub tool, which always sends one — went through unasked whenever
             # the number was not this branch's recorded one: a pull request opened with
             # `gh pr create`, one opened on the website, any merge from the main checkout.
-            if not config.approved(ctx, config.APPROVE_MERGE):
+            #
+            # Waited for rather than read once: the founder's `+merge` can reach the session
+            # before the hook that records it has run, and the merge it prompted was refused
+            # as unaccepted while the word was on its way (#232).
+            if not config.awaited(ctx, config.APPROVE_MERGE):
                 deny_for_founder(
                     ctx, rec,
-                    "claude-bestpractice: this pull request has not been accepted by the founder "
-                    "yet. Passing checks mean the code works, not that the work is "
-                    "wanted — and main deploys, so merging is a step towards shipping "
-                    "it.\n"
-                    "  Show them what changed and ask. When they are happy they say "
-                    "`+merge` — copy it exactly — and this allows the merge once.\n"
+                    "claude-bestpractice: no `+merge` from the founder is on record for this "
+                    f"merge, and none arrived in the {config.ACCEPTANCE_GRACE:.0f} seconds this "
+                    "gate waited for one. Passing checks mean the code works, not that the "
+                    "work is wanted — and main deploys, so merging is a step towards "
+                    "shipping it.\n"
+                    "  If their last message already says `+merge`, do not ask them for it "
+                    "again: it can reach you before it is recorded, so run the merge once "
+                    "more first.\n"
+                    "  Otherwise show them what changed and ask. When they are happy they "
+                    "say `+merge` — copy it exactly — and this allows the merge once.\n"
                     "  Their word is read from their own message; nothing you write "
                     "can stand in for it."
                 )
@@ -1564,20 +1572,22 @@ def main() -> None:
             # gate over; so is the same flag handed to an installer, a search or a commit.
             # And spent only on a real promotion, since the founder's word allows one.
             deploying = promotes_to_production(str(ti.get("command", "")), session_cwd)
-            if deploying and not config.approved(ctx, config.APPROVE_RELEASE):
+            if deploying and not config.awaited(ctx, config.APPROVE_RELEASE):
                 # The literal used to be a token IN THE COMMAND, which the session writes
                 # — so the gate on the one irreversible action was openable by the party
                 # it gates. Decision 0006 closed exactly that hole for config switches and
                 # this was left behind. The founder's own word now, consumed on use, so it
-                # can never become a standing grant.
+                # can never become a standing grant. Waited for, as `+merge` is (#232).
                 deny_for_founder(
                     ctx, rec,
                     "claude-bestpractice: promoting to production is the one action that cannot be "
-                    "undone by re-running it, and it has not been approved.\n"
-                    "  Deploy to a preview environment instead, or show the founder what "
-                    "would ship and wait. When they are ready they say `+release` — copied "
-                    "exactly — and "
-                    "that allows exactly one promotion.\n"
+                    "undone by re-running it, and no `+release` from the founder is on "
+                    "record for it.\n"
+                    "  If their last message already says `+release`, do not ask them for it "
+                    "again: it can reach you before it is recorded, so run it once more first.\n"
+                    "  Otherwise deploy to a preview environment instead, or show the founder "
+                    "what would ship and wait. When they are ready they say `+release` — "
+                    "copied exactly — and that allows exactly one promotion.\n"
                     "  Rollback stays automatic; promotion does not."
                 )
             if deploying:
@@ -1595,15 +1605,18 @@ def main() -> None:
                     # so the gate on irreversible data loss was openable by the party it
                     # gates — the same hole decision 0006 closed for config switches and
                     # v1.28.0 closed for merges and promotions. This was the last one.
-                    if not config.approved(ctx, config.APPROVE_MIGRATION):
+                    if not config.awaited(ctx, config.APPROVE_MIGRATION):
                         deny_for_founder(
                             ctx, rec,
                             "claude-bestpractice: destructive DDL in a migration. This is irreversible "
                             "and data-shaped — the tests pass either way and corruption surfaces "
                             "only under production concurrency.\n"
-                            "  Use an expand-contract migration, or show the founder the "
-                            "statement and what it drops. When they accept the loss they say "
-                            "`+migration` — copied exactly — and that allows exactly one.\n"
+                            "  If their last message already says `+migration`, do not ask them "
+                            "for it again: it can reach you before it is recorded, so write it "
+                            "once more first.\n"
+                            "  Otherwise use an expand-contract migration, or show the founder "
+                            "the statement and what it drops. When they accept the loss they "
+                            "say `+migration` — copied exactly — and that allows exactly one.\n"
                             "  Their word is read from their own message; a token you write "
                             "into the migration is not their word."
                         )

@@ -8,7 +8,7 @@ import sys
 import time
 import unittest
 
-from helpers import BIN, RepoCase, git, harness_matches, sid
+from helpers import BIN, RepoCase, a_gate_underway, answer_of, git, harness_matches, sid
 
 from claude_bestpractice import board, evidence, pullrequest, store
 
@@ -693,7 +693,7 @@ class TestAMergeWaitsForTheFoundersWord(PRCase):
         self.open_a_pr()
         proc = self.merging()
         self.assertEqual("deny", self.decision(proc))
-        self.assertIn("not been accepted", self.reason(proc))
+        self.assertIn("no `+merge` from the founder is on record", self.reason(proc))
         self.assertIn("+merge", self.reason(proc), "the way through must be named")
 
     def test_the_founders_word_allows_it(self):
@@ -990,6 +990,72 @@ class TestPromotingToProductionTakesTheFoundersWord(PRCase):
         self.deploying()
         self.assertEqual("deny", self.decision(self.deploying()))
 
+class TestTheFoundersWordIsWaitedFor(PRCase):
+    """Issue #232. The founder sent `+merge` on its own, and the first merge after it was
+    refused as unaccepted; the same merge seconds later went through, with nothing said in
+    between. Their message had reached the session before the hook that records it had run,
+    and twice in a row the session asked them for the word again."""
+
+    def underway(self, command: str):
+        return a_gate_underway("pre-tool", {"session_id": "s1", "hook_event_name": "PreToolUse",
+                                            "tool_name": "Bash", "tool_input": {"command": command}},
+                               self.repo)
+
+    def say(self, prompt: str) -> None:
+        self.gate("prompt-capture", {"session_id": "s1", "hook_event_name": "UserPromptSubmit",
+                                     "prompt": prompt})
+
+    def test_a_merge_asked_for_before_the_word_was_recorded_goes_through(self):
+        """The command from the report, compound and all."""
+        self.start()
+        merging = self.underway("git fetch -q && gh pr view 501 && gh pr merge 501 --admin --squash")
+        time.sleep(2)
+        self.say("looks good to me\n+merge")
+        proc = answer_of(merging)
+        self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
+
+    def test_a_promotion_asked_for_before_the_word_was_recorded_goes_through(self):
+        self.configure(stage_override="traction")
+        self.start()
+        deploying = self.underway("fly deploy")
+        time.sleep(2)
+        self.say("checked the preview\n+release")
+        proc = answer_of(deploying)
+        self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
+
+    def test_with_no_word_the_merge_is_refused_once_the_wait_is_over(self):
+        """And the refusal says what the gate knows: nothing is on record, which is not the
+        same as the founder not having said it — so it is tried again before they are asked."""
+        from claude_bestpractice import config
+
+        self.start()
+        began = time.monotonic()
+        proc = self.tool("Bash", {"command": "gh pr merge 501 --squash"})
+        self.assertEqual("deny", self.decision(proc))
+        self.assertGreaterEqual(time.monotonic() - began, config.ACCEPTANCE_GRACE)
+        self.assertIn("run the merge once more", self.reason(proc))
+
+    def test_the_wait_ends_well_inside_the_time_the_harness_gives_the_gate(self):
+        """Past its timeout the harness gives up on `pre-tool` and the call is not judged."""
+        from claude_bestpractice import config
+
+        manifest = json.loads((BIN.parent / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+        budget = min(hook["timeout"] for entry in manifest["hooks"]["PreToolUse"]
+                     for hook in entry["hooks"] if "pre-tool" in hook["command"])
+        self.assertLessEqual(config.ACCEPTANCE_GRACE * 2, budget)
+
+    def test_the_word_is_recorded_before_anything_that_can_fail_first(self):
+        """The session's record was looked up, and registered when missing, before the word
+        was written down, and a failure there ended the hook silently with the word unsaid."""
+        from claude_bestpractice import config, sessions
+
+        blocked = store.tier_b(self.ctx(), sessions.SESSIONS_DIR)
+        blocked.parent.mkdir(parents=True, exist_ok=True)
+        blocked.write_text("a file where the session records belong\n", encoding="utf-8")
+        self.accept()
+        self.assertTrue(config.approved(self.ctx(), config.APPROVE_MERGE))
+
+
 class TestTheHarnessSendsTheToolsMergeToTheGate(unittest.TestCase):
     """The founder's `+merge` was asked of a GitHub-tool merge only in this file.
 
@@ -1111,7 +1177,7 @@ class TestMergingSomebodyElsesPullRequest(PRCase):
             with self.subTest(tool=name):
                 proc = self.tool(name, tool_input)
                 self.assertEqual("deny", self.decision(proc))
-                self.assertIn("not been accepted by the founder", self.reason(proc))
+                self.assertIn("no `+merge` from the founder is on record", self.reason(proc))
 
     def test_one_word_is_still_one_merge_of_somebody_elses(self):
         self.start()
