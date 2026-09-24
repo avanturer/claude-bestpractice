@@ -140,7 +140,10 @@ def _junit_failures(root: "ET.Element") -> tuple[str, ...]:
     """
     out: list[str] = []
     for case in root.iter("testcase"):
-        if not any(case.iter("failure")) and not any(case.iter("error")):
+        # Found or not, never the element's truth value: an element is falsy when it has
+        # no children, which a `<failure>` holding only its message and traceback does not
+        # have, so every failing case read as passing and this returned nothing.
+        if case.find(".//failure") is None and case.find(".//error") is None:
             continue
         where = (case.get("file") or "").strip()
         if where and where not in out:

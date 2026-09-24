@@ -45,6 +45,19 @@ class TestArtifactParsing(RepoCase):
         self.assertEqual((art.total, art.failed), (5, 1))
         self.assertFalse(art.passed)
 
+    def test_the_failing_cases_name_their_files(self):
+        """A `<failure>` holding only its message and traceback has no child elements, and
+        an element with none is falsy, so every such case read as passing and a report that
+        named its failing files named none. Python 3.12 warns about exactly this test."""
+        art = evidence.parse_artifact(self.write("junit.xml", (
+            '<?xml version="1.0"?><testsuite name="s" tests="3" failures="1" errors="1">'
+            '<testcase name="a" file="tests/test_a.py"><failure message="boom">Traceback'
+            "</failure></testcase>"
+            '<testcase name="b" file="tests/test_b.py"><error message="oops"/></testcase>'
+            '<testcase name="c" file="tests/test_c.py"/>'
+            "</testsuite>")))
+        self.assertEqual(("tests/test_a.py", "tests/test_b.py"), art.failures)
+
     def test_pytest_json_report(self):
         path = self.write(
             "pytest-report.json",
