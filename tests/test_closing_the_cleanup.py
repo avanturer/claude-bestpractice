@@ -152,8 +152,10 @@ class TestARemovalAskedForByHand(CleanupCase):
         sessions.register(self.ctx(), record)
 
     def removing(self, tree, extra: str = ""):
-        """As the harness sends it: the working directory of a hook is the one the chat
-        started in — the main checkout — whatever the shell has `cd`-ed to since."""
+        """From the main checkout, where a session can still stand with its work in its tree.
+        Claude Code reports the tree itself as the hook's working directory once the session
+        has `cd`-ed into it (2.1.280, 2.1.281); the same removal asked from inside the tree is
+        driven in `test_one_session_two_trees`."""
         return self.run_hook("pre-tool", {
             "session_id": "s1",
             "hook_event_name": "PreToolUse",
