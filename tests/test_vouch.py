@@ -105,14 +105,15 @@ class TestAFormatterIsACheckOnlyWhenItIsToldToCheck(VouchCase):
 
     def test_a_formatter_that_would_rewrite_the_files_is_not_a_check(self):
         for line in ("black src/", "python3 -m black .", "uv run black .", "isort src/",
-                     "ruff format src/", "cargo fmt"):
+                     "ruff format src/", "cargo fmt", "tsc", "npx tsc -p ."):
             self.assertSilent(line)
 
     def test_the_same_formatter_told_to_check_still_is_one(self):
         """The fix must not cost the founder the prompts this module exists to remove."""
         for line in ("black --check src/", "black --diff .", "python3 -m black --check .",
                      "isort --check-only src/", "ruff format --check src/",
-                     "cargo fmt --check", "cargo fmt -- --check"):
+                     "cargo fmt --check", "cargo fmt -- --check", "tsc --noEmit",
+                     "npx tsc --noEmit -p ."):
             self.assertVouched(line, "evidence gate")
 
     def test_a_linter_told_to_fix_is_not_a_check(self):

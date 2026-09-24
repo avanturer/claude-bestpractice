@@ -138,6 +138,10 @@ _CHECK_MODE = {
     "isort": {"--check-only", "--check", "-c", "--diff", "--df"},
     "ruff format": {"--check", "--diff"},
     "cargo fmt": {"--check"},
+    # Not a formatter, and the same act: without `--noEmit` the compiler writes its output
+    # beside the sources or into `outDir`, which in the shared checkout is a write like any
+    # other. `tsc --noEmit` is the type check the families above meant.
+    "tsc": {"--noEmit"},
 }
 # ...and a linter, or a runner that rewrites expectations, is one only WITHOUT the flag that
 # makes it fix: `--fix`, a snapshot update, Go's golden-file `-update`. Matched whole, never
@@ -676,7 +680,7 @@ def surface(ctx: GitContext, test_command: list[str]) -> list[str]:
     return [
         f"reads inside {ctx.worktree_root.name}/ that write nothing (git log/diff/status, cat, grep)",
         f"this project's checks in any spelling (detected: {detected}); a formatter only "
-        "with --check or --diff, and nothing told to --fix",
+        "with --check or --diff, tsc only with --noEmit, and nothing told to --fix",
         "git worktree add/remove/list, entering and leaving one, and writes and commits "
         "in this session's own tree — never a commit where a write would be refused",
         "opening a pull request, and merging one this gate has just found no blockers for",
