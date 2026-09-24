@@ -155,6 +155,12 @@ the tree this plugin made for that harness id links them instead. `claude -p` ch
 share a harness id stay separate. The board no longer lists a session's own earlier id as a
 sibling.
 
+The founder's instruction comes along too. It was recorded under the id the session had when
+they spoke, so a session that entered its tree straight after had none there, and the card
+rule, which reads it, never fired at the first write. In the live runs every file was
+written first and the card was asked for at Stop. Now the first write in the tree asks for
+the founder's card, and the runs claimed it before the code.
+
 ### The ledger
 
 - **The founder's instruction is one card.** A founder's card belongs to the session their
