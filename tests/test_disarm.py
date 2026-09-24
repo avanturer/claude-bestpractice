@@ -791,3 +791,25 @@ class TestDriftMustNotWedgeTheSession(RepoCase):
 
         landed = evidence.landed(self.ctx(), ["shipped.py", "local.py"])
         self.assertEqual(["shipped.py"], landed)
+
+    def test_what_landed_is_asked_of_git_once_for_the_whole_list(self):
+        """Four git processes a file, on every Stop: 1,500 files of one vendored library cost
+        twelve seconds before anything else the gate does."""
+        from unittest import mock
+
+        from claude_bestpractice import evidence
+
+        for n in range(60):
+            self.write(f"vendor/lib/mod{n}.py", f"X = {n}\n")
+        self.write("local.py", "y = 2\n")
+        self.commit("vendor a library")
+        git(["update-ref", "refs/remotes/origin/main", "HEAD"], self.repo)
+        self.write("local.py", "y = 3\n")
+        self.write("vendor/lib/mod0.py", "X = 'changed here'\n")
+        changed = [f"vendor/lib/mod{n}.py" for n in range(60)] + ["local.py"]
+        ctx = self.ctx()
+
+        with mock.patch.object(subprocess, "run", wraps=subprocess.run) as run:
+            landed = evidence.landed(ctx, changed)
+        self.assertEqual(sorted(changed[1:-1]), sorted(landed))
+        self.assertLessEqual(run.call_count, 2, "git was asked once per file")

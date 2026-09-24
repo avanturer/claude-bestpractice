@@ -1667,45 +1667,71 @@ def landed(ctx, changed: list[str]) -> list[str]:
     through whatever review the founder runs, and a gate that keeps calling it drift is
     describing the past. Compared by content rather than by name, because a file that
     exists on the trunk with different content is exactly the case drift is FOR.
-    """
-    from .gitctx import blob_sha
 
+    Two git processes for the whole list, not four for every file: this runs on every Stop,
+    and 1,500 changed files — one vendored library — cost twelve seconds of it.
+    """
+    from .gitctx import TRUNK_REFS
+
+    paths = [rel for rel in changed if rel and "\n" not in rel]
+    known = _objects(ctx, [f"{ref}:{rel}" for rel in paths for ref in ("HEAD", *TRUNK_REFS)])
+    # The WORKING TREE's content, not HEAD's. Drift is about what the tree holds now, and a
+    # session that brought a file to the trunk's content — `git checkout origin/main --
+    # <path>`, the one move that greened a suite red only because the tree lagged — had that
+    # write judged against a blob it had not touched. So the content already on the trunk
+    # was called drift, reverting it turned the suite red again, and the two gates asked for
+    # opposite things until a person intervened (#217). HEAD answers for a file that is gone
+    # from the tree.
+    here = _working_blobs(ctx, [rel for rel in paths if (ctx.worktree_root / rel).is_file()])
     settled = []
-    for rel in changed:
-        # The WORKING TREE's content, not HEAD's. Drift is about what the tree holds now,
-        # and a session that brought a file to the trunk's content — `git checkout
-        # origin/main -- <path>`, the one move that greened a suite red only because the
-        # tree lagged — had that write judged against a blob it had not touched. So the
-        # content already on the trunk was called drift, reverting it turned the suite red
-        # again, and the two gates asked for opposite things until a person intervened
-        # (#217). HEAD answers for a file that is gone from the tree.
-        here = blob_sha(ctx, rel) or _blob(ctx, "HEAD", rel)
-        if not here:
-            continue
-        for trunk in ("origin/HEAD", "origin/main", "origin/master"):
-            there = _blob(ctx, trunk, rel)
-            if there:
-                if there == here:
-                    settled.append(rel)
-                break
+    for rel in paths:
+        mine = here.get(rel) or known.get(f"HEAD:{rel}")
+        if mine and _on_the_trunk(known, rel) == mine:
+            settled.append(rel)
     return settled
+
+
+def _on_the_trunk(known: dict[str, str], rel: str) -> str:
+    """The object the first trunk name that HAS this path holds for it, or "" if none does."""
+    from .gitctx import TRUNK_REFS
+
+    return next((known[f"{ref}:{rel}"] for ref in TRUNK_REFS if f"{ref}:{rel}" in known), "")
 
 
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
-def _blob(ctx, rev: str, relpath: str) -> str:
-    """The blob id of one path at one revision, or "" when there is not one.
+def _objects(ctx, names: list[str]) -> dict[str, str]:
+    """`rev:path` to object id, for each of `names` that has one. One git process.
 
-    Checked against the SHA shape rather than against emptiness: `git rev-parse` ECHOES an
-    argument it cannot resolve instead of failing, so an absent `origin/HEAD` came back as
-    the literal string `origin/HEAD:file.py` — which is non-empty, ended the search at the
-    first trunk name, and made every merged file look unmerged.
+    Checked against the SHA shape rather than against emptiness, as `rev-parse` had to be:
+    that ECHOES an argument it cannot resolve instead of failing, so an absent `origin/HEAD`
+    came back as the literal `origin/HEAD:file.py`, ended the search at the first trunk name
+    and made every merged file look unmerged. `cat-file` answers `<name> missing` instead,
+    which the shape check refuses the same way.
     """
-    from .gitctx import _run
+    if not names:
+        return {}
+    proc = subprocess.run(
+        ["git", "cat-file", "--batch-check"], input="".join(f"{name}\n" for name in names),
+        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8",
+        errors="surrogateescape", timeout=60,
+    )
+    found = [line.split(" ", 1)[0] for line in proc.stdout.splitlines()]
+    return {name: sha for name, sha in zip(names, found) if _SHA.match(sha)}
 
-    out = _run(["rev-parse", f"{rev}:{relpath}"], ctx.worktree_root, check=False).strip()
-    return out if _SHA.match(out) else ""
+
+def _working_blobs(ctx, paths: list[str]) -> dict[str, str]:
+    """What each of these files in the working tree would be as a blob. One git process."""
+    if not paths:
+        return {}
+    proc = subprocess.run(
+        ["git", "hash-object", "--stdin-paths"], input="".join(f"{rel}\n" for rel in paths),
+        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8",
+        errors="surrogateescape", timeout=60,
+    )
+    shas = proc.stdout.split()
+    return dict(zip(paths, shas)) if proc.returncode == 0 and len(shas) == len(paths) else {}
 
 
 def scope_drift(changed: list[str], task_paths: list[str], exempt: list[str]) -> list[str]:
