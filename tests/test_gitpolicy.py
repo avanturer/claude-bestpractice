@@ -1356,6 +1356,19 @@ class TestCommitMessages(PolicyCase):
                 self.assertEqual(self.commit(command)[0], "allow")
         self.assertEqual(self.commit("git commit --message=wip")[0], "deny")
 
+    def test_a_commit_in_a_script_being_written_is_not_being_run(self):
+        """The heredoc body was still tokenised with the line, so an `&&` inside a script
+        being written split out a `git commit -m "Release"` that nothing was running."""
+        command = ("cat > scripts/release.sh <<'EOF'\n#!/bin/sh\nset -e\n"
+                   "git add -A && git commit -m \"Release\"\nEOF")
+        self.assertEqual("allow", self.commit(command)[0])
+
+    def test_a_commit_on_a_line_of_its_own_is_still_judged(self):
+        """Newlines are whitespace to the tokeniser, so a commit on the second line read as
+        more arguments to the first command and its message was never judged."""
+        self.assertEqual("deny", self.commit("git status\ngit commit -m wip")[0])
+        self.assertEqual("deny", self.commit("git add -A\ngit commit -m wip")[0])
+
     def test_a_message_the_shell_writes_is_not_judged_as_typed(self):
         """`"$MSG"` is a variable name; the message git receives is not on the line."""
         for command in ('git commit -m "$MSG"', 'git commit -m "`cat msg.txt`"'):

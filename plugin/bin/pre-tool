@@ -339,9 +339,7 @@ def promotes_to_production(command: str, cwd: Path) -> bool:
     declines is not a way past: its words are still searched for a deploying program, which
     is the only thing that could make it one. A shell's `-c` is read as the line it is.
     """
-    scannable = _QUOTED.sub(lambda m: " " * len(m.group(0)),
-                            _HEREDOC.sub(lambda m: " " * len(m.group(0)), command))
-    for _segment, literal, _here, _start in _segments_with_cwd(scannable, cwd, command):
+    for _segment, literal, _here, _start in _segments_with_cwd(_blanked(command), cwd, command):
         commands = _commands_in(literal)
         if not commands:
             words = _WORD.findall(literal)
@@ -662,6 +660,13 @@ BASH_COPIES = re.compile(
 # problem. Blanked like quoted spans, and for the same reason.
 _HEREDOC = re.compile(r"<<-?\s*(['\"]?)(?P<tag>\w+)\1.*?^\s*(?P=tag)\s*$", re.S | re.M)
 _ARG = re.compile(r"[\w./@+~-]+")
+
+
+def _blanked(command: str) -> str:
+    """The command with heredoc bodies and quoted spans turned to spaces, its length kept."""
+    for pattern in (_HEREDOC, _QUOTED):
+        command = pattern.sub(lambda m: " " * len(m.group(0)), command)
+    return command
 
 
 # `cd x && …` moves what a relative redirect means, and nothing here was reading it. A
@@ -1036,6 +1041,20 @@ def _sed_in_place(argv: list[str]) -> list[str]:
     return operands if scripted else operands[1:]
 
 
+def commit_message_in(command: str, cwd: Path) -> str:
+    """The message a `git commit` on this line is given, asked of one segment at a time.
+
+    Whole, a line's newlines are whitespace to the tokeniser: `git status` and a `git commit
+    -m wip` on the next line read as one `git status` with five arguments, and the message
+    went unjudged from the day it began to be read from the parsed words.
+    """
+    for _segment, literal, _here, _start in _segments_with_cwd(_blanked(command), cwd, command):
+        message = gitpolicy.commit_message(literal)
+        if message:
+            return message
+    return ""
+
+
 def bash_write_targets(command: str, cwd: Path) -> list[Path]:
     """Absolute paths a shell command appears to write, resolved as the shell would.
 
@@ -1060,8 +1079,7 @@ def bash_writes(command: str, cwd: Path) -> tuple[list[Path], str]:
     # Blank out quoted spans first. `echo "a > b"` and `grep -q "x>y" f` contain no
     # redirect, but a naive scan read one and claimed a lease on a path that does not
     # exist — which denies a sibling session for a file nobody is editing.
-    scannable = _HEREDOC.sub(lambda m: " " * len(m.group(0)), command)
-    scannable = _QUOTED.sub(lambda m: " " * len(m.group(0)), scannable)
+    scannable = _blanked(command)
 
     out: list[Path] = []
     written = [char if char == "\n" else " " for char in command]
@@ -1450,7 +1468,7 @@ def main() -> None:
     gates = stage.gates_for(resolved_stage)
 
     if event.tool_name == "Bash" and cfg.commit_conventions:
-        message = gitpolicy.commit_message(str(ti.get("command", "")))
+        message = commit_message_in(str(ti.get("command", "")), session_cwd)
         if message:
             complaint = gitpolicy.message_complaint(
                 message, conventional=gitpolicy.uses_conventional_commits(ctx)

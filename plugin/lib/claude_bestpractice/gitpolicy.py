@@ -601,6 +601,12 @@ _HEREDOC_MESSAGE = re.compile(
 # What the shell rewrites inside double quotes before git ever sees the message.
 _EXPANDED = re.compile(r"\$[({\w]|`")
 
+# Any other heredoc is data handed to a command — a script being written, a query being
+# run — and a `git commit` inside one is not being run. Its body was tokenised with the rest
+# of the line, so `cat > release.sh <<'EOF'` over a body holding `git add -A && git commit
+# -m "Release"` split out a commit of "Release" and refused it as seven characters.
+_HEREDOC_DATA = re.compile(r"<<-?\s*(['\"]?)(?P<tag>\w+)\1.*?^\s*(?P=tag)\s*$", re.S | re.M)
+
 # `=======` alone is also how Markdown and reStructuredText underline a seven-character
 # heading, so requiring the OPENING marker as well is what stops `Options` under a row of
 # equals signs being hard-refused as an unresolved conflict.
@@ -834,6 +840,7 @@ def commit_message(command: str) -> str:
     heredoc = _HEREDOC_MESSAGE.search(command)
     if heredoc:
         return heredoc.group("body")
+    command = _HEREDOC_DATA.sub(" ", command)
     parsed = shellcmd.commands(command)
     if not parsed:
         # Not tokenisable here, so the text is all there is to go on.
