@@ -389,7 +389,26 @@ def adopt(ctx: GitContext, session_id: str) -> SessionRecord:
         heartbeat_at=time.time(),
     )
     register(ctx, rec)
-    return rec
+    return _with_its_instruction(ctx, rec)
+
+
+def _with_its_instruction(ctx: GitContext, rec: SessionRecord) -> SessionRecord:
+    """The founder's instruction, carried to a new id of the session that was given it.
+
+    It is recorded under the id the session had when the founder spoke, the main checkout's
+    in the ordinary flow. A session that entered its tree straight after was a new record
+    there with no statement, and the rule that asks for a card at the first write reads the
+    statement: it never fired in the tree, where the work happens, and the card was asked
+    for only at Stop, after three files. The freshest statement among its other ids, with
+    the paths it named; nothing from a sibling, which `identities` never includes.
+    """
+    given = [other for other in (get(ctx, sid) for sid in identities(ctx, rec.session_id))
+             if other is not None and other.session_id != rec.session_id and other.task_statement]
+    if not given:
+        return rec
+    source = max(given, key=lambda other: other.heartbeat_at)
+    return touch(ctx, rec.session_id, task_statement=source.task_statement,
+                 task_paths=list(source.task_paths)) or rec
 
 
 def get(ctx: GitContext, session_id: str) -> SessionRecord | None:

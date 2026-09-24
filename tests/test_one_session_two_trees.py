@@ -331,6 +331,49 @@ class TestWithNoProcToNameTheProcess(MovedSession):
                              sessions.identities(self.ctx(), sid(self.repo, "S")))
 
 
+class TestTheInstructionComesWithIt(RepoCase):
+    """The founder's instruction is recorded under the id the session had when it was given,
+    the main checkout's. A session that entered its tree straight after it was a new record
+    there with no statement, and the rule that asks for a card at the first write reads the
+    statement: it never fired in the tree, where the work happens. Seen in live runs on
+    2.1.281, where three files were written in the tree and the card was asked for only at
+    Stop."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        from pathlib import Path
+
+        self.write("src/app.py", "def parse(text):\n    return text.split(',')\n")
+        self.commit("a history to branch from")
+        self.hook("session-start", self.repo, hook_event_name="SessionStart")
+        self.hook("prompt-capture", self.repo, hook_event_name="UserPromptSubmit",
+                  prompt="Validate the input to src/app.py")
+        made = self.hook("worktree-create", self.repo, hook_event_name="WorktreeCreate",
+                         name="side-quest")
+        self.tree = Path(made.stdout.strip())
+        self.assertTrue(self.tree.is_dir(), f"precondition: the hook made a tree: {made.stderr}")
+
+    def hook(self, gate: str, cwd, session: str = "S", **event):
+        return self.run_hook(gate, {"session_id": session, **event}, cwd=cwd)
+
+    def write_in_the_tree(self, session: str = "S"):
+        return self.hook("pre-tool", self.tree, session, hook_event_name="PreToolUse",
+                         tool_name="Write",
+                         tool_input={"file_path": str(self.tree / "src" / "app.py"),
+                                     "content": "x = 1\n"})
+
+    def test_the_first_write_in_its_tree_asks_for_the_card_it_was_given(self):
+        proc = self.write_in_the_tree()
+        self.assertEqual("deny", self.hook_decision(proc), proc.stdout + proc.stderr)
+        self.assertIn("claude-bp-plan update 0001", self.hook_reason(proc))
+
+    def test_another_session_in_that_tree_is_not_given_it(self):
+        self.write_in_the_tree(session="B")
+        record = sessions.get(self.ctx(), sid(self.tree, "B"))
+        self.assertIsNotNone(record, "precondition: the gate registered the other session")
+        self.assertEqual("", record.task_statement)
+
+
 class TestTheBoardDoesNotListItAsASibling(MovedSession):
     """Started again in its tree — a compaction does it — the session was shown its own id
     in the main checkout as another live session, on its own task."""
