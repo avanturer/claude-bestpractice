@@ -92,6 +92,22 @@ class TestOpeningRecordsAnObligation(PRCase):
         self.tool("Bash", {"command": "gh pr create --fill --draft"})
         self.assertEqual(1, len(pullrequest.outstanding(self.ctx())))
 
+    def test_the_structured_tool_is_recorded_by_the_one_hook_that_sees_it(self):
+        """PreToolUse is matched on the built-in tools by exact name, so the harness sends
+        this call to pr-opened alone — which only stamped a number onto a record nothing had
+        filed, and the pull request never reached the board."""
+        self.start()
+        self.gate("pr-opened", {
+            "session_id": "s1", "hook_event_name": "PostToolUse",
+            "tool_name": "mcp__github__create_pull_request",
+            "tool_input": {"owner": "o", "repo": "r", "title": "t", "head": "feat/x",
+                           "base": "main"},
+            "tool_response": {"url": f"https://github.com/o/r/pull/{PRCase.PR_NUMBER}"},
+        })
+        [record] = pullrequest.outstanding(self.ctx())
+        self.assertEqual(("feat/x", "main", PRCase.PR_NUMBER),
+                         (record["branch"], record["base"], record["number"]))
+
     def test_opening_twice_is_still_one_obligation(self):
         self.start()
         self.open_a_pr()
