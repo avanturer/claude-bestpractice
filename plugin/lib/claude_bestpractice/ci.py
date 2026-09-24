@@ -644,8 +644,9 @@ def ensure(ctx: GitContext) -> tuple[bool, str]:
                 return False, ""
             return _arm(ctx)
     except (store.LockTimeout, OSError):
-        # A sibling has held the lock for as long as a start will wait: it is arming this
-        # same gate, and the next session start finds its hook.
+        # A sibling has held the lock for as long as a start will wait — it is arming this
+        # same gate — or there was no lock to be had. Either way this start arms nothing,
+        # and the next one looks again.
         return False, ""
 
 
