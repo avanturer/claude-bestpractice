@@ -32,6 +32,14 @@ if command -v python3 >/dev/null 2>&1 &&
   PY=python3
 fi
 if [ -z "$PY" ]; then
+  # A python3 that is too old is not a missing one. Told "found \`python\` but not
+  # \`python3\`" over a 3.8 python3, the founder was handed a symlink that changes nothing:
+  # the old python3 is still the first one `env` finds.
+  if command -v python3 >/dev/null 2>&1; then
+    die "the first python3 on PATH is $(python3 --version 2>&1) at $(command -v python3), and
+  3.9 or newer is required. Every gate here is launched by \`env python3\`, so that is the
+  one that has to be new enough: put a newer python3 ahead of it on PATH, then run this again."
+  fi
   if command -v python >/dev/null 2>&1; then
     die "found \`python\` but not \`python3\`. Every gate here is launched by \`env python3\`,
   so they would install and then never run. Install python3, or symlink it:
@@ -50,10 +58,13 @@ if [ -d "$INSTALL_DIR/.git" ]; then
   # git error and exit 128 — on a re-run whose only purpose was to re-register a copy
   # that was already on disk and perfectly usable. Being unable to reach the network is
   # not a reason to refuse to install what has already been downloaded.
+  #
+  # Fast-forward only. A hard reset to origin/HEAD came first here, and it threw away a
+  # commit and an uncommitted edit made in this directory with nothing said but
+  # "updating". Whatever git will not fast-forward over is kept, and said to be.
   if git -C "$INSTALL_DIR" fetch --quiet origin 2>/dev/null; then
-    git -C "$INSTALL_DIR" reset --quiet --hard origin/HEAD 2>/dev/null \
-      || git -C "$INSTALL_DIR" pull --quiet --ff-only 2>/dev/null \
-      || dim "could not fast-forward; installing the checkout as it stands"
+    git -C "$INSTALL_DIR" pull --quiet --ff-only 2>/dev/null \
+      || dim "work of your own in $INSTALL_DIR does not fast-forward to origin — kept, and installing the checkout as it stands"
   else
     dim "offline or origin unreachable — installing the copy already here"
   fi

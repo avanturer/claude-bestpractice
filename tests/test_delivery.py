@@ -30,6 +30,25 @@ class DeliveryCase(RepoCase):
         self.commit()
         subprocess.run(["git", "merge", "feat/a"], cwd=str(self.repo), capture_output=True, timeout=60)
 
+    def a_clone_with_other_peoples_cards(self):
+        """The shape reported: last week's closed card, a sibling's card in flight, and this
+        branch's own, with one file changed on `feat/login`."""
+        from claude_bestpractice import plan
+
+        old = plan.add(self.ctx(), "Old work from last week: migrate DB driver",
+                       paths=["db/driver.py"], done_when="stated", branch="feat/db")
+        plan.claim(self.ctx(), old.id, "old", "feat/db")
+        plan.complete(self.ctx(), old.id)
+        sibling = plan.add(self.ctx(), "Session B: rewrite billing export",
+                           paths=["billing/export.py"], done_when="stated")
+        plan.claim(self.ctx(), sibling.id, "b", "feat/billing")
+        git(["switch", "-qc", "feat/login"], self.repo)
+        self.write("auth/login.py", "redirect = 1\n")
+        self.commit("fix the login redirect")
+        mine = plan.add(self.ctx(), "Session A: fix login redirect", paths=["auth/login.py"],
+                        done_when="stated")
+        plan.claim(self.ctx(), mine.id, "a", "feat/login")
+
 
 class TestMergeState(DeliveryCase):
     def test_a_clean_repository_reports_nothing(self):
@@ -160,11 +179,61 @@ class TestWhatShipped(DeliveryCase):
         proc = self.ship()
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
+    def test_the_summary_is_this_branchs_work_and_nobody_elses(self):
+        self.a_clone_with_other_peoples_cards()
+
+        out = self.ship().stdout
+
+        self.assertIn("Session A: fix login redirect", out)
+        self.assertNotIn("Old work from last week", out)
+        self.assertNotIn("Session B", out)
+
+    def test_a_card_claimed_elsewhere_over_a_file_this_branch_changes_is_its_work(self):
+        """Claimed in the main checkout, it keeps `main` as its branch after the work moves."""
+        from claude_bestpractice import delivery, plan
+
+        git(["switch", "-qc", "feat/export"], self.repo)
+        self.write("src/export.py", "x = 1\n")
+        self.commit("the export")
+        card = plan.add(self.ctx(), "Add CSV export", paths=["src/export.py"], done_when="stated")
+        plan.claim(self.ctx(), card.id, "a", "main")
+
+        self.assertIn("Add CSV export", delivery.shipped(self.ctx(), "main"))
+
     def test_the_cli_refuses_mid_merge(self):
         self.conflict()
         proc = self.ship()
         self.assertEqual(proc.returncode, 1)
         self.assertIn("UNRESOLVED", proc.stderr)
+
+
+class TestShipOpensAnObligation(DeliveryCase):
+    """`claude-bp-ship --pr` runs `gh` in its own process, where no hook sees it."""
+
+    def test_the_pull_request_it_opens_is_on_the_board(self):
+        from claude_bestpractice import evidence, pullrequest
+
+        bare = self.tmp / "origin.git"
+        git(["init", "-q", "--bare", str(bare)], self.tmp)
+        git(["remote", "add", "origin", str(bare)], self.repo)
+        git(["push", "-q", "origin", "main"], self.repo)
+        git(["switch", "-qc", "feat/export"], self.repo)
+        self.write("src/export.py", "x = 1\n")
+        self.commit("add the export module")
+        evidence.record_green(self.ctx(), ["pytest"])
+
+        stubs = self.tmp / "bin"
+        stubs.mkdir()
+        (stubs / "gh").write_text("#!/bin/sh\necho https://github.com/o/r/pull/77\n")
+        (stubs / "gh").chmod(0o755)
+        env = {**os.environ, "PATH": f"{stubs}{os.pathsep}{os.environ.get('PATH', '')}"}
+        proc = subprocess.run([sys.executable, str(BIN / "claude-bp-ship"), "--pr"],
+                              capture_output=True, text=True, cwd=str(self.repo), timeout=180, env=env)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+
+        records = {row["branch"]: row for row in pullrequest.outstanding(self.ctx())}
+        self.assertIn("feat/export", records, "the pull request never reached the board")
+        self.assertEqual(77, records["feat/export"]["number"])
 
 
 class TestPullRequestReadiness(DeliveryCase):
@@ -196,6 +265,42 @@ class TestPullRequestReadiness(DeliveryCase):
         from claude_bestpractice import delivery
 
         self.assertIn("no commits on top of main", delivery.ready(self.ctx(), "main"))
+
+    def test_an_uncommitted_decision_record_blocks_it(self):
+        """`.claude/` holds the founder's decisions and settings beside this plugin's own
+        state, and the whole prefix was exempt: both read as a clean tree, and the pull
+        request opened without them."""
+        from claude_bestpractice import delivery
+
+        self.write(".claude/rules/decisions/0001-keep-the-importer.md", "decided\n")
+        self.assertIn("there are uncommitted changes", delivery.ready(self.ctx(), "main"))
+
+    def test_an_edited_settings_file_is_uncommitted_work(self):
+        from claude_bestpractice import delivery
+
+        self.write(".claude/settings.json", "{}\n")
+        self.commit("the project's settings")
+        self.write(".claude/settings.json", '{"enabledPlugins": {}}\n')
+        self.assertTrue(delivery.dirty(self.ctx()))
+
+    def test_the_plugins_own_state_is_still_not_the_founders_work(self):
+        from claude_bestpractice import delivery
+
+        self.write(".claude/claude-bestpractice/stage.json", "{}\n")
+        self.write(".claude/worktrees/feat-x/scratch.py", "x = 1\n")
+        self.assertFalse(delivery.dirty(self.ctx()))
+
+    def test_a_claude_directory_nothing_was_committed_from_is_looked_inside(self):
+        """Wholly untracked, `.claude/` is one line of `git status`, and that line is this
+        plugin's state until something of the founder's is in it."""
+        from claude_bestpractice import delivery
+
+        git(["rm", "-r", "-q", "--cached", ".claude"], self.repo)
+        git(["commit", "-qm", "nothing under .claude is committed here"], self.repo)
+        self.assertFalse(delivery.dirty(self.ctx()), "the plugin's own config read as work")
+
+        self.write(".claude/commands/deploy.md", "deploy it\n")
+        self.assertTrue(delivery.dirty(self.ctx()))
 
     def unverified_on(self, branch: str) -> None:
         from claude_bestpractice import store
@@ -236,6 +341,16 @@ class TestPullRequestReadiness(DeliveryCase):
         self.assertIn("## What this does", body)
         self.assertIn("Add CSV export", body)
         self.assertNotIn("diff --git", body)
+
+    def test_the_body_says_what_this_pull_request_does_and_nothing_else(self):
+        from claude_bestpractice import delivery
+
+        self.a_clone_with_other_peoples_cards()
+
+        body = delivery.pr_body(self.ctx(), "main")
+        self.assertIn("- Session A: fix login redirect", body)
+        self.assertNotIn("Old work from last week", body)
+        self.assertNotIn("Session B", body)
 
 
 if __name__ == "__main__":

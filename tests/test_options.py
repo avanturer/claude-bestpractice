@@ -77,6 +77,25 @@ class TestWhatCountsAsAComparison(OptionCase):
         )
         self.assertIsNotNone(recorded)
 
+    def test_a_word_that_contains_the_name_does_not_cover_it(self):
+        """A comparison about "the reviews screen" contains the letters `ws`. Read as
+        covering the new `ws` dependency, that one was never asked for."""
+        from claude_bestpractice import options
+
+        options.record(self.ctx(), self.comparison(problem="the reviews screen: which list"))
+        self.assertEqual(set(), options.covered(self.ctx(), ["ws", "pg"]))
+
+    def test_a_comparison_that_names_it_still_covers_it(self):
+        from claude_bestpractice import options
+
+        options.record(self.ctx(), self.comparison(
+            problem="ws: why this one, and not socket.io.",
+            options=[options.Option("ws", {"latency": 9, "ops": 8}),
+                     options.Option("socket.io", {"latency": 7, "ops": 5})],
+            chosen="ws"))
+        self.assertEqual({"ws", "socket.io"},
+                         options.covered(self.ctx(), ["ws", "socket.io", "socket", "pg"]))
+
     def test_a_real_comparison_is_recorded(self):
         from claude_bestpractice import options
 
@@ -158,6 +177,21 @@ class TestTheGateDemandsIt(RepoCase):
         )
         self.write("package.json", json.dumps({"name": "app", "dependencies": {"express": "^4.18", "redis": "^4.0"}}))
         self.assertNotIn("no comparison on record", self.stop().stderr)
+
+    def test_a_comparison_of_something_else_does_not_answer_for_it(self):
+        """The Stop gate's own demand, over a comparison whose text happens to contain the
+        new package's letters: `ws` is in "reviews"."""
+        from claude_bestpractice import options
+
+        self.start_with_manifest({"express": "^4.18"})
+        options.record(self.ctx(), options.Comparison(
+            id="", problem="the reviews screen: paginate or scroll", metrics=["ux"],
+            options=[options.Option("paginate", {"ux": 6}), options.Option("scroll", {"ux": 8})],
+            chosen="scroll", why=""))
+        self.write("package.json", json.dumps({"name": "app", "dependencies": {
+            "express": "^4.18", "ws": "^8.0", "pg": "^8.0"}}))
+        said = self.stop().stderr
+        self.assertIn("no comparison on record: pg, ws", said)
 
     def test_it_can_be_switched_off(self):
         self.configure(compare_dependencies=False)

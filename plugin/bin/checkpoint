@@ -142,9 +142,9 @@ def _carried(ctx, rec) -> list:
     out = ["", "## The work this window was doing", ""]
     try:
         # A missing record means "cannot tell whose this is", and dropping the section is
-        # the wrong direction for a restore, so an unknown owner carries everything.
-        mine = [t for t in plan.load_all(ctx, plan.DOING)
-                if not rec or t.owner == rec.session_id]
+        # the wrong direction for a restore, so an unknown owner carries everything. A
+        # known one carries its cards under any id it has had (`plan.held_by`).
+        mine = plan.held_by(ctx, rec.session_id) if rec else plan.load_all(ctx, plan.DOING)
         if not mine:
             out.append("- (this session held no card)")
         for task in mine:
@@ -227,7 +227,9 @@ def main() -> None:
 
     stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
     name = f"{stamp}-{(event.session_id or 'anon')[:8]}.md"
-    path = store.tier_a(ctx, "checkpoints", name)
+    # The main checkout's, not this tree's: an untracked file here is one `git worktree
+    # remove` refuses the tree over, for good.
+    path = store.checkpoint_dir(ctx) / name
     store.atomic_write(path, "\n".join(lines) + "\n", mode=0o644)
 
     hookio.emit_silent()

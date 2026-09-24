@@ -1,5 +1,378 @@
 # Changelog
 
+## v1.69.0
+
+What running the plugin for real found: real Claude Code sessions on real repositories, then
+a review of every area of it that had to reproduce each defect before it counted.
+
+### Before you pull this into a clone of this repository
+
+This repository still tracked its own ledger, 81 cards under
+`.claude/claude-bestpractice/plan/`, although decision 0018 took the ledger out of git. This
+release untracks them. **A checkout that still tracks those files has them deleted from disk by
+the pull.** Before pulling, either start one session there with this version installed (its
+session start untracks them), or run:
+
+```sh
+git rm -r -q --cached .claude/claude-bestpractice/plan
+```
+
+If the pull already took them: `git checkout ORIG_HEAD -- .claude/claude-bestpractice/plan`,
+then the same `git rm --cached`. Repositories that only use the plugin are not affected: repair
+0015 took their ledgers out of git in v1.65.0.
+
+### How this was found
+
+Headless `claude -p` sessions (Claude Code 2.1.280, then 2.1.281) with this plugin loaded from
+the tree were given ordinary founder requests on pypa/sampleproject and on a small Node project
+using the built-in test runner. The Python sessions finished, but paid for it: a refused
+commit, a duplicated card, an invented `.env`. The Node session never finished. It spent all
+fifty turns on a Stop gate that kept calling correct work red.
+
+Reviewers then read the plugin area by area: the Stop gate, PreToolUse and its parsing,
+sessions and worktrees, the ledger and the pull-request flow, config and repairs, the CLI and
+the installer. Every finding below was reproduced against the code before it was fixed, and
+every fix's test was shown to fail without it.
+
+One premise did not survive the live runs: that the hook's `cwd` stays in the main checkout
+after `cd <tree>` (#213). On 2.1.280 and 2.1.281 it follows the session, after `cd` and after
+`EnterWorktree` alike, measured with a probe. The hooks reference says the same. The finding
+built on that premise (a card claimed from the tree never counts) is not true any more. The
+defects it hid are fixed below under "One session is one session".
+
+### What changes on purpose
+
+- **The founder's config and off switch are read from the main checkout**, for every tree.
+  `enabled off` there, or the plugin's `enabledPlugins` entry, stood the plugin down in the
+  main checkout alone, while the sessions worked in worktrees. `claude-bp set` writes there
+  and changes only the key it names. Before, it rewrote the whole file with every default
+  pinned in, the detected test command included. A session in a worktree can no longer write
+  the main checkout's config or its off switch.
+- **A new tree is cut from the remote trunk as last fetched**, as Claude Code's own default
+  `worktree.baseRef: "fresh"` does, and not from the local HEAD of whichever checkout asked.
+  That HEAD lags until somebody pulls, so new trees started without work already merged.
+  `worktree.baseRef: "head"`, a clone with no remote trunk, or a HEAD holding unpushed commits
+  keeps the old behaviour. Nothing is fetched.
+- **Every new tree gets the same setup**, whichever path made it: the main checkout's `.env`,
+  what `.worktreeinclude` names, and the project's `worktree_setup`. Claude Code stops
+  processing `.worktreeinclude` once a WorktreeCreate hook is installed, and this plugin
+  installs one, so every project's `.worktreeinclude` had silently stopped working.
+  `worktree_setup` had run only where a `DATABASE_URL` existed.
+- **`claude-bp-decide accept` and `discard` take the draft's id** that `list` prints. They no
+  longer take its position, which moved whenever a sibling filed a draft between `list` and
+  `discard 2`. The wrong draft went.
+- **`claude-bp-ci off` from a session needs the founder's own `pre_push off`** (decision 0006).
+- **Compaction checkpoints are written to the main checkout.** In a tree they were an
+  untracked file that kept the tree from ever being removed.
+
+### Every gate runs from an install path with a space in it
+
+The hook commands named `${CLAUDE_PLUGIN_ROOT}` unquoted, and the harness runs them through
+sh. From an install path holding a space, as a Windows home directory often does, every gate
+exited 127 (`sh: …/Jane: not found`). That is a non-blocking error, so a real session on
+Claude Code 2.1.281 ran with no gate at all and nothing said so, and the CLI's own
+`claude plugin validate --strict` refused the manifest for it. The placeholder is quoted now,
+and the doctor reads each command the way sh does from such a path. The status line that
+`claude-bp statusline --install` writes is quoted the same way, and repair 0031 quotes one
+written before.
+
+### The Stop gate stopped calling correct work red
+
+- **pytest is driven only where Python is tested.** A `tests/` or `test/` directory was
+  enough, so a Node project using `node --test` had pytest run over it on every Stop. That was
+  "0 failing of 0 run by the gate itself", a red record, and a session that spent its whole
+  turn budget on it. The gate now drives pytest where a config file carries pytest's own
+  section or a Python test is declared, and "nothing collected" (exit 5) is not a failure.
+  node:test and mocha summaries are read when the project's own command runs, so a run that
+  passed is no longer filed as "reported no test counts". The test count stopped counting
+  sibling worktrees' tests and `node_modules`.
+- **The config pytest reads is the one pinned**: the first file that carries pytest's own
+  section, in pytest's own order. A `pyproject.toml` holding only `[tool.black]` hid the
+  `setup.cfg` that set `pythonpath = src`, and a green suite was filed red.
+- **A runner that is not installed is not a red suite.** pytest in the project's virtualenv
+  but not for the gate's `python3` read as "The suite FAILS", and RED SUITE was broadcast to
+  every sibling. Now the turn is refused as an environment problem, with nothing filed red and
+  nothing broadcast.
+- **A red record is cleared by its own suite passing, and only by that.** A green in
+  `backend/` cleared the record for `web/`. A suite recorded red under its declared command
+  stayed red after the gate watched it pass. One suite's test counts were carried into
+  another suite's record, which then could never be cleared.
+- **A turn that only changes tests is verified**, and **no suite the diff reaches is dropped**.
+  A detected suite that cannot start gives way to the repository's own command, as decision
+  0012 says, instead of turning a passing run into "no artifact found".
+- **Every run is on the Stop's own clock and leaves nothing running.** The project's command
+  and the clean re-run had a fixed 300 seconds each on top of what the witnessed run spent,
+  and a killed suite left its servers alive. Each suite now runs in its own process group,
+  which is killed when the run ends.
+- **The clean re-run gets the committed tree's submodules**, from this tree's own checkouts
+  of them, and nothing is fetched. Past the prototype stage, every repository whose tests read
+  a submodule was told its committed tree fails.
+- **Drift and the tree hash see every uncommitted file, by its real name.** A new directory,
+  a quoted non-ASCII name, or a changed tracked file that matched an artifact glob was taken
+  for committed. The last one let a green be stamped over a HEAD that had not passed.
+- **The gate cannot re-enter itself.** Its own pytest run carried no recursion token, so a
+  suite that fires the Stop gate on the same clone ran 157 times for one Stop. Each run also
+  has a token of its own now, where a sibling worktree used to overwrite the shared one.
+- **Nothing the gate keeps holds a secret.** What a failing suite printed went into the red
+  record, the failed attempt and the open item unscrubbed, and a production password landed in
+  untracked files one `git add -A` from history.
+- The rest: `go env -w GOFLAGS=…` narrowed the gate's own `go test`; an over-long file name
+  in a failure and one unbalanced quote in `test_commands` each crashed every Stop; the block
+  memory was lost on the next tool call, so the ceiling filed "continuation ceiling reached"
+  with no reason; a verified turn that asked for notes kept its block counter and its leases;
+  a failing file with a space in its name was blamed on the trunk; `evidence.landed` spawned
+  up to four git processes per changed file (1,500 files: 12.7 s, now 0.6 s).
+- **A JUnit report's failing files are read.** Since they were added in v1.66.0, a case
+  counted as failing only when its `<failure>` element had children of its own. One holding
+  just a message and a traceback has none, so the gate never learned from a report which
+  files failed.
+
+### The founder's word is asked for every merge, and read only from what they typed
+
+- **Every merge needs `+merge`.** `gh pr merge <N>` skipped it whenever the obligation on
+  record did not match. A merge through the GitHub MCP tool never reached the gate at all: the
+  PreToolUse matcher was a list of names, which the harness compares as exact strings. The
+  matcher is now a regular expression that also admits any server's pull-request tools, and
+  the tests evaluate it the way the harness documents.
+- **The word is spent when the merge is allowed**, not when it is refused over its blockers.
+- **`+merge`, `+release` and `+migration` count only when the founder typed them.** A pasted
+  diff, a fenced code block, a task notification that printed its own closing tag, or a pasted
+  Stop block quoting the task all granted them. A message that opened with a pasted refusal
+  lost the founder's own `+merge` under it.
+- **`+release` is asked of a command that deploys**: vercel, netlify, fly, railway, kubectl
+  against a prod context, terraform and helm naming production, `eas update` to production, or
+  a deploy script told production. `npm ci --production`, `git grep -- --production` and
+  `terraform plan` were refused, and a `git grep` spent the word the real deploy needed.
+
+### One session is one session
+
+A session that moved into its own tree became a second identity. `claim` of its own card was
+refused as held by a live session, which was itself. The database gate refused it over its own
+record, its removal of its own tree went to the shell standing in it, and `git add -A` in its
+tree was refused over its own leases. `sessions.identities` now unites one session's ids: the
+same harness id and the same CLI process. Where no pid can name the process (macOS, Windows),
+the tree this plugin made for that harness id links them instead. `claude -p` children that
+share a harness id stay separate. The board no longer lists a session's own earlier id as a
+sibling.
+
+The founder's instruction comes along too. It was recorded under the id the session had when
+they spoke, so a session that entered its tree straight after had none there, and the card
+rule, which reads it, never fired at the first write. In the live runs every file was
+written first and the card was asked for at Stop. Now the first write in the tree asks for
+the founder's card, and the runs claimed it before the code.
+
+### The ledger
+
+- **The founder's instruction is one card.** A founder's card belongs to the session their
+  message opened it for, rather than to whichever session's founder spoke next. Every refusal
+  that asks for a card names that card (`update <id>` then `claim <id>`) instead of `add`,
+  which filed the instruction a second time.
+- **Every card command a refusal prints runs.** `add` without `--done-when` was always
+  refused by the `claim` after it, and `--paths <the files this touches>` was a redirect to
+  bash (decision 0020). The tests run the printed lines through bash.
+- **A card is claimed under a lock**; two parallel claims both "succeeded" 11 times in 12.
+  `pause` and `done` refuse a card a live sibling holds. A closed card covers only the files it
+  named, not every write for the rest of the session.
+- **Cards survive odd input**: a title with `---` in it, a newline in a value, a 300-character
+  word, a card saved as cp1251. Each broke `add`, `claim` or the card itself, and the last one
+  refused every write in every session.
+- **The ledger stays out of git after the upgrade.** A tree cut later from a trunk that still
+  tracked cards put them back into git with its next commit (#219).
+- `done 7` tells a session waiting on 0007, as `done 0007` did. Attempts and decisions are
+  numbered across worktrees, so two trees no longer both file 0001, and an attempt naming
+  several files is relevant to all of them, not only the first.
+
+### Pull requests
+
+- **A pull request opened with the GitHub tool is filed**, and so is one that
+  `claude-bp-ship --pr` opens. One closed without merging is discharged, whether by
+  `gh pr close`, by the tool's `state: closed`, or by its branch no longer existing. Before,
+  it stayed on the board as open for thirty days.
+- **A branch's second pull request gets its own number**, not the merged first one's.
+- **A pull request body and the ship summary list this branch's cards**, not the last cards
+  in the clone, and a pull request is measured against the remote base before a stale local
+  one. A merge of one file had closed this session's card over another session's release.
+- **The founder's files under `.claude/` are uncommitted work**: decision records,
+  `settings.json`, commands and skills. A pull request that did not carry them was called
+  ready, and the branch was taken for delivered.
+- A close naming another repository settles nothing here.
+
+### Refusals that were wrong
+
+Each of these refused a call no rule objected to, and several provisioned a worktree for it:
+
+- `sed -n '1,20p' file | grep -in x` read as `sed -i`; `grep "open('x', 'w')"` or a
+  `gh pr create --body` describing one read as a write; a credential-looking `NAME=value`
+  handed to a command (`PGPASSWORD=postgres psql`) read as a write of it.
+- A commit message was judged by the first line of a heredoc, and quoting was read as text:
+  `'Don'\''t …'` became `'Don'`. It is now read the way the shell reads it, one segment at a
+  time and past git's own options such as `-C <tree>`. Before, `git status` followed by
+  `git commit -m wip` on the next line was never judged at all.
+- A path git ignores, or an absent ignored directory, was owed a card.
+- `git pull --ff-only` of the main checkout, `git -C <main> stash list`, and the subshell one
+  refusal prescribed were refused by the next rule (decision 0017).
+- A path with a space broke the command a refusal printed; a quoted `cd` or `-C` was read as
+  the word after it. Every path a refusal prints is shell-quoted now.
+- `echo "\ud800"`, a 300-character file name, or a NUL in a path crashed the gate, which
+  fails closed.
+
+And one the other way: a write into a provisioned tree from the main checkout was exempt from
+the card rule as "under `.claude/`". It is judged in the tree it lands in now.
+
+### Approvals that were wrong
+
+`vouch` approves a call with no permission prompt, so each of these ran unasked:
+
+- **A command on the next line.** shlex reads a newline as a space, so `git status` followed
+  by `rm -rf src` on the next line was vouched as a status, and `git log` followed by a
+  `curl … -d @.env` as a log. A `#` inside a word started a comment and hid the rest of the
+  line. The line is now split where bash splits it.
+- **An option that runs or deletes something**: `rg --pre=rm` deleted the tracked tree, and
+  `pytest --basetemp=<outside>` emptied a directory. Each whitelisted program now carries the
+  options that open such a door.
+- **A write spelled as a check**: `black src/`, `ruff check --fix`, and plain `tsc`, which
+  emits. `git add` and `git commit` were vouched in the main checkout where `sed -i` is
+  refused. These go to the permission layer now; nothing new is refused.
+
+### Worktrees, branches and the reaper
+
+- **A branch is deleted only on proof that its own work is in the trunk**: its tip is an
+  ancestor of the remote trunk, or every file it delivers is identical there, mode included.
+  The reaper had force-deleted the branch a tree was made on after judging the one it stood on,
+  and lost an unmerged commit. `git branch -d` answered against the upstream, so an open pull
+  request's branch went. A mode change read as delivered. The trunk itself went with a tree
+  switched onto it.
+- **A session open over a weekend, or in another pid namespace, is not reaped** while its CLI
+  runs. The reaper had removed its tree with the CLI standing in it. A reaped session's
+  baseline is logged before its record goes, so a resume between the two no longer re-anchors
+  at HEAD.
+- **Parallel hooks are counted under a lock**, so the fan-out ceiling holds when six Agent
+  calls arrive at once; it had allowed all six against three. Trusting trees made at once no
+  longer loses all but one of them.
+- **The board names commands that run**: a hand-deleted tree gets `worktree prune`, a locked
+  one is not offered for removal, and a submodule tree gets `--force` after the status check.
+- **A tree is named what the harness asks for, and no database is invented.**
+  `WorktreeCreate` carries `name`, and every `isolation: "worktree"` subagent of one session
+  had landed in one shared tree. A tree got a `.env` with a derived `DATABASE_URL` in
+  repositories that have no database.
+- A bare clone's trees go beside it, not inside its git directory. A database name cut to fit
+  keeps a hash, so two trees no longer share one. A fact whose first note went stale unsent can
+  be sent again, and a drain that fails midway marks what it already sent.
+
+### Nothing the founder owns is written over
+
+- **`~/.claude/settings.json` is never replaced because it does not parse.** A trailing comma
+  or a BOM made it read as empty, and every session start wrote a file holding only `autoMode`
+  over it. The board now says so instead of "refreshed".
+- **A config that does not parse is reported, never read as defaults**, and never moved aside.
+  A byte-order mark (PowerShell 5.1 writes one) made the founder's `enabled: false` read as
+  true. One malformed value (`"inf"`, `"nan"`, a `package.json` whose `scripts` is a list)
+  raised in the reader every gate calls first.
+- **Every write finishes or raises.** A short write on a nearly full disk left half a
+  `config.json` renamed over the good one, read back as absent. A log torn inside a multibyte
+  character read as empty, and `claude-bp-reindex` then crashed with the logs stranded.
+- **The repairs run one clone at a time**, a repair is recorded only when it finished, and
+  a reindex keeps the repair ledger. After one, every repair ran again.
+- **Repairs touch only what is theirs.** Repair 0011 closed a card whenever its files matched
+  the trunk in the tree running it, which is any tree that never touched them. Repair 0003
+  adopted TODO files from submodules and nested repositories.
+- `claude-bp init --force` keeps answered knowledge files instead of putting the placeholders
+  back. `install.sh` updates its directory by fast-forward instead of `git reset --hard`.
+  `adopt` rewrites only the settings file it takes a hook from, and keeps that file's mode.
+- After a compaction a session gets its own checkpoint or none, never a sibling's.
+
+### Secrets
+
+The scrub now takes a whole PEM private key rather than only its BEGIN line, a URL password
+with no user (`redis://:<password>@host`), and `Authorization: Basic`, `X-Api-Key` and cookie
+headers. Repair 0030 scrubs what earlier versions captured. Commit review now reads a file
+whose name holds a space or non-ASCII characters; before, those were never reviewed. The URL
+and header patterns run in linear time. A crafted 40 KB line cost the URL pattern 3.4 s on
+every Write and every Bash call.
+
+### The push gate
+
+- `record-green` and `record-run`, the hook's own bookkeeping, were approved as this plugin's
+  commands, so one call cleared a red record and let `git push` through a red `make check`.
+  They are refused to sessions and never vouched for.
+- It is installed only where this repository's own config points. A global `core.hooksPath`
+  got this repository's hook for every repository on the machine, and `~/.githooks` became a
+  directory literally named `~`. On a git older than 2.26 the scope is asked for one scope at
+  a time.
+- Arming it is locked. Eight sessions starting at once could move the founder's own hook onto
+  ours, which then chained itself.
+- The chained hook keeps its mode. The baked runner is rewritten when it changes, and a
+  module the runner cannot import is a missing runner, not a failure recorded as red.
+- `init` and setup keep it off once switched off. `--off` is refused except on `github`, and
+  `github` is no longer offered for a workflow it cannot write. Hosted CI reads as unknown
+  when `gh` does not answer, instead of a 60-second hang and a traceback.
+
+### Commands and the installer
+
+- `claude-bp doctor`, `statusline` and `policy --prune` run outside a repository. The doctor
+  and the status line answer `--help`. The doctor runs against no git config but its own
+  fixtures', so a founder's global hooks path or commit-msg hook no longer breaks it or
+  receives its hook.
+- `claude-bp-report` shows every report it would send, not the first, and `defect` exits 1
+  when it records nothing. `claude-bp-ingest` no longer loses a batch over a stack frame
+  outside the repository. `claude-bp-options` counts a comparison as covering a dependency
+  only when it names it whole: `ws` is not "reviews".
+- The installer names a `python3` older than 3.9 as old, not missing. The Windows `.cmd`
+  launchers branch on `where`'s exit code, so a refusal is no longer run a second time through
+  `python`. That was checked against the cmd.exe documentation, not on Windows.
+- A Bash line is tokenised once per hook call, in linear time. A 256 KB commit message cost
+  the hook 11.2 s, and now costs 0.33 s.
+
+### Repairs
+
+On the next session start:
+
+- `0018` puts back what a crashed reindex stranded
+- `0019` puts back a `config.json` set aside
+- `0020` takes our hook out of a shared hooks directory
+- `0021` removes the hook left under a literal `~`
+- `0022` unchains a hook that calls itself
+- `0023` drops an empty quarantine block
+- `0024` forgets a pull-request number carried to the next pull request
+- `0025` carries checkpoints out of trees
+- `0026` forgets a red suite that never ran
+- `0027` scrubs what a failing suite printed
+- `0028` drops the shared verification token
+- `0029` unstamps greens a changed tracked file could hide
+- `0030` scrubs captured secrets
+- `0031` quotes the status line's path
+
+Repairs 0004 and 0006 run again (revision 2) against the main checkout's config, 0005 moves
+trees made inside a bare clone's git directory (revision 3), and 0015 runs again where a
+refused `git rm` was recorded as done (revision 2).
+
+### Two notes on the decisions
+
+- Decisions 0019 and 0022 name `git branch -d` as the proof for deleting a merged branch. The
+  mechanism is now the same proof asked of the trunk rather than of the upstream or a lagging
+  HEAD, then `-D`, for the reasons above. The records are left as written.
+- `supersedes: "0002"` retired nothing because of its quotes. 0004 and 0018 now retire what
+  they name, and the decisions index counts "9 older" instead of 11.
+
+### For contributors
+
+- `make test` names a missing pytest before the suite fails on it.
+- The stdlib-only lint's list for 3.9 names `calendar`, which a repair in this release
+  imports; without it `make check` failed its first step on 3.9 alone. A test now reads that
+  list on every Python.
+- The release-compatibility test extracts each tag's archive with the `data` filter where
+  Python has it, which is what 3.14 does by default and what 3.12+ warned about 53 times.
+- The check workflow has a read-only token and runs once per push to a pull request.
+- `helpers.harness_matches` evaluates a hook matcher the way the harness does, and
+  `helpers.hooks_at_once` fires hooks concurrently.
+- The shipped-gate tests anchor at the commit they cloned, so they hold on a detached HEAD,
+  which is how CI checks a pull request out. Run there, two of them failed: the gate compared
+  against a stale local `main` and passed a change with no bump. `test_gitpolicy` runs on its
+  own.
+- The README's gate table, update path, task-list line, push-gate switch, `claude-bp-ingest`
+  line, branch-removal proof and counts match the code, and so do the roadmap's counts.
+
+
 ## v1.68.0
 
 The removal that #220 introduced finishes what it starts, and a session never removes the

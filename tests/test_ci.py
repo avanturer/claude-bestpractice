@@ -16,6 +16,7 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from helpers import BIN, REPO_ROOT, RepoCase, git
 
@@ -225,6 +226,34 @@ class TestLocalIsTheDefault(CICase):
         self.assertIn("pre-push", proc.stdout)
 
 
+class TestOffSticksThroughInitAndSetup(CICase):
+    """The README says the removal sticks. `claude-bp init` and the Setup hook both called
+    `install`, which clears the opt-out because asking for the hook by name is consent —
+    so `claude-bp-ci off` followed by `init --force` printed "checks now run before every
+    push" and the gate the founder had switched off was back.
+    """
+
+    def test_init_leaves_a_switched_off_gate_off(self):
+        from claude_bestpractice import ci
+
+        ci.remove(self.ctx())
+        for args in (["init"], ["init", "--force"]):
+            with self.subTest(args=args):
+                said = subprocess.run([sys.executable, str(BIN / "claude-bp"), *args],
+                                      capture_output=True, text=True, cwd=str(self.repo),
+                                      timeout=180).stdout
+                self.assertFalse(ci.installed(self.ctx()), "init re-armed a gate switched off")
+                self.assertIn("stays off", said)
+        self.assertTrue(ci.declined(self.ctx()))
+
+    def test_setup_leaves_it_off_too(self):
+        from claude_bestpractice import ci
+
+        ci.remove(self.ctx())
+        self.run_hook("setup", {"session_id": "s1", "hook_event_name": "Setup"})
+        self.assertFalse(ci.installed(self.ctx()), "setup re-armed a gate switched off")
+
+
 class TestHostedCICostsNothingUntilAskedFor(CICase):
     def workflow(self, gated: bool) -> None:
         path = self.repo / ".github" / "workflows" / "check.yml"
@@ -238,6 +267,36 @@ class TestHostedCICostsNothingUntilAskedFor(CICase):
         self.workflow(gated=True)
         self.assertEqual(ci.workflow_state(self.ctx()), "gated")
         self.assertTrue(any("gated" in line for line in ci.status_lines(self.ctx())))
+
+    def test_off_anywhere_but_github_is_refused_rather_than_ignored(self):
+        """`claude-bp-ci local --off` installed the hook: the flag belongs to `github`, and
+        with any other command it was dropped without a word."""
+        from claude_bestpractice import ci
+
+        proc = self.cli("local", "--off")
+        self.assertNotEqual(0, proc.returncode)
+        self.assertFalse(ci.installed(self.ctx()), "asked with --off, it installed the hook")
+        self.assertIn("claude-bp-ci off", proc.stderr)
+
+    def test_a_gh_that_never_answers_is_unknown_and_not_a_traceback(self):
+        """`claude-bp status` waited a minute on a hung `gh`, then printed a TimeoutExpired
+        traceback and nothing else. What it cannot find out, it says it cannot."""
+        from claude_bestpractice import ci
+
+        self.workflow(gated=True)
+        stub = self.repo.parent / "hung-gh"
+        stub.mkdir()
+        (stub / "gh").write_text("#!/bin/sh\nexec sleep 600\n")
+        (stub / "gh").chmod(0o755)
+        path = {"PATH": f"{stub}{os.pathsep}{os.environ.get('PATH', '')}"}
+        with mock.patch.dict(os.environ, path), \
+                mock.patch.object(ci, "_GH_LOOK_SECONDS", 1, create=True), \
+                mock.patch.object(ci, "_GH_SET_SECONDS", 1, create=True):
+            lines = "\n".join(ci.status_lines(self.ctx()))
+            switched, note = ci.set_hosted(self.ctx(), on=True)
+        self.assertIn("currently unknown", lines)
+        self.assertFalse(switched)
+        self.assertIn(f"gh variable set {ci.CI_VARIABLE} --body on", note)
 
     def test_an_ungated_workflow_is_called_out_as_spending_minutes(self):
         from claude_bestpractice import ci
@@ -274,6 +333,23 @@ class TestTheShippedWorkflowIsOptIn(unittest.TestCase):
 
         text = (REPO_ROOT / ci.WORKFLOW).read_text(encoding="utf-8")
         self.assertIn(f"vars.{ci.CI_VARIABLE} == 'on'", text)
+
+    def test_its_token_can_read_and_nothing_else(self):
+        """No `permissions:` block meant whatever the repository's default grants, which
+        can be write access to everything, for a job that only reads the code."""
+        import re
+
+        text = (REPO_ROOT / ".github" / "workflows" / "check.yml").read_text(encoding="utf-8")
+        self.assertRegex(text, re.compile(r"^permissions:\n  contents: read\n(?!  )", re.M))
+
+    def test_a_pull_request_is_checked_once(self):
+        """`push` to every branch AND `pull_request` both fired for a branch with a pull
+        request open: two runs of the same commit on every push to it."""
+        import re
+
+        text = (REPO_ROOT / ".github" / "workflows" / "check.yml").read_text(encoding="utf-8")
+        self.assertRegex(text, re.compile(r"^  pull_request:", re.M))
+        self.assertRegex(text, re.compile(r"^  push:\n    branches: \[main\]\n", re.M))
 
     def test_the_workflow_runs_the_same_gates_as_the_hook(self):
         """Two check surfaces that disagree is worse than one."""
@@ -432,6 +508,24 @@ class TestTheStatusLineIsTrue(CICase):
         lines = "\n".join(ci.status_lines(self.ctx()))
         self.assertIn("gated on", lines)
         self.assertNotIn("of your own", lines)
+
+    def test_no_line_offers_a_workflow_nothing_writes(self):
+        """`claude-bp-ci github` switches a gated workflow on and writes none. Status and
+        setup both said it "adds one", and it refused with "no .github/workflows/check.yml"."""
+        from claude_bestpractice import ci
+
+        self.write(".github/workflows/deploy.yml", "on: push\njobs: {}\n")
+        self.assertNotIn("claude-bp-ci github", "\n".join(ci.status_lines(self.ctx())))
+        said = self.run_hook("setup", {"session_id": "s1", "hook_event_name": "Setup"}).stdout
+        self.assertIn("before every push", said)
+        self.assertNotIn("claude-bp-ci github", said)
+
+    def test_setup_names_it_where_there_is_a_gated_run_to_switch(self):
+        from claude_bestpractice import ci
+
+        self.write(ci.WORKFLOW, f"on: push\n# {ci.CI_VARIABLE}\n")
+        said = self.run_hook("setup", {"session_id": "s1", "hook_event_name": "Setup"}).stdout
+        self.assertIn("`claude-bp-ci github` switches the hosted run on", said)
 
 
 class TestLookingDoesNotWrite(CICase):
@@ -1077,6 +1171,86 @@ class TestAStaleHookIsBroughtUpToDate(RepoCase):
         self.assertIn("husky", displaced.read_text(encoding="utf-8"))
 
 
+class TestAModuleTheRunnerCannotImportIsAMissingRunner(CICase):
+    """A stdlib-unittest project and a python3 with no pytest in it.
+
+    Detection names `python3 -m pytest -q` for any `test_*.py`, and the hook checked only
+    that `python3` exists. So a green suite could not be pushed: every push was refused on
+    "No module named pytest", and recorded as a FAILED run of a suite that never started.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.write("tests/test_x.py", "import unittest\n\n\nclass T(unittest.TestCase):\n"
+                                      "    def test_x(self):\n        self.assertTrue(True)\n")
+        self.commit("a stdlib suite")
+        self.with_remote()
+        # A python3 that has its standard library and nothing installed beside it.
+        stub = self.repo.parent / "stdlib-only"
+        stub.mkdir()
+        (stub / "python3").write_text(f'#!/bin/sh\nexec "{sys.executable}" -S "$@"\n')
+        (stub / "python3").chmod(0o755)
+        self.env = {**os.environ, "PATH": f"{stub}{os.pathsep}{os.environ.get('PATH', '')}"}
+
+    def push(self) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "push", "origin", "main"], cwd=str(self.repo),
+                              capture_output=True, text=True, timeout=180, env=self.env)
+
+    def test_it_is_refused_as_a_runner_that_is_missing(self):
+        from claude_bestpractice import ci, evidence
+
+        ci.install(self.ctx())
+        pushed = self.push()
+        self.assertNotEqual(0, pushed.returncode)
+        self.assertIn("python3 cannot import pytest", pushed.stderr)
+        self.assertIn("python3 -m pip install pytest", pushed.stderr)
+        self.assertFalse(evidence._run_path(self.ctx()).exists(),
+                         "a suite that never started was recorded as a failed run")
+
+    def test_the_command_the_founder_declared_is_the_one_it_runs(self):
+        """Their door when detection is wrong: `test_command`, in the file no session may
+        write, which the Stop gate already honoured and the hook did not."""
+        self.configure(test_command=["python3", "-m", "unittest", "discover", "-s", "tests"])
+        self.commit("the founder names the suite")
+        self.cli("local")
+        pushed = self.push()
+        self.assertEqual(0, pushed.returncode, pushed.stderr)
+
+
+class TestTheRemedyTheHookNamesDoesSomething(CICase):
+    """A hook whose baked runner is gone refuses the push and says "run 'claude-bp-ci local'
+    if the runner changed". That command compared versions only, so over a hook of this
+    version still baking `go`, in a project that had moved to `make test`, it said "already
+    current" — and every push stayed refused.
+    """
+
+    def moved_from_go_to_make(self) -> None:
+        from claude_bestpractice import ci
+
+        self.write("go.mod", "module example.com/x\n")
+        ci.install(self.ctx())
+        self.assertIn("_runner=go", ci.hook_path(self.ctx()).read_text())
+        (self.repo / "go.mod").unlink()
+        self.write("Makefile", "test:\n\t@echo tests ok\n")
+        self.commit("the project runs make test now")
+
+    def test_local_rebakes_the_runner(self):
+        from claude_bestpractice import ci
+
+        self.moved_from_go_to_make()
+        said = self.cli("local").stdout
+        self.assertNotIn("already current", said)
+        self.assertIn("_runner=make", ci.hook_path(self.ctx()).read_text())
+
+    def test_and_the_push_it_was_refusing_goes_out(self):
+        self.moved_from_go_to_make()
+        self.with_remote()
+        self.cli("local")
+        pushed = subprocess.run(["git", "push", "origin", "main"], cwd=str(self.repo),
+                                capture_output=True, text=True, timeout=180)
+        self.assertEqual(0, pushed.returncode, pushed.stderr)
+
+
 class TestAHookFromBeforeTheRenameIsOurs(CICase):
     """The project was called founder-os once, and hooks written then say so.
 
@@ -1284,3 +1458,95 @@ class TestTheEvidenceCommandsSayWhatTheyDid(CICase):
     def test_green_covers_tree_says_which_way_it_went(self):
         self.make_check(0)
         self.assertIn("not covered", self.ci("green-covers-tree").stdout)
+
+
+class TestASessionCannotSpeakForThePushGate(CICase):
+    """The push gate's bookkeeping and its off switch, reached through the plugin's own
+    command — which `pre-tool` approved without asking anybody, as it approves every
+    command of this plugin's.
+
+    `record-green` and `record-run` are what the pre-push hook calls once it has watched
+    the checks run, and `git push` is what starts the hook: no tool call of a session's
+    ever does. Called by a session after a red Stop, `record-green '<the red command>'`
+    was approved, cleared the failure, and `claude-bp-ship` said "Tests: green (observed
+    by the gate)" — and the hook, which skips a tree already on record as green, let
+    `git push` through a red `make check`. A pass remembered without being observed
+    (decision 0013). And `claude-bp-ci off` was approved in the same breath as
+    `rm .git/hooks/pre-push` was refused: the gated session switching its own gate off
+    (decision 0006).
+    """
+
+    def bash(self, command: str) -> subprocess.CompletedProcess:
+        return self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse",
+            "tool_name": "Bash", "tool_input": {"command": command},
+        })
+
+    def founder_says(self, prompt: str) -> None:
+        self.run_hook("prompt-capture", {
+            "session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": prompt,
+        })
+
+    def test_a_session_cannot_record_a_green_nobody_observed(self):
+        """Every spelling that names the program: on PATH, behind a `cd`, and the
+        interpreter-and-path form the hook itself uses — the first thing a session reading
+        the hook would copy."""
+        from claude_bestpractice import evidence
+
+        self.make_check(exit_code=1)
+        evidence.record_red(self.ctx(), ["make", "check"], "1 failed")
+        for line in (f"{CLI} record-green 'make check'",
+                     f"{sys.executable} {CLI} record-green 'make check'",
+                     f"cd {self.repo} && {CLI} record-green 'make check'"):
+            with self.subTest(line=line):
+                self.assertEqual("deny", self.hook_decision(self.bash(line)))
+
+    def test_nor_a_run_it_did_not_watch(self):
+        self.assertEqual("deny", self.hook_decision(self.bash(f"{CLI} record-run 'make check'")))
+
+    def test_the_refusal_names_what_does_count(self):
+        """Decision 0020: a refusal leaves a command that runs here. The run that counts is
+        one this plugin watched — the Stop gate's, or the hook's on a push."""
+        self.write("Makefile", "test:\n\t@true\n")
+        self.commit("a project with a suite")
+        said = self.hook_reason(self.bash(f"{CLI} record-green 'make test'"))
+        self.assertIn("git push", said)
+        self.assertIn("make test", said)
+
+    def test_switching_the_gate_off_is_the_founders_word(self):
+        proc = self.bash(f"{CLI} off")
+        self.assertEqual("deny", self.hook_decision(proc))
+        self.assertIn("`pre_push off`", self.hook_reason(proc))
+
+    def test_the_founders_word_opens_that_door_once(self):
+        """The mechanism every other switch uses: their line, captured by the hook that reads
+        their messages, then the session carries it out — and the word is spent on use."""
+        from claude_bestpractice import ci
+
+        self.founder_says("pre_push off")
+        self.assertNotEqual("deny", self.hook_decision(self.bash(f"{CLI} off")))
+
+        self.cli("off")
+        self.assertTrue(ci.declined(self.ctx()))
+        self.assertEqual("deny", self.hook_decision(self.bash(f"{CLI} off")),
+                         "one word switched the gate off twice")
+
+    def test_pasting_the_refusal_back_is_not_the_word(self):
+        """The refusal carries the literal it asks for. Read naively, the founder showing it
+        back would BE the word — the message saying it is missing becoming the grant."""
+        said = self.hook_reason(self.bash(f"{CLI} off"))
+        self.founder_says(f"what does this mean?\n{said}")
+        self.assertEqual("deny", self.hook_decision(self.bash(f"{CLI} off")))
+
+    def test_looking_and_arming_need_nobodys_word(self):
+        """`status` reads, and `local` puts the gate back — the direction nobody gates."""
+        for verb in ("status", "local"):
+            with self.subTest(verb=verb):
+                self.assertEqual("allow", self.hook_decision(self.bash(f"{CLI} {verb}")))
+
+    def test_the_word_is_a_switch_and_not_a_task(self):
+        """A message that is only the founder's word on a gate is not a statement of work."""
+        from claude_bestpractice import config
+
+        self.assertEqual({"pre_push": "off"}, config.switches_in("pre_push off"))
+        self.assertTrue(config.is_only_a_switch("pre_push off"))

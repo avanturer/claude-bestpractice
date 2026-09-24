@@ -46,8 +46,14 @@ def cmd_list(ctx) -> int:
         # `where` field anyway said "at observed", which reads like a place and is not.
         if report.get("kind") != defects.OBSERVED:
             print(f"      at {report.get('where') or 'unknown'}")
-    print(f"\nThis is the whole of what would be sent to {defects.REPORT_REPO}:\n")
-    print("\n".join("  " + line for line in defects.body(waiting[0]).splitlines()))
+    # Every body, because `send` files every one. Only the first was shown under "this is
+    # the whole of what would be sent", and the next one named a client's file path in a
+    # public issue that nobody had been shown.
+    print(f"\nThis is the whole of what would be sent to {defects.REPORT_REPO}, "
+          f"one issue per report:")
+    for i, report in enumerate(waiting, start=1):
+        print(f"\n  [{i}] {defects.title(report)}")
+        print("\n".join("    " + line for line in defects.body(report).splitlines()))
     print("\nSend with: claude-bp-report send")
     return 0
 
@@ -102,8 +108,9 @@ def main() -> int:
         print("defect reporting is off for this repository")
         return 0
     if args.command == "defect":
-        print(defects.observed(ctx, args.what, args.gate))
-        return 0
+        recorded, said = defects.observed(ctx, args.what, args.gate)
+        print(said)
+        return 0 if recorded else 1
     return cmd_send(ctx) if args.command == "send" else cmd_list(ctx)
 
 

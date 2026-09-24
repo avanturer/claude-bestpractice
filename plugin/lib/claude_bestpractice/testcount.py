@@ -32,6 +32,7 @@ executing a repository's code to count its tests would be a far worse trade.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -77,8 +78,18 @@ MAX_FILES = 4_000
 MAX_BYTES = 400_000
 
 
+# Where tests live by DIRECTORY, whatever the file inside is called — a fixture, a snapshot
+# or a conftest under `tests/` is part of the suite as much as `test_app.py` is. The first
+# half of `_TEST_FILE`, on its own.
+_TEST_DIR = re.compile(r"(?i)(?:^|/)(?:tests?|specs?|__tests__)/")
+
+
 def is_test_file(relpath: str) -> bool:
     return bool(_TEST_FILE.search(relpath))
+
+
+def in_test_directory(relpath: str) -> bool:
+    return bool(_TEST_DIR.search(relpath))
 
 
 def count_in_text(text: str, suffix: str) -> int:
@@ -101,23 +112,58 @@ def _is_skipped(rel: str, skipped: tuple[str, ...]) -> bool:
     return any(rel == name or rel.startswith(f"{name}/") for name in skipped)
 
 
-def _counted(path: Path, root: Path, skipped: tuple[str, ...]) -> str:
-    """The path relative to `root` when this file's declarations count, "" when they do not.
+def _pruned(parent: Path, name: str) -> bool:
+    """A directory whose contents are never this tree's tests.
 
-    One decision rather than five guards in the loop: a test file, of a language we can
-    count, not in a vendored directory, and not one the founder excluded.
+    Vendored and generated trees, anything hidden, and a nested checkout. Hidden is what
+    covers the worktrees this plugin provisions under `.claude/worktrees/` — INSIDE the main
+    checkout, so from there every sibling session's copy of the suite was counted as this
+    tree's own, and one open tree was enough for the main checkout to "declare" twice the
+    tests its runner executed: a narrowed run, by the arithmetic below. pytest leaves
+    dot-directories alone by default for the same reason.
     """
-    if not path.is_file() or path.suffix not in _ALL_SUFFIXES:
-        return ""
-    if _SKIP_DIRS & set(path.parts):
-        return ""
-    try:
-        rel = path.relative_to(root).as_posix()
-    except ValueError:
-        return ""
+    return name in _SKIP_DIRS or name.startswith(".") or (parent / name / ".git").exists()
+
+
+def _test_files(root: Path, skipped: tuple[str, ...], suffixes: set[str] | None = None):
+    """Every file under `root` whose declarations count, in a stable order, bounded.
+
+    A pruned walk, and every judgement made on the path RELATIVE to `root`. The loop it
+    replaces enumerated and sorted the whole of `node_modules` before discarding it, and
+    tested the absolute path's parts against the vendored names — so a repository cloned
+    anywhere under a directory called `build` or `vendor` counted zero tests, and a floor of
+    zero guards nothing.
+    """
+    wanted = suffixes or _ALL_SUFFIXES
+    seen = 0
+    for current, dirs, files in os.walk(root):
+        here = Path(current)
+        dirs[:] = sorted(name for name in dirs if not _pruned(here, name))
+        for path in (here / name for name in sorted(files)):
+            if not _counts(path, root, wanted, skipped):
+                continue
+            if seen >= MAX_FILES:
+                return
+            seen += 1
+            yield path
+
+
+def _counts(path: Path, root: Path, wanted: set[str], skipped: tuple[str, ...]) -> bool:
+    """A test file, of a language asked about, that the founder did not exclude."""
+    if path.suffix not in wanted or not path.is_file():
+        return False
+    rel = path.relative_to(root).as_posix()
     if not is_test_file(rel) and path.suffix not in _INLINE_TEST_SUFFIXES:
-        return ""
-    return "" if _is_skipped(rel, skipped) else rel
+        return False
+    return not _is_skipped(rel, skipped)
+
+
+def _declarations(path: Path) -> int:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")[:MAX_BYTES]
+    except OSError:
+        return 0
+    return count_in_text(text, path.suffix)
 
 
 def count_tree(root: Path, skip: list[str] | None = None) -> int:
@@ -132,22 +178,15 @@ def count_tree(root: Path, skip: list[str] | None = None) -> int:
     run — not a witnessed pass". The guard is right in general and wrong here, because the
     narrowing was authored in a file the session cannot write (#158).
     """
-    skipped = _clean(skip)
-    total = 0
-    seen = 0
-    for path in sorted(root.rglob("*")):
-        if seen >= MAX_FILES:
-            break
-        rel = _counted(path, root, skipped)
-        if not rel:
-            continue
-        seen += 1
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")[:MAX_BYTES]
-        except OSError:
-            continue
-        total += count_in_text(text, path.suffix)
-    return total
+    return sum(_declarations(path) for path in _test_files(root, _clean(skip)))
+
+
+def declares(root: Path, suffix: str) -> bool:
+    """Whether any test file under `root` declares a test in the language of `suffix`.
+
+    Stops at the first one: this is asked before a runner is chosen, on every Stop.
+    """
+    return any(_declarations(path) for path in _test_files(root, (), {suffix}))
 
 
 _ALL_SUFFIXES = {suffix for suffixes, _ in _PATTERNS for suffix in suffixes}

@@ -427,6 +427,47 @@ class TestBashIsAWriteTool(DisarmCase):
             with self.subTest(command=command[:24]):
                 self.assertTrue(self.bash(command), "a shell write carried a credential through")
 
+    def test_a_command_is_scanned_only_for_what_it_writes(self):
+        """The scan exists to stop a credential reaching a file a commit will carry, and it
+        read every command whole — so these were refused as "this write" with nothing being
+        written, the last of them the very suite the Stop gate demands."""
+        self.start()
+        for command in (
+            "PGPASSWORD=postgres psql -h localhost -U postgres -c 'select 1'",
+            "docker run -d -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:16",
+            "SECRET_KEY=test-secret-key python manage.py test",
+            "JWT_SECRET=testsecret npm test 2>&1 | tee test.log",
+        ):
+            with self.subTest(command=command[:24]):
+                self.assertFalse(self.bash(command), "a command that writes nothing was scanned")
+
+    def test_the_line_named_is_the_commands_own(self):
+        """The scan reads a copy of the command with everything else blanked, and a line
+        number from it has to still be a line of what the session typed."""
+        self.start()
+        proc = self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+            "tool_input": {"command": f"JWT_SECRET=x npm test\necho '{SECRET}' >> conf.py"},
+        })
+        self.assertEqual("deny", self.hook_decision(proc))
+        self.assertIn("line 2: echo", self.hook_reason(proc))
+
+    def test_a_development_default_and_an_endpoint_are_not_credentials(self):
+        """`psql postgresql://postgres:postgres@localhost` passed, and the compose file
+        naming the same default was refused; so was the address of an OAuth endpoint."""
+        self.start()
+        for name, content in (
+            ("docker-compose.yml",
+             "services:\n  db:\n    image: postgres:16\n    environment:\n"
+             "      POSTGRES_PASSWORD: postgres\n"),
+            ("settings.py", 'TOKEN_URL = "https://oauth2.googleapis.com/token"\n'),
+        ):
+            proc = self.run_hook("pre-tool", {
+                "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Write",
+                "tool_input": {"file_path": str(self.repo / name), "content": content},
+            })
+            self.assertNotEqual("deny", self.hook_decision(proc), name)
+
     def test_a_shell_write_respects_another_session_s_lease(self):
         self.write("app.py", "x = 1\n")
         self.commit()
@@ -447,10 +488,10 @@ class TestBashIsAWriteTool(DisarmCase):
 class TestNoCachedVerdictOutlivesItsCause(RepoCase):
     """The result cache was the richest source of defects in the gate. There is none."""
 
-    def project(self, expected: int) -> None:
+    def project(self, expected: int, test_file: str = "test_impl.py") -> None:
         self.write("impl.py", f"def f():\n    return {expected}\n")
         self.write(
-            "test_impl.py", stdlib_test("impl", "f()", "2")
+            test_file, stdlib_test("impl", "f()", "2")
         )
         self.commit()
 
@@ -466,14 +507,18 @@ class TestNoCachedVerdictOutlivesItsCause(RepoCase):
         ).returncode
 
     def test_a_permissive_command_does_not_certify_the_tree_forever(self):
-        self.project(expected=1)
+        """About the DECLARED command, so its test is named where the gate's own runner does
+        not look. Named `test_impl.py`, the gate drives pytest itself wherever `python3` can
+        import it and never runs `true` at all — the first assertion then held on a machine
+        without pytest and failed on one with it, which is a fixture, not a finding."""
+        self.project(expected=1, test_file="check_impl.py")
         self.config(["true"])
         self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
         self.claim_a_task("s1", "impl.py")
         self.write("impl.py", "def f():\n    return 1  # edited\n")
         self.assertEqual(self.stop(), 0, "a permissive command should pass on its own terms")
 
-        self.config([sys.executable, *STDLIB_DISCOVER])
+        self.config([sys.executable, *STDLIB_DISCOVER[:-1], "check_*.py"])
         self.assertEqual(self.stop(), 2, "the earlier permissive pass survived the command change")
 
     def test_a_failure_clears_once_the_code_is_fixed(self):
@@ -511,6 +556,63 @@ class TestTheGateCannotReEnterItself(RepoCase):
             {"session_id": "r1", "hook_event_name": "Stop", "stop_hook_active": False},
         )
         self.assertIn(proc.returncode, (0, 2), "the gate recursed instead of returning")
+
+    def test_a_suite_the_gate_drives_itself_runs_once(self):
+        """The same loop through the gate's OWN pytest run, which carried no recursion token:
+        a test that fires the Stop gate on this clone had that gate drive the suite again,
+        one level deeper each time, until the hook's budget ran out."""
+        counter = self.tmp / "runs.txt"
+        self.write("app.py", "x = 1\n")
+        self.write("test_reenter.py", (
+            "import json\nimport subprocess\nimport sys\n\n\n"
+            "def test_fires_the_gate():\n"
+            f"    with open({str(counter)!r}, 'a') as out:\n"
+            "        out.write('ran\\n')\n"
+            f"    event = json.dumps({{'cwd': {str(self.repo)!r}, 'hook_event_name': 'Stop',\n"
+            "                         'session_id': 'r1', 'stop_hook_active': False})\n"
+            f"    subprocess.run([sys.executable, {str(BIN / 'evidence-gate')!r}], input=event,\n"
+            "                   text=True, capture_output=True, timeout=90)\n"))
+        self.commit()
+        self.run_hook("session-start", {"session_id": "r1", "hook_event_name": "SessionStart"})
+        self.claim_a_task("r1", "app.py")
+        self.write("app.py", "x = 2\n")
+        proc = self.run_hook(
+            "evidence-gate",
+            {"session_id": "r1", "hook_event_name": "Stop", "stop_hook_active": False},
+        )
+        self.assertIn(proc.returncode, (0, 2), proc.stderr)
+        self.assertEqual(1, counter.read_text().count("ran"),
+                         "the gate drove the suite again from inside its own run")
+
+    def test_a_run_in_a_sibling_tree_does_not_lift_this_ones_guard(self):
+        """The token lived in ONE file for the whole clone. A Stop in a sibling worktree
+        overwrote it mid-run, and whichever run finished first deleted the other's."""
+        import os
+        from unittest import mock
+
+        from claude_bestpractice import evidence
+        from claude_bestpractice.gitctx import resolve
+
+        here, there = self.ctx(), resolve(self.add_worktree("sibling"))
+        mine = evidence._issue_nonce(here)
+        theirs = evidence._issue_nonce(there)
+        with mock.patch.dict(os.environ, {evidence.VERIFYING_ENV: mine}):
+            self.assertTrue(evidence._inside_our_own_run(here), "a sibling's run took the token")
+            evidence._retire_nonce(there, theirs)
+            self.assertTrue(evidence._inside_our_own_run(here), "a sibling's end ended this run")
+            evidence._retire_nonce(here, mine)
+            self.assertFalse(evidence._inside_our_own_run(here))
+
+    def test_the_clean_rerun_takes_its_token_back(self):
+        """A token left behind is a guard that stays up after the run it guarded."""
+        from claude_bestpractice import evidence, store
+
+        self.write("app.py", "x = 1\n")
+        self.commit("something to re-run")
+        evidence.clean_rerun(self.ctx(), ["python3", "-c", "print('1 passed')"])
+        tokens = store.tier_b(self.ctx(), evidence.NONCE_DIR)
+        self.assertEqual([], list(tokens.iterdir()) if tokens.is_dir() else [])
+        self.assertFalse(store.tier_b(self.ctx(), "verifying.nonce").exists())
 
 
 class TestARenameActuallyFailsValidation(RepoCase):
@@ -700,12 +802,37 @@ class TestDriftMustNotWedgeTheSession(RepoCase):
         git(["mv", "before.py", "after.py"], self.repo)
         self.assertNotIn("after.py", evidence.committed(self.ctx(), ["after.py"]))
 
+    def test_a_file_in_a_directory_the_tree_never_had_is_still_loose(self):
+        """git reports a new directory as `payments/`, which is no file anybody changed."""
+        from claude_bestpractice import evidence
+
+        self.write("payments/stripe.py", "KEY = 'x'\n")
+        self.assertEqual(set(), evidence.committed(self.ctx(), ["payments/stripe.py"]))
+
+    def test_a_name_git_would_quote_is_still_loose(self):
+        """`src/café.py` came back as `"src/caf\\303\\251.py"`, which matches nothing."""
+        from claude_bestpractice import evidence
+
+        self.write("src/café.py", "x = 1\n")
+        self.write("src/my notes.py", "y = 1\n")
+        self.commit("names git quotes")
+        self.write("src/café.py", "x = 2\n")
+        self.write("src/my notes.py", "y = 2\n")
+        self.assertEqual(set(), evidence.committed(self.ctx(), ["src/café.py", "src/my notes.py"]))
+
     def test_an_unreadable_status_forgives_nothing(self):
         """Fails closed: a gate that cannot see the tree does not get to wave it through."""
+        from dataclasses import replace
+
         from claude_bestpractice import evidence
 
         self.write("loose.py", "x = 1\n")
         self.assertEqual(set(), evidence.committed(self.ctx(), []))
+        # A status git refuses to give — here, asked outside any repository — used to read
+        # as "nothing is uncommitted", which forgave every changed file as committed.
+        (self.tmp / "not-a-repository").mkdir()
+        blind = replace(self.ctx(), worktree_root=self.tmp / "not-a-repository")
+        self.assertEqual(set(), evidence.committed(blind, ["loose.py"]))
 
     def test_work_already_on_the_trunk_is_not_this_sessions_drift(self):
         """Merged work has been through whatever review the founder runs; a gate that
@@ -721,3 +848,25 @@ class TestDriftMustNotWedgeTheSession(RepoCase):
 
         landed = evidence.landed(self.ctx(), ["shipped.py", "local.py"])
         self.assertEqual(["shipped.py"], landed)
+
+    def test_what_landed_is_asked_of_git_once_for_the_whole_list(self):
+        """Four git processes a file, on every Stop: 1,500 files of one vendored library cost
+        twelve seconds before anything else the gate does."""
+        from unittest import mock
+
+        from claude_bestpractice import evidence
+
+        for n in range(60):
+            self.write(f"vendor/lib/mod{n}.py", f"X = {n}\n")
+        self.write("local.py", "y = 2\n")
+        self.commit("vendor a library")
+        git(["update-ref", "refs/remotes/origin/main", "HEAD"], self.repo)
+        self.write("local.py", "y = 3\n")
+        self.write("vendor/lib/mod0.py", "X = 'changed here'\n")
+        changed = [f"vendor/lib/mod{n}.py" for n in range(60)] + ["local.py"]
+        ctx = self.ctx()
+
+        with mock.patch.object(subprocess, "run", wraps=subprocess.run) as run:
+            landed = evidence.landed(ctx, changed)
+        self.assertEqual(sorted(changed[1:-1]), sorted(landed))
+        self.assertLessEqual(run.call_count, 2, "git was asked once per file")

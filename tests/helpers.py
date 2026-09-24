@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -35,6 +36,23 @@ BIN = REPO_ROOT / "plugin" / "bin"
 
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
+
+
+def harness_matches(matcher: str, value: str) -> bool:
+    """Whether Claude Code fires a hook with this `matcher` for `value` (a tool's name).
+
+    The rules as the hooks reference states them: "*", "" or none match everything; a
+    matcher of only letters, digits, `_`, `-`, spaces, `,` and `|` is a list of exact names;
+    anything else is an unanchored regular expression. A test that splits the matcher on `|`
+    instead asserts a rule the harness does not apply.
+    """
+    import re
+
+    if matcher in ("", "*"):
+        return True
+    if re.fullmatch(r"[A-Za-z0-9_\- ,|]+", matcher):
+        return value in {part.strip() for part in re.split(r"[|,]", matcher)}
+    return re.search(matcher, value) is not None
 
 
 def git(args: list[str], cwd: Path) -> str:
@@ -68,6 +86,20 @@ def make_repo(parent: Path, name: str = "repo", seed: bool = True, relax_git_pol
         git(["add", "-A"], repo)
         git(["commit", "-qm", "seed"], repo)
     return repo
+
+
+def add_origin(repo: Path, parent: Path) -> Path:
+    """A bare `origin` for `repo`, pushed to and set as its remote HEAD.
+
+    The shape every rule about "the trunk" is written for: `origin/HEAD` resolves, a branch
+    can have an upstream, and the clone's own `main` can lag the remote's.
+    """
+    origin = parent / "origin.git"
+    git(["init", "-q", "--bare", "-b", "main", str(origin)], parent)
+    git(["remote", "add", "origin", str(origin)], repo)
+    git(["push", "-q", "-u", "origin", "main"], repo)
+    git(["remote", "set-head", "origin", "main"], repo)
+    return origin
 
 
 class RepoCase(unittest.TestCase):
@@ -188,6 +220,31 @@ class RepoCase(unittest.TestCase):
         )
 
 
+def hooks_at_once(name: str, events: list[dict], cwd, env: dict | None = None) -> list[str]:
+    """One gate per event, all in the same instant: what each printed.
+
+    The way the harness runs the hooks of one message's parallel calls — every process
+    already started and waiting on its stdin, then every event handed over together. Run
+    one after another, a race between them cannot happen and a test of it proves nothing.
+    """
+    gates = [
+        subprocess.Popen([sys.executable, str(BIN / name)], cwd=str(cwd), env=env,
+                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                         stderr=subprocess.DEVNULL, text=True)
+        for _ in events
+    ]
+    time.sleep(1.5)
+    for gate, event in zip(gates, events):
+        gate.stdin.write(json.dumps({"cwd": str(cwd), **event}))
+        gate.stdin.close()
+    said = []
+    for gate in gates:
+        with gate.stdout:
+            said.append(gate.stdout.read())
+        gate.wait()
+    return said
+
+
 def session_record_for(ctx, session_id: str, pid: int | None = None):
     """Build a session record for an arbitrary context.
 
@@ -216,6 +273,30 @@ def session_record_for(ctx, session_id: str, pid: int | None = None):
         started_at=now,
         heartbeat_at=now,
     )
+
+
+def process_gone(pid: int, within: float = 5.0) -> bool:
+    """Whether a process has exited within a few seconds. A zombie counts as exited.
+
+    Zombies count because who reaps an orphan is the machine's business, not the gate's:
+    in a container whose init never waits, a killed process stays in the table forever.
+    """
+    import os
+    import time
+
+    end = time.time() + within
+    while time.time() < end:
+        try:
+            with open(f"/proc/{pid}/stat", "rb") as handle:
+                if handle.read().rsplit(b")", 1)[1].split()[0] == b"Z":
+                    return True
+        except OSError:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return True
+        time.sleep(0.05)
+    return False
 
 
 def sid(cwd, session_id: str) -> str:

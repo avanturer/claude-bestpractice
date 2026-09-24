@@ -14,7 +14,9 @@ exist; shipped plugins that read them enforce nothing.
 
 from __future__ import annotations
 
+import functools
 import os
+import shlex
 import sys
 import time
 from pathlib import Path
@@ -23,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
 import json  # noqa: E402
 import re  # noqa: E402
+import shlex  # noqa: E402
 
 from claude_bestpractice import ci, config, evidence, gitpolicy, hookio, inbox, pullrequest, redact, sessions, shellcmd, stage, store, subagents, vouch, worktree  # noqa: E402
 from claude_bestpractice.gitctx import resolve  # noqa: E402
@@ -146,14 +149,38 @@ def _disables_the_plugin(ctx, path: Path, content: str) -> bool:
     switches it off. A session edits permissions, hooks and env in that file for the
     founder all day, and refusing the file wholesale would be this plugin taking a file
     that is not its own.
+
+    In this tree or in the main checkout, which is where every tree reads the switch from.
     """
-    try:
-        rel = path.resolve().relative_to(ctx.worktree_root.resolve()).as_posix()
-    except (OSError, ValueError):
-        return False
-    if rel not in config.PROJECT_SETTINGS or config.disabled_for_project(ctx):
+    rels = _relative_in(path, ctx.worktree_root, config.founders_tree(ctx))
+    if not set(rels) & set(config.PROJECT_SETTINGS) or config.disabled_for_project(ctx):
         return False
     return _turns_it_off(content)
+
+
+def _relative_in(path: Path, *roots: Path) -> list:
+    """This path as each of these trees names it, for the trees it is inside."""
+    out = []
+    for root in roots:
+        try:
+            out.append(path.resolve().relative_to(root.resolve()).as_posix())
+        except (OSError, ValueError):
+            continue
+    return out
+
+
+def _founders_state(ctx, absolute: list) -> list:
+    """Enforcement state in the main checkout, written from another tree.
+
+    Every tree reads the main checkout's `config.json` now, and the rule below only sees
+    writes inside this session's own tree — so without this a session in a worktree could
+    rewrite the one config every tree obeys, `enabled` and `test_command` included.
+    """
+    home = config.founders_tree(ctx)
+    if home.resolve() == ctx.worktree_root.resolve():
+        return []
+    return [str(path) for path in absolute
+            if any(_protected_state(rel) for rel in _relative_in(path, home))]
 
 
 MIGRATION_DIRS = ("migrations/", "db/migrate/", "prisma/migrations/", "alembic/versions/")
@@ -167,10 +194,172 @@ DESTRUCTIVE_DDL = re.compile(
 
 # Promotion is the one-way door. Preview deploys stay free; rollback is fully automatic
 # precisely because its failure mode is returning to what already worked.
-PRODUCTION_DEPLOY = re.compile(
-    r"(?i)(?:--prod\b|--production\b|-e\s+prod(?:uction)?\b|environment[= ]production\b|"
-    r"kubectl\s+.*--context[= ]\S*prod|fly\s+deploy(?!.*--config)|railway\s+up\b)"
-)
+#
+# Decided on the PROGRAM and what it was told to do, never on a flag wherever it appears.
+# `--prod` anywhere in a line refused `npm ci --production` and `pnpm install --prod`, which
+# install; `git grep -- --production`, which searches; a commit message mentioning the flag;
+# and `terraform plan` and `kubectl get` pointed at production, which change nothing. Each
+# went to the founder rather than to the session — and each spent their one `+release` on
+# the way through, so the real promotion after it was refused again.
+_PRODUCTION = re.compile(r"(?i)(?:^|[^a-z])prod(?:uction)?(?:[^a-z]|$)")
+
+# A project's own way to ship, named for it: `./deploy.sh --prod`, `npm run deploy --
+# --production`, `make release ENV=production`. The name is all a gate can read about what
+# a project's script does, and it is what the flag-anywhere rule was catching for these.
+_NAMED_FOR_SHIPPING = re.compile(r"(?i)deploy|release|promote")
+
+# How such a script is reached: a package runner, a package manager's `run`, make, or an
+# interpreter handed the file.
+_RUNS_A_SCRIPT = {"npx", "pnpx", "bunx", "yarn", "make", "just"}
+_SCRIPT_VERBS = {"run", "run-script", "exec", "dlx", "x"}
+_PACKAGE_MANAGERS = {"npm", "pnpm", "yarn", "bun"}
+
+# Each tool's subcommands, the ones that change what is deployed and the ones that only
+# look, so that the first of them on a line says which kind this is — whatever global
+# option values stand in front of it.
+_VERCEL_VERBS = {"deploy", "redeploy", "promote", "build", "dev", "env", "pull", "link", "ls",
+                 "list", "inspect", "logs", "rollback", "alias", "domains", "rm", "remove"}
+_KUBECTL_CHANGES = {"apply", "create", "delete", "replace", "patch", "edit", "set", "rollout",
+                    "scale", "autoscale", "label", "annotate", "expose", "run", "drain",
+                    "cordon", "uncordon", "taint"}
+_KUBECTL_READS = {"get", "describe", "logs", "top", "explain", "diff", "version", "config",
+                  "api-resources", "api-versions", "auth", "cluster-info", "events", "wait",
+                  "port-forward", "exec", "cp", "attach", "proxy"}
+_HELM_VERBS = {"install", "upgrade", "uninstall", "delete", "rollback", "list", "ls",
+               "status", "get", "history", "template", "lint", "show", "diff", "repo",
+               "dependency", "search", "pull", "package", "test", "version"}
+_TERRAFORM_VERBS = {"apply", "destroy", "plan", "show", "output", "validate", "fmt", "init",
+                    "state", "graph", "providers", "version", "workspace", "import", "refresh",
+                    "console", "taint", "untaint", "test", "get"}
+
+
+def _verb(args: list[str], known: set[str]) -> str:
+    """The first argument that is one of a tool's own subcommands, or ""."""
+    return next((arg for arg in args if arg in known), "")
+
+
+def _values(args: list[str], *names: str) -> list[str]:
+    """Every value these options were given, as `--name value` or `--name=value`."""
+    out: list[str] = []
+    for index, arg in enumerate(args):
+        for name in names:
+            if arg == name and index + 1 < len(args):
+                out.append(args[index + 1])
+            elif arg.startswith(name + "="):
+                out.append(arg.split("=", 1)[1])
+    return out
+
+
+def _names_production(words: list[str]) -> bool:
+    return any(_PRODUCTION.search(word) for word in words)
+
+
+# One judge per program that deploys, handed the arguments after that program's name.
+def _vercel(args: list[str]) -> bool:
+    verb = _verb(args, _VERCEL_VERBS)
+    if verb == "promote":
+        return True
+    return verb in ("", "deploy", "redeploy") and (
+        "--prod" in args or _names_production(_values(args, "--target"))
+    )
+
+
+def _netlify(args: list[str]) -> bool:
+    return _verb(args, {"deploy"}) == "deploy" and bool(
+        {"--prod", "--prod-if-unlocked", "-p"}.intersection(args)
+    )
+
+
+def _fly(args: list[str]) -> bool:
+    # A named config is how a fly app is deployed anywhere but its production one.
+    return _verb(args, {"deploy"}) == "deploy" and not _values(args, "--config", "-c")
+
+
+def _railway(args: list[str]) -> bool:
+    return _verb(args, {"up"}) == "up"
+
+
+def _kubectl(args: list[str]) -> bool:
+    verb = _verb(args, _KUBECTL_CHANGES | _KUBECTL_READS)
+    if verb not in _KUBECTL_CHANGES or (verb == "rollout" and _verb(args, {"status", "history"})):
+        return False
+    return _names_production(_values(args, "--context"))
+
+
+def _helm(args: list[str]) -> bool:
+    verb = _verb(args, _HELM_VERBS)
+    return verb in ("install", "upgrade", "uninstall", "delete") and _names_production(args)
+
+
+def _terraform(args: list[str]) -> bool:
+    return _verb(args, _TERRAFORM_VERBS) in ("apply", "destroy") and _names_production(args)
+
+
+# An over-the-air update is a promotion like any other (decision 0010).
+def _eas(args: list[str]) -> bool:
+    return _verb(args, {"update", "build", "submit", "channel", "branch"}) == "update" and \
+        _names_production(_values(args, "--branch", "--channel", "--environment"))
+
+
+_PROMOTES = {
+    "vercel": _vercel, "netlify": _netlify, "ntl": _netlify, "fly": _fly, "flyctl": _fly,
+    "railway": _railway, "kubectl": _kubectl, "helm": _helm, "terraform": _terraform,
+    "tofu": _terraform, "terragrunt": _terraform, "eas": _eas,
+}
+
+
+def _what_runs(argv: list[str]) -> tuple[str, list[str]]:
+    """The program a command really runs, and its arguments: past `npx`, `npm run`, `make`
+    and an interpreter handed a script."""
+    name, rest = argv[0].rsplit("/", 1)[-1], argv[1:]
+    if name in _PACKAGE_MANAGERS and rest[:1] and rest[0] in _SCRIPT_VERBS:
+        rest = rest[1:]
+    elif name not in _RUNS_A_SCRIPT and not _INTERPRETER.match(name):
+        return name, rest
+    for index, word in enumerate(rest):
+        if not word.startswith("-"):
+            return word.rsplit("/", 1)[-1], rest[index + 1:]
+    return name, rest
+
+
+def promotes(argv: list[str]) -> bool:
+    """Does this one command promote something to production?"""
+    name, args = _what_runs(argv)
+    judge = _PROMOTES.get(name)
+    if judge is not None:
+        return judge(args)
+    return bool(_NAMED_FOR_SHIPPING.search(name)) and _names_production([name, *args])
+
+
+# The words of a segment the tokeniser declines, for the one question asked of them here.
+_WORD = re.compile(r"[^\s'\"`$();|&<>]+")
+
+
+def promotes_to_production(command: str, cwd: Path) -> bool:
+    """Does anything this line runs promote to production — its text about one never counts.
+
+    Read per segment, so `(cd web && vercel --prod)` is read at all. A segment the tokeniser
+    declines is not a way past: its words are still searched for a deploying program, which
+    is the only thing that could make it one. A shell's `-c` is read as the line it is.
+    """
+    for _segment, literal, _here, _start in _segments_with_cwd(_blanked(command), cwd, command):
+        commands = _commands_in(literal)
+        if not commands:
+            words = _WORD.findall(literal)
+            commands = [words[at:] for at, word in enumerate(words)
+                        if word.rsplit("/", 1)[-1] in _PROMOTES]
+        for argv in commands:
+            code = _shell_code(argv)
+            if promotes(argv) or (code and promotes_to_production(code, cwd)):
+                return True
+    return False
+
+
+def _shell_code(argv: list[str]) -> str:
+    """The line a `sh -c` hands its shell to run, or "" for any other command."""
+    if argv[0].rsplit("/", 1)[-1] in ("sh", "bash", "zsh") and "-c" in argv[1:-1]:
+        return argv[argv.index("-c") + 1]
+    return ""
 
 
 def signature(event: hookio.HookEvent) -> str:
@@ -204,7 +393,11 @@ def signature(event: hookio.HookEvent) -> str:
     if isinstance(edits, list):
         anchors.extend(str(e.get("old_string", "")) for e in edits if isinstance(e, dict))
     seed = "\u0000".join([str(target), *(a for a in anchors if a)])
-    return f"{event.tool_name}:{hashlib.sha256(seed.encode('utf-8', 'surrogateescape')).hexdigest()[:24]}"
+    # `surrogatepass`, not `surrogateescape`: the second only round-trips the surrogates
+    # that decoding bytes produces, and a paste can carry any lone one. `echo "\ud800"`
+    # raised here, before any rule had looked at the call, and a fail-closed gate turned
+    # that into a refusal of a command that writes nothing.
+    return f"{event.tool_name}:{hashlib.sha256(seed.encode('utf-8', 'surrogatepass')).hexdigest()[:24]}"
 
 
 def _spawn_target(event: hookio.HookEvent) -> str:
@@ -240,23 +433,56 @@ def _sibling_of_repo(ctx, target) -> bool:
     return resolved.parent == root.parent and resolved.name.startswith(f"{root.name}-")
 
 
-def _holds_a_card(ctx, session_id: str) -> bool:
-    """Is a task on the board claimed by this session?
+def _holds_a_card(ctx, session_id: str, touched: list[str] | None = None) -> bool:
+    """Is a task on the board claimed by this session, for `touched` when paths are known?
 
     Split out because the answer is now wanted about a call that names no path at all —
     `_ledger_covers` reads `touched`, and `all()` over an empty list is True, so asking it
     about a `git merge` would have answered yes for every session on the machine.
+
+    By any id this session has had (`plan.held_by`, `plan.closed_by`): it claims in the
+    main checkout and then works in its own tree, where it is a second identity with the
+    same card.
     """
     from claude_bestpractice import plan
 
+    if plan.held_by(ctx, session_id):
+        return True
     # A card this session CLOSED counts. Closing is what the ledger asks for, and a gate
     # that then says "nothing on the board says this session is working" punishes the
     # session for doing it — the only way to stay quiet was to leave the card open until
     # the session ended (#220).
-    return any(
-        t.owner == session_id
-        for t in plan.load_all(ctx, plan.DOING) + plan.load_all(ctx, plan.DONE)
+    #
+    # For the files it named and nothing else. Counted for any path, one closed card was a
+    # licence to write anything for the rest of the session without claiming another: the
+    # next card the founder filed was advertised as ready to start while this session was
+    # already writing it, which is the collision the board exists to prevent.
+    closed = plan.closed_by(ctx, session_id)
+    return bool(touched) and all(
+        any(plan.carried_by(card, [rel]) for card in closed) for rel in touched
     )
+
+
+def _card_commands(ctx, event, paths: str) -> str:
+    """The two commands that put this call's work on the board, as a refusal prints them.
+
+    The card a founder's message already opened for this session, when there is one. Sent to
+    `add` instead, a session filed a second card for the same instruction and left the first
+    sitting in NEXT over finished work — the duplicate a real session made, and the one the
+    Stop gate already stopped asking for. `--done-when` in both, because `claim` refuses a
+    card without one (decision 0020: every command a refusal names runs as printed).
+    """
+    from claude_bestpractice import plan
+
+    done_when = '--done-when "<what has to become true>"'
+    opened = plan.opened_for(ctx, str(event.raw.get("session_id") or ""))
+    if opened is not None:
+        return (f"  Your founder's instruction is already on it as {opened.id} — plan it and "
+                "claim it:\n"
+                f"  claude-bp-plan update {opened.id} --paths {paths} {done_when}\n"
+                f"  then: claude-bp-plan claim {opened.id}")
+    return (f'  claude-bp-plan add "<what you are about to do>" --paths {paths} {done_when}\n'
+            "  then: claude-bp-plan claim <id>   (or claim the task you are on)")
 
 
 def _ledger_covers(ctx, session_id: str, touched: list[str]) -> bool:
@@ -265,11 +491,55 @@ def _ledger_covers(ctx, session_id: str, touched: list[str]) -> bool:
     Exempt paths too: a turn that only touches `.claude/` needs no card for the same
     reason it needs no test run — the gate's own bookkeeping is not the founder's work.
     """
-    from claude_bestpractice import store
-
-    if all(rel.startswith(store.TIER_A_DIRNAME) or rel.startswith(".claude/") for rel in touched):
+    if all(_bookkeeping(rel) for rel in touched):
         return True
-    return _holds_a_card(ctx, session_id)
+    return _holds_a_card(ctx, session_id, touched)
+
+
+def _bookkeeping(rel: str) -> bool:
+    """Is this path, relative to the tree it is in, the gate's own rather than the work?"""
+    return rel.startswith(store.TIER_A_DIRNAME) or rel.startswith(".claude/")
+
+
+def _landed(ctx, absolute: list[Path]) -> list[tuple[Path, str]]:
+    """Each write inside this checkout: the tree it lands in, and its path inside that tree.
+
+    Relative to the tree a write LANDS in, never to the one the hook runs from. From the
+    main checkout, a write into the tree this plugin provisioned is `.claude/worktrees/<t>/
+    src/app.py` — under `.claude/`, which exempts the gate's own bookkeeping — so every
+    write into the tree needed no card at all, while the very same write with the hook
+    standing in the tree was refused for want of one.
+    """
+    root = ctx.worktree_root.resolve()
+    home = worktree.HOME.parts
+    inside = len(home) + 1
+    out: list[tuple[Path, str]] = []
+    for path in absolute:
+        try:
+            parts = path.relative_to(root).parts
+        except ValueError:
+            continue
+        if parts[:len(home)] == home and len(parts) > inside:
+            out.append((root.joinpath(*parts[:inside]), "/".join(parts[inside:])))
+        else:
+            out.append((root, "/".join(parts)))
+    return out
+
+
+def _unlisted(ctx, session_id: str, absolute: list[Path]) -> str:
+    """The first of these writes no card on the board covers, as a card would name it.
+
+    A path git ignores is owed no card. The board is how a sibling decides what is safe to
+    touch, and no commit will ever carry an ignored file to a sibling — so `pytest -q 2>&1
+    | tee test-output.log`, with `*.log` ignored, was refused for want of a card on a log.
+    Asked last and only of what is left: it costs git a call, the rest cost nothing.
+    """
+    landed = _landed(ctx, absolute)
+    if _ledger_covers(ctx, session_id, [rel for _tree, rel in landed]):
+        return ""
+    owed = [rel for tree, rel in landed
+            if not _bookkeeping(rel) and not gitpolicy.git_ignores(tree, rel)]
+    return owed[0] if owed else ""
 
 
 # What a session is to do with a block from this plugin, said at the block itself
@@ -357,7 +627,17 @@ BASH_WRITE_TARGETS = re.compile(
 
 # `sed -i` writes its LAST argument; everything before it is the script, which looks
 # path-shaped enough (`s/x/y/`) to fool a single pattern.
+#
+# Only for a line the tokeniser declines. Otherwise `-i` is read from sed's own arguments:
+# `" -i" in segment` fired on any `-i` in a pipeline that ran sed anywhere, so
+# `sed -n '1,20p' f | grep -in split` was a write — refused in the main checkout, where it
+# provisioned a worktree for every session that ran it, and a lease on a file it only read.
 SED_IN_PLACE = re.compile(r"\bsed\s+(?:-\S+\s+|'[^']*'\s+|\"[^\"]*\"\s+)*(?P<path>[\w./@+-]+)")
+
+# What stands in front of a program without changing what it does: sed's files are still
+# sed's under `sudo`, and `uv run python -c …` is still Python running inline code.
+_LAUNCHERS = {"sudo", "doas", "xargs", "uv", "poetry", "pipenv", "pdm", "hatch", "rye",
+              "npx", "pnpx", "bunx"}
 
 # A verb writes only when it is the command being RUN, and `\b` matched it as an ARGUMENT
 # too. `install` is a subcommand of nearly every package manager there is, so `pip install
@@ -407,6 +687,13 @@ _HEREDOC = re.compile(r"<<-?\s*(['\"]?)(?P<tag>\w+)\1.*?^\s*(?P=tag)\s*$", re.S 
 _ARG = re.compile(r"[\w./@+~-]+")
 
 
+def _blanked(command: str) -> str:
+    """The command with heredoc bodies and quoted spans turned to spaces, its length kept."""
+    for pattern in (_HEREDOC, _QUOTED):
+        command = pattern.sub(lambda m: " " * len(m.group(0)), command)
+    return command
+
+
 # `cd x && …` moves what a relative redirect means, and nothing here was reading it. A
 # command that wrote `/tmp/t9/a.py` was resolved against the repository root instead and
 # refused as a write to `<repo>/a.py` — a file it never touched. Reported from a real
@@ -419,8 +706,19 @@ _ARG = re.compile(r"[\w./@+~-]+")
 # with "`(cd … && ...)` leaves this shell where it is", so taking the advice was what
 # triggered the refusal (#203). A subshell's `cd` moves the commands inside it; it is only
 # the PARENT shell's final directory that it leaves alone, and that is asked elsewhere.
-_CD = re.compile(r"^\s*[(\s]*cd\s+(?P<path>[\"']?[\w./@+~-]+[\"']?)\s*$")
+#
+# The directory is read from the words the shell will see, never from the copy with quoted
+# spans blanked: that copy has no directory left in `cd "/tmp/dir with space"`, so the `cd`
+# went unread and `cd "/tmp/dir with space" && echo hi > out.txt` from the main checkout was
+# refused as a write into the checkout it had just left. This only says a segment MAY be one.
+_CD = re.compile(r"^[\s({]*cd\b")
 _SEGMENTS = re.compile(r"&&|\|\||;|\n")
+
+# A subshell's brackets, at the edges of a segment. `_SEGMENTS` cuts on `&&` and `;` and
+# never on brackets, so `(cd x && git pull)` arrives as `(cd x ` and ` git pull)` — and a
+# bracket is the one piece of shell `shellcmd` declines outright. Trimmed at the edges only:
+# one anywhere else still makes it decline, which every caller here falls back from.
+_EDGE_BRACKETS = re.compile(r"^[\s({]+|[\s)}]+$")
 
 # Git destroys a working tree without ever naming a file in it, so every rule here keyed
 # on "which paths does this write" saw nothing at all. `git -C ../main reset --hard HEAD~1`
@@ -450,6 +748,13 @@ _WORKTREE_REMOVE = re.compile(r"\bworktree\s+remove\b(?P<args>(?:\s+(?:-\S+|[\w.
 # refused as a command that discards uncommitted work (#218).
 _WORKTREE_READ = re.compile(r"\bworktree\s+(?:list|prune)\b")
 
+# The same for the other verbs, read off each command's own arguments wherever the line can
+# be read that way: `stash list` and `stash show` print, `clean -n` lists what it would
+# delete, and `apply --check` and its siblings report. `git -C <main> stash list` came back
+# as a command that discards uncommitted work, and so did every other way to look.
+_READ_SPELLINGS = {"stash": {"list", "show"}, "worktree": {"list", "prune"}}
+_APPLY_REPORTS = {"--check", "--stat", "--numstat", "--summary"}
+
 # The session asking for the tree to go whatever is in it. Read rather than decided:
 # nothing in this plugin adds `--force` on its own.
 _WORKTREE_FORCE = re.compile(r"\bworktree\s+remove\b[^&|;\n]*\s(?:--force|-f)\b")
@@ -463,6 +768,16 @@ _INTERPRETER_WRITE = re.compile(
     re.M,
 )
 
+# ...and only where an interpreter RUNS the code: handed it with `-c` or `-e`, told `-` to
+# read it, or given no script at all so a heredoc or a pipe feeds it. Scanned in every
+# segment, `open('x', 'w')` anywhere in a command was a write whatever program ran — so
+# `grep -rn "open('config.json', 'w')" src/` was one, and a pull request body describing
+# the change, and a heredoc writing a script to /tmp. Reading taken for doing: #76, one
+# rule over, and each provisioned a worktree when run from the main checkout.
+_INTERPRETER = re.compile(r"^(?:python[\d.]*|pypy[\d.]*|node|nodejs|deno|bun|ruby|perl|php|"
+                          r"sh|bash|zsh)$")
+_INLINE_CODE = {"-c", "-e", "-E", "-p", "-r", "--eval", "--print", "-", "eval"}
+
 
 def _segments_with_cwd(scannable: str, cwd: Path, literal: str = ""):
     """Each shell segment paired with the directory it would actually run in.
@@ -471,6 +786,7 @@ def _segments_with_cwd(scannable: str, cwd: Path, literal: str = ""):
     scan can be trusted on, and the raw one, which is the only copy where an interpreter's
     quoted path survives at all. Blanking preserves LENGTH, so one set of offsets cuts
     both, and the raw half is no longer scanned whole against a cwd the `cd`s have moved.
+    The offset comes back too, for a caller cutting the same span out of a third copy.
     """
     here = cwd
     raw = literal or scannable
@@ -480,18 +796,48 @@ def _segments_with_cwd(scannable: str, cwd: Path, literal: str = ""):
     edges.append(len(scannable))
     for start, end in zip(edges[0::2], edges[1::2]):
         segment = scannable[start:end]
-        moved = _CD.match(segment)
-        if moved:
+        moved = _moves_to(raw[start:end])
+        if moved is not None:
             # Tracked, never executed. `cd` into a path that does not exist still changes
             # what the rest of the line means to this scanner, and guessing wrong here
             # only costs a target that lands outside every tree, which is ignored anyway.
             # Through `_resolve`, because `here / "~/x"` is `<here>/~/x` and `.expanduser()`
             # does not touch it — the #37 rewrite of a home path into a repository one,
             # still live in this half of the file long after the other half was fixed.
-            moved_to = _resolve(here, moved.group("path"))
+            moved_to = _resolve(here, moved)
             here = moved_to if moved_to is not None else here
             continue
-        yield segment, raw[start:end], here
+        yield segment, raw[start:end], here, start
+
+
+@functools.lru_cache(maxsize=256)
+def _commands_in(segment: str) -> list[list[str]]:
+    """What one segment runs, split the way the shell splits it; empty where it cannot be.
+
+    A heredoc body is blanked first, for the reason it is everywhere in this file: it is
+    data handed to the command, not words of the command.
+
+    Cached for the one call this process judges, because several rules ask about the same
+    segment and a long quoted argument costs the tokeniser more than linear time. The lists
+    are therefore shared: read them, never change them.
+    """
+    body = _HEREDOC.sub(lambda m: " " * len(m.group(0)), segment)
+    return shellcmd.commands(_EDGE_BRACKETS.sub("", body))
+
+
+def _moves_to(segment: str) -> str | None:
+    """The directory a segment that is nothing but a `cd` names, or None for any other."""
+    if not _CD.match(segment):
+        return None
+    commands = _commands_in(segment)
+    if len(commands) != 1 or commands[0][0] != "cd":
+        return None
+    named = [word for word in commands[0][1:] if not word.startswith("-")]
+    # One directory, and a literal one. `cd` alone and `cd -` go where only the shell
+    # knows, and `$DIR` is whatever it expands to: none of them is a place to resolve.
+    if len(named) != 1 or "$" in named[0] or "`" in named[0]:
+        return None
+    return named[0]
 
 
 def _resolve(base: Path, raw: str) -> Path | None:
@@ -502,23 +848,45 @@ def _resolve(base: Path, raw: str) -> Path | None:
     then refused by the main-checkout rule, for a file the command never went near.
     Reported as issue #37: deleting stray files under `~/.claude/projects/` came back as
     "this is the main checkout, not a worktree".
+
+    None, too, for a path no filesystem call can take: a NUL byte raises ValueError rather
+    than OSError, and a Write naming one crashed this gate — which fails closed — instead
+    of reaching the tool that refuses the path itself. A lone surrogate raised the same
+    way, and is judged as the name it becomes on disk: the harness encodes it as U+FFFD.
     """
     try:
-        candidate = Path(raw.strip("\"'")).expanduser()
+        name = raw.strip("\"'").encode("utf-16", "surrogatepass").decode("utf-16", "replace")
+        candidate = Path(name).expanduser()
         if not candidate.is_absolute():
             candidate = base / candidate
         return candidate.resolve()
-    except (OSError, RuntimeError):
+    except (OSError, RuntimeError, ValueError):
         return None
 
 
-def _removal_targets(rest: str, here: Path) -> list[Path]:
-    """The trees `git worktree remove` would delete, as this segment names them."""
-    return [
-        _resolve(here, a)
-        for removal in _WORKTREE_REMOVE.finditer(rest)
+def _removal_targets(rest: str, literal: str, here: Path) -> list[Path]:
+    """The trees `git worktree remove` would delete, as this segment names them.
+
+    Read from the words the shell will see wherever the segment can be read that way. In
+    `rest` a quoted path is blanked, so `git worktree remove "<a tree under a space>"` named
+    no tree at all — and a session removing its own tree was let through to do it from
+    inside, the one step decision 0022 exists to take for it (#224).
+    """
+    commands = _commands_in(literal)
+    named = [word for argv in commands for word in _removed_by(argv)] if commands else [
+        a for removal in _WORKTREE_REMOVE.finditer(rest)
         for a in _ARG.findall(removal.group("args")) if not a.startswith("-")
     ]
+    return [_resolve(here, word) for word in named]
+
+
+def _removed_by(argv: list[str]) -> list[str]:
+    """What one command's `git worktree remove` names, or nothing when it is not one."""
+    argv = _launched(argv, "git")
+    for at in range(1, len(argv) - 1):
+        if argv[at:at + 2] == ["worktree", "remove"]:
+            return [word for word in argv[at + 2:] if not word.startswith("-")]
+    return []
 
 
 def worktree_removals(command: str, cwd: Path) -> list[Path]:
@@ -531,62 +899,190 @@ def worktree_removals(command: str, cwd: Path) -> list[Path]:
     """
     scannable = _QUOTED.sub(lambda m: " " * len(m.group(0)), command)
     out: list[Path] = []
-    for segment, _literal, here in _segments_with_cwd(scannable, cwd):
+    for segment, literal, here, _start in _segments_with_cwd(scannable, cwd, command):
         found = _GIT_VERB.search(segment)
         if not found:
             continue
-        for path in _removal_targets(found.group("rest"), here):
+        for path in _removal_targets(found.group("rest"), literal, here):
             if path is not None and path not in out:
                 out.append(path)
     return out
 
 
-def git_tree_targets(command: str, cwd: Path) -> list[Path]:
-    """Working trees a git command would mutate, however it was pointed at them.
+def git_tree_targets(command: str, cwd: Path) -> list[tuple[Path, bool]]:
+    """Working trees a git command would mutate, however it was pointed at them — each with
+    whether a fast-forward is all it would do there.
 
     Three ways to name one, and all three are explicit, which is why this is worth doing
     statically at all: `-C <path>`, `--work-tree <path>`, or the directory the command runs
     in — which `cd` already tracks for redirects.
     """
     scannable = _QUOTED.sub(lambda m: " " * len(m.group(0)), command)
-    out: list[Path] = []
-    for segment, _literal, here in _segments_with_cwd(scannable, cwd):
+    out: list[tuple[Path, bool]] = []
+    for segment, literal, here, _start in _segments_with_cwd(scannable, cwd, command):
         found = _GIT_VERB.search(segment)
         if not found:
             continue
-        rest = found.group("rest")
-        verbs = GIT_TREE_VERBS & set(_ARG.findall(rest))
-        if not verbs:
-            continue
-        # Only when `worktree` is the whole reason this matched: `git worktree list && git
-        # reset --hard` is two commands in one segment and the second one still counts.
-        if verbs == {"worktree"} and _WORKTREE_READ.search(rest):
-            continue
-        # Only when `worktree` is the whole reason this matched: `git worktree list && git
-        # reset --hard` is two commands in one segment and the second one still counts.
-
-        # `git worktree remove <path>` destroys a tree named as a plain argument.
-        removals = _removal_targets(rest, here)
-        if removals:
-            # ONLY the tree being removed. `-C <main checkout>` is where the command RUNS,
-            # and running it there mutates nothing there: `git worktree remove` moves no
-            # HEAD, touches no index and discards nobody's uncommitted work — it deletes
-            # another directory. Counting the `-C` as a target refused a session tidying up
-            # its own tree after a merge, in the name of protecting a checkout the command
-            # does not go near, and git will not remove a tree from inside it either, so
-            # the advice to "run it in your own tree" named the one place it cannot be run
-            # (#218).
-            bases = removals
-        else:
-            bases = [_resolve(here, m.group("path"))
-                     for m in list(_GIT_C.finditer(rest)) + list(_GIT_WORK_TREE.finditer(rest))]
-        if not bases:
-            bases = [_resolve(here, ".")]
-
-        for base in bases:
-            if base is not None and base not in out:
-                out.append(base)
+        commands = _commands_in(literal)
+        named = _trees_changed(commands, here) if commands else [
+            (base, False) for base in _trees_named(found.group("rest"), literal, here)
+        ]
+        for target in named:
+            if target[0] is not None and target not in out:
+                out.append(target)
     return out
+
+
+def _trees_changed(commands: list[list[str]], here: Path) -> list[tuple[Path | None, bool]]:
+    """The trees these commands change, read from git's own arguments."""
+    out: list[tuple[Path | None, bool]] = []
+    for argv in commands:
+        launched = _launched(argv, "git")
+        pointed, verb, args = gitpolicy.split_git(launched)
+        if verb not in GIT_TREE_VERBS or _only_reads(verb, args):
+            continue
+        # ONLY the tree being removed, when it is a removal. `-C <main checkout>` is where
+        # the command RUNS, and running it there mutates nothing there: `git worktree
+        # remove` moves no HEAD, touches no index and discards nobody's uncommitted work —
+        # it deletes another directory. Counting the `-C` as a target refused a session
+        # tidying up its own tree after a merge, in the name of protecting a checkout the
+        # command does not go near, and git will not remove a tree from inside it either,
+        # so the advice to "run it in your own tree" named the one place it cannot be run
+        # (#218).
+        bases = _removed_by(launched) or pointed or ["."]
+        out += [(_resolve(here, base), _fast_forwards(verb, args)) for base in bases]
+    return out
+
+
+def _trees_named(rest: str, literal: str, here: Path) -> list[Path | None]:
+    """The same, off the text, for a line the tokeniser declines: generous, as before."""
+    verbs = GIT_TREE_VERBS & set(_ARG.findall(rest))
+    # Only when `worktree` is the whole reason this matched: `git worktree list && git
+    # reset --hard` is two commands in one segment and the second one still counts.
+    if not verbs or (verbs == {"worktree"} and _WORKTREE_READ.search(rest)):
+        return []
+    # A removal names only the tree being removed, for the reason `_trees_changed` gives.
+    removals = _removal_targets(rest, literal, here)
+    if removals:
+        return removals
+    bases = [_resolve(here, m.group("path"))
+             for m in list(_GIT_C.finditer(rest)) + list(_GIT_WORK_TREE.finditer(rest))]
+    return bases or [_resolve(here, ".")]
+
+
+def _only_reads(verb: str, args: list[str]) -> bool:
+    """Is this tree verb spelled so that it changes nothing?"""
+    if verb in _READ_SPELLINGS:
+        return bool(args) and args[0] in _READ_SPELLINGS[verb]
+    if verb == "clean":
+        return any(arg == "--dry-run" or (arg[:1] == "-" and arg[1:2] != "-" and "n" in arg)
+                   for arg in args)
+    return verb == "apply" and bool(_APPLY_REPORTS.intersection(args)) and "--apply" not in args
+
+
+def _fast_forwards(verb: str, args: list[str]) -> bool:
+    """A `pull` or `merge` told it may only move its branch forward, and nothing else."""
+    return verb in ("pull", "merge") and "--ff-only" in args and not any(
+        arg in ("-r", "--no-ff", "--squash") or arg.startswith("--rebase") for arg in args
+    )
+
+
+def _launched(argv: list[str], *programs: str) -> list[str]:
+    """`argv` from the first of `programs` on, run directly or behind one of `_LAUNCHERS`;
+    nothing when it runs none of them."""
+    names = [word.rsplit("/", 1)[-1] for word in argv]
+    if names[0] in programs:
+        return argv
+    if names[0] in _LAUNCHERS:
+        for index, name in enumerate(names):
+            if name in programs:
+                return argv[index:]
+    return []
+
+
+def _runs_inline_code(literal: str) -> bool:
+    """Does this segment hand an interpreter code written on the line itself?
+
+    A line the tokeniser declines answers yes: the text is all there is, as before.
+    """
+    commands = _commands_in(literal)
+    return not commands or any(_inline(argv) for argv in commands)
+
+
+def _inline(argv: list[str]) -> bool:
+    """Is this one command an interpreter running code it was given here, not a script?"""
+    names = [word.rsplit("/", 1)[-1] for word in argv]
+    at = next((index for index, name in enumerate(names) if _INTERPRETER.match(name)), None)
+    if at is None or (at > 0 and names[0] not in _LAUNCHERS):
+        return False
+    given = argv[at + 1:]
+    return bool(_INLINE_CODE.intersection(given)) or all(word.startswith("-") for word in given)
+
+
+def _edited_in_place(segment: str, literal: str) -> list[str]:
+    """The files a `sed -i` in this segment rewrites, as the segment names them."""
+    commands = _commands_in(literal)
+    if commands:
+        return [path for argv in commands for path in _sed_in_place(argv)]
+    # Declined by the tokeniser, so the text is all there is — and generous is the
+    # direction this whole scanner errs in.
+    if "sed" in segment and " -i" in segment:
+        return [m.group("path") for m in SED_IN_PLACE.finditer(segment)]
+    return []
+
+
+def _sed_in_place(argv: list[str]) -> list[str]:
+    """The files one `sed` rewrites in place, and nothing when it only reads them.
+
+    GNU and BSD spellings both: `-i`, `-i.bak`, `-i ''`, `--in-place[=.bak]`, and an `i`
+    inside a cluster such as `-ni`. The first operand is the script unless `-e` or `-f`
+    gave it, and every operand after that is a file sed rewrites.
+    """
+    argv = _launched(argv, "sed", "gsed")
+    if not argv:
+        return []
+    in_place, scripted, operands = False, False, []
+    at = 1
+    while at < len(argv):
+        word, at = argv[at], at + 1
+        if word == "--":
+            operands += argv[at:]
+            break
+        if word == "-" or not word.startswith("-"):
+            operands.append(word)
+        elif word.startswith("--"):
+            in_place = in_place or word.startswith("--in-place")
+            scripted = scripted or word.split("=")[0] in ("--expression", "--file")
+            at += 1 if word in ("--expression", "--file", "--line-length") else 0
+        else:
+            for position, flag in enumerate(word[1:], start=2):
+                last = position == len(word)
+                if flag in "iI":
+                    # A backup suffix is glued on, or, in BSD's spelling, its own empty word.
+                    in_place = True
+                    at += 1 if last and at < len(argv) and argv[at] == "" else 0
+                    break
+                if flag in "efl":
+                    scripted = scripted or flag != "l"
+                    at += 1 if last else 0
+                    break
+    if not in_place:
+        return []
+    return operands if scripted else operands[1:]
+
+
+def commit_message_in(command: str, cwd: Path) -> str:
+    """The message a `git commit` on this line is given, asked of one segment at a time.
+
+    Whole, a line's newlines are whitespace to the tokeniser: `git status` and a `git commit
+    -m wip` on the next line read as one `git status` with five arguments, and the message
+    went unjudged from the day it began to be read from the parsed words.
+    """
+    for _segment, literal, _here, _start in _segments_with_cwd(_blanked(command), cwd, command):
+        message = gitpolicy.commit_message(literal)
+        if message:
+            return message
+    return ""
 
 
 def bash_write_targets(command: str, cwd: Path) -> list[Path]:
@@ -599,59 +1095,99 @@ def bash_write_targets(command: str, cwd: Path) -> list[Path]:
     write lands in, and a path that has already been forced relative to one root cannot
     answer that.
     """
+    return bash_writes(command, cwd)[0]
+
+
+def bash_writes(command: str, cwd: Path) -> tuple[list[Path], str]:
+    """Where a shell command writes, and the part of its text that lands there.
+
+    The text is the command with everything blanked but the segments that write their own
+    words into a file — a redirect or `tee`, `sed -i`, an interpreter's inline `open` — and,
+    in those, the environment set in front of each command. Length and line breaks are
+    kept, so a line a caller reports from it is the command's own line.
+    """
     # Blank out quoted spans first. `echo "a > b"` and `grep -q "x>y" f` contain no
     # redirect, but a naive scan read one and claimed a lease on a path that does not
     # exist — which denies a sibling session for a file nobody is editing.
-    scannable = _HEREDOC.sub(lambda m: " " * len(m.group(0)), command)
-    scannable = _QUOTED.sub(lambda m: " " * len(m.group(0)), scannable)
+    scannable = _blanked(command)
 
     out: list[Path] = []
+    written = [char if char == "\n" else " " for char in command]
 
-    for segment, literal, here in _segments_with_cwd(scannable, cwd, command):
-        # On the RAW segment, because `_QUOTED` blanks quoted spans and an interpreter's
-        # path is always quoted — scanning the blanked copy would find nothing, every time.
-        # Per SEGMENT rather than over the whole line, because the whole line carries no
-        # `cd`: `cd /tmp/scratch && python3 -c "open('out.txt','w')…"` was resolved against
-        # the repository root and refused as a write into the main checkout, for a file in
-        # /tmp the command never went near (#203).
-        for match in _INTERPRETER_WRITE.finditer(literal):
-            resolved = _resolve(here, match.group("a") or match.group("b") or "")
-            if resolved is not None and resolved not in out:
-                out.append(resolved)
+    for segment, literal, here, start in _segments_with_cwd(scannable, cwd, command):
+        carried = _writes_its_words(segment, literal, here)
+        for path in carried + _writes_by_moving(segment, here):
+            if path not in out:
+                out.append(path)
+        if carried:
+            written[start:start + len(literal)] = _without_environment(literal, segment)
+    return out, "".join(written)
 
-        matches = list(BASH_WRITE_TARGETS.finditer(segment))
-        if "sed" in segment and " -i" in segment:
-            matches += list(SED_IN_PLACE.finditer(segment))
-        raws = [m.group("path") for m in matches]
 
-        # ...and every path a destructive verb names. `rm` is not a redirect, so none of
-        # these commands produced a target at all, and every rule keyed on "what does this
-        # write" was one `rm` away from irrelevant.
-        for match in BASH_REMOVES.finditer(segment):
-            raws += [a for a in _ARG.findall(match.group("args")) if not a.startswith("-")]
+def _writes_its_words(segment: str, literal: str, here: Path) -> list[Path]:
+    """The files this segment writes its own text into."""
+    # On the RAW segment, because `_QUOTED` blanks quoted spans and an interpreter's
+    # path is always quoted — scanning the blanked copy would find nothing, every time.
+    # Per SEGMENT rather than over the whole line, because the whole line carries no
+    # `cd`: `cd /tmp/scratch && python3 -c "open('out.txt','w')…"` was resolved against
+    # the repository root and refused as a write into the main checkout, for a file in
+    # /tmp the command never went near (#203).
+    run = _INTERPRETER_WRITE.finditer(literal) if _runs_inline_code(literal) else ()
+    coded = [_resolve(here, match.group("a") or match.group("b") or "") for match in run]
+    raws = [m.group("path") for m in BASH_WRITE_TARGETS.finditer(segment)]
+    raws += _edited_in_place(segment, literal)
+    return [path for path in coded + [_named(raw, here) for raw in raws] if path is not None]
 
-        # Destination only. The sources are reads, and refusing a read is how a guard
-        # stops being about safety and starts being about obedience.
-        for match in BASH_COPIES.finditer(segment):
-            operands = [a for a in _ARG.findall(match.group("args")) if not a.startswith("-")]
-            if operands:
-                raws.append(operands[-1])
 
-        for raw in raws:
-            token = raw.strip("\"'")
-            # `2>&1`, `> 0`, `>1`: file descriptors and comparisons, never filenames.
-            if not token or token.startswith("/dev/") or token.isdigit():
-                continue
-            # A token with no name in it is not a file. The arg pattern accepts `@`, `~`,
-            # `+` and `-` so that real names carrying them survive, and on their own they
-            # are what is left of an operator some scan read through — the refusal that
-            # named `@` as the file this session was working on came out here (#205).
-            if not token.strip("@+~-."):
-                continue
-            resolved = _resolve(here, raw)
-            if resolved is not None and resolved not in out:
-                out.append(resolved)
-    return out
+def _writes_by_moving(segment: str, here: Path) -> list[Path]:
+    """The files this segment removes, or copies and moves others onto."""
+    raws: list[str] = []
+    # ...and every path a destructive verb names. `rm` is not a redirect, so none of
+    # these commands produced a target at all, and every rule keyed on "what does this
+    # write" was one `rm` away from irrelevant.
+    for match in BASH_REMOVES.finditer(segment):
+        raws += [a for a in _ARG.findall(match.group("args")) if not a.startswith("-")]
+
+    # Destination only. The sources are reads, and refusing a read is how a guard
+    # stops being about safety and starts being about obedience.
+    for match in BASH_COPIES.finditer(segment):
+        operands = [a for a in _ARG.findall(match.group("args")) if not a.startswith("-")]
+        if operands:
+            raws.append(operands[-1])
+    return [path for path in (_named(raw, here) for raw in raws) if path is not None]
+
+
+def _named(raw: str, here: Path) -> Path | None:
+    """The file a scanned token names, or None for a token that names no file."""
+    token = raw.strip("\"'")
+    # `2>&1`, `> 0`, `>1`: file descriptors and comparisons, never filenames.
+    if not token or token.startswith("/dev/") or token.isdigit():
+        return None
+    # A token with no name in it is not a file. The arg pattern accepts `@`, `~`,
+    # `+` and `-` so that real names carrying them survive, and on their own they
+    # are what is left of an operator some scan read through — the refusal that
+    # named `@` as the file this session was working on came out here (#205).
+    if not token.strip("@+~-."):
+        return None
+    return _resolve(here, raw)
+
+
+# `NAME=value` in front of a command is the environment it runs with, not words it writes
+# anywhere: `JWT_SECRET=testsecret npm test 2>&1 | tee test.log` puts npm's output in the
+# log, and the assignment was what the credential scan refused it for.
+_ENVIRONMENT = re.compile(
+    r"""\s*(?:env\s+)?(?:[A-Za-z_]\w*=(?:"[^"]*"|'[^']*'|[^\s"'|;&<>])*\s+)+"""
+)
+
+
+def _without_environment(literal: str, segment: str) -> str:
+    """This segment with the assignments in front of each of its commands blanked out."""
+    out = list(literal)
+    for start in [0] + [match.end() for match in re.finditer(r"\|", segment)]:
+        found = _ENVIRONMENT.match(literal, start)
+        if found:
+            out[found.start():found.end()] = " " * (found.end() - found.start())
+    return "".join(out)
 
 
 def main() -> None:
@@ -695,9 +1231,14 @@ def main() -> None:
     history.append(sig)
     history = history[-SIGNATURE_HISTORY:]
 
-    counts = {k: v for k, v in rec.tool_signatures.items() if k != "_history" and isinstance(v, int)}
+    # The signature counts, and the Stop gate's own `_` bookkeeping whatever its type. Keeping
+    # integers only threw away the block memory — its reason, paths, tree and time — on the
+    # first tool call after every block, which is every real session: the ceiling then filed
+    # "continuation ceiling reached" with no reason and no files (#31 again), and the streak
+    # never reset after an hour's silence because its clock was always gone.
+    counts = {k: v for k, v in rec.tool_signatures.items()
+              if k != "_history" and (isinstance(v, int) or k.startswith("_"))}
     counts[sig] = counts.get(sig, 0) + 1
-    calls = rec.tool_calls + 1
 
     ti = event.tool_input
     target = ""
@@ -708,6 +1249,8 @@ def main() -> None:
     # neither — and the third is none of this gate's business.
     session_cwd = Path(event.cwd) if event.cwd else ctx.worktree_root
     absolute: list[Path] = []
+    # What a shell command puts INTO those files, for the credential scan below.
+    shell_writes = ""
 
     if event.tool_name in WRITE_TOOLS and ti.get("file_path"):
         raw = str(ti["file_path"])
@@ -724,7 +1267,7 @@ def main() -> None:
             except ValueError:
                 target = ""
     elif event.tool_name == "Bash":
-        absolute = bash_write_targets(str(ti.get("command", "")), session_cwd)
+        absolute, shell_writes = bash_writes(str(ti.get("command", "")), session_cwd)
         # Repo-relative is what the leases, the board and the protected-state refusal all
         # speak, so the ones inside our tree are converted and the rest stay out of it.
         for path in absolute:
@@ -780,14 +1323,15 @@ def main() -> None:
             pinned = subagents.pinned_tier(ctx, str(ti.get("subagent_type") or ""))
             if not subagents.names_a_tier(pinned):
                 deny(ctx, rec, subagents.tier_refusal(str(ti.get("subagent_type") or ""), pinned))
-        spawned = rec.spawns_this_turn
-        if cfg.subagent_fanout > 0 and spawned >= cfg.subagent_fanout:
-            deny(ctx, rec, subagents.fanout_refusal(spawned, cfg.subagent_fanout))
         # Counted on the way through, because a PreToolUse hook never sees the result and
         # a spawn that is allowed is a spawn that is running. Refused ones are not
         # counted, for the same reason refused tool calls are not: a call this gate
-        # stopped is not work the session did.
-        sessions.touch(ctx, event.session_id, spawns_this_turn=spawned + 1)
+        # stopped is not work the session did. Checked and counted in ONE locked step:
+        # read from `rec` and written back afterwards, six spawns in one message all
+        # read 0 and all six went through a ceiling of three.
+        spawned = sessions.count(ctx, event.session_id, "spawns_this_turn", cfg.subagent_fanout)
+        if cfg.subagent_fanout > 0 and spawned >= cfg.subagent_fanout:
+            deny(ctx, rec, subagents.fanout_refusal(spawned, cfg.subagent_fanout))
 
     # CONSECUTIVE repeats, never a lifetime total. The lifetime count made the fourth
     # `npm test` of a session a permanent refusal — and `npm test` is the command the
@@ -830,36 +1374,49 @@ def main() -> None:
         command = str(ti.get("command", "")) if event.tool_name == "Bash" else ""
         number = pullrequest.merge_target(event.tool_name, command, ti)
         if number is not None:
+            # Green is not accepted. The checks say the code works; they say nothing about
+            # whether the founder wants what was built, and in a repository that deploys
+            # from the trunk a merge is a step towards shipping it. So the merge waits for
+            # their word — and once it is given, the assistant opens, checks and merges on
+            # its own, which is the arrangement they asked for.
+            #
+            # Asked of EVERY merge, before anything decides whose pull request it is. It
+            # sat inside the branch-matching below, so naming a number — `gh pr merge 7`,
+            # and the GitHub tool, which always sends one — went through unasked whenever
+            # the number was not this branch's recorded one: a pull request opened with
+            # `gh pr create`, one opened on the website, any merge from the main checkout.
+            if not config.approved(ctx, config.APPROVE_MERGE):
+                deny_for_founder(
+                    ctx, rec,
+                    "claude-bestpractice: this pull request has not been accepted by the founder "
+                    "yet. Passing checks mean the code works, not that the work is "
+                    "wanted — and main deploys, so merging is a step towards shipping "
+                    "it.\n"
+                    "  Show them what changed and ask. When they are happy they say "
+                    "`+merge` — copy it exactly — and this allows the merge once.\n"
+                    "  Their word is read from their own message; nothing you write "
+                    "can stand in for it."
+                )
             gated = pullrequest.gated_by(
                 ctx, number, pullrequest.about_current_branch(event.tool_name, command)
             )
-            if gated is not None:
-                # Green is not accepted. The checks say the code works; they say nothing
-                # about whether the founder wants what was built, and in a repository that
-                # deploys from the trunk a merge is a step towards shipping it. So the
-                # merge waits for their word — and once it is given, the assistant opens,
-                # checks and merges on its own, which is the arrangement they asked for.
-                if not config.approved(ctx, config.APPROVE_MERGE):
-                    deny_for_founder(
-                        ctx, rec,
-                        "claude-bestpractice: this pull request has not been accepted by the founder "
-                        "yet. Passing checks mean the code works, not that the work is "
-                        "wanted — and main deploys, so merging is a step towards shipping "
-                        "it.\n"
-                        "  Show them what changed and ask. When they are happy they say "
-                        "`+merge` — copy it exactly — and this allows the merge once.\n"
-                        "  Their word is read from their own message; nothing you write "
-                        "can stand in for it."
-                    )
-                # Spent here rather than after the call, because a PreToolUse hook never
-                # sees the result: one word authorises one merge either way, and a merge
-                # that failed is re-authorised by the founder rather than by its own retry.
+            if gated is None:
+                # Somebody else's pull request: nothing checked here is about it (#135).
+                # Still one word, one merge.
                 config.clear_switch(ctx, config.APPROVE_MERGE)
+            else:
                 base = str(gated.get("base") or "") or gitpolicy.default_branch(ctx) or "main"
                 # The pull request's own head, not the tree this session is standing in.
                 problems = pullrequest.blockers(ctx, base, str(gated.get("branch") or ""))
                 if problems:
                     deny_for_founder(ctx, rec, pullrequest.merge_refusal(gated, problems))
+                # Spent once the merge goes ahead, and never before its blockers are judged:
+                # the refusal above promises the merge "as soon as the list is empty", and
+                # spending the word first turned that into asking the founder a second time.
+                # Still before the call rather than after it, because a PreToolUse hook
+                # never sees the result: a merge that then fails is re-authorised by the
+                # founder rather than by its own retry.
+                config.clear_switch(ctx, config.APPROVE_MERGE)
                 # Judged, and nothing found. Carried to the vouch at the end of this file
                 # rather than allowed here, because `allow_tool` ends the permission
                 # pipeline and every gate below this line still has its say.
@@ -916,6 +1473,13 @@ def main() -> None:
             pullrequest.opened(ctx, head, base, event.session_id)
             if pullrequest.about_this_repository(ctx, event.tool_name, ti, command):
                 pr_vouch = vouch.PULL_REQUEST
+        else:
+            # Closed without merging: the other way an obligation ends, and the one nothing
+            # wrote down — a closed pull request stayed on every board as "ready to merge"
+            # for thirty days. Recorded on the way through, as a merge is.
+            closed = pullrequest.closes(ctx, event.tool_name, command, ti, session_cwd)
+            if closed:
+                pullrequest.settle(ctx, closed, pullrequest.CLOSED)
 
     # Entering a worktree is the move this gate ORDERS. Making the founder authorise it
     # through a permission prompt is the plugin interrupting them with its own
@@ -949,7 +1513,7 @@ def main() -> None:
     gates = stage.gates_for(resolved_stage)
 
     if event.tool_name == "Bash" and cfg.commit_conventions:
-        message = gitpolicy.commit_message(str(ti.get("command", "")))
+        message = commit_message_in(str(ti.get("command", "")), session_cwd)
         if message:
             complaint = gitpolicy.message_complaint(
                 message, conventional=gitpolicy.uses_conventional_commits(ctx)
@@ -969,14 +1533,14 @@ def main() -> None:
     # is what this plugin sends every session into — never meets it (#220).
     if event.tool_name == "Bash" and gitpolicy.stages_everything(str(ti.get("command", ""))):
         # Asked of the tree the COMMAND will run in, which is the tree this plugin sent the
-        # session into — not the harness's working directory, which is the shared checkout in
-        # every session it sends anywhere. Judged there, a session staging its own clean tree
-        # would be refused over fifty files it cannot even see.
+        # session into — the harness's working directory once the session stands in it, and
+        # not while it works there from the shared checkout. Judged in the checkout, a
+        # session staging its own clean tree would be refused over fifty files it cannot see.
         foreign, mine = gitpolicy.whose_work_is_in_the_way(
             worktree.working_context(ctx, event.session_id), rec.session_id)
         if foreign:
             shown = ", ".join(foreign[:4]) + (f" (+{len(foreign) - 4} more)" if len(foreign) > 4 else "")
-            yours = " ".join(mine[:8]) if mine else ""
+            yours = " ".join(shlex.quote(path) for path in mine[:8]) if mine else ""
             deny(ctx, rec, (
                 f"claude-bestpractice: this stages the whole tree, and {len(foreign)} path(s) in "
                 f"it are not this session's: {shown}. In a checkout several sessions share, that "
@@ -995,20 +1559,11 @@ def main() -> None:
 
     if gates["migration_gate"]:
         if event.tool_name == "Bash":
-            command = str(ti.get("command", ""))
-            # Per COMMAND, not per line. `--prod` inside `echo "deploy with --prod"` is
-            # text about a deploy, and refusing it is the defect #76 reported one gate
-            # over. An unparseable line falls back to the whole string, so a command
-            # crafted to break the tokeniser does not become one that walks past this.
-            # Two different empties, and folding them together made `echo "--prod"` a
-            # deploy again: `acting` returns nothing both for a line that cannot be parsed
-            # and for a line that only reads. The first must fall back to the whole string,
-            # the second must pass. Caught by the test written for this very fix.
-            parsed = shellcmd.commands(command)
-            deploying = (
-                any(PRODUCTION_DEPLOY.search(" ".join(argv)) for argv in shellcmd.acting(command))
-                if parsed else bool(PRODUCTION_DEPLOY.search(command))
-            )
+            # Per COMMAND, and per the program it runs. `--prod` inside `echo "deploy with
+            # --prod"` is text about a deploy, and refusing it is the defect #76 reported one
+            # gate over; so is the same flag handed to an installer, a search or a commit.
+            # And spent only on a real promotion, since the founder's word allows one.
+            deploying = promotes_to_production(str(ti.get("command", "")), session_cwd)
             if deploying and not config.approved(ctx, config.APPROVE_RELEASE):
                 # The literal used to be a token IN THE COMMAND, which the session writes
                 # — so the gate on the one irreversible action was openable by the party
@@ -1101,37 +1656,79 @@ def main() -> None:
         removals = worktree_removals(str(ti.get("command", "")), session_cwd) if own else []
         if own and any(path == own.resolve() for path in removals if path is not None):
             released = None
+            # Before the removal, never after: when the session stands in the tree it is
+            # removing, that tree IS `ctx`, and every git call takes it as a working
+            # directory — asked afterwards, the success message itself raised
+            # FileNotFoundError, and this gate fails closed. The Stop gate learned the same.
+            where = shlex.quote(str(worktree.main_checkout(ctx)))
+            kept: list[str] = []
             try:
                 # `--force` only where the session typed it: it is the session's own act
                 # being carried out somewhere it survives, not a judgement this gate makes
                 # about whose work may be discarded.
                 forced = bool(_WORKTREE_FORCE.search(str(ti.get("command", ""))))
-                released = worktree.release_now(ctx, rec.session_id, force=forced)
+                released = worktree.release_now(ctx, rec.session_id, force=forced, kept=kept)
             except Exception:  # noqa: BLE001 - a refusal is better than a crashing gate
                 released = None
             if released is not None:
                 path, branch, also = released
                 carried = f"\n  With it: {'; '.join(also)}." if also else ""
+                # What git did with the branch, not what was asked of it: "and so is <it>"
+                # was said over a branch `git branch` still listed with its commits on it.
+                what = (
+                    f"{path} is removed. {branch} is kept: its commits are not in the trunk, "
+                    f"and `git -C {where} log --oneline -5 {shlex.quote(branch)}` shows them — tell the "
+                    "founder before deleting it." if kept else
+                    f"{path} is removed" + (f" and so is {branch}." if branch else ".")
+                )
                 deny(
                     ctx, rec,
-                    f"claude-bestpractice: done — {path} is removed and so is {branch}."
+                    f"claude-bestpractice: done — {what}"
                     f"{carried}\n"
                     "  Run from the main checkout rather than from inside the tree, because "
                     "removing the directory this shell stands in leaves Claude Code refusing "
                     "every later git call as isolated in a worktree that no longer exists.\n"
-                    f"  The shell is now in a directory that is gone — `cd "
-                    f"{worktree.main_checkout(ctx)}`. There is nothing else to clean up."
+                    f"  The shell is now in a directory that is gone — `cd {where}`."
+                    + ("" if kept else " There is nothing else to clean up.")
                 )
             deny(
                 ctx, rec,
                 f"claude-bestpractice: git refused to remove {own}, so it is still there and so "
                 "is this shell. `git worktree remove` without `--force` will not delete a tree "
                 "holding a modified or untracked file.\n"
-                f"  git -C {own} status --porcelain --untracked-files=all\n"
+                f"  git -C {shlex.quote(str(own))} status --porcelain --untracked-files=all\n"
                 "  Commit what is worth keeping, remove what is not, then run this again — it "
                 "is performed from the main checkout, which is the only place it can be run "
                 "without stranding this session."
             )
+
+    # Kept out of `absolute` on purpose, so these never reach the worktree and trunk rules
+    # below. `git switch -c` is the command that RESOLVES a trunk violation, and a gate
+    # that refuses the fix for the thing it is complaining about is a trap the agent learns
+    # to route around. Pointed at somebody else's tree it is a different act entirely, and
+    # that is the only thing checked here.
+    #
+    # Asked BEFORE the stranding rule below, whose way out is a subshell — `(cd <main> &&
+    # ...)`. When this rule refuses what is inside it, saying so first is the only order in
+    # which the two do not give opposite advice (decision 0017): the subshell was offered,
+    # taken, and then refused here, for `git pull --ff-only` among others.
+    if cfg.require_worktree and event.tool_name == "Bash":
+        main_checkout = ctx.common_dir.parent.resolve()
+        for path, fast_forward in git_tree_targets(str(ti.get("command", "")), session_cwd):
+            owner = gitpolicy.foreign_tree(ctx, path, rec.session_id)
+            # A fast-forward of the main checkout moves it to the trunk and nowhere else:
+            # it makes no commit, and git refuses it rather than overwrite anything
+            # uncommitted. Nobody stands in that tree to lose work, and a main checkout left
+            # behind the trunk is what turned suites red on code nobody present wrote
+            # (decision 0018) — refusing it left nothing anywhere able to update it.
+            if owner is None or (fast_forward and owner == main_checkout):
+                continue
+            # Ours to clean up if our own hook made it for us. Otherwise the refusal that
+            # hands a session a worktree also makes that worktree permanent: the main
+            # checkout is told it belongs to another session, and a worktree cannot remove
+            # itself from the inside.
+            if not gitpolicy.provisioned_for(ctx, rec.session_id, path):
+                deny(ctx, rec, gitpolicy.foreign_git_refusal(owner, ctx))
 
     # Before the shell takes a step it cannot take back. Claude Code refuses every Bash
     # call whose working directory is inside the protected checkout — judged before the
@@ -1150,24 +1747,9 @@ def main() -> None:
                 "`cd` back — and the shell stays unusable until the session restarts. It is "
                 "refused here because that is recoverable and the deadlock is not.\n"
                 f"  Run it from this worktree, or in a subshell that returns: "
-                f"`(cd {stranded} && ...)` leaves this shell where it is.\n"
+                f"`(cd {shlex.quote(str(stranded))} && ...)` leaves this shell where it is.\n"
                 + config.switch_advice("require_worktree", False)
             )
-
-    # Kept out of `absolute` on purpose, so these never reach the worktree and trunk rules
-    # below. `git switch -c` is the command that RESOLVES a trunk violation, and a gate
-    # that refuses the fix for the thing it is complaining about is a trap the agent learns
-    # to route around. Pointed at somebody else's tree it is a different act entirely, and
-    # that is the only thing checked here.
-    if cfg.require_worktree and event.tool_name == "Bash":
-        for path in git_tree_targets(str(ti.get("command", "")), session_cwd):
-            owner = gitpolicy.foreign_tree(ctx, path, rec.session_id)
-            # Ours to clean up if our own hook made it for us. Otherwise the refusal that
-            # hands a session a worktree also makes that worktree permanent: the main
-            # checkout is told it belongs to another session, and a worktree cannot remove
-            # itself from the inside.
-            if owner is not None and not gitpolicy.provisioned_for(ctx, rec.session_id, path):
-                deny(ctx, rec, gitpolicy.foreign_git_refusal(owner, ctx))
 
     # Outside every working tree of this repository there is no rule to apply: a scratch
     # file in /tmp is not somebody else's work, and refusing it only taught the agent that
@@ -1215,6 +1797,19 @@ def main() -> None:
                     "restart. Do not work around this by editing the file another way."
                 )
 
+    # The push gate's own verbs, and whose they are. The hook's bookkeeping records runs the
+    # hook watched, and `git push` is what starts it — never a tool call — so a session
+    # calling it is writing down an observation nobody made (decision 0013). `off` is the
+    # founder's switch on the gate over this session's own pushes: `rm` of the hook is
+    # refused below, and this plugin's own command was the same act, approved (decision 0006).
+    if event.tool_name == "Bash":
+        verbs = ci.verbs_run(str(ti.get("command", "")))
+        forged = [verb for verb in verbs if verb in ci.HOOK_ONLY]
+        if forged:
+            deny(ctx, rec, ci.forged_refusal(forged[0], cfg.test_command))
+        if "off" in verbs and config.asked_for(ctx, config.PUSH_GATE) != "off":
+            deny_for_founder(ctx, rec, ci.OFF_REFUSAL)
+
     if event.tool_name in WRITE_TOOLS or event.tool_name == "Bash":
         # A gate whose settings the gated party may rewrite is a suggestion. `config.json`
         # names the command the Stop gate runs as its evidence, and it lives in committed
@@ -1243,6 +1838,7 @@ def main() -> None:
                     )
 
         protected = [rel for rel in writing_now if _protected_state(rel)]
+        protected += _founders_state(ctx, absolute)
         if protected:
             deny_for_founder(
                 ctx, rec,
@@ -1263,7 +1859,13 @@ def main() -> None:
         # written: `cat > .env <<EOF` carried a live key straight past a gate whose
         # whole purpose is to stop that, silently, while the doctor reported 23/23.
         content = proposed_content(event)
-        hits = [] if _a_credential_belongs_here(ctx, absolute) else redact.find(content)
+        # For a shell command, only the words it writes into a file. The scan is for a
+        # credential reaching a file a commit will carry, and it read every command whole:
+        # `PGPASSWORD=postgres psql …`, `docker run -e POSTGRES_PASSWORD=postgres …` and
+        # `JWT_SECRET=testsecret npm test` — the suite the Stop gate demands — were each
+        # refused as "this write" with nothing being written anywhere.
+        scanned = shell_writes if event.tool_name == "Bash" else content
+        hits = [] if _a_credential_belongs_here(ctx, absolute) else redact.find(scanned)
         if hits:
             # WHERE, not just what. Naming the detector alone left a founder deleting
             # lines they suspected, being refused again, and having no way to learn what
@@ -1272,7 +1874,7 @@ def main() -> None:
             # would put it in the transcript, which is the thing being prevented.
             where = "\n".join(
                 f"  line {number}: {excerpt}  [{name}]"
-                for name, number, excerpt in redact.locate(content)[:5]
+                for name, number, excerpt in redact.locate(scanned)[:5]
             )
             deny(
                 ctx, rec,
@@ -1305,18 +1907,16 @@ def main() -> None:
         # shell one above; a session whose first prompt was a paste still gets the Stop
         # demand, and is the narrow case left open deliberately.
         if cfg.require_task and rec.task_statement and writing_now:
-            from claude_bestpractice import plan
-
-            if not _ledger_covers(ctx, event.session_id, writing_now):
+            unlisted = _unlisted(ctx, event.session_id, absolute)
+            if unlisted:
                 deny(
                     ctx, rec,
                     f"claude-bestpractice: nothing on the board says this session is working "
-                    f"on {writing_now[0]}.\n"
+                    f"on {unlisted}.\n"
                     "  Every sibling session reads the board to decide what is safe to "
                     "touch, and unlisted work is invisible to all of them — so this is "
                     "asked BEFORE the write, while there is still something to protect.\n"
-                    f'  claude-bp-plan add "<what you are about to do>" --paths {writing_now[0]}\n'
-                    "  then: claude-bp-plan claim <id>   (or claim the task you are on)"
+                    + _card_commands(ctx, event, shlex.quote(unlisted))
                 )
 
         # And the work that never writes a file. The demand above reads the paths a call
@@ -1342,9 +1942,7 @@ def main() -> None:
                     "  It writes no file, so no other rule here sees it — and every "
                     "sibling reads the board to decide what is safe to touch, so this is "
                     "the last moment there is still something to protect.\n"
-                    '  claude-bp-plan add "<what you are about to do>" --paths <the files '
-                    "this touches>\n"
-                    "  then: claude-bp-plan claim <id>   (or claim the task you are on)\n"
+                    + _card_commands(ctx, event, '"<the files this touches>"') + "\n"
                     "  Finishing one already in flight — `--abort`, `--continue`, "
                     "`--skip` — is never refused here."
                 )
@@ -1460,11 +2058,12 @@ def main() -> None:
 
     # Reached only when every gate allowed the call, so this records what was actually
     # written rather than what was attempted — and, for the same reason, what was actually
-    # done rather than what was refused.
+    # done rather than what was refused. Added under the record's lock rather than written
+    # as the count read at the top plus one, which parallel calls overwrote in turn.
     if touched:
-        sessions.touch(ctx, event.session_id, tool_calls=calls, last_touched=touched)
+        sessions.count(ctx, event.session_id, "tool_calls", last_touched=touched)
     else:
-        sessions.touch(ctx, event.session_id, tool_calls=calls)
+        sessions.count(ctx, event.session_id, "tool_calls")
 
     # Last, and only here. `allow_tool` ends the permission pipeline, so a vouch placed any
     # earlier would walk past this gate's own refusals — the credential scan, the leases,
@@ -1472,7 +2071,9 @@ def main() -> None:
     # every one of them has already allowed the call, and the only question left is whether
     # the founder should be asked about something the plugin itself ordered.
     if event.tool_name == "Bash":
-        vouched = vouch.for_bash(ctx, str(ti.get("command", "")), cfg.test_command, session_cwd)
+        vouched = vouch.for_bash(ctx, str(ti.get("command", "")), cfg.test_command, session_cwd,
+                                 require_worktree=cfg.require_worktree,
+                                 protect_trunk=cfg.protect_trunk)
     elif event.tool_name in WRITE_TOOLS:
         vouched = vouch.for_write(ctx, event.session_id, absolute)
     else:

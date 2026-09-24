@@ -144,7 +144,7 @@ def record(ctx: GitContext, gate: str, exc: BaseException) -> None:
         return
 
 
-def observed(ctx: GitContext, what: str, gate: str = "") -> str:
+def observed(ctx: GitContext, what: str, gate: str = "") -> tuple[bool, str]:
     """A gate that refused the wrong thing, filed by the session it refused.
 
     The other half of `record`. A crash files itself; a gate that runs perfectly and
@@ -158,23 +158,25 @@ def observed(ctx: GitContext, what: str, gate: str = "") -> str:
     already look at, `claude-bp-report` shows exactly what would be sent, and nothing
     leaves this machine without `send` — the same consent rule crash reports have.
 
-    Returns what to print, never raises, and holds nothing back for judgement: a report
-    that is wrong costs one line in a list the founder can clear.
+    Returns whether it was recorded and what to print — the first half because the
+    command exited 0 over a report it refused, and a session reads 0 as "filed". Never
+    raises, and holds nothing back for judgement: a report that is wrong costs one line in
+    a list the founder can clear.
     """
     try:
         from . import config
 
         if config.load(ctx).report_defects == OFF:
-            return "defect capture is off (`report_defects`), so nothing was recorded"
+            return False, "defect capture is off (`report_defects`), so nothing was recorded"
         text = sanitize(_one_line(what))
         if len(text) < MIN_OBSERVATION_CHARS:
-            return ("say what was refused and why that is wrong — a report that names "
-                    "neither cannot be acted on")
+            return False, ("say what was refused and why that is wrong — a report that names "
+                           "neither cannot be acted on")
         named = _one_line(gate)[:40] or UNNAMED_GATE
         _file(ctx, signature(named, text, OBSERVED), named, text, OBSERVED, kind=OBSERVED)
-        return f"recorded against {named} — `claude-bp-report` shows what would be sent"
+        return True, f"recorded against {named} — `claude-bp-report` shows what would be sent"
     except Exception:  # noqa: BLE001 - a reporter that throws makes one defect into two
-        return "the report could not be written"
+        return False, "the report could not be written"
 
 
 def _file(ctx: GitContext, key: str, gate: str, error: str, where: str,

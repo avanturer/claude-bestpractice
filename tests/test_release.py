@@ -11,9 +11,12 @@ part no test exercises.
 from __future__ import annotations
 
 import json
+import os
 import re
+import shlex
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -127,7 +130,7 @@ class TestTheReleaseCutsItself(unittest.TestCase):
         )
 
     def test_every_workflow_that_runs_the_suite_installs_a_runner_for_it(self):
-        """Three tests drive a real pytest over a throwaway project; a bare runner has none.
+        """Several tests drive a real pytest over a throwaway project; a bare runner has none.
 
         This was latent for as long as the repository existed: `check.yml` is gated behind
         a variable and had never executed, so nothing had ever run `make check` on a clean
@@ -261,6 +264,67 @@ class TestInstallPath(unittest.TestCase):
         self.assertIn(plugin["license"], text.replace(" License", ""))
         self.assertNotIn("[year]", text, "LICENSE still has a placeholder")
         self.assertNotIn("[fullname]", text, "LICENSE still has a placeholder")
+
+
+class TestTheGatesRunFromAnyInstallPath(unittest.TestCase):
+    """The harness hands each hook command to sh with `${CLAUDE_PLUGIN_ROOT}` in it.
+
+    Unquoted, an install path holding a space split the command in two. Measured on Claude
+    Code 2.1.281 with the plugin loaded from such a path: SessionStart, UserPromptSubmit and
+    Stop each exited 127 with `sh: …/space: not found`, which blocks nothing, so the session
+    ran with no gate at all and nothing said so. The CLI's own `claude plugin validate
+    --strict` refuses the manifest for the same reason.
+    """
+
+    ROOT = "/Users/Jane Doe/.claude/plugins/cache/claude-bestpractice"
+
+    def commands(self) -> list[tuple[str, str]]:
+        hooks = json.loads((BIN.parent / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+        return [(event, handler["command"])
+                for event, groups in hooks["hooks"].items()
+                for group in groups for handler in group["hooks"]]
+
+    def test_each_command_is_one_word_to_the_shell(self) -> None:
+        for event, command in self.commands():
+            with self.subTest(event=event):
+                words = shlex.split(command.replace("${CLAUDE_PLUGIN_ROOT}", self.ROOT))
+                self.assertEqual(1, len(words), command)
+                self.assertTrue(words[0].startswith(f"{self.ROOT}/bin/"), command)
+
+    def test_a_gate_runs_through_sh_from_such_a_path(self) -> None:
+        """With the root exported the way the harness exports it, and sh doing the rest."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "with a space"
+            root.symlink_to(BIN.parent, target_is_directory=True)
+            outside = Path(tmp) / "not a repository"
+            outside.mkdir()
+            proc = subprocess.run(
+                ["sh", "-c", dict(self.commands())["PermissionDenied"]],
+                input="{}", capture_output=True, text=True, cwd=str(outside), timeout=60,
+                env={**os.environ, "CLAUDE_PLUGIN_ROOT": str(root)},
+            )
+            self.assertEqual(0, proc.returncode, proc.stderr)
+
+
+class TestTheStdlibLintHoldsOnTheFloor(unittest.TestCase):
+    """`sys.stdlib_module_names` is 3.10+, so on 3.9 the lint allows only its own list.
+
+    A module that list lacked, `calendar`, came in with a repair and passed `make lint` on
+    every newer Python, then failed the first step of `make check` on 3.9, the floor this
+    project declares. Checked here with the list alone, on whatever Python runs the suite.
+    """
+
+    def test_every_import_is_on_the_list_the_floor_reads(self) -> None:
+        lint = REPO_ROOT / "tools" / "check_stdlib_only.py"
+        as_the_floor_sees_it = (
+            "import runpy, sys\n"
+            "if hasattr(sys, 'stdlib_module_names'):\n"
+            "    del sys.stdlib_module_names\n"
+            f"runpy.run_path({str(lint)!r}, run_name='__main__')\n"
+        )
+        proc = subprocess.run([sys.executable, "-c", as_the_floor_sees_it],
+                              capture_output=True, text=True, timeout=120)
+        self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
 
 
 class TestTranslationsStayInStep(unittest.TestCase):
@@ -544,6 +608,38 @@ class TestWindowsShims(unittest.TestCase):
         leave a shim silently pointing at the old one."""
         for shim in self.BIN.glob("*.cmd"):
             self.assertIn("%~dp0%~n0", shim.read_text(encoding="utf-8"), shim.name)
+
+    # What cmd.exe executes, in order. The launcher is chosen by `where`'s exit code and
+    # nothing else: `where /q py && (py -3 …) || (python …)` runs the `||` branch whenever
+    # anything before it fails — `py -3` included — so a gate that refused by exiting 2 ran
+    # a second time through `python`, with its stdin already read.
+    EXECUTED = [
+        "setlocal",
+        "where /q py",
+        "if %ERRORLEVEL% EQU 0 (",
+        'py -3 "%~dp0%~n0" %*',
+        ") else (",
+        'python "%~dp0%~n0" %*',
+        ")",
+        "exit /b %ERRORLEVEL%",
+    ]
+
+    def test_a_script_that_fails_is_never_run_a_second_time(self):
+        for shim in self.BIN.glob("*.cmd"):
+            lines = [line.strip() for line in shim.read_text(encoding="utf-8").splitlines()]
+            executed = [line for line in lines
+                        if line and not line.lower().startswith(("rem", "@echo off"))]
+            with self.subTest(shim=shim.name):
+                self.assertEqual(self.EXECUTED, executed)
+
+    def test_no_remark_carries_a_percent_sign_cmd_would_expand(self):
+        """cmd.exe expands `%` before it recognises a remark, and a malformed `%~` in a
+        comment aborts the batch before it runs anything."""
+        for shim in self.BIN.glob("*.cmd"):
+            remarks = [line for line in shim.read_text(encoding="utf-8").splitlines()
+                       if line.lower().startswith("rem")]
+            with self.subTest(shim=shim.name):
+                self.assertEqual([], [r for r in remarks if "%" in r.replace("%~n0", "")])
 
 
 class TestThisRepositoryRunsUnderItsOwnPlugin(unittest.TestCase):

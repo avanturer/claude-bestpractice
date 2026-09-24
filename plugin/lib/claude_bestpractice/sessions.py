@@ -15,7 +15,7 @@ working session looks like while a human reads.
 So death is: the process is gone, or the pid was recycled by a different process, or
 the worktree is no longer registered with git. A quiet heartbeat is grounds for death
 only past a ceiling far longer than any think, and only as a backstop against records
-that outlived a reboot.
+that outlived a reboot — never over a pid that still proves the session is running.
 
 The second worst defect was the mirror of the first, and it hid behind a green suite for
 five releases: the pid being watched was the wrong process. Claude Code runs hooks
@@ -34,7 +34,7 @@ from dataclasses import dataclass, asdict, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from . import store
+from . import hookio, store
 from .gitctx import GitContext, worktree_paths
 
 # Older than this and the board stops calling the session active. It is a DISPLAY
@@ -44,8 +44,13 @@ HEARTBEAT_STALE_SECONDS = 900.0
 
 # The backstop for a record that outlived the process it describes — a hard reboot
 # reuses pids from 1 and can hand a stale record a live, unrelated pid. Long enough
-# that no amount of thinking, lunch, or an overnight pause reaches it.
+# that no amount of thinking, lunch, or an overnight pause reaches it. A weekend does,
+# which is why it only decides where the pid cannot: see `_pid_proves_life`.
 HEARTBEAT_DEAD_SECONDS = 36 * 3600.0
+
+# Where a boot names itself, on Linux. Elsewhere there is no fingerprint either, and the
+# ceiling decides exactly as it always did.
+BOOT_ID = Path("/proc/sys/kernel/random/boot_id")
 
 SESSIONS_DIR = "sessions"
 
@@ -85,6 +90,12 @@ class SessionRecord:
     heartbeat_at: float
     pid_fingerprint: str = ""
     pid_trust: str = ""
+    # Where the pid means what it says. A pid is a number in ONE pid namespace of ONE boot:
+    # read from a container sharing the checkout, pid 2 was the host's `kthreadd`, so its
+    # start time "mismatched" and a running session was reaped with its tree. Empty in a
+    # record written before these existed, which reads as it always did.
+    pid_identity: str = ""
+    boot_id: str = ""
     task_statement: str = ""
     task_paths: list[str] = field(default_factory=list)
     model: str = ""
@@ -171,6 +182,19 @@ def pid_fingerprint(pid: int) -> str:
         return ""
 
 
+def current_boot() -> str:
+    """This boot's own id, or "" where the kernel does not expose one.
+
+    What tells a record that outlived a reboot from one that did not. A start-time
+    fingerprint is boot-relative, so across a reboot it can match a stranger by chance —
+    which is exactly the case the heartbeat ceiling was kept for.
+    """
+    try:
+        return BOOT_ID.read_text(encoding="ascii").strip()
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
 def _proc_ppid(pid: int) -> int:
     fields = _proc_stat_fields(pid)
     try:
@@ -241,7 +265,12 @@ def _pid_says_dead(rec: SessionRecord) -> bool:
     before the walk existed, so its pid is a wrapper that the old code was reading as
     death on every pass; it decides only once the record has also fallen silent, which
     retires the corpses that bug left behind without touching a session still working.
+
+    A pid read in another pid namespace proves nothing either way: the same number here is
+    a different process, or none. That is "cannot tell", and cannot tell is live.
     """
+    if rec.pid_identity and rec.pid_identity != store.lock_identity():
+        return False
     gone = not pid_alive(rec.pid)
     if not gone:
         current = pid_fingerprint(rec.pid)
@@ -253,10 +282,32 @@ def _pid_says_dead(rec: SessionRecord) -> bool:
     return (time.time() - rec.heartbeat_at) > HEARTBEAT_STALE_SECONDS
 
 
+def _pid_proves_life(rec: SessionRecord) -> bool:
+    """Is the pid, beyond doubt, still the CLI that registered this record?
+
+    The CLI itself, read in this pid namespace, on this boot, with the start time it had
+    then. Every one of those is required, because each is a way for a live pid to be a
+    stranger — and where all of them hold, silence is a founder away for the weekend. The
+    ceiling overrode exactly that: a session idle for 63 hours, its CLI still running, was
+    reaped by the next sibling to start, and its tree — `.env`, build output and all — was
+    deleted with the CLI still standing in it.
+    """
+    return (
+        rec.pid_trust == PID_TRUST_OWNER
+        and bool(rec.pid_fingerprint and rec.boot_id)
+        and rec.boot_id == current_boot()
+        and rec.pid_identity == store.lock_identity()
+        and pid_fingerprint(rec.pid) == rec.pid_fingerprint
+    )
+
+
 def is_live(ctx: GitContext, rec: SessionRecord, known_worktrees: set[str] | None = None) -> bool:
     if _pid_says_dead(rec):
         return False
-    if (time.time() - rec.heartbeat_at) > HEARTBEAT_DEAD_SECONDS:
+    # The ceiling is the backstop for a pid that cannot speak for itself — one resolved
+    # to a wrapper, one with no fingerprint, one from before a reboot or from another pid
+    # namespace. Over a pid that can, it was overruling the evidence it exists to back up.
+    if (time.time() - rec.heartbeat_at) > HEARTBEAT_DEAD_SECONDS and not _pid_proves_life(rec):
         return False
     if known_worktrees is None:
         known_worktrees = {p.as_posix() for p in worktree_paths(ctx)}
@@ -289,6 +340,9 @@ def register(ctx: GitContext, rec: SessionRecord) -> None:
     # previous process's start time made is_live read its own record as a recycled pid —
     # positive evidence of death for a session that had just started.
     rec.pid_fingerprint = pid_fingerprint(rec.pid) or rec.pid_fingerprint
+    # Where that pid was read, for the same reason: it is this process that resolved it.
+    rec.pid_identity = store.lock_identity()
+    rec.boot_id = current_boot()
     store.write_json(_record_path(ctx, rec.session_id), rec.to_dict())
 
 
@@ -335,7 +389,26 @@ def adopt(ctx: GitContext, session_id: str) -> SessionRecord:
         heartbeat_at=time.time(),
     )
     register(ctx, rec)
-    return rec
+    return _with_its_instruction(ctx, rec)
+
+
+def _with_its_instruction(ctx: GitContext, rec: SessionRecord) -> SessionRecord:
+    """The founder's instruction, carried to a new id of the session that was given it.
+
+    It is recorded under the id the session had when the founder spoke, the main checkout's
+    in the ordinary flow. A session that entered its tree straight after was a new record
+    there with no statement, and the rule that asks for a card at the first write reads the
+    statement: it never fired in the tree, where the work happens, and the card was asked
+    for only at Stop, after three files. The freshest statement among its other ids, with
+    the paths it named; nothing from a sibling, which `identities` never includes.
+    """
+    given = [other for other in (get(ctx, sid) for sid in identities(ctx, rec.session_id))
+             if other is not None and other.session_id != rec.session_id and other.task_statement]
+    if not given:
+        return rec
+    source = max(given, key=lambda other: other.heartbeat_at)
+    return touch(ctx, rec.session_id, task_statement=source.task_statement,
+                 task_paths=list(source.task_paths)) or rec
 
 
 def get(ctx: GitContext, session_id: str) -> SessionRecord | None:
@@ -348,21 +421,59 @@ def get(ctx: GitContext, session_id: str) -> SessionRecord | None:
         return None
 
 
-def touch(ctx: GitContext, session_id: str, **updates: Any) -> SessionRecord | None:
-    """Refresh the heartbeat and apply field updates.
+def _rewrite(ctx: GitContext, session_id: str, change) -> SessionRecord | None:
+    """Read this session's record, apply `change`, stamp the heartbeat, write it back.
 
-    Each session owns its own file, so this needs no lock — the only writer is the
-    session itself.
+    Under the record's own lock, re-read inside it. Each session owns its file, and that
+    was taken to mean one writer — but parallel tool calls and every subagent of a session
+    run their hooks at the same instant against the same record, since a subagent's calls
+    arrive under its parent's session id. Each wrote back the record it had read, and the
+    others' updates vanished: eight parallel Bash calls moved `tool_calls` by two.
     """
-    rec = get(ctx, session_id)
-    if rec is None:
-        return None
+    path = _record_path(ctx, session_id)
+    with store.file_lock(path.with_name(path.name + ".lock")):
+        rec = get(ctx, session_id)
+        if rec is None:
+            return None
+        change(rec)
+        rec.heartbeat_at = time.time()
+        store.write_json(path, rec.to_dict())
+    return rec
+
+
+def _assign(rec: SessionRecord, updates: dict[str, Any]) -> None:
     for key, value in updates.items():
         if hasattr(rec, key):
             setattr(rec, key, value)
-    rec.heartbeat_at = time.time()
-    store.write_json(_record_path(ctx, session_id), rec.to_dict())
-    return rec
+
+
+def touch(ctx: GitContext, session_id: str, **updates: Any) -> SessionRecord | None:
+    """Refresh the heartbeat and apply field updates, without losing a concurrent hook's."""
+    return _rewrite(ctx, session_id, lambda rec: _assign(rec, updates))
+
+
+def count(ctx: GitContext, session_id: str, counter: str, ceiling: int = 0,
+          **updates: Any) -> int:
+    """Add one to a counter on this session's record, and return what it held before.
+
+    Read and added in one step under the lock, because a value read when the hook started
+    is stale by the time it is written: six subagents started in one message all read
+    `spawns_this_turn` as 0, and a fan-out ceiling of three let all six through — the
+    founder's number, failing in exactly the case it exists for (decision 0015).
+
+    With a `ceiling`, a counter already at it is left where it is: a call refused for it
+    is not work the session did. `updates` land in the same write. 0 for no record.
+    """
+    before: list[int] = []
+
+    def add_one(rec: SessionRecord) -> None:
+        before.append(int(getattr(rec, counter) or 0))
+        if ceiling <= 0 or before[0] < ceiling:
+            setattr(rec, counter, before[0] + 1)
+        _assign(rec, updates)
+
+    _rewrite(ctx, session_id, add_one)
+    return before[0] if before else 0
 
 
 def unregister(ctx: GitContext, session_id: str) -> None:
@@ -387,12 +498,15 @@ def reap(ctx: GitContext, exclude: str | None = None) -> list[SessionRecord]:
             continue
         if not is_live(ctx, rec, known):
             dead.append(rec)
-            _record_path(ctx, rec.session_id).unlink(missing_ok=True)
             # The baseline goes into the reap log, not just the record. A crashed
             # session is reaped by a sibling, and when the founder resumes it the rebuild
             # finds no record and re-anchors at HEAD — so every commit made before the
             # crash falls outside the diff and the Stop gate has nothing to verify.
             # Reaping the process must not amnesty the work it already did.
+            #
+            # Logged BEFORE the record goes, never after: a resume landing between the
+            # two found neither the record nor the log entry and started from HEAD — the
+            # amnesty above, reopened for as long as the unlink took.
             store.append_jsonl(
                 store.tier_b(ctx, REAPED_LOG),
                 {
@@ -404,6 +518,7 @@ def reap(ctx: GitContext, exclude: str | None = None) -> list[SessionRecord]:
                     "task_paths": rec.task_paths,
                 },
             )
+            _record_path(ctx, rec.session_id).unlink(missing_ok=True)
     if dead:
         _trim_reaped_log(ctx)
         _release_many(ctx, {r.session_id for r in dead})
@@ -470,6 +585,92 @@ def my_pid(ctx: GitContext, session_id: str) -> int:
     if record is None or record.pid_trust != PID_TRUST_OWNER or record.pid <= 0:
         return 0
     return record.pid
+
+
+def _process_of(record: SessionRecord) -> tuple[str, int, str] | None:
+    """(harness id, CLI pid, its start time): what makes two records one running session.
+
+    None where any half is unknown — an id that was not composed here, an anonymous one, or
+    a pid never resolved to the CLI itself, which `my_pid` refuses for the same reason.
+    """
+    harness = hookio.harness_of(record.session_id, record.worktree)
+    if not harness or record.pid_trust != PID_TRUST_OWNER or record.pid <= 0:
+        return None
+    return harness, record.pid, record.pid_fingerprint
+
+
+def identities(ctx: GitContext, session_id: str) -> set[str]:
+    """Every id this ONE session is registered under: its own, and the ones it left behind.
+
+    Identity is (harness id, worktree), and Claude Code reports the tree as a hook's working
+    directory from the first call after `cd` or `EnterWorktree` into it (measured on
+    2.1.280 and 2.1.281). So a session that files and claims its card in the main checkout
+    and then enters the tree this plugin made for it is a second identity from its first
+    call there, while the record it left behind stays live — it names the same process.
+    Every rule asking "is that card, that lease, that record mine?" then answered no about
+    the session doing the asking: its own card was a stranger's, `claim` refused it as held
+    by a live session that was itself, and `git add -A` in its own tree was refused over
+    its own paths.
+
+    United on BOTH halves, never on one. `claude -p` children inherit one harness id and are
+    separate processes — the reason the tree is in the identity at all — so the process has
+    to match too, start time included, or a recycled pid would be taken for this session.
+    Subagents share both halves: they are this session's own hands, and count as it.
+
+    Where the process cannot be named — every pid on a machine with no /proc, macOS and
+    Windows among them — the tree registry answers instead (`_through_a_tree`), and it
+    never overrules two pids that were both resolved.
+    """
+    me = get(ctx, session_id) if session_id else None
+    harness = hookio.harness_of(me.session_id, me.worktree) if me is not None else ""
+    if not harness:
+        return {session_id} if session_id else set()
+    records = load_all(ctx)
+    linked = _through_a_tree(ctx, me, harness, records)
+    process = _process_of(me)
+    return {session_id} | {
+        record.session_id for record in records
+        if _one_session(process, _process_of(record), record.session_id in linked)
+    }
+
+
+def _one_session(process: tuple | None, other: tuple | None, linked: bool) -> bool:
+    """Are two records of one harness id the same session, as far as the evidence goes?
+
+    Two resolved pids decide, both ways: one process is one session wherever it stands,
+    and two processes are two sessions however their trees were made. Only where either
+    pid is unresolved does the tree registry get the say.
+    """
+    if process is not None and other is not None:
+        return process == other
+    return linked
+
+
+def _through_a_tree(ctx: GitContext, me: SessionRecord, harness: str,
+                    records: list[SessionRecord]) -> set[str]:
+    """Ids of this harness standing where its tree came from, or in the tree made for it.
+
+    The pid is the proof `identities` prefers, and it exists only where /proc does: every
+    other pid is the hook's own shell, so nothing was ever united and every consequence of
+    the split stood — the card lost in the tree, `claim` refused as a sibling's, the
+    database gate refusing the session over itself. The registry of trees this plugin made
+    is the other account of who is who: a tree made for harness id H and the main checkout
+    it was made from hold one session between them. Between two such trees it says nothing —
+    a tree is tied to the checkout it was made from and to no other tree.
+    """
+    from . import worktree
+
+    trees = worktree.made_for(ctx, harness)
+    if not trees:
+        return set()
+    main = ctx.common_dir.parent.resolve()
+    here = Path(me.worktree).resolve()
+    places = trees if here == main else ({main} if here in trees else set())
+    return {
+        record.session_id for record in records
+        if Path(record.worktree).resolve() in places
+        and hookio.harness_of(record.session_id, record.worktree) == harness
+    }
 
 
 # --------------------------------------------------------------------------- leases
@@ -610,10 +811,12 @@ def _release_many(ctx: GitContext, session_ids: set[str]) -> int:
     return removed
 
 
-def leases_held_by(ctx: GitContext, session_id: str) -> list[str]:
+def leases_held_by(ctx: GitContext, session_id: str, tree: Path | None = None) -> list[str]:
+    """The paths this session holds — in `tree` alone when one is named, since a lease is a
+    claim on a file in ONE tree and the same name in another tree is another file (#163)."""
     table = _lease_table(store.read_json(_leases_path(ctx), default={}))
-    return sorted(split_lease_key(k)[1] for k, h in table.items()
-                  if h.get("session_id") == session_id)
+    held = [split_lease_key(k) for k, h in table.items() if h.get("session_id") == session_id]
+    return sorted(path for where, path in held if tree is None or where == str(tree))
 
 
 def elsewhere_on(ctx: GitContext, relpath: str, session_id: str) -> list[str]:

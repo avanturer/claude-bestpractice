@@ -8,6 +8,8 @@ with neither session told. So the rule is checked before the write, not after.
 from __future__ import annotations
 
 import json
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -15,8 +17,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from helpers import BIN, RepoCase, add_origin, git, make_repo, sid
+
 from claude_bestpractice.gitctx import worktree_paths
-from helpers import BIN, RepoCase, git, sid
 
 
 def _verdict(proc) -> tuple[str, str]:
@@ -466,6 +469,69 @@ class TestAPackageNameIsNotAPath(PolicyCase):
                 self.assertEqual(_verdict(proc)[0], "allow", f"{command} -> {_verdict(proc)[1]}")
 
 
+class TestAnInPlaceEditIsReadFromSedsOwnArguments(PolicyCase):
+    """`" -i" in segment` fired on any `-i` in a pipeline that ran sed anywhere, so
+    `sed -n '1,20p' f | grep -in split` — a read — was refused in the main checkout, where
+    it provisioned a worktree for every session that ran it."""
+
+    def test_a_flag_of_the_next_program_is_not_seds(self):
+        command = "sed -n '1,20p' README.md | grep -in seed"
+        self.assertEqual([], write_targets(command, self.repo))
+        proc = self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+            "tool_input": {"command": command}, "cwd": str(self.repo),
+        })
+        self.assertNotEqual("deny", _verdict(proc)[0], _verdict(proc)[1])
+        self.assertFalse((self.repo / ".claude" / "worktrees").exists(), "a read provisioned a tree")
+
+    def test_every_spelling_of_in_place_still_writes(self):
+        for command, written in (
+            ("sed -i 's/a/b/' notes.txt", ["notes.txt"]),
+            ("sed -i '' 's/a/b/' notes.txt", ["notes.txt"]),
+            ("sed -i.bak -e 's/a/b/' -e 's/c/d/' a.txt b.txt", ["a.txt", "b.txt"]),
+            ("sed -ni 's/x/y/p' f.txt", ["f.txt"]),
+            ("sed --in-place=.orig --expression='s/a/b/' g.txt", ["g.txt"]),
+            ("sudo sed -i 's/a/b/' h.txt", ["h.txt"]),
+        ):
+            self.assertEqual([str(self.repo / name) for name in written],
+                             write_targets(command, self.repo), command)
+
+
+class TestAnInterpreterWritesOnlyWhereItRuns(PolicyCase):
+    """`open('x', 'w')` anywhere in a command was a write, whatever program ran — so a
+    search for it, a pull request body describing it, and a heredoc writing a script to
+    /tmp each provisioned a worktree from the main checkout. #76, one rule over."""
+
+    def test_text_about_an_open_is_not_one(self):
+        for command in (
+            "grep -rn \"open('config.json', 'w')\" src/",
+            "gh pr create --title \"Atomic config writes\" "
+            "--body \"Replaces open('config.json', 'w') with an atomic rename.\"",
+            "git commit -m \"Replace open('config.json', 'w') with an atomic write\"",
+            "cat > /tmp/gen.py <<'EOF'\nwith open('report.json', 'w') as f:\n    f.write('{}')\nEOF",
+            "python3 tools/gen.py \"open('no.txt', 'w')\"",
+        ):
+            inside = [t for t in write_targets(command, self.repo) if t.startswith(str(self.repo))]
+            self.assertEqual([], inside, command)
+        proc = self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+            "tool_input": {"command": "grep -rn \"open('config.json', 'w')\" ."},
+            "cwd": str(self.repo),
+        })
+        self.assertNotEqual("deny", _verdict(proc)[0], _verdict(proc)[1])
+        self.assertFalse((self.repo / ".claude" / "worktrees").exists(), "a search provisioned a tree")
+
+    def test_code_an_interpreter_runs_still_writes(self):
+        for command, written in (
+            ("python3 -c \"open('out.txt','w').write('x')\"", "out.txt"),
+            ("python3 - <<'EOF'\nopen('out2.txt', 'w').write('x')\nEOF", "out2.txt"),
+            ("node -e \"require('fs').writeFileSync('out3.txt', 'x')\"", "out3.txt"),
+            ("uv run python -c \"open('uv.txt','w')\"", "uv.txt"),
+            ("echo \"open('piped.txt','w')\" | python3", "piped.txt"),
+        ):
+            self.assertIn(str(self.repo / written), write_targets(command, self.repo), command)
+
+
 class TestTheScannerFollowsTheShellIntoEverySegment(PolicyCase):
     """A relative path means whatever the last `cd` says it means, everywhere.
 
@@ -504,6 +570,34 @@ class TestTheScannerFollowsTheShellIntoEverySegment(PolicyCase):
             [str(home / "scratch" / "junk")],
             write_targets("cd ~/scratch && rm -rf junk", self.repo),
         )
+
+    def test_a_quoted_directory_is_still_a_directory(self):
+        """`_CD` read the copy with quoted spans blanked, where `cd "/tmp/dir with space"`
+        has no directory left — so the `cd` went unread and the write after it was judged
+        in the checkout the command had just left. From the main checkout that refused a
+        write into /tmp; from a worktree it let a write into the main checkout through."""
+        with tempfile.TemporaryDirectory() as tmp:
+            spaced = Path(tmp).resolve() / "dir with space"
+            self.assertEqual(
+                [str(spaced / "out.txt")],
+                write_targets(f'cd "{spaced}" && echo hi > out.txt', self.repo),
+            )
+            proc = self.run_hook("pre-tool", {
+                "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+                "tool_input": {"command": f'cd "{spaced}" && echo hi > out.txt'},
+                "cwd": str(self.repo),
+            }, cwd=self.repo)
+            self.assertEqual("allow", _verdict(proc)[0], _verdict(proc)[1])
+
+        mine = self.worktree("feat/mine")
+        proc = self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+            "tool_input": {"command": f"(cd '{self.repo}' && echo hi > out.txt)"},
+            "cwd": str(mine),
+        }, cwd=mine)
+        decision, reason = _verdict(proc)
+        self.assertEqual("deny", decision, reason)
+        self.assertIn("main checkout", reason)
 
     def test_an_absolute_write_is_still_read_where_it_points(self):
         """The `cd` tracking must not swallow the case it was added for."""
@@ -580,6 +674,66 @@ class TestGitItselfReachesIntoOtherTrees(PolicyCase):
         ):
             decision, reason = self.bash(mine, command)
             self.assertEqual(decision, "allow", f"{command} -> {reason}")
+
+    def test_the_main_checkout_can_be_brought_up_to_the_trunk(self):
+        """Nobody stands in the main checkout, so nothing else will ever update it, and one
+        left behind the trunk turned suites red on code nobody present wrote (decision
+        0018). A fast-forward makes no commit, and git refuses it rather than overwrite
+        anything uncommitted. The subshell is the form the stranding refusal recommends,
+        and was refused by this rule as soon as it was taken (decision 0017)."""
+        mine = self.worktree("feat/mine")
+        for command in (
+            f"git -C {self.repo} pull --ff-only",
+            f"git -C {self.repo} merge --ff-only origin/main",
+            f"(cd {self.repo} && git pull --ff-only)",
+        ):
+            decision, reason = self.bash(mine, command)
+            self.assertEqual("allow", decision, f"{command} -> {reason}")
+
+    def test_but_nothing_that_can_merge_and_no_siblings_tree(self):
+        mine = self.worktree("feat/mine")
+        theirs = self.worktree("feat/theirs")
+        for command in (
+            f"git -C {self.repo} pull",
+            f"(cd {self.repo} && git pull)",
+            f"git -C {self.repo} pull --ff-only --rebase",
+            f"git -C {theirs} pull --ff-only",
+        ):
+            decision, reason = self.bash(mine, command)
+            self.assertEqual("deny", decision, f"{command} -> {reason}")
+
+    def test_a_tree_verb_spelled_to_read_is_a_read(self):
+        """`git -C <main> stash list` came back as a command that discards uncommitted
+        work, and so did every other way to look without changing anything."""
+        mine = self.worktree("feat/mine")
+        for command in (
+            f"git -C {self.repo} stash list",
+            f"git -C {self.repo} stash show -p",
+            f"git -C {self.repo} clean -nd",
+            f"git -C {self.repo} apply --check fix.patch",
+        ):
+            decision, reason = self.bash(mine, command)
+            self.assertEqual("allow", decision, f"{command} -> {reason}")
+
+    def test_a_refusal_never_recommends_what_the_next_rule_refuses(self):
+        """`cd <main> && git checkout …` was told to run it as `(cd <main> && ...)`, which
+        this rule refused the moment it was taken. The rule that refuses the subshell now
+        speaks first, and for the main checkout it names the update that is allowed."""
+        mine = self.worktree("feat/mine")
+        decision, reason = self.bash(mine, f"cd {self.repo} && git checkout -b feat/x")
+        self.assertEqual("deny", decision, reason)
+        self.assertNotIn("(cd", reason)
+        self.assertIn(f"git -C {self.repo} pull --ff-only", reason)
+
+    def test_a_quoted_tree_is_still_the_tree(self):
+        """Read off the text with quoted spans blanked, `-C "<a path with a space>"` came
+        back as the word after it, and the command was judged in the session's own tree."""
+        spaced = make_repo(self.tmp / "dir with space", "app")
+        mine = self.tmp / "mine-of-spaced"
+        git(["worktree", "add", "-q", "-b", "feat/mine", str(mine)], spaced)
+        decision, reason = self.bash(mine, f'git -C "{spaced}" reset --hard')
+        self.assertEqual("deny", decision, reason)
+        self.assertIn("main checkout", reason)
 
     def test_a_cd_into_the_shared_checkout_is_refused_before_the_shell_is_stuck(self):
         """The step the founder took, and the one that cannot be taken back."""
@@ -892,7 +1046,10 @@ class TestWorktreeNamesAndCleanup(PolicyCase):
         )
         body = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
         self.assertIn("removed 1 unused worktree", body)
-        self.assertIn("branches are kept", body)
+        self.assertIn("nothing committed is gone", body)
+        # Said as it is true: the branch of this very tree was merged and went with it.
+        self.assertNotIn("branches are kept", body)
+        self.assertIn("only where its work is already in the trunk", body)
 
     def test_it_says_nothing_when_it_swept_nothing(self):
         """Which is nearly every session, and the context budget is 400 tokens."""
@@ -931,6 +1088,102 @@ class TestTheTrunkIsProtected(PolicyCase):
     def test_it_can_be_switched_off(self):
         self.configure(require_worktree=False, protect_trunk=False)
         self.assertEqual(self.decision()[0], "allow")
+
+
+class TestTheCommandARefusalNamesRunsAsWritten(PolicyCase):
+    """Decision 0020: a refusal's way out has to run on this machine. Paths went into those
+    commands unquoted, so a repository under `…/final space ü/app` was told
+    `cd …/final space ü/app/.claude/worktrees/…` — and bash answered "too many arguments"."""
+
+    def named(self, reason: str, pattern: str) -> list[str]:
+        """The words of the command the refusal names, split the way a shell splits them."""
+        found = re.search(pattern, reason)
+        self.assertIsNotNone(found, reason)
+        return shlex.split(found.group(1))
+
+    def say(self, prompt: str, where) -> None:
+        self.run_hook("prompt-capture", {
+            "session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": prompt,
+            "cwd": str(where),
+        }, cwd=where)
+
+    def test_the_worktree_it_hands_over_can_be_entered(self):
+        spaced = make_repo(self.tmp / "final space ü", "app")
+        decision, reason = self.decision(spaced)
+        self.assertEqual("deny", decision, reason)
+        command = re.search(r"`(cd [^`]+)`", reason).group(1)
+        proc = subprocess.run(["bash", "-c", command], cwd=str(spaced),
+                              capture_output=True, text=True, timeout=60)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+
+    def test_the_subshell_it_recommends_can_be_run(self):
+        spaced = make_repo(self.tmp / "final space ü", "app")
+        mine = self.tmp / "mine"
+        git(["worktree", "add", "-q", "-b", "feat/mine", str(mine)], spaced)
+        proc = self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+            "tool_input": {"command": f"cd '{spaced}'"}, "cwd": str(mine),
+        }, cwd=mine)
+        words = self.named(_verdict(proc)[1], r"`\((cd .+?) && \.\.\.\)`")
+        self.assertEqual(["cd", str(spaced)], words)
+
+    def test_the_branch_it_names_is_one_argument(self):
+        self.configure(require_worktree=False)
+        self.say("Fix the user's login redirect", self.repo)
+        decision, reason = self.decision()
+        self.assertEqual("deny", decision, reason)
+        words = self.named(reason, r"(git switch -c [^\n]+)")
+        self.assertEqual(["git", "switch", "-c", "feat/fix-the-user's-login"], words)
+
+    def test_the_card_it_asks_for_names_the_file(self):
+        mine = self.worktree("feat/mine", occupant="")
+        self.say("Write up the parser notes", mine)
+        proc = self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Write",
+            "tool_input": {"file_path": str(mine / "parser notes.md"), "content": "x\n"},
+            "cwd": str(mine),
+        }, cwd=mine)
+        words = self.named(_verdict(proc)[1], r"(claude-bp-plan (?:add|update) [^\n]+)")
+        self.assertEqual("parser notes.md", words[words.index("--paths") + 1])
+
+    def test_the_paths_it_says_to_stage_are_the_paths(self):
+        from claude_bestpractice import sessions
+
+        from helpers import session_record_for
+
+        self.write("src/my module.py", "x = 1\n")
+        self.write("src/theirs.py", "y = 1\n")
+        self.commit("both files exist")
+        theirs = sid(self.repo, "theirs")
+        sessions.register(self.ctx(), session_record_for(self.ctx(), theirs, pid=1))
+        sessions.acquire_lease(self.ctx(), theirs, "src/theirs.py")
+        self.write("src/my module.py", "x = 2\n")
+        self.write("src/theirs.py", "y = 2\n")
+        proc = self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+            "tool_input": {"command": "git add -A"}, "cwd": str(self.repo),
+        })
+        words = self.named(_verdict(proc)[1], r"(git add -- [^\n]+)")
+        self.assertEqual(["git", "add", "--", "src/my module.py"], words)
+
+    def test_the_commands_around_removing_its_own_tree_run(self):
+        from claude_bestpractice import worktree
+        from claude_bestpractice.gitctx import resolve
+
+        spaced = make_repo(self.tmp / "final space ü", "app")
+
+        def remove(tree):
+            return _verdict(self.run_hook("pre-tool", {
+                "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+                "tool_input": {"command": f"git worktree remove '{tree}'"}, "cwd": str(spaced),
+            }, cwd=spaced))[1]
+
+        tree = worktree.provision(resolve(spaced), "tidy up", sid(spaced, "s1"))
+        (tree / "untracked.txt").write_text("x\n", encoding="utf-8")
+        words = self.named(remove(tree), r"\n  (git -C [^\n]+)")
+        self.assertEqual(["git", "-C", str(tree)], words[:3])
+        (tree / "untracked.txt").unlink()
+        self.assertEqual(["cd", str(spaced)], self.named(remove(tree), r"`(cd [^`]+)`"))
 
 
 class TestAdoptability(PolicyCase):
@@ -1082,6 +1335,66 @@ class TestCommitMessages(PolicyCase):
         """`git commit` opening an editor carries no message to judge."""
         self.assertEqual(self.commit("git commit")[0], "allow")
 
+    def test_a_heredoc_message_is_judged_by_its_body(self):
+        """How Claude Code writes every multi-line commit. The opener is not the subject.
+
+        Found by running a real session under the plugin: `"$(cat <<'EOF'" is 13
+        characters` refused the commit, and the `git add` chained before it went with it.
+        """
+        body = ("git add a.py && git commit -m \"$(cat <<'EOF'\n"
+                "Add the \"multiply\" helper next to add_one\n\nCo-Authored-By: A <a@b.c>\nEOF\n)\"")
+        self.assertEqual(self.commit(body)[0], "allow")
+        self.assertEqual(self.commit("git commit -m \"$(cat <<'EOF'\nwip\nEOF\n)\"")[0], "deny")
+
+    def test_the_message_is_read_the_way_the_shell_reads_it(self):
+        """A pattern over the text stopped at the first quote: `Handle \\"quoted\\" …` was
+        judged as `Handle \\` and `'Don'\\''t …'` as `Don` — refusals no rewording could
+        satisfy — and a commit inside a heredoc being written to a script as a commit."""
+        for command in (
+            'git commit -m "Handle \\"quoted\\" fields in the CSV parser so exports round-trip"',
+            "git commit -m 'Don'\\''t crash on empty input to the parser'",
+            "cat > scripts/release.sh <<'EOF'\ngit commit -am \"Release\"\nEOF",
+            'git commit --message "Explain the retry budget in the client"',
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.commit(command)[0], "allow")
+        self.assertEqual(self.commit("git commit --message=wip")[0], "deny")
+
+    def test_a_commit_in_a_script_being_written_is_not_being_run(self):
+        """The heredoc body was still tokenised with the line, so an `&&` inside a script
+        being written split out a `git commit -m "Release"` that nothing was running."""
+        command = ("cat > scripts/release.sh <<'EOF'\n#!/bin/sh\nset -e\n"
+                   "git add -A && git commit -m \"Release\"\nEOF")
+        self.assertEqual("allow", self.commit(command)[0])
+
+    def test_a_commit_on_a_line_of_its_own_is_still_judged(self):
+        """Newlines are whitespace to the tokeniser, so a commit on the second line read as
+        more arguments to the first command and its message was never judged."""
+        self.assertEqual("deny", self.commit("git status\ngit commit -m wip")[0])
+        self.assertEqual("deny", self.commit("git add -A\ngit commit -m wip")[0])
+
+    def test_git_options_before_the_subcommand_do_not_hide_the_message(self):
+        """`git -C <tree> commit -m …` is how a session commits in its tree from anywhere.
+        Only the word straight after `git` was compared, so every such message went unread."""
+        for command in (
+            'git -C . commit -m "wip"',
+            'git -c commit.gpgsign=false commit -qm "wip"',
+            "git -C . commit -m \"$(cat <<'EOF'\nwip\nEOF\n)\"",
+        ):
+            with self.subTest(command=command):
+                decision, reason = self.commit(command)
+                self.assertEqual(decision, "deny")
+                self.assertIn("describes committing", reason)
+        self.assertEqual(
+            self.commit('git -C . commit -m "Explain the retry budget in the client"')[0], "allow"
+        )
+
+    def test_a_message_the_shell_writes_is_not_judged_as_typed(self):
+        """`"$MSG"` is a variable name; the message git receives is not on the line."""
+        for command in ('git commit -m "$MSG"', 'git commit -m "`cat msg.txt`"'):
+            with self.subTest(command=command):
+                self.assertEqual(self.commit(command)[0], "allow")
+
 
 class TestConflictMarkers(PolicyCase):
     relax_git_policy = True
@@ -1145,6 +1458,24 @@ class TestTheGateDoesNotRefuseTheTreeItHandedOver(PolicyCase):
         decision, reason = self.write_into(theirs)
         self.assertEqual("deny", decision)
         self.assertIn("another session", reason)
+
+    def test_a_write_into_it_from_the_main_checkout_still_needs_a_card(self):
+        """Relative to the main checkout, the handed tree lives under `.claude/`, which
+        exempts the gate's own bookkeeping — so from there no write into it ever needed a
+        card, while the same write with the hook in the tree was refused for want of one."""
+        self.decision()
+        handed = self.provisioned()
+        self.run_hook("prompt-capture", {
+            "session_id": "s1", "hook_event_name": "UserPromptSubmit",
+            "prompt": "Add the payment module and cover it with tests",
+        })
+        decision, reason = self.write_into(handed)
+        self.assertEqual("deny", decision, reason)
+        self.assertIn("working on pay.py", reason)
+        self.assertNotEqual("deny", self.write_into(handed, ".claude/notes.md")[0],
+                            "the tree's own bookkeeping lost its exemption")
+        self.claim_a_task("s1", "pay.py")
+        self.assertNotEqual("deny", self.write_into(handed)[0])
 
 
 class TestEnteringAWorktreeIsNeverAQuestion(PolicyCase):
@@ -1339,6 +1670,16 @@ class TestAnIgnoredPathHasNowhereElseToGo(PolicyCase):
         self.assertEqual("deny", decision, reason)
         self.assertIn("main checkout", reason)
 
+    def test_an_ignored_directory_that_is_not_there_yet_is_ignored_too(self):
+        """A `build/` rule matches only what git can see is a directory, and an absent one
+        is not — so `rm -rf build` was refused, with a worktree provisioned for nothing."""
+        (self.repo / ".gitignore").write_text("build/\n", encoding="utf-8")
+        git(["add", ".gitignore"], self.repo)
+        git(["commit", "-qm", "ignore builds"], self.repo)
+        decision, reason = self.rm(self.repo / "build")
+        self.assertEqual("allow", decision, reason)
+        self.assertFalse((self.repo / ".claude" / "worktrees").exists(), "provisioned for nothing")
+
 
 class TestTheRuleArrivesBeforeTheRefusal(PolicyCase):
     """Issue #81. `EnterWorktree` refuses to act on its own judgement — its description
@@ -1510,6 +1851,220 @@ class TestTheStandingInstructionNamesTheTree(RepoCase):
         self.assertNotIn("never in this main checkout", body)
 
 
+class TestTheGateFurnishesItsTreeLikeTheHook(PolicyCase):
+    """The tree a session refused in the main checkout is sent to got no `.env` and no
+    database of its own, while the record beside it named one — so the session ran with no
+    config, copied the main checkout's `.env` by hand and shared its database, which is
+    #164 and #182 arriving through the gate's door instead of the hook's."""
+
+    def the_gate_makes_one(self) -> Path:
+        self.decision()
+        tree = self.provisioned()
+        self.assertIsNotNone(tree, "precondition: the refusal provisioned a tree")
+        return tree
+
+    def a_setup_that_leaves_a_mark(self, wait: float = 0.0) -> None:
+        """A `worktree_setup` that is not about a database at all, as `npm ci` is not."""
+        code = f"import time; time.sleep({wait}); open('set-up.txt', 'w').write('done')"
+        self.configure(worktree_setup=[sys.executable, "-c", code])
+
+    def test_it_gets_the_main_checkout_s_env_on_a_database_of_its_own(self):
+        from claude_bestpractice import worktree
+
+        self.write(".env", "DATABASE_URL=postgres://u:p@localhost:5432/shop_dev\nSTRIPE_KEY=sk_1\n")
+
+        tree = self.the_gate_makes_one()
+
+        self.assertIn("STRIPE_KEY=sk_1", (tree / ".env").read_text(encoding="utf-8"))
+        _record, body = worktree.record_for(self.ctx(), tree)
+        self.assertEqual(f"postgres://u:p@localhost:5432/{body['database']}",
+                         worktree.database_of(tree))
+
+    def test_its_setup_runs_where_there_is_no_database(self):
+        import time
+
+        self.a_setup_that_leaves_a_mark()
+
+        mark = self.the_gate_makes_one() / "set-up.txt"
+
+        deadline = time.time() + 30
+        while not mark.exists() and time.time() < deadline:
+            time.sleep(0.1)
+        self.assertTrue(mark.exists(), "worktree_setup never ran in the gate's tree")
+
+    def test_the_hook_s_tree_runs_it_too(self):
+        self.a_setup_that_leaves_a_mark()
+
+        made = self.run_hook("worktree-create", {"session_id": "s1",
+                                                 "hook_event_name": "WorktreeCreate"})
+
+        self.assertTrue((Path(made.stdout.strip()) / "set-up.txt").exists(), made.stderr)
+
+    def test_a_slow_setup_does_not_hold_the_gate_past_its_timeout(self):
+        """A PreToolUse hook that runs out of time lets the call through, and the call here
+        is the write into the main checkout that the gate exists to refuse."""
+        import time
+
+        self.a_setup_that_leaves_a_mark(wait=20)
+
+        started = time.time()
+        verdict, _reason = self.decision()
+
+        self.assertEqual("deny", verdict)
+        self.assertLess(time.time() - started, 10, "the gate waited for the project's setup")
+
+
+class TestWhatWorktreeincludeNamesReachesTheTree(RepoCase):
+    """Claude Code copies the gitignored files `.worktreeinclude` names into every tree it
+    makes — and processes none of it once a `WorktreeCreate` hook is installed: "copy the
+    files inside the hook script". So with this plugin a project's `.worktreeinclude` did
+    nothing at all, in any tree."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.write(".gitignore", ".env.local\nconfig/\nnode_modules/\n")
+        self.write(".worktreeinclude", "# what a fresh checkout lacks\n.env.local\nconfig/secrets.json\n")
+        self.commit("ignore what is local")
+        self.write(".env.local", "LOCAL_TOKEN=1\n")
+        self.write("config/secrets.json", '{"key": "local"}\n')
+        self.write("config/unasked.json", "{}\n")
+        self.write("node_modules/pkg/.env.local", "NOT_THIS=1\n")
+
+    def assert_carried(self, tree: Path) -> None:
+        self.assertEqual("LOCAL_TOKEN=1\n", (tree / ".env.local").read_text(encoding="utf-8"))
+        self.assertTrue((tree / "config" / "secrets.json").is_file())
+        self.assertFalse((tree / "config" / "unasked.json").exists(), "copied what was not named")
+        self.assertFalse((tree / "node_modules").exists(), "walked a directory nothing reaches")
+
+    def test_the_hook_s_tree_gets_what_it_names(self):
+        made = self.run_hook("worktree-create", {"session_id": "s1",
+                                                 "hook_event_name": "WorktreeCreate"})
+
+        self.assert_carried(Path(made.stdout.strip()))
+
+    def test_the_gate_s_tree_gets_it_too(self):
+        import time
+
+        from claude_bestpractice import worktree
+
+        tree = worktree.provision(self.ctx(), "the next thing", "s1")
+
+        deadline = time.time() + 30
+        while not (tree / "config" / "secrets.json").exists() and time.time() < deadline:
+            time.sleep(0.1)
+        self.assert_carried(tree)
+
+    def test_a_file_the_tree_already_has_is_left_as_it_is(self):
+        from claude_bestpractice import worktree
+
+        tree = self.add_worktree("feat/own-config")
+        (tree / ".env.local").write_text("MINE=1\n", encoding="utf-8")
+
+        worktree.copy_included(self.ctx(), tree)
+
+        self.assertEqual("MINE=1\n", (tree / ".env.local").read_text(encoding="utf-8"))
+        self.assertTrue((tree / "config" / "secrets.json").is_file())
+
+
+class TestABareCloneKeepsItsTreesBesideIt(RepoCase):
+    """`main_checkout` answers with the first tree git lists, and in a clone made as a bare
+    repository with working trees beside it, that is the git directory itself: every tree
+    this plugin made went inside `proj.git/`, among its objects and refs."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.bare = self.tmp / "proj.git"
+        git(["clone", "-q", "--bare", str(self.repo), str(self.bare)], self.tmp)
+        self.main = self.tmp / "main"
+        git(["worktree", "add", "-q", str(self.main), "main"], self.bare)
+        self.home = (self.tmp / ".claude" / "worktrees").resolve()
+
+    def test_a_new_tree_is_made_beside_the_repository(self):
+        from claude_bestpractice import worktree
+        from claude_bestpractice.gitctx import resolve
+
+        made = worktree.provision(resolve(self.main), "the work", "s1")
+
+        self.assertEqual(self.home, made.resolve().parent)
+        self.assertNotIn(self.bare.resolve(), made.resolve().parents)
+
+    def test_one_made_inside_it_before_is_moved_out_on_upgrade(self):
+        """Every change ships its repair: the move-to-the-home step runs again, once, in a
+        clone that ran its earlier revision."""
+        from claude_bestpractice import migrate, store
+        from claude_bestpractice.gitctx import resolve
+
+        ctx = resolve(self.main)
+        inside = self.bare / ".claude" / "worktrees" / "old-work"
+        git(["worktree", "add", "-q", "-b", "feat/old-work", str(inside), "main"], self.bare)
+        store.write_json(store.tier_b(ctx, "worktrees", "old-work.json"), {
+            "path": str(inside), "branch": "feat/old-work", "session_id": "gone",
+            "provisioned_by_plugin": True})
+        migrate._mark(ctx, "0005-trees-into-the-no-prompt-zone", 2, "")
+
+        migrate.repair(ctx)
+
+        self.assertFalse(inside.is_dir(), "the tree is still inside the git directory")
+        self.assertTrue((self.home / "old-work").is_dir())
+
+
+class TestANewTreeStartsFromTheTrunk(RepoCase):
+    """A `WorktreeCreate` hook replaces Claude Code's own creation, and with it the documented
+    default `worktree.baseRef: "fresh"` — branch from the remote's default branch. Every tree
+    here started from the checkout's local HEAD instead, which lags `origin/main` until
+    somebody pulls, so a session sent into a new tree worked without a merged fix."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        origin = add_origin(self.repo, self.tmp)
+        elsewhere = self.tmp / "elsewhere"
+        git(["clone", "-q", str(origin), str(elsewhere)], self.tmp)
+        for key, value in (("user.email", "o@example.com"), ("user.name", "o"),
+                           ("commit.gpgsign", "false")):
+            git(["config", key, value], elsewhere)
+        (elsewhere / "fix.py").write_text("fixed = True\n", encoding="utf-8")
+        git(["add", "-A"], elsewhere)
+        git(["commit", "-qm", "fix the crash (#41)"], elsewhere)
+        git(["push", "-q", "origin", "main"], elsewhere)
+        git(["fetch", "-q", "origin"], self.repo)
+
+    def test_the_gate_s_tree_has_what_the_trunk_has(self):
+        from claude_bestpractice import worktree
+
+        tree = worktree.provision(self.ctx(), "the next thing", "s1")
+
+        self.assertTrue((tree / "fix.py").is_file(), "cut from a main that had not pulled")
+        branch = git(["rev-parse", "--abbrev-ref", "HEAD"], tree)
+        self.assertEqual("", git(["for-each-ref", "--format=%(upstream)", f"refs/heads/{branch}"],
+                                 tree), "the new branch was set to push to the trunk")
+
+    def test_the_hook_s_tree_has_it_too(self):
+        made = self.run_hook("worktree-create", {"session_id": "s1", "hook_event_name":
+                                                 "WorktreeCreate", "name": "feature-auth"})
+
+        self.assertTrue((Path(made.stdout.strip()) / "fix.py").is_file(), made.stderr)
+
+    def test_head_is_kept_where_the_founder_chose_it(self):
+        from claude_bestpractice import worktree
+
+        self.write(".claude/settings.local.json", json.dumps({"worktree": {"baseRef": "head"}}))
+
+        tree = worktree.provision(self.ctx(), "the next thing", "s1")
+
+        self.assertFalse((tree / "fix.py").exists())
+
+    def test_work_the_trunk_does_not_have_is_not_cut_away(self):
+        """What `"fresh"` costs, and not paid here: a HEAD carrying commits the trunk lacks."""
+        from claude_bestpractice import worktree
+
+        self.write("unpushed.py", "mine = True\n")
+        self.commit("not pushed yet")
+
+        tree = worktree.provision(self.ctx(), "the next thing", "s1")
+
+        self.assertTrue((tree / "unpushed.py").is_file())
+
+
 class TestWorktreeCreateMakesTheTreeItNames(RepoCase):
     """The hook echoed a path it had never created — only the path's PARENT was made — so
     the harness refused every isolated agent with *"the hook must create the directory
@@ -1549,6 +2104,21 @@ class TestWorktreeCreateMakesTheTreeItNames(RepoCase):
     def test_a_named_branch_is_still_honoured(self):
         """The unique slug must not replace a name the caller gave."""
         self.assertIn("doctor-feature", self.create(branch="doctor-feature"))
+
+    def test_the_name_the_harness_sends_is_the_tree_it_gets(self):
+        """`name` is the field this event documents: `claude --worktree feature-auth`, or
+        one the harness generated. It was never read, so every tree was `agent-work-…`,
+        and the subagents of one session — which share its session id — all got ONE."""
+        def named(name: str) -> str:
+            return self.run_hook("worktree-create", {
+                "session_id": "a1", "hook_event_name": "WorktreeCreate",
+                "cwd": str(self.repo), "name": name,
+            }).stdout.strip()
+
+        first, second = named("feature-auth"), named("bold-oak-a3f2")
+        self.assertTrue(first.endswith("/.claude/worktrees/feature-auth"), first)
+        self.assertTrue(second.endswith("/.claude/worktrees/bold-oak-a3f2"), second)
+        self.assertEqual("worktree-feature-auth", git(["-C", first, "branch", "--show-current"], self.repo))
 
 
 class TestOneDatabasePerSession(RepoCase):
@@ -1678,6 +2248,53 @@ class TestOneDatabasePerSession(RepoCase):
         self.assertTrue(theirs, "the new tree was born with no DATABASE_URL")
         self.assertNotEqual(worktree.database_of(self.repo), theirs)
         self.assertIn("user:pw@localhost:5432", theirs, "credentials were invented rather than kept")
+
+    def test_two_sessions_given_one_instruction_get_two_databases(self):
+        """Cut at the length Postgres keeps, a long repository name took the per-session
+        hash with it, and two trees derived one database between them."""
+        from claude_bestpractice import worktree
+        from claude_bestpractice.gitctx import resolve
+
+        from helpers import make_repo
+
+        ctx = resolve(make_repo(self.tmp, "acme-commerce-platform-backend-services",
+                                relax_git_policy=True))
+        task = "implement the new checkout flow with apple pay"
+        names = {worktree.record_for(ctx, worktree.provision(ctx, task, who))[1]["database"]
+                 for who in ("session-one", "session-two")}
+
+        self.assertEqual(2, len(names), names)
+        self.assertTrue(all(len(name) <= worktree.DB_NAME_MAX for name in names), names)
+
+    def test_a_project_with_no_database_gets_no_invented_one(self):
+        """Every tree of every project used to be born with an untracked `.env` naming
+        `postgresql://localhost:5432/<tree>` — found in a real session on a library with no
+        database, where it stood in `git status` and in the paths the Stop gate asked the
+        session to claim."""
+        made = Path(self.run_hook("worktree-create", {
+            "session_id": "a1", "hook_event_name": "WorktreeCreate", "cwd": str(self.repo),
+        }).stdout.strip())
+        self.assertTrue(made.is_dir())
+        self.assertFalse((made / ".env").exists(), (made / ".env").read_text() if (made / ".env").exists() else "")
+        self.assertEqual("", git(["status", "--porcelain"], made))
+
+    def test_an_env_without_a_database_is_carried_as_it_is(self):
+        (self.repo / ".env").write_text("API_KEY=abc\n", encoding="utf-8")
+        made = Path(self.run_hook("worktree-create", {
+            "session_id": "a1", "hook_event_name": "WorktreeCreate", "cwd": str(self.repo),
+        }).stdout.strip())
+        self.assertEqual("API_KEY=abc\n", (made / ".env").read_text(encoding="utf-8"))
+
+    def test_a_query_that_carries_a_path_keeps_it(self):
+        """`?sslrootcert=/etc/ssl/ca.pem` is how managed Postgres is reached; splitting on
+        the URL's last slash renamed the certificate instead of the database."""
+        from claude_bestpractice import worktree
+
+        url = "postgres://u:p@db.example.com:5432/shop?sslmode=verify-full&sslrootcert=/etc/ssl/ca.pem"
+        self.assertEqual(
+            ("postgres://u:p@db.example.com:5432", "shop",
+             "?sslmode=verify-full&sslrootcert=/etc/ssl/ca.pem"),
+            worktree.split_dsn(url))
 
     def psql_that_answers(self, answer: str = "", code: int = 0) -> Path:
         """A `psql` on PATH that records what it was asked and says what the test says.

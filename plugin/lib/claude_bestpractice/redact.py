@@ -21,7 +21,13 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("google-api-key", re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b")),
     ("openai-key", re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_\-]{20,}\b")),
     ("anthropic-key", re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{20,}\b")),
-    ("private-key-block", re.compile(r"-----BEGIN[A-Z ]*PRIVATE KEY-----")),
+    # The WHOLE block. Matching the BEGIN line alone redacted the one line that is not the
+    # key and wrote the body and the END line into a signal file verbatim. To its END line
+    # when the text has one within a key's length; otherwise the base64 that follows, which
+    # is what is left of a key cut off mid-way.
+    ("private-key-block", re.compile(
+        r"-----BEGIN[A-Z ]*PRIVATE KEY(?: BLOCK)?-----"
+        r"(?:[\s\S]{0,16384}?-----END[A-Z ]*PRIVATE KEY(?: BLOCK)?-----|[A-Za-z0-9+/=\s]{0,16384})")),
     ("jwt", re.compile(r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b")),
     ("bearer", re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._\-]{20,}")),
     # Assignment forms catch the long tail: FOO_TOKEN=..., "password": "..."
@@ -34,10 +40,31 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
             r"[\"']?\s*[:=]\s*(?P<quote>[\"']?)(?P<value>[^\s\"',;]{8,})"
         ),
     ),
-    # Connection strings leak credentials in the authority component.
+    # Connection strings leak credentials in the authority component. The scheme starts only
+    # where a run of scheme characters starts: anchored on `\b` alone, every dot in `a.a.a…`
+    # began a fresh scan of the rest of the run, so the time went with the SQUARE of its
+    # length — a 20 KB Write took a second in the gate that scans every write, 40 KB 3.6 s.
+    # The user may be EMPTY: Redis names only a password, `redis://:<password>@host`, and a
+    # production one was written into a signal file whole.
     ("url-credentials", re.compile(
-        r"\b([a-z][a-z0-9+.\-]*)://(?P<user>[^\s:/@]+):(?P<secret>[^\s:/@]+)@(?P<host>[^\s:/@]+)")),
+        r"(?<![a-z0-9+.\-])\b([a-z][a-z0-9+.\-]*)://"
+        r"(?P<user>[^\s:/@]*):(?P<secret>[^\s:/@]+)@(?P<host>[^\s:/@]+)")),
 ]
+
+# What an HTTP header carries by its name: `Authorization: Basic …`, an API key, a cookie.
+# Only `Bearer` was known, so a signal quoting the headers of a failed request was written
+# down with the credential in it. Scrubbed and never refused: read by the header's name,
+# a value has no shape of its own to be told from prose by, and one word too many taken
+# out of a note costs nothing where a refused write costs the turn. A value is taken when
+# a scheme names it or it carries a digit, and never when it is a template — `${TOKEN}`.
+# The digit is looked for within a bounded stretch: unbounded, every `cookie:` in a line of
+# them scanned to the end of the line, and the time went with the square of its length.
+_HEADER_CREDENTIAL = re.compile(
+    r"(?i)\b(?P<name>(?:proxy-)?authorization|x-api-key|api-key|x-auth-token|set-cookie|cookie)"
+    r"(?P<sep>[\"']?[ \t]*[:=][ \t]*[\"']?)"
+    r"(?P<value>(?:(?:basic|bearer|token|digest)[ \t]+[^\s\"'$<{]{6,}|[^\"'$<{\r\n]{0,1024}\d)"
+    r"[^\r\n\"']*)"
+)
 
 REDACTED = "[REDACTED]"
 
@@ -146,6 +173,30 @@ def _is_expression(value: str) -> bool:
     return bool(_BRACKETED.search(value))
 
 
+# An address is where a credential is SENT, not the credential. `TOKEN_URL =
+# "https://oauth2.googleapis.com/token"` names the endpoint every OAuth client posts to, and
+# was refused as an assigned secret. Only a bare one: a URL carrying userinfo is
+# `url-credentials`' to judge, and one carrying a query may carry a token in it.
+_ADDRESS = re.compile(r"(?i)^https?://[^\s/?#@]+(?:/[^\s?#@]*)?$")
+
+
+def _is_address(value: str) -> bool:
+    return bool(_ADDRESS.match(value.strip()))
+
+
+def _is_development_default(name: str, value: str) -> bool:
+    """The assignment form of the default `_is_local_default` already lets through.
+
+    `postgres://postgres:postgres@localhost` passed as a URL while `POSTGRES_PASSWORD:
+    postgres` — the same default, spelled as the variable the image reads — was refused in
+    a compose file. The same two shapes, judged the same way: a placeholder word, or a
+    value that only repeats the name of what it unlocks, which is the user-equals-password
+    of this form.
+    """
+    word = value.strip().lower()
+    return _is_placeholder(word) or word in name.lower().replace("-", "_").split("_")
+
+
 def _is_not_a_secret(match: "re.Match") -> bool:
     """Values the assignment form matches that cannot be credentials.
 
@@ -159,7 +210,9 @@ def _is_not_a_secret(match: "re.Match") -> bool:
     protects nothing at all.
     """
     value = match.group("value")
-    if _is_indirection(value) or _is_measurement(value):
+    if _is_indirection(value) or _is_measurement(value) or _is_address(value):
+        return True
+    if _is_development_default(match.group("name"), value):
         return True
     if match.group("quote"):
         return False
@@ -186,7 +239,7 @@ def scrub(text: str) -> str:
             )
         else:
             out = pattern.sub(REDACTED, out)
-    return out
+    return _HEADER_CREDENTIAL.sub(lambda m: f"{m.group('name')}{m.group('sep')}{REDACTED}", out)
 
 
 def find(text: str) -> list[str]:

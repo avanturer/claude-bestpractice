@@ -58,11 +58,42 @@ def settings_path(home: Path | None = None) -> Path:
 
 def read(home: Path | None = None) -> dict:
     """The founder's settings, or an empty mapping. Never raises: this is read on a hook."""
+    return for_update(home) or {}
+
+
+def for_update(home: Path | None = None) -> dict | None:
+    """The founder's settings to write back, or None when writing back would destroy them.
+
+    Empty when there is no file, which is the one case where writing creates rather than
+    replaces. None when there IS a file and it is not a JSON object this module could carry
+    through: a trailing comma left mid-edit, a stray byte. Every writer here used to read
+    that as "empty" and write `{"autoMode": ...}` over it — on a session start, with no
+    backup — which took the founder's permissions, deny rules, hooks and env with it. Claude
+    Code reports a broken settings file and offers to repair it; after this plugin had run
+    there was nothing left to repair.
+    """
+    path = settings_path(home)
     try:
-        raw = json.loads(settings_path(home).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        # `-sig`: a byte-order mark is how several Windows editors save UTF-8, and a file
+        # that is only unreadable to us is still the founder's.
+        text = path.read_text(encoding="utf-8-sig")
+    except FileNotFoundError:
         return {}
-    return raw if isinstance(raw, dict) else {}
+    except (OSError, UnicodeDecodeError):
+        return None
+    try:
+        raw = json.loads(text)
+    except ValueError:
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
+def write(settings: dict, home: Path | None = None) -> None:
+    """Write the founder's settings back whole, as `for_update` returned them plus a change."""
+    path = settings_path(home)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    store.atomic_write(path, json.dumps(settings, indent=2, ensure_ascii=False),
+                       mode=0o600, follow_symlink=True)
 
 
 def _entries(settings: dict, key: str) -> list[str]:
@@ -157,6 +188,9 @@ class Delta:
     # Blocks this plugin wrote for repositories that are no longer on disk. Counted here
     # so the dry run and the board can say so; dropped only by `prune`.
     vanished: list[str] = field(default_factory=list)
+    # The file exists and does not parse, so nothing above can be written into it and
+    # nothing may be said to have been.
+    unreadable: bool = False
 
     @property
     def in_sync(self) -> bool:
@@ -164,7 +198,8 @@ class Delta:
 
 
 def delta(ctx: GitContext, test_command: list[str], home: Path | None = None) -> Delta:
-    settings = read(home)
+    loaded = for_update(home)
+    settings = loaded or {}
     mark = marker(ctx)
     current = [line for line in _entries(settings, ENVIRONMENT) if line.startswith(mark)]
     wanted = facts(ctx, test_command)
@@ -173,6 +208,7 @@ def delta(ctx: GitContext, test_command: list[str], home: Path | None = None) ->
         remove=[line for line in current if line not in wanted],
         dead=dead_rules(settings),
         vanished=sorted(_gone(settings)),
+        unreadable=loaded is None,
     )
 
 
@@ -209,7 +245,9 @@ def prune(home: Path | None = None) -> list[str]:
     settings to clean up after the plugin's own test suite, which is the shape #113 was
     filed about.
     """
-    settings = read(home)
+    settings = for_update(home)
+    if settings is None:
+        return []
     entries = _entries(settings, ENVIRONMENT)
     doomed = _gone(settings)
     if not doomed:
@@ -221,11 +259,7 @@ def prune(home: Path | None = None) -> list[str]:
         auto = {}
     auto[ENVIRONMENT] = kept
     settings["autoMode"] = auto
-
-    path = settings_path(home)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    store.atomic_write(path, json.dumps(settings, indent=2, ensure_ascii=False),
-                       mode=0o600, follow_symlink=True)
+    write(settings, home)
     return sorted(doomed)
 
 
@@ -275,7 +309,9 @@ def apply(ctx: GitContext, test_command: list[str], home: Path | None = None) ->
         # what WOULD be written is not the caller doing damage.
         return found
 
-    settings = read(home)
+    settings = for_update(home)
+    if settings is None:
+        return found
     mark = marker(ctx)
     auto = settings.get("autoMode")
     if not isinstance(auto, dict):
@@ -283,11 +319,7 @@ def apply(ctx: GitContext, test_command: list[str], home: Path | None = None) ->
     kept = [line for line in _entries(settings, ENVIRONMENT) if not line.startswith(mark)]
     auto[ENVIRONMENT] = kept + facts(ctx, test_command)
     settings["autoMode"] = auto
-
-    path = settings_path(home)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    store.atomic_write(path, json.dumps(settings, indent=2, ensure_ascii=False),
-                       mode=0o600, follow_symlink=True)
+    write(settings, home)
     return found
 
 
@@ -318,6 +350,9 @@ def refresh(ctx: GitContext, test_command: list[str], home: Path | None = None) 
     # decision 0008 draws everywhere else: the plugin holds the pen on facts, never grants.
     dropped = prune(home)
     found = apply(ctx, test_command, home)
+    if found.unreadable:
+        return (f"\nauto-mode policy: {settings_path(home)} is not valid JSON, so nothing was "
+                "written to it. Claude Code names the error at its next start.")
     if found.in_sync and not found.dead and not dropped:
         return ""
     parts = []

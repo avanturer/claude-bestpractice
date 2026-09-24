@@ -44,6 +44,13 @@ def main() -> int:
         help="print the project's own test command, for the pre-push hook to run",
     )
     args = parser.parse_args()
+    # `--off` belongs to `github`. Anywhere else it was dropped on the floor, and
+    # `claude-bp-ci local --off` — asked, by any reading of it, to take the hook out —
+    # installed it and said so.
+    if args.off and args.command != "github":
+        parser.error(f"--off goes with `github` (claude-bp-ci github --off switches hosted CI "
+                     f"off), not with `{args.command}`. The pre-push hook comes out with: "
+                     "claude-bp-ci off")
     ctx = resolve_for_cli()
 
     if args.command == "record-green":
@@ -127,6 +134,10 @@ def main() -> int:
 
     if args.command == "off":
         _, note = ci.remove(ctx)
+        # Spent on use, like every word of the founder's: one `pre_push off` takes the gate
+        # out once, and a session wanting it out again asks again (decision 0006). From
+        # their own terminal there is nothing to spend; `pre-tool` never sees that call.
+        config.clear_switch(ctx, config.PUSH_GATE)
         print(note)
         return 0
 

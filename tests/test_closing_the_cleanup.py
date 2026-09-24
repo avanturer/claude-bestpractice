@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import unittest
 
-from helpers import git
+from helpers import RepoCase, add_origin, git
 from test_closing_the_work import TreeCase
 
 from claude_bestpractice import worktree
@@ -152,8 +152,10 @@ class TestARemovalAskedForByHand(CleanupCase):
         sessions.register(self.ctx(), record)
 
     def removing(self, tree, extra: str = ""):
-        """As the harness sends it: the working directory of a hook is the one the chat
-        started in — the main checkout — whatever the shell has `cd`-ed to since."""
+        """From the main checkout, where a session can still stand with its work in its tree.
+        Claude Code reports the tree itself as the hook's working directory once the session
+        has `cd`-ed into it (2.1.280, 2.1.281); the same removal asked from inside the tree is
+        driven in `test_one_session_two_trees`."""
         return self.run_hook("pre-tool", {
             "session_id": "s1",
             "hook_event_name": "PreToolUse",
@@ -214,6 +216,35 @@ class TestARemovalAskedForByHand(CleanupCase):
 
         self.assertFalse(tree.is_dir(), "--force was asked for and not passed on")
 
+    def test_a_branch_git_kept_is_said_to_be_kept(self):
+        """"…is removed and so is <branch>. There is nothing else to clean up." was said over
+        a branch `git branch` still listed, carrying the one commit nobody had merged."""
+        tree, branch = self.a_tree()
+        self.work_in(tree)
+        self.a_live_session(tree)
+
+        said = self.hook_reason(self.removing(tree))
+
+        self.assertFalse(tree.is_dir(), "precondition: the tree itself was removable")
+        self.assertIn(branch, self.branches())
+        self.assertIn(f"{branch} is kept", said)
+        self.assertNotIn("and so is", said)
+        self.assertNotIn("nothing else to clean up", said)
+
+    def test_a_tree_switched_onto_the_trunk_leaves_the_trunk(self):
+        """The clone's own `main` is trivially in the trunk, so a proof by ancestry would
+        have taken it with a tree the session had switched onto it."""
+        tree, _branch = self.a_tree()
+        git(["switch", "-q", "-c", "elsewhere"], self.repo)
+        git(["switch", "-q", "main"], tree)
+        self.a_live_session(tree)
+
+        said = self.hook_reason(self.removing(tree))
+
+        self.assertFalse(tree.is_dir(), "precondition: the tree itself was removable")
+        self.assertIn("main", self.branches().split())
+        self.assertNotIn("so is main", said)
+
     def test_somebody_elses_tree_is_none_of_this(self):
         """The interception is only ever about the tree this session is standing in. Another
         session's tree is the cross-tree rule's business and reaches it unchanged."""
@@ -263,6 +294,136 @@ class TestFinishingWhatWasLeftBehind(CleanupCase):
                         changed)
         self.assertEqual([], [line for line in migrate.repair(self.ctx())
                               if "0017-finish-removals" in line])
+
+
+class TestACheckpointDoesNotPinItsTree(TreeCase):
+    """A compaction checkpoint was written into the tree the session stood in — the hook's
+    working directory follows the session into its worktree — as an untracked file, and
+    `git worktree remove` refuses a tree holding one for good: the reaper never cleared it,
+    the finished tree never removed itself, and nothing named it, because `stranded()`
+    exempts `.claude/`."""
+
+    HARNESS = "4f1c2a9e-7b3d-4e8f-9a1b-2c3d4e5f6a7b"
+
+    def compacted_in(self, tree) -> None:
+        proc = self.run_hook("checkpoint", {"session_id": self.HARNESS, "trigger": "auto",
+                                            "hook_event_name": "PreCompact"}, cwd=tree)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+
+    def test_a_compaction_in_the_tree_leaves_it_clean(self):
+        from claude_bestpractice import store
+
+        tree, _branch = self.a_tree()
+
+        self.compacted_in(tree)
+
+        self.assertEqual("", git(["status", "--porcelain", "--untracked-files=all"], tree))
+        self.assertTrue(list(store.checkpoint_dir(self.ctx()).glob("*.md")))
+
+    def test_the_session_still_gets_it_back(self):
+        tree, _branch = self.a_tree()
+        self.compacted_in(tree)
+
+        said = self.run_hook("session-start", {"session_id": self.HARNESS, "source": "compact",
+                                               "hook_event_name": "SessionStart"}, cwd=tree)
+
+        self.assertIn("RESTORED AFTER COMPACTION", said.stdout)
+
+    def test_one_an_earlier_version_left_in_a_tree_is_carried_out(self):
+        from claude_bestpractice import migrate, store
+
+        tree, _branch = self.a_tree()
+        left = tree / ".claude" / "claude-bestpractice" / "checkpoints"
+        left.mkdir(parents=True)
+        (left / f"20260901-120000-{self.HARNESS[:8]}.md").write_text(
+            "---\nkind: checkpoint\n---\nwhat the window held\n", encoding="utf-8")
+
+        migrate.repair(self.ctx())
+
+        self.assertEqual("", git(["status", "--porcelain", "--untracked-files=all"], tree))
+        self.assertIn("what the window held", store.newest_checkpoint(self.ctx(), self.HARNESS))
+
+
+class TestABranchGoesOnlyOnItsOwnProof(RepoCase):
+    """What the sweep deleted was decided by `git branch -d`, which answers whether a branch
+    is merged into its UPSTREAM — or into HEAD when it has none — and by a proof computed for
+    a different branch. Never by whether that branch's work was in the trunk.
+
+    So a clone with a real `origin`, where upstreams exist, and the sweep reached the way it
+    is in use: a tree this plugin made for a session that is gone, and the next session start.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        add_origin(self.repo, self.tmp)
+
+    def a_branch(self, name: str, relpath: str, mode: int = 0o644) -> str:
+        """One commit of work on its own branch, and main left where it was."""
+        git(["switch", "-q", "-c", name], self.repo)
+        self.write(relpath, "work\n").chmod(mode)
+        self.commit(f"the {name} work")
+        git(["switch", "-q", "main"], self.repo)
+        return name
+
+    def the_next_session_starts(self) -> None:
+        """A dead session's tree to reap, which is what runs the branch sweep."""
+        worktree.provision(self.ctx(), "tiny docs fix", "gone-session")
+        self.run_hook("session-start", {"session_id": "next", "hook_event_name": "SessionStart",
+                                        "source": "startup"})
+
+    def branches(self) -> list[str]:
+        return git(["branch", "--format=%(refname:short)"], self.repo).split()
+
+    def test_a_pushed_branch_with_its_pull_request_open_stays(self):
+        branch = self.a_branch("feat/payments-wip", "pay.py")
+        git(["push", "-q", "-u", "origin", branch], self.repo)
+
+        self.the_next_session_starts()
+
+        self.assertIn(branch, self.branches(), "deleted for being merged into its own upstream")
+
+    def test_a_mode_change_is_not_already_in_the_trunk(self):
+        """Same blob, different mode: comparing blob ids alone called it delivered."""
+        self.write("deploy.sh", "work\n")
+        self.commit("the deploy script")
+        git(["push", "-q", "origin", "main"], self.repo)
+        branch = self.a_branch("fix/deploy-exec", "deploy.sh", mode=0o755)
+
+        self.the_next_session_starts()
+
+        self.assertIn(branch, self.branches(), "`-D` took the only commit making it executable")
+
+    def test_a_branch_merged_upstream_goes_while_this_main_lags(self):
+        """Merged on the remote and never pulled here: `-d` asked this checkout's HEAD."""
+        branch = self.a_branch("feat/add-search", "search.py")
+        git(["push", "-q", "origin", f"{branch}:main"], self.repo)
+        git(["fetch", "-q", "origin"], self.repo)
+
+        self.the_next_session_starts()
+
+        self.assertNotIn(branch, self.branches())
+
+    def test_the_branch_a_tree_was_made_on_is_not_taken_on_another_branch_s_proof(self):
+        """The reaper proved the branch the tree stood on NOW and force-deleted the one it
+        was MADE on — unmerged work, gone, under a line saying branches are kept."""
+        tree = worktree.provision(self.ctx(), "add the importer", "dead-session")
+        made_on = git(["rev-parse", "--abbrev-ref", "HEAD"], tree)
+        (tree / "importer.py").write_text("half an importer\n", encoding="utf-8")
+        git(["add", "-A"], tree)
+        git(["commit", "-qm", "WIP importer"], tree)
+        git(["switch", "-q", "-c", "fix/typo", "origin/main"], tree)
+        (tree / "README.md").write_text("seed, fixed\n", encoding="utf-8")
+        git(["commit", "-qam", "fix the typo"], tree)
+        self.write("README.md", "seed, fixed\n")
+        self.commit("fix the typo (#12)")
+        git(["push", "-q", "origin", "main"], self.repo)
+
+        self.run_hook("session-start", {"session_id": "next", "hook_event_name": "SessionStart",
+                                        "source": "startup"})
+
+        self.assertFalse(tree.is_dir(), "precondition: the abandoned tree was reaped")
+        self.assertIn(made_on, self.branches())
+        self.assertNotIn("fix/typo", self.branches(), "the squash-merged one still goes")
 
 
 if __name__ == "__main__":

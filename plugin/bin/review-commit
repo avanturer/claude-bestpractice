@@ -58,8 +58,11 @@ def added_lines(diff: str) -> list[tuple[str, int, str]]:
     path = ""
     lineno = 0
     for line in diff.splitlines():
-        if line.startswith("+++ b/"):
-            path = line[6:]
+        if line.startswith("+++ "):
+            # Git ends the line with a TAB when the name holds a space, and a name it still
+            # has to quote (`"b/…"`) or a deletion (`/dev/null`) is no path to read: left
+            # unchanged, the lines below were charged to the file before it.
+            path = line[6:].rstrip("\t") if line.startswith("+++ b/") else ""
         elif line.startswith("@@"):
             match = re.search(r"\+(\d+)", line)
             lineno = int(match.group(1)) if match else 0
@@ -83,9 +86,9 @@ def untracked_lines(root: Path) -> list[tuple[str, int, str]]:
     avoids mutating the index, which `git add -N` would do.
     """
     out: list[tuple[str, int, str]] = []
-    listing = git(["ls-files", "--others", "--exclude-standard"], root)
-    for rel in listing.splitlines():
-        rel = rel.strip()
+    # `-z`: git quotes a name outside ASCII otherwise, and `"src/caf\303\251.py"` is no file.
+    listing = git(["ls-files", "-z", "--others", "--exclude-standard"], root)
+    for rel in listing.split("\0"):
         if not rel:
             continue
         path = root / rel
@@ -101,7 +104,9 @@ def untracked_lines(root: Path) -> list[tuple[str, int, str]]:
 
 
 def review(root: Path, baseline: str) -> list[tuple[str, str, int, str]]:
-    diff = git(["diff", "--unified=0", baseline], root)
+    # `core.quotePath=false`, or `src/café.py` comes back as `+++ "b/src/caf\303\251.py"`
+    # and the file is never reviewed at all.
+    diff = git(["-c", "core.quotePath=false", "diff", "--unified=0", baseline], root)
     added = added_lines(diff) + untracked_lines(root)
     if not added:
         return []

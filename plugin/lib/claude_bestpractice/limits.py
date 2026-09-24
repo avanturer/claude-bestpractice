@@ -19,7 +19,9 @@ something long instead of dying in the middle of it.
 
 from __future__ import annotations
 
+import shlex
 import time
+from pathlib import Path
 
 from . import store
 from .gitctx import GitContext
@@ -127,21 +129,43 @@ def install(command: str, home=None) -> tuple:
     the opposite of `policy`: nothing is written when the key is taken. Decision 0008 lets
     this plugin write FACTS about the repository into that file; somebody's status bar is
     neither a fact nor a grant, and taking it over unasked is how a tool gets uninstalled.
-    """
-    import json
 
-    from . import policy, store
+    Ours is brought up to date when it differs: written before its path was quoted, it split
+    at the first space in an install path and showed nothing, and calling that installed
+    left the founder no way to repair it.
+    """
+    from . import policy
 
     current = installed(home)
     if current and "claude-bp-statusline" not in current:
         return False, current
-    if current:
+    if current == command:
         return True, current
 
-    settings = policy.read(home)
+    settings = policy.for_update(home)
+    if settings is None:
+        # Not ours to overwrite: see `policy.for_update`. Reported as not installed, with
+        # nothing in the way, so the caller says the file needs fixing rather than naming a
+        # status line that is not there.
+        return False, ""
     settings[SETTING] = {"type": "command", "command": command}
-    path = policy.settings_path(home)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    store.atomic_write(path, json.dumps(settings, indent=2, ensure_ascii=False),
-                       mode=0o600, follow_symlink=True)
+    policy.write(settings, home)
     return True, command
+
+
+def requote(home=None) -> str:
+    """Ours, written before its path was quoted, from a path with whitespace in it: quoted.
+
+    What older versions wrote was the bare path of this file. The shell split it at the
+    space, so nothing was shown, and a second `--install` answered that it was already
+    there. Only that exact shape is rewritten, through `install`, which leaves the
+    founder's own status line and a settings file that does not parse alone. The command
+    now installed, or "" when there was nothing of ours to fix.
+    """
+    current = installed(home)
+    if "claude-bp-statusline" not in current or not any(ch.isspace() for ch in current):
+        return ""
+    if not Path(current).is_file():
+        return ""
+    ok, found = install(shlex.quote(current), home)
+    return found if ok else ""

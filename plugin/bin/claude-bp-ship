@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import __version__, delivery, gitpolicy, hookio  # noqa: E402
+from claude_bestpractice import __version__, delivery, gitpolicy, hookio, pullrequest  # noqa: E402
 from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
 
 
@@ -43,6 +43,14 @@ def open_pr(ctx, base: str) -> int:
         cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=300,
     )
     print(proc.stdout.strip() or proc.stderr.strip())
+    if proc.returncode == 0:
+        # `gh` runs inside this process, where no hook sees it, so the obligation the
+        # PreToolUse gate records for every other way of opening one was never written:
+        # the pull request was missing from the board, and the Stop gate then told the
+        # session to open one — a second pull request for the same branch.
+        pullrequest.opened(ctx, ctx.branch, base,
+                           hookio.current_session_id(str(ctx.worktree_root)),
+                           number=pullrequest.number_in(proc.stdout), url=proc.stdout.strip())
     return proc.returncode
 
 

@@ -6,6 +6,8 @@
     "  - Exit 2 blocks. Exit 1 is a NON-blocking error and the tool RUNS.",
     "  - The event arrives on STDIN as JSON. TOOL_NAME / TOOL_INPUT env vars do not exist.",
     "  - type 'http' fails OPEN on non-2xx, timeout and connection error. Never use it for a gate.",
+    "  - Quote ${CLAUDE_PLUGIN_ROOT}. The command goes to sh, and an install path holding a space",
+    "    split it in two: every gate exited 127, which blocks nothing and says nothing.",
     "",
     "Verify with `plugin/bin/claude-bp-doctor`, which proves each gate by attempting a",
     "known-bad action rather than reading this file back."
@@ -16,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/setup",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/setup\"",
             "timeout": 120,
             "once": true,
             "statusMessage": "claude-bestpractice: deriving project knowledge"
@@ -29,7 +31,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/worktree-create",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/worktree-create\"",
             "timeout": 60,
             "statusMessage": "claude-bestpractice: provisioning worktree"
           }
@@ -53,7 +55,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/session-start",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/session-start\"",
             "timeout": 30,
             "statusMessage": "claude-bestpractice: session board"
           }
@@ -65,7 +67,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/prompt-capture",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/prompt-capture\"",
             "timeout": 15
           }
         ]
@@ -73,16 +75,16 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|EnterWorktree|Agent|Task",
+        "matcher": "^(Write|Edit|MultiEdit|NotebookEdit|Bash|EnterWorktree|Agent|Task)$|__(create|merge|update)_pull_request$",
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/pre-tool",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/pre-tool\"",
             "timeout": 15
           },
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/review-commit",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/review-commit\"",
             "if": "Bash(git commit:*)",
             "timeout": 300,
             "asyncRewake": true,
@@ -101,13 +103,16 @@
           "",
           "Matched on the structured tools only. Adding `Bash` here would spawn a process",
           "on every shell call to catch `gh pr create`, and an unlearned number now means",
-          "'do not judge', which is the safe direction."
+          "'do not judge', which is the safe direction.",
+          "",
+          "`update_pull_request` because closing one without merging is `state: closed` on",
+          "it, and nothing else sees that call: `gh pr close` is read by pre-tool instead."
         ],
-        "matcher": ".*create_pull_request",
+        "matcher": ".*(create|update)_pull_request",
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/pr-opened",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/pr-opened\"",
             "timeout": 15
           }
         ]
@@ -118,7 +123,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/subagent-brief",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/subagent-brief\"",
             "timeout": 15
           }
         ]
@@ -129,7 +134,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/checkpoint",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/checkpoint\"",
             "timeout": 60,
             "statusMessage": "claude-bestpractice: checkpoint"
           }
@@ -141,7 +146,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/evidence-gate",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/evidence-gate\"",
             "timeout": 900,
             "statusMessage": "claude-bestpractice: verifying"
           }
@@ -153,7 +158,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/permission-denied"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/permission-denied\""
           }
         ]
       }

@@ -45,6 +45,19 @@ class TestArtifactParsing(RepoCase):
         self.assertEqual((art.total, art.failed), (5, 1))
         self.assertFalse(art.passed)
 
+    def test_the_failing_cases_name_their_files(self):
+        """A `<failure>` holding only its message and traceback has no child elements, and
+        an element with none is falsy, so every such case read as passing and a report that
+        named its failing files named none. Python 3.12 warns about exactly this test."""
+        art = evidence.parse_artifact(self.write("junit.xml", (
+            '<?xml version="1.0"?><testsuite name="s" tests="3" failures="1" errors="1">'
+            '<testcase name="a" file="tests/test_a.py"><failure message="boom">Traceback'
+            "</failure></testcase>"
+            '<testcase name="b" file="tests/test_b.py"><error message="oops"/></testcase>'
+            '<testcase name="c" file="tests/test_c.py"/>'
+            "</testsuite>")))
+        self.assertEqual(("tests/test_a.py", "tests/test_b.py"), art.failures)
+
     def test_pytest_json_report(self):
         path = self.write(
             "pytest-report.json",
@@ -139,6 +152,16 @@ class TestMaterialChanges(unittest.TestCase):
         """`docs/` must not exempt `docsite/`."""
         self.assertEqual(evidence.material_changes(["docsite/a.py"], ["docs/"]), ["docsite/a.py"])
 
+    def test_a_test_directory_is_exempt_from_drift_and_never_from_verification(self):
+        """The default list exempts `tests/`, `test/`, `spec/` and `__tests__/` so that the test
+        this gate demands is not called scope drift. The same list decided what was material,
+        so a turn that only added a failing test had nothing to verify and finished silent."""
+        exempt = ["docs/", "tests/", "test/", "spec/", "__tests__/", "backend/tests/"]
+        tests = ["tests/test_billing.py", "test/fixtures/cart.json", "spec/cart_spec.rb",
+                 "__tests__/app.test.js", "backend/tests/conftest.py"]
+        self.assertEqual(tests, evidence.material_changes(tests + ["docs/guide.md"], exempt))
+        self.assertEqual([], evidence.scope_drift(tests, ["src/billing.py"], exempt))
+
 
 class TestCleanRerun(RepoCase):
     def test_passes_when_committed_tree_is_good(self):
@@ -167,6 +190,102 @@ class TestCleanRerun(RepoCase):
         evidence.clean_rerun(self.ctx(), ["python3", "-c", "pass"])
         after = git(["worktree", "list"], self.repo).count("\n")
         self.assertEqual(before, after)
+
+
+class TestTheCleanRerunHasOnlyTheStopsTime(RepoCase):
+    """The re-run had a fixed 300 seconds on top of everything the Stop had already spent.
+
+    A 310-second suite passed the gate's own run and was then refused on every Stop, ten
+    minutes each, with "clean re-run exceeded 300s and was killed" — naming nothing to run —
+    and the server its test had started was still running after the gate returned.
+    """
+
+    def test_running_out_is_inconclusive_and_names_the_command(self):
+        verdict = evidence.clean_rerun(self.ctx(), ["sh", "-c", "sleep 30"], "", time.time() + 1)
+        self.assertTrue(verdict.ok, "running out of the Stop's time is not the code failing")
+        self.assertTrue(verdict.unverified, verdict.reason)
+        self.assertIn("`sh -c sleep 30`", verdict.reason)
+
+    def test_with_nothing_left_it_is_not_started(self):
+        verdict = evidence.clean_rerun(self.ctx(), ["sh", "-c", "exit 1"], "", time.time() - 1)
+        self.assertTrue(verdict.ok, verdict.reason)
+        self.assertTrue(verdict.unverified)
+        self.assertIn("not started", verdict.reason)
+
+    def test_nothing_it_started_outlives_it(self):
+        from helpers import process_gone
+
+        pidfile = self.tmp / "server.pid"
+        evidence.clean_rerun(
+            self.ctx(), ["sh", "-c", f"sleep 300 & echo $! > '{pidfile}'; sleep 30"], "",
+            time.time() + 2)
+        self.assertTrue(pidfile.is_file(), "precondition: the suite started its server")
+        self.assertTrue(process_gone(int(pidfile.read_text())),
+                        "the server the suite started outlived the gate")
+
+
+# Says how many tests ran, so the gate's first tier is a witnessed green and the Stop goes
+# on to the clean re-run rather than finishing unverified before it.
+READS_THE_SUBMODULE = [
+    "python3", "-c",
+    "import json, sys; ok = json.load(open('shared/rates.json'))['vat'] == 20; "
+    "print('1 passed' if ok else '1 failed'); sys.exit(0 if ok else 1)",
+]
+
+
+class TestTheCleanRerunHasTheSubmodules(RepoCase):
+    """A detached worktree checks a submodule out as an empty directory, so a suite reading a
+    committed submodule's file failed there — "passes in your working tree but FAILS on the
+    committed tree" — on every finish past prototype, in any repository whose tests use one.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        from helpers import make_repo
+
+        library = make_repo(self.tmp, "fixtures-library", seed=False)
+        (library / "rates.json").write_text('{"vat": 20}\n', encoding="utf-8")
+        git(["add", "-A"], library)
+        git(["commit", "-qm", "rates"], library)
+        git(["-c", "protocol.file.allow=always", "submodule", "add", "-q", str(library), "shared"],
+            self.repo)
+        self.commit("shared fixtures")
+
+    def test_the_committed_tree_gets_them_from_the_checkouts_here(self):
+        config = (self.repo / ".git" / "config").read_text(encoding="utf-8")
+        verdict = evidence.clean_rerun(self.ctx(), READS_THE_SUBMODULE)
+        self.assertTrue(verdict.ok, verdict.reason)
+        self.assertFalse(verdict.unverified, verdict.reason)
+        self.assertEqual(config, (self.repo / ".git" / "config").read_text(encoding="utf-8"),
+                         "verifying the repository rewrote its configuration")
+
+    def test_without_the_network_or_the_original(self):
+        """From this tree's checkout, never the URL: the library is gone, and still found."""
+        import shutil
+
+        shutil.rmtree(self.tmp / "fixtures-library")
+        verdict = evidence.clean_rerun(self.ctx(), READS_THE_SUBMODULE)
+        self.assertTrue(verdict.ok, verdict.reason)
+        self.assertFalse(verdict.unverified, verdict.reason)
+
+    def test_one_it_could_not_be_given_makes_a_failure_inconclusive(self):
+        git(["submodule", "deinit", "-q", "-f", "shared"], self.repo)
+        verdict = evidence.clean_rerun(self.ctx(), READS_THE_SUBMODULE)
+        self.assertTrue(verdict.ok, "a failure beside a missing submodule was blamed on the code")
+        self.assertTrue(verdict.unverified)
+        self.assertIn("shared", verdict.reason)
+
+    def test_the_stop_gate_past_prototype_accepts_the_finish(self):
+        self.configure(require_task=False, manage_pull_requests=False, stage_override="traction",
+                       test_command=READS_THE_SUBMODULE)
+        self.commit("config")
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart",
+                                        "source": "startup"})
+        self.write("app.py", "X = 2\n")
+        self.commit("a change past prototype")
+        proc = self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                               "stop_hook_active": False})
+        self.assertEqual(0, proc.returncode, proc.stderr)
 
 
 class TestLoopDetection(unittest.TestCase):
@@ -340,3 +459,83 @@ class TestAFastForwardIsNotAnEdit(RepoCase):
         git(["commit", "-qm", "my work"], self.repo)
 
         self.assertIn("mine.py", changed_files(self.ctx(), baseline))
+
+
+APP_READING_ITS_DATA = (
+    "import xml.etree.ElementTree as ET\n\n\n"
+    "def total():\n    return int(ET.parse('data/report.xml').getroot().get('total'))\n"
+)
+TEST_OF_THE_DATA = (
+    "import unittest\n\nfrom app import total\n\n\n"
+    "class T(unittest.TestCase):\n    def test_total(self):\n        self.assertEqual(total(), 3)\n"
+)
+
+
+class TestATrackedFileIsTheTreesOwnContent(RepoCase):
+    """A name that looks like a run's leftovers is only leftovers when nobody tracks it.
+
+    `tree_hash` let a changed TRACKED file through whenever its name matched an artifact glob
+    or sat under a byproduct directory. `data/report.xml` is both an artifact name and a file
+    the code reads: fixed in the working tree over a HEAD that still broke it, the green was
+    stamped with HEAD's tree and the push-time skip covered a commit that failed; edited the
+    other way, a failure the tree no longer had was re-asserted instead of run (decision 0013
+    breached in both directions).
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.configure(require_task=False, manage_pull_requests=False, test_command=[
+            "python3", "-m", "unittest", "discover", "-s", "tests", "-t", "."])
+        self.write("app.py", APP_READING_ITS_DATA)
+        self.write("data/report.xml", '<report total="3"/>\n')
+        self.write("tests/__init__.py", "")
+        self.write("tests/test_app.py", TEST_OF_THE_DATA)
+        self.commit("an app that reads a tracked data file")
+        # The session starts here, so what is committed next is its own work.
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart",
+                                        "source": "startup"})
+
+    def stop(self):
+        return self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                               "stop_hook_active": False})
+
+    def test_a_tracked_file_changed_in_place_is_uncommitted_work(self):
+        """An artifact's name, and a file under a byproduct directory — both tracked."""
+        self.write("coverage/thresholds.json", '{"lines": 80}\n')
+        self.commit("thresholds the build reads")
+        for rel, body in (("data/report.xml", '<report total="4"/>\n'),
+                          ("coverage/thresholds.json", '{"lines": 90}\n')):
+            self.write(rel, body)
+            self.assertEqual("", evidence.tree_hash(self.ctx()), rel)
+            git(["checkout", "--", rel], self.repo)
+
+    def test_what_a_run_leaves_behind_is_still_not(self):
+        """The allowance #206 needed stands: untracked byproducts and artifacts."""
+        self.write("junit.xml", "<testsuite tests='1'/>\n")
+        self.write("coverage/index.html", "<html></html>\n")
+        self.write("__pycache__/app.cpython-311.pyc", "x")
+        self.write(".claude/claude-bestpractice/notes.json", "{}\n")
+        head = git(["rev-parse", "HEAD^{tree}"], self.repo)
+        self.assertEqual(head, evidence.tree_hash(self.ctx()))
+
+    def test_a_fix_only_in_the_working_tree_is_not_stamped_as_heads(self):
+        self.write("app.py", APP_READING_ITS_DATA + "\n# refactor\n")
+        self.write("data/report.xml", '<report total="4"/>\n')
+        self.commit("HEAD breaks the suite")
+        self.write("data/report.xml", '<report total="3"/>\n')
+
+        proc = self.stop()
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertFalse(evidence.green_covers_tree(self.ctx()),
+                         "the push would skip a suite that fails on what it pushes")
+
+    def test_a_failure_the_tree_no_longer_has_is_run_not_reasserted(self):
+        self.write("app.py", APP_READING_ITS_DATA + "\n# refactor\n")
+        self.write("data/report.xml", '<report total="4"/>\n')
+        self.commit("HEAD breaks the suite")
+        self.assertEqual(2, self.stop().returncode, "precondition: the break is recorded red")
+
+        self.write("data/report.xml", '<report total="3"/>\n')
+        proc = self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                               "stop_hook_active": True})
+        self.assertEqual(0, proc.returncode, proc.stderr)

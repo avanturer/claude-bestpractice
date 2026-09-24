@@ -27,6 +27,7 @@ command.
 
 from __future__ import annotations
 
+import calendar
 import re
 import subprocess
 import time
@@ -49,7 +50,10 @@ LEDGER = "migrations.json"
 # curated document a project maintains on purpose, and adopting one would be taking over
 # something that was never a workaround. The hyphen is the whole distinction, and it is
 # the difference between helping and helping yourself to someone's documentation.
-_PARKED_BY_HAND = re.compile(r"(?:^|/)TODO[-_][\w.-]+\.md$", re.I)
+#
+# The pattern used to accept an underscore as well, against the sentence above, and
+# `third_party/libfoo/TODO_LIST.md` — somebody else's list — was rewritten to a pointer.
+_PARKED_BY_HAND = re.compile(r"(?:^|/)TODO-[\w.-]+\.md$", re.I)
 
 # The sentence left where an adopted file stood. Adoption has to recognise its own work:
 # without this, a second run adopts the pointer, files a task whose body is the pointer
@@ -67,13 +71,23 @@ def _done(ctx: GitContext) -> dict:
 
 
 def _mark(ctx: GitContext, step: str, revision: int, detail: str) -> None:
+    """Record a repair as done. A ledger that cannot be written leaves it to run again.
+
+    Every step is idempotent, so the cost of an unrecorded one is a re-run that finds
+    nothing to do. The cost of raising here was every repair after the first, on every
+    session start for as long as the ledger stayed unwritable — and, before `repair` took
+    its lock, the session start itself: this sat outside the guard around each step.
+    """
     record = _done(ctx)
     record[step] = {
         "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "revision": revision,
         "detail": detail,
     }
-    store.write_json(store.tier_b(ctx, LEDGER), record)
+    try:
+        store.write_json(store.tier_b(ctx, LEDGER), record)
+    except OSError:
+        return
 
 
 def _ran_at(ctx: GitContext, step: str) -> int:
@@ -81,16 +95,37 @@ def _ran_at(ctx: GitContext, step: str) -> int:
 
     A record written before repairs carried revisions reads as 0, so every repair at
     revision 1 or above runs again on it. That is the point rather than a side effect:
-    such a clone was last reconciled by code that has since changed.
+    such a clone was last reconciled by code that has since changed. A revision that is
+    not a number reads the same way — it raised, before any step was guarded, and a
+    session start with it in the ledger produced no board at all.
     """
     entry = _done(ctx).get(step)
     if entry is None:
         return -1
-    return int(entry.get("revision") or 0) if isinstance(entry, dict) else 0
+    try:
+        return int(entry.get("revision") or 0) if isinstance(entry, dict) else 0
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+class Unfinished(Exception):
+    """A repair that could not do all of its work, and must not be recorded as done.
+
+    Raised by a step whose git call was refused: `repair` marks every step that returns,
+    so a step that swallowed the refusal was recorded as done and never ran again. Its
+    message is what did get done, reported the way a finished step's detail is.
+    """
 
 
 def pending(ctx: GitContext) -> list[str]:
     return [name for name, (revision, _) in _REPAIRS.items() if _ran_at(ctx, name) < revision]
+
+
+# Held around a whole run, beside the ledger it guards. Sessions start together — restarting
+# them after an upgrade is exactly that — and each ran every pending repair at once: in five
+# trials out of five, four simultaneous starts filed one scratch TODO as two to four cards.
+REPAIR_LOCK = "migrations.lock"
+_LOCK_TIMEOUT = store.LOCK_ACQUIRE_TIMEOUT
 
 
 def repair(ctx: GitContext) -> list[str]:
@@ -112,13 +147,32 @@ def repair(ctx: GitContext) -> list[str]:
     Never raises. An upgrade that dies halfway through fixing something has left the
     repository worse than the defect it came to fix, and the founder with no way to tell
     which half ran.
+
+    One run per clone at a time, with the ledger read again inside the lock, so a repair a
+    sibling has just finished reads as finished. A session that cannot have the lock in time
+    starts without the repairs and leaves them to the one holding it: waiting its whole
+    start out, or running them beside it, is the defect.
     """
+    if not pending(ctx):
+        return []
+    try:
+        with store.file_lock(store.tier_b(ctx, REPAIR_LOCK), timeout=_LOCK_TIMEOUT):
+            return _repair_pending(ctx)
+    except (store.LockTimeout, OSError):
+        return []
+
+
+def _repair_pending(ctx: GitContext) -> list[str]:
+    """Every repair this clone has not had at its current revision. Callers hold the lock."""
     changed: list[str] = []
     for name, (revision, step) in _REPAIRS.items():
         if _ran_at(ctx, name) >= revision:
             continue
         try:
             detail = step(ctx)
+        except Unfinished as partly:
+            changed.extend([f"{name}: {partly}"] if str(partly) else [])
+            continue
         except Exception:  # noqa: BLE001 - a failed repair must not brick a session
             continue
         _mark(ctx, name, revision, detail)
@@ -174,12 +228,18 @@ def _quarantine_unreadable_state(ctx: GitContext) -> str:
     own decode error and carries on with a default, so nothing is broken loudly and
     nothing is ever fixed. Moved to `.broken` with the original kept, because deleting a
     founder's file to fix a parse error is not a trade this plugin gets to make.
+
+    Never `config.json`. It is not this plugin's state but the founder's word, committed and
+    edited by hand, and setting it aside showed their config as deleted in `git status`
+    while every gate went on at the defaults. A broken one is named on the board instead.
     """
+    from . import config
+
     root = store.tier_a(ctx)
     moved = 0
     for path in sorted(root.glob("*.json")):
         raw = store.read_json(path, default=None)
-        if raw is not None:
+        if raw is not None or path.name == config.CONFIG_NAME:
             continue
         try:
             path.replace(path.with_suffix(".json.broken"))
@@ -308,6 +368,10 @@ def _move_trees_into_the_no_prompt_zone(ctx: GitContext) -> str:
     `git worktree move` and not a delete-and-recreate: it carries the branch and the
     uncommitted work with it, verified against a dirty tree. Without `--force`, so a locked
     tree or one with submodules is left alone rather than broken.
+
+    Revision 3: in a clone whose main entry is a bare repository the home moved from inside
+    the git directory to beside it (`worktree.home_of`), and the trees already made in there
+    follow it the same way.
     """
     from . import worktree
 
@@ -378,10 +442,14 @@ def _lift_the_tool_call_ceiling(ctx: GitContext) -> str:
 
     Only the value this plugin chose. A number the founder set themselves is their word on
     the subject and is left exactly as it is.
+
+    The copy every tree reads, which is the main checkout's (`config.founders_tree`).
+    Revision 1 repaired whichever tree happened to start first, and once every tree read the
+    main checkout's copy, a 2000 left there would have come back into force everywhere.
     """
     from . import config
 
-    path = store.tier_a(ctx, config.CONFIG_NAME)
+    path = config.config_path(ctx)
     raw = store.read_json(path, default=None)
     if not isinstance(raw, dict) or raw.get("max_tool_calls") != 2000:
         return ""
@@ -401,10 +469,11 @@ def _drop_the_witness_timeout(ctx: GitContext) -> str:
     `config.save` writes every key, so the number is on disk in every repository that
     saved a config while it existed — and leaving it there leaves a knob that does
     nothing, which is worse than no knob. The ceiling comes from the hook budget now.
+    In the main checkout's copy, for the reason the step above gives.
     """
     from . import config
 
-    path = store.tier_a(ctx, config.CONFIG_NAME)
+    path = config.config_path(ctx)
     raw = store.read_json(path, default=None)
     # The key check is belt over braces and said so rather than dressed up as a rule:
     # `repair` swallows what a step raises, so without it a config lacking the key would
@@ -551,10 +620,10 @@ def _already_home(home: Path, name: str, states: tuple) -> bool:
 def _carry_one(path: Path, target: Path) -> int:
     """Move one task file, or leave it where it is. Returns how many moved, for the sum.
 
-    The move is carried into both indexes when git was tracking the file. Without that
-    this repair RECREATED the defect the one after it exists to undo: a tracked file
-    leaving a worktree with git never told is a bare `D` in that tree and an untracked
-    copy in another (#208).
+    The move reaches the index when git was tracking the file. Without that this repair
+    RECREATED the defect the one after it exists to undo: a tracked file leaving a worktree
+    with git never told is a bare `D` in that tree (#208). It is a staged deletion there now,
+    and nothing is added where it lands: the ledger is out of git (decision 0018).
     """
     from . import plan
 
@@ -613,21 +682,64 @@ def _close_cards_whose_work_shipped(ctx: GitContext) -> str:
 
     Two conditions, both conservative, because this runs unattended in somebody's
     repository. The owner must not be a live session — a card a chat is holding right now
-    is that chat's to close. And EVERY file the card named must be byte-identical to what
-    the trunk holds, where `settle_delivered` needs only one: it is judging a delivery it
-    watched happen, and this is inferring one from the state left behind.
+    is that chat's to close. And EVERY file the card named must have reached the trunk from
+    the card's own branch, where `settle_delivered` needs only one: it is judging a delivery
+    it watched happen, and this is inferring one from the state left behind.
     """
-    from . import evidence, plan, sessions
+    from . import plan, sessions
+    from .gitctx import trunk_ref
 
+    trunk = trunk_ref(ctx)
     closed = 0
     for task in plan.load_all(ctx, plan.DOING):
         holder = sessions.get(ctx, task.owner) if task.owner else None
         if holder is not None and sessions.is_live(ctx, holder):
             continue
-        if not task.paths or len(evidence.landed(ctx, task.paths)) != len(task.paths):
+        if not trunk or not _delivered_by_its_branch(ctx, task, trunk):
             continue
         closed += len(plan.settle_delivered(ctx, task.owner, task.paths, "the trunk"))
     return f"{closed} in-flight card(s) closed over work already on the trunk" if closed else ""
+
+
+def _delivered_by_its_branch(ctx: GitContext, task, trunk: str) -> bool:
+    """Did the branch this card was claimed on put every file it names on the trunk?
+
+    Asked of that BRANCH, never of whichever tree happens to run the repair. A tree that
+    never touched the files holds the trunk's content by definition — the main checkout
+    beside a sibling worktree whose work is unmerged, which is the default workflow — and
+    this closed such a card as shipped, delivery note and all, while its work sat in the
+    sibling with `git branch --no-merged` still listing it.
+
+    Content, not ancestry, so a squash merge counts. And the branch must have touched those
+    files since the card was filed: one still standing where it was cut holds the trunk's
+    content too, and that equality is about work nobody did.
+    """
+    from .gitctx import _run
+
+    tip = _run(["rev-parse", "--verify", "--quiet", f"refs/heads/{task.branch}"],
+               ctx.worktree_root, check=False) if task.branch else ""
+    if not tip or not task.paths:
+        return False
+    touched = _run(["log", "-1", "--format=%ct", tip, "--", *task.paths],
+                   ctx.worktree_root, check=False)
+    if not touched.isdigit() or int(touched) < _filed_at(task.created_at):
+        return False
+    return all(_blob_at(ctx, tip, rel) == _blob_at(ctx, trunk, rel) != "" for rel in task.paths)
+
+
+def _blob_at(ctx: GitContext, rev: str, rel: str) -> str:
+    from .gitctx import _run
+
+    return _run(["rev-parse", "--verify", "--quiet", f"{rev}:{rel}"], ctx.worktree_root,
+                check=False)
+
+
+def _filed_at(created_at: str) -> float:
+    """When a card was filed; never, when it does not say — nothing is closed on a guess."""
+    try:
+        return float(calendar.timegm(time.strptime(created_at, "%Y-%m-%dT%H:%M:%SZ")))
+    except (TypeError, ValueError):
+        return float("inf")
 
 
 def _ledger_root(ctx: GitContext) -> Path:
@@ -656,6 +768,10 @@ def _restage_ledger_moves_git_lost(ctx: GitContext) -> str:
     Matched by FILENAME, which carries the id and the slug and is what a transition keeps
     identical; a deletion whose file is nowhere on the board is left exactly as it is,
     because it may be a real one somebody meant.
+
+    It restaged them as renames until the ledger left git (decision 0018). `follow_in_git`
+    now stages the deletion and adds nothing, so a stranded `D` becomes the staged one the
+    repair after this leaves everywhere else.
     """
     from . import plan
 
@@ -675,7 +791,7 @@ def _restage_ledger_moves_git_lost(ctx: GitContext) -> str:
         if on_the_board.get(gone.name) not in (None, gone)
     ]
     restaged = sum(1 for gone, target in moved if plan.follow_in_git(gone, target))
-    return f"{restaged} ledger move(s) git had recorded as deletions restaged" if restaged else ""
+    return f"{restaged} ledger move(s) git had recorded as bare deletions staged" if restaged else ""
 
 
 def _reconcile_scattered_ledger_copies(ctx: GitContext) -> str:
@@ -710,26 +826,60 @@ def _untrack_the_ledger(ctx: GitContext) -> str:
     git is a staged deletion the founder commits with whatever they commit next. Nothing is
     lost and nothing needs to be restored — `git restore --staged` puts the index back if
     they disagree. Reversibility is the whole reason this is `--cached` and not `rm`.
+
+    A tree whose index git would not write — an `index.lock` held by an editor or a sibling
+    for a moment — leaves the step unfinished rather than done: counted as done, it was
+    never run again, and that clone kept its ledger in git for good.
     """
     from . import worktree
 
     worktree.hide(ctx)
-    untracked = 0
-    for tree in _trees_of(ctx):
-        listed = _git_out(tree, ["ls-files", "-z", "--", _LEDGER_PATH])
-        names = [name for name in listed.split("\0") if name.strip()]
-        if not names:
-            continue
-        # `-z` on the READ, never on the removal: `git rm` accepts it only with
-        # `--pathspec-from-file`, so passing it there failed the whole call and the repair
-        # reported nothing while nothing had happened. Found by running it, not by reading.
-        done = subprocess.run(
-            ["git", "rm", "--cached", "--quiet", "--", *names],
-            cwd=str(tree), capture_output=True,
-            encoding="utf-8", errors="surrogateescape", timeout=120,
-        )
-        if done.returncode == 0:
-            untracked += len(names)
+    counts = [untrack_ledger(ctx, tree) for tree in _trees_of(ctx)]
+    said = _untracked_note(sum(count for count in counts if count > 0))
+    if any(count < 0 for count in counts):
+        # A tree whose index git refused — its lock held by an IDE or a sibling mid-commit —
+        # is not done. Recorded as done anyway, the ledger stayed in that tree's index for
+        # good, because a repair recorded once is never run again.
+        raise Unfinished(said)
+    return said
+
+
+def keep_the_ledger_out(ctx: GitContext) -> str:
+    """The repair above, asked again on EVERY session start, of the session's own tree.
+
+    The repair runs once per clone, in the trees that exist that day, and records itself
+    done. A tree added later from a trunk that still tracked the cards had them in its index
+    again, and so did one that checked out or pulled a branch carrying them, and the tree's
+    next commit kept them in git (#219). Taken out here, the deletion goes with that commit
+    instead. One `ls-files` when there is nothing to take out, which is every start after
+    the first.
+    """
+    return _untracked_note(max(0, untrack_ledger(ctx, ctx.worktree_root)))
+
+
+def untrack_ledger(ctx: GitContext, tree: Path) -> int:
+    """Take whatever of the ledger ONE tree's index still holds out of it. How many files,
+    or -1 when git refused that tree's index, so the repair can say it is not finished."""
+    listed = _git_out(tree, ["ls-files", "-z", "--", _LEDGER_PATH])
+    names = [name for name in listed.split("\0") if name.strip()]
+    if not names:
+        return 0
+    from . import worktree
+
+    # The rule first, so the cards go from tracked to hidden and never show as untracked.
+    worktree.hide(ctx)
+    # `-z` on the READ, never on the removal: `git rm` accepts it only with
+    # `--pathspec-from-file`, so passing it there failed the whole call and the repair
+    # reported nothing while nothing had happened. Found by running it, not by reading.
+    done = subprocess.run(
+        ["git", "rm", "--cached", "--quiet", "--", *names],
+        cwd=str(tree), capture_output=True,
+        encoding="utf-8", errors="surrogateescape", timeout=120,
+    )
+    return len(names) if done.returncode == 0 else -1
+
+
+def _untracked_note(untracked: int) -> str:
     if not untracked:
         return ""
     return (f"{untracked} ledger file(s) taken out of git's index and left on disk; "
@@ -756,6 +906,47 @@ def _finish_removals_done_by_hand(ctx: GitContext) -> str:
     shown = ", ".join(cleaned[:3])
     more = f" (+{len(cleaned) - 3} more)" if len(cleaned) > 3 else ""
     return f"finished the cleanup of {len(cleaned)} item(s) left by a removed worktree: {shown}{more}"
+
+
+_CHECKPOINTS = f"{store.TIER_A_DIRNAME}/checkpoints"
+
+
+def _carry_checkpoints_out_of_trees(ctx: GitContext) -> str:
+    """Checkpoints earlier versions wrote into worktrees, moved to where they are read now.
+
+    Each one was an untracked file in its tree, and `git worktree remove` without `--force`
+    refuses a tree holding one: the reaper never cleared it, a finished tree never removed
+    itself, and nothing named it, because `stranded()` exempts `.claude/`. Every tree of the
+    clone rather than this one's, since a tree whose session is gone starts no session to
+    repair itself. A checkpoint git tracks is somebody's commit and stays where it is.
+    """
+    from . import gitpolicy, worktree
+
+    home = store.checkpoint_dir(ctx)
+    main = worktree.main_checkout(ctx).resolve()
+    moved = sum(_carry_checkpoints_of(tree, home) for tree in gitpolicy.working_trees(ctx)
+                if tree != main)
+    return f"{moved} checkpoint(s) moved out of the worktrees they kept from being removed" \
+        if moved else ""
+
+
+def _carry_checkpoints_of(tree: Path, home: Path) -> int:
+    """Move one tree's untracked checkpoints to `home`. How many moved."""
+    tracked = set(subprocess.run(
+        ["git", "ls-files", "--", _CHECKPOINTS], cwd=str(tree), capture_output=True,
+        encoding="utf-8", errors="surrogateescape", timeout=60,
+    ).stdout.splitlines())
+    moved = 0
+    for path in sorted((tree / _CHECKPOINTS).glob("*.md")):
+        if f"{_CHECKPOINTS}/{path.name}" in tracked or (home / path.name).exists():
+            continue
+        try:
+            store.ensure_dir(home)
+            path.replace(home / path.name)
+        except OSError:
+            continue
+        moved += 1
+    return moved
 
 
 _LEDGER_PATH = ".claude/claude-bestpractice/plan"
@@ -802,13 +993,334 @@ def _drop_the_compaction_demand_marker(ctx: GitContext) -> str:
     return "dropped the compaction demand's marker; a manual /compact is no longer blocked"
 
 
+def _put_back_what_a_reindex_stranded(ctx: GitContext) -> str:
+    """The inbox an interrupted `claude-bp-reindex` left beside Tier B.
+
+    Until this release one log torn inside a multibyte character made the purge raise
+    after its `rmtree` and before its put-back, so the queued notes it had set aside stayed
+    in `.claude-bestpractice.carry/`, read by nothing, until the next reindex deleted them.
+    """
+    back = store.restore_carried(ctx)
+    if not back:
+        return ""
+    return (f"{', '.join(sorted(set(back)))} set aside by an interrupted `claude-bp-reindex` "
+            "is back where sessions read it")
+
+
+def _put_back_a_config_set_aside(ctx: GitContext) -> str:
+    """The founder's `config.json`, moved aside by repair 0002 when it did not parse.
+
+    A byte-order mark was enough (PowerShell 5.1 writes one), so a committed config that
+    every reader now takes sat as `config.json.broken`, with `git status` showing the
+    founder's file deleted. Put back only where nothing has taken its place: a config
+    written since is their newer word, and the old one stays beside it for them to read.
+
+    Every tree, because 0002 ran in whichever one started first and this runs once a clone.
+    """
+    from . import config
+
+    restored = 0
+    for tree in _trees_of(ctx):
+        current = tree / store.TIER_A_DIRNAME / config.CONFIG_NAME
+        aside = current.with_suffix(".json.broken")
+        if aside.is_file() and not current.exists():
+            aside.replace(current)
+            restored += 1
+    if not restored:
+        return ""
+    return (f"config.json set aside by an earlier upgrade is back in {restored} tree(s); "
+            "if it still does not parse, the board says so")
+
+
+def _take_the_push_gate_out_of_shared_hooks(ctx: GitContext) -> str:
+    """This plugin's pre-push hook, in a hooks directory every repository reads.
+
+    A global core.hooksPath was honoured as if it named this repository's own hooks, so
+    `claude-bp-ci local`, `init`, setup, every session start — and the doctor, which the
+    installer runs before it registers anything — wrote a hook carrying ONE repository's
+    checks where git runs hooks for ALL of them, moving the founder's own hook aside. Every
+    other repository's push then ran this one's suite and was refused on it.
+
+    Taken out and the founder's hook put back, as `claude-bp-ci off` would, but without the
+    opt-out `off` records: nobody declined the gate, it was only ever in the wrong place.
+    """
+    from . import ci
+
+    if not ci.shared_hooks(ctx) or not ci.installed(ctx):
+        return ""
+    where = ci.hooks_dir(ctx)
+    ci.take_out(ctx)
+    return f"took this plugin's pre-push hook out of {where}, which every repository reads"
+
+
+def _unchain_a_hook_that_calls_itself(ctx: GitContext) -> str:
+    """A copy of this plugin's own hook at the name it chains the founder's hook under.
+
+    Sessions that started together each armed the gate, and looking and moving were not
+    one step: a session that looked before a sibling wrote the hook moved that hook onto
+    the founder's. Their hook was gone from that moment, and what was left ran itself on
+    every push — `sh` forking until somebody killed it. The hook no longer runs a chained
+    copy of itself, and this takes the copy away; there is nothing of theirs left to restore.
+    """
+    from . import ci
+
+    chained = ci.hooks_dir(ctx) / ci.DISPLACED_NAME
+    if not ci.our_hook(chained):
+        return ""
+    chained.unlink()
+    return f"removed {chained.name}: a copy of this plugin's own pre-push hook it was chaining as yours"
+
+
+def _drop_an_empty_quarantine_block(ctx: GitContext) -> str:
+    """The quarantine block `claude-bp adopt` wrote, empty, into a settings file it had
+    nothing to take from.
+
+    Adopt counted what it parked across both settings files, so settings.json having a
+    hook to park was enough to rewrite settings.local.json as well: reformatted, and given
+    an empty `_claudeBestpracticeQuarantined`. The block goes. The 0644 it was written with
+    stays, because it cannot be told from a mode the founder chose.
+    """
+    from . import conflicts
+
+    cleaned = conflicts.drop_empty_quarantine(ctx)
+    return f"dropped an empty quarantine block from {', '.join(cleaned)}" if cleaned else ""
+
+
+def _drop_the_hook_under_a_literal_tilde(ctx: GitContext) -> str:
+    """The pre-push hook written into a directory literally named `~` inside a tree.
+
+    `core.hooksPath=~/.githooks` was read without expanding the tilde, so the hook went to
+    `<tree>/~/.githooks/pre-push`: a file git never runs, which `claude-bp-ci status` reported
+    as the gate being ON and `git status` listed as untracked. The reader expands it now and
+    installs where git looks; this takes away what the old one left, and only that.
+    """
+    from . import ci
+
+    raw = _git_out(ctx.worktree_root, ["config", "--get", "core.hooksPath"]).strip()
+    if not raw.startswith("~"):
+        return ""
+    removed = [tree for tree in _trees_of(ctx) if _drop_stray_hook(tree, tree / raw / ci.HOOK_NAME)]
+    if not removed:
+        return ""
+    return f"removed the pre-push hook written into a directory named {raw} in {len(removed)} tree(s)"
+
+
+def _drop_stray_hook(tree: Path, hook: Path) -> bool:
+    """Delete one hook of ours and the directories it alone kept, up to the tree. True when done."""
+    from . import ci
+
+    try:
+        if ci.MARKER not in hook.read_text(encoding="utf-8", errors="replace"):
+            return False
+        hook.unlink()
+    except OSError:
+        return False
+    for directory in (hook.parent, *hook.parent.parents):
+        if directory == tree or not directory.is_relative_to(tree):
+            break
+        try:
+            directory.rmdir()
+        except OSError:
+            break
+    return True
+
+
+def _forget_numbers_carried_to_the_next_pull_request(ctx: GitContext) -> str:
+    """Open obligations filed under the number of their branch's previous pull request.
+
+    Until this release `opened` filled a new obligation's number from the branch's last
+    record whenever the call carried none — every `gh pr create` — so the second pull
+    request on a branch whose first had merged went on the board as the first one's number,
+    and a merge of the real one was matched against a number nothing open carries. The fix
+    stops new ones; a record already filed that way stays until it is settled, up to thirty
+    days, so it is told it does not know its number, which is the truth.
+    """
+    from . import pullrequest
+
+    path = store.tier_b(ctx, pullrequest.PR_FILE)
+    rows = [row for row in store.read_jsonl(path) if isinstance(row, dict) and row.get("branch")]
+    # (branch, number) of every pull request that was merged or closed, and each branch's
+    # latest record — the file is append-only, so a later row supersedes.
+    spent = {(str(row["branch"]), str(row.get("number"))) for row in rows
+             if row.get("state") != pullrequest.OPEN}
+    latest = {str(row["branch"]): row for row in rows}
+    carried = [row for branch, row in latest.items()
+               if row.get("state") == pullrequest.OPEN and row.get("number")
+               and (branch, str(row["number"])) in spent]
+    for row in carried:
+        store.append_jsonl(path, {**row, "number": 0})
+    return (f"{len(carried)} open pull request(s) had the number of the branch's previous one; "
+            "forgotten until the real one is learned") if carried else ""
+
+
+def _forget_a_red_suite_that_never_ran(ctx: GitContext) -> str:
+    """A red-suite record written for a run that never reached the code.
+
+    Until 1.69.0 `python3 -m pytest` on an interpreter without pytest — the commonest shape
+    of a project whose pytest lives in its own virtualenv — was read as a failing suite: its
+    `No module named pytest` was filed here, put on every board as "fix it before new work"
+    and held against every merge. The gate reads it as a missing runner now, so nothing it
+    runs writes one again; and nothing it runs clears the one already written either, since
+    the command that wrote it cannot pass on the interpreter it failed on.
+
+    Only a record whose own output names the module after its own `-m`. A red suite that
+    failed for anything else stays exactly as it was.
+    """
+    from . import evidence
+
+    entry = evidence.red(ctx)
+    if not entry:
+        return ""
+    command = [str(part) for part in entry.get("command") or []]
+    absent = evidence._absent_module(command, str(entry.get("tail") or ""))
+    if not absent:
+        return ""
+    store.tier_a(ctx, evidence.RED_SUITE_FILE).unlink(missing_ok=True)
+    return (f"dropped the red-suite record for `{' '.join(command)}` — `{absent}` was not "
+            "installed, so that run never reached the code")
+
+
+def _scrub_what_a_failing_suite_printed(ctx: GitContext) -> str:
+    """Credentials a failing suite printed, already written where the gate records failures.
+
+    Until 1.69.0 the end of a failing run's output went unscrubbed into the red-suite record,
+    and through the reason of an unverified finish into its attempt, the unverified-finish
+    marker and the open item — a DSN carrying a production password among them, in files
+    under `.claude/` that are untracked and not ignored. The gate scrubs before it writes
+    now; this scrubs what it wrote before, and changes nothing else in those files.
+    """
+    from . import board
+
+    fixed = _scrub_red_record(ctx) + _scrub_unverified_attempts(ctx)
+    for name, field in (("unverified.jsonl", "reason"), (board.OPEN_ITEMS_FILE, "text")):
+        fixed += _scrub_field(store.tier_b(ctx, name), field)
+    return f"scrubbed what a failing suite had printed out of {fixed} record file(s)" if fixed else ""
+
+
+def _scrub_red_record(ctx: GitContext) -> int:
+    from . import evidence, redact
+
+    path = store.tier_a(ctx, evidence.RED_SUITE_FILE)
+    entry = store.read_json(path, default=None)
+    tail = entry.get("tail") if isinstance(entry, dict) else None
+    if not isinstance(tail, str) or redact.scrub(tail) == tail:
+        return 0
+    store.write_json(path, {**entry, "tail": redact.scrub(tail)}, mode=0o644)
+    return 1
+
+
+def _scrub_unverified_attempts(ctx: GitContext) -> int:
+    """The attempts an unverified finish filed — only those; the rest are the session's words."""
+    from . import attempts, redact
+
+    fixed = 0
+    for path in sorted(attempts.attempts_dir(ctx).glob("*.md")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if "Finished without proof." in text and redact.scrub(text) != text:
+            store.atomic_write(path, redact.scrub(text), mode=0o644)
+            fixed += 1
+    return fixed
+
+
+def _scrub_field(path: Path, field: str) -> int:
+    from . import redact
+
+    rows = store.read_jsonl(path)
+    clean = [{**row, field: redact.scrub(row[field])}
+             if isinstance(row, dict) and isinstance(row.get(field), str) else row
+             for row in rows]
+    if clean == rows:
+        return 0
+    store.rewrite_jsonl(path, clean)
+    return 1
+
+
+def _unstamp_greens_a_changed_tracked_file_could_hide(ctx: GitContext) -> str:
+    """Green records stamped by a tree hash that let a changed tracked file through.
+
+    Until 1.69.0 `tree_hash` read a modified TRACKED file as clean when its name matched an
+    artifact glob or it sat under a byproduct directory, so a green observed with such a file
+    changed was stamped with HEAD's tree — and the pre-push hook skips its run for a tree on
+    record as green. Which stamps were written that way cannot be told from the stamp, so
+    every stamp written before goes. The cost is one push-time run per branch, which is the
+    direction the stamp is allowed to be wrong in.
+    """
+    unstamped = 0
+    for path in sorted(store.tier_b(ctx, "green").glob("*.json")):
+        record = store.read_json(path, default=None)
+        if isinstance(record, dict) and record.get("tree"):
+            store.write_json(path, {k: v for k, v in record.items() if k != "tree"}, mode=0o644)
+            unstamped += 1
+    if not unstamped:
+        return ""
+    return f"{unstamped} green record(s) will be run once more before they excuse a push"
+
+
+def _drop_the_shared_verification_token(ctx: GitContext) -> str:
+    """The one token file every worktree's verification run used to share.
+
+    Nothing reads it now: each run holds a token of its own under `verifying/`. The file on
+    disk is the last clean re-run's, which never deleted it.
+    """
+    path = store.tier_b(ctx, "verifying.nonce")
+    if not path.exists():
+        return ""
+    path.unlink()
+    return "dropped the verification token every worktree shared; each run now has its own"
+
+
+def _scrub_what_was_captured_with_a_secret_in_it(ctx: GitContext) -> str:
+    """Signals and checkpoints written before the redaction knew every shape of a secret.
+
+    Both are text this plugin captured and scrubbed on its way to disk, and the scrub let
+    through a private key's body and END line, a URL password with no user in front of it,
+    and a credential an HTTP header carries by name. A batch of ingested signals kept a
+    production Redis password and an API key that way, in files that sit untracked in the
+    tree. Nothing but that captured text is in either kind of file, so the same pass is run
+    over them again; one that is already clean is left as it was.
+    """
+    from . import redact
+
+    rewritten = 0
+    for tree in _trees_of(ctx):
+        for folder in (tree / ".claude" / "signals", tree / store.TIER_A_DIRNAME / "checkpoints"):
+            for path in sorted(folder.glob("*.md")) if folder.is_dir() else []:
+                # A link is not a file this plugin wrote, whatever it is named.
+                if path.is_symlink():
+                    continue
+                try:
+                    text = path.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    continue
+                cleaned = redact.scrub(text)
+                if cleaned != text:
+                    store.atomic_write(path, cleaned, mode=0o644)
+                    rewritten += 1
+    return (f"took a credential the old redaction missed out of {rewritten} signal or "
+            "checkpoint file(s)") if rewritten else ""
+
+
+def _quote_the_status_line(_ctx: GitContext) -> str:
+    """The status line of ours written unquoted from an install path with a space in it.
+
+    A shell split it at the space, so it showed nothing, and installing it again answered
+    that it was already there. The same path, quoted, in `~/.claude/settings.json`; the
+    founder's own status line is never touched. It belongs to no repository, so whichever
+    clone starts first after the upgrade repairs it, and every later run finds nothing.
+    """
+    from . import limits
+
+    quoted = limits.requote()
+    return f"quoted the path of the status line, which a space in it split: {quoted}" if quoted else ""
+
+
 _REPAIRS = {
     "0001-task-paths": (1, _backfill_task_paths),
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
     "0003-absorb-scratch-todos": (1, _absorb_scratch_todos),
-    "0004-lift-the-tool-call-ceiling": (1, _lift_the_tool_call_ceiling),
-    "0005-trees-into-the-no-prompt-zone": (2, _move_trees_into_the_no_prompt_zone),
-    "0006-drop-the-witness-timeout": (1, _drop_the_witness_timeout),
+    "0004-lift-the-tool-call-ceiling": (2, _lift_the_tool_call_ceiling),
+    "0005-trees-into-the-no-prompt-zone": (3, _move_trees_into_the_no_prompt_zone),
+    "0006-drop-the-witness-timeout": (2, _drop_the_witness_timeout),
     "0007-forget-a-switch-taken-as-a-task": (1, _forget_a_statement_that_was_only_a_switch),
     "0008-collapse-the-decision-inbox": (1, _collapse_the_decision_inbox),
     "0009-drop-defects-that-are-not-ours": (1, _drop_defects_from_things_that_are_not_gates),
@@ -817,9 +1329,25 @@ _REPAIRS = {
     "0012-carry-worktree-tasks-home": (1, _carry_this_worktrees_tasks_home),
     "0013-restage-ledger-moves": (1, _restage_ledger_moves_git_lost),
     "0014-reconcile-ledger-copies": (1, _reconcile_scattered_ledger_copies),
-    "0015-untrack-the-ledger": (1, _untrack_the_ledger),
+    "0015-untrack-the-ledger": (2, _untrack_the_ledger),
     "0016-drop-the-compaction-marker": (1, _drop_the_compaction_demand_marker),
     "0017-finish-removals-done-by-hand": (1, _finish_removals_done_by_hand),
+    "0018-put-back-what-reindex-stranded": (1, _put_back_what_a_reindex_stranded),
+    "0019-put-back-a-config-set-aside": (1, _put_back_a_config_set_aside),
+    "0020-push-gate-out-of-shared-hooks": (1, _take_the_push_gate_out_of_shared_hooks),
+    "0021-drop-the-hook-under-a-literal-tilde": (1, _drop_the_hook_under_a_literal_tilde),
+    "0022-unchain-a-hook-that-calls-itself": (1, _unchain_a_hook_that_calls_itself),
+    "0023-drop-an-empty-quarantine-block": (1, _drop_an_empty_quarantine_block),
+    "0024-forget-a-number-carried-to-the-next-pull-request":
+        (1, _forget_numbers_carried_to_the_next_pull_request),
+    "0025-carry-checkpoints-out-of-trees": (1, _carry_checkpoints_out_of_trees),
+    "0026-forget-a-red-suite-that-never-ran": (1, _forget_a_red_suite_that_never_ran),
+    "0027-scrub-what-a-failing-suite-printed": (1, _scrub_what_a_failing_suite_printed),
+    "0028-drop-the-shared-verification-token": (1, _drop_the_shared_verification_token),
+    "0029-unstamp-greens-a-changed-tracked-file-could-hide":
+        (1, _unstamp_greens_a_changed_tracked_file_could_hide),
+    "0030-scrub-captured-secrets": (1, _scrub_what_was_captured_with_a_secret_in_it),
+    "0031-quote-the-status-line": (1, _quote_the_status_line),
 }
 
 
@@ -1122,21 +1650,31 @@ def brief(ctx: GitContext, path: Path) -> str:
 
 
 def parked_by_hand(ctx: GitContext) -> list[Path]:
-    """TODO files a session wrote because the ledger could not park a task yet."""
-    found: list[Path] = []
+    """TODO files a session wrote because the ledger could not park a task yet.
+
+    Only this repository's own files — tracked, or untracked and not ignored — which is
+    what `git ls-files` lists, and it stops at a submodule and at a nested repository.
+    Walking the directory reached both: the upgrade rewrote a submodule's `TODO-v2.md` to a
+    pointer, leaving ` m vendor/upstream` in the founder's status, and filed a card for it.
+    Decision 0005 bounds this write to files a session wrote as a stand-in, and a session
+    writes into this repository, not into the ones it vendors.
+    """
     root = ctx.worktree_root
-    for path in root.rglob("TODO*.md"):
-        if any(part in _SKIP for part in path.relative_to(root).parts):
+    listed = _git_out(root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard",
+                             "--", ":(glob,icase)**/TODO-*.md"])
+    found: list[Path] = []
+    for relative in sorted(set(listed.split("\0"))):
+        if not _PARKED_BY_HAND.search(relative) or any(
+                part in _SKIP for part in PurePosixPath(relative).parts):
             continue
-        if not _PARKED_BY_HAND.search(path.relative_to(root).as_posix()):
-            continue
+        path = root / relative
         try:
             if POINTER in path.read_text(encoding="utf-8", errors="replace"):
                 continue
         except OSError:
             continue
         found.append(path)
-    return sorted(found)
+    return found
 
 
 def adopt(ctx: GitContext, path: Path) -> str:

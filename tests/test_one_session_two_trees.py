@@ -1,0 +1,414 @@
+"""One session, two identities: it files its card in the main checkout and works in its tree.
+
+Identity is (harness id, worktree), and Claude Code reports the tree as the hook's working
+directory from the first call after `cd` or `EnterWorktree` into it — measured on 2.1.280 and
+2.1.281. So a session that did everything this plugin asks, in the order it asks it — file a
+card, claim it, be refused in the main checkout, move into the tree it was handed — arrived
+there as a second identity, with the first still live because it names the same process. Its
+own card was nobody's it knew, `claim` refused it as held by a live session that was itself,
+`git add -A` was refused over its own paths, the database gate refused it over itself, and
+`git worktree remove` of its own tree was run by the shell standing in it.
+
+Driven through the real gates with the hook's working directory in the tree, and every rule
+relaxed here is also run against a genuine sibling — another process — because uniting on
+anything looser hides the sibling the per-tree identity exists to surface.
+"""
+
+from __future__ import annotations
+
+import os
+import unittest
+
+from helpers import BIN, RepoCase, git, session_record_for, sid
+
+from claude_bestpractice import plan, sessions
+from claude_bestpractice.gitctx import resolve
+
+# The process the founder's session runs as. Under test the walk up the process tree finds
+# the test runner — or, inside a Claude Code session, that session's own CLI — so it is named
+# here instead of resolved, the way `resolve_owner` would find one CLI running one chat.
+THIS_PROCESS = os.getpid()
+
+# Alive for the whole run and never this process: a sibling. `claude -p` children inherit the
+# harness id of whatever launched them, so a sibling can carry THIS session's harness id too.
+ANOTHER_PROCESS = 1
+
+DSN = "postgres://localhost:5432/app"
+
+# What `resolve_owner` can report on a machine with no /proc — macOS, Windows: the hook's own
+# shell, gone the moment the hook returns, a different number on every call, and marked as
+# proving nothing. No process has these.
+UNRESOLVED = 999_999_990
+
+
+class MovedSession(RepoCase):
+    """A session started in the main checkout that claimed its card there, was refused a
+    write there, and now stands in the tree this plugin provisioned for it."""
+
+    relax_git_policy = False
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.write("src/app.py", "def parse(text):\n    return text.split(',')\n")
+        self.commit("a history to branch from")
+        self.hook("session-start", self.repo, hook_event_name="SessionStart")
+        self.hook("prompt-capture", self.repo, hook_event_name="UserPromptSubmit",
+                  prompt="Validate the input to src/app.py")
+        self.cli(self.repo, "update", "0001", "--paths", "src/app.py",
+                 "--done-when", "the parser rejects empty input")
+        claimed = self.cli(self.repo, "claim", "0001")
+        self.assertEqual(0, claimed.returncode, f"precondition: {claimed.stderr}")
+        refused = self.write_in(self.repo)
+        self.assertEqual("deny", self.hook_decision(refused), "precondition: main is refused")
+        self.main = resolve(self.repo).worktree_root
+        self.tree = self.main / ".claude" / "worktrees" / self.provisioned()
+        self.pin(self.repo, "S", THIS_PROCESS)
+        self.pin(self.tree, "S", THIS_PROCESS)
+        # The founder's next message, which is what reaches the tree first in a real chat.
+        self.hook("prompt-capture", self.tree, hook_event_name="UserPromptSubmit",
+                  prompt="go on, and cover it with a test")
+
+    def provisioned(self) -> str:
+        made = sorted(p.name for p in (self.repo / ".claude" / "worktrees").iterdir())
+        self.assertEqual(1, len(made), f"precondition: one tree provisioned, got {made}")
+        return made[0]
+
+    def pin(self, tree, raw_id: str, pid: int, trust: str = sessions.PID_TRUST_OWNER) -> None:
+        """Record which process this identity runs as, keeping whatever else it knows."""
+        ctx = resolve(tree)
+        identity = sid(tree, raw_id)
+        record = sessions.get(ctx, identity) or session_record_for(ctx, identity, pid)
+        record.pid, record.pid_trust = pid, trust
+        sessions.register(ctx, record)
+
+    def a_sibling(self, tree, raw_id: str, paths=()) -> str:
+        """A different process standing in `tree`, with the paths its founder named."""
+        self.pin(tree, raw_id, ANOTHER_PROCESS)
+        identity = sid(tree, raw_id)
+        sessions.touch(resolve(tree), identity, task_paths=list(paths))
+        return identity
+
+    def hook(self, gate: str, cwd, session: str = "S", **event):
+        return self.run_hook(gate, {"session_id": session, **event}, cwd=cwd)
+
+    def bash(self, command: str, cwd=None, session: str = "S"):
+        return self.hook("pre-tool", cwd or self.tree, session, hook_event_name="PreToolUse",
+                         tool_name="Bash", tool_input={"command": command})
+
+    def write_in(self, tree, relpath: str = "src/app.py", session: str = "S"):
+        return self.hook("pre-tool", tree, session, hook_event_name="PreToolUse",
+                         tool_name="Write",
+                         tool_input={"file_path": str(tree / relpath), "content": "x = 1\n"})
+
+    def cli(self, cwd, *args: str, session: str = "S"):
+        import subprocess
+        import sys
+
+        env = {**os.environ, "CLAUDE_CODE_SESSION_ID": session}
+        return subprocess.run([sys.executable, str(BIN / "claude-bp-plan"), *args],
+                              capture_output=True, text=True, cwd=str(cwd), env=env,
+                              timeout=120)
+
+    def edit_in_tree(self) -> None:
+        (self.tree / "src" / "app.py").write_text(
+            "def parse(text):\n    if not text:\n        raise ValueError('empty')\n"
+            "    return text.split(',')\n", encoding="utf-8")
+
+    def a_tree_the_harness_asked_for(self):
+        """`EnterWorktree`, `--worktree`, a subagent's isolation: made by `worktree-create`,
+        which runs before the session has any id in the tree it makes."""
+        from pathlib import Path
+
+        proc = self.hook("worktree-create", self.repo, hook_event_name="WorktreeCreate",
+                         name="side-quest")
+        made = Path(proc.stdout.strip())
+        self.assertTrue(made.is_dir(), f"precondition: the hook made a tree: {proc.stderr}")
+        return made
+
+
+class TestItsCardComesWithIt(MovedSession):
+    def test_its_own_card_covers_a_write_in_its_own_tree(self):
+        proc = self.write_in(self.tree)
+        self.assertNotEqual("deny", self.hook_decision(proc), self.hook_reason(proc))
+
+    def test_its_subagent_writes_under_the_same_card(self):
+        """A subagent's calls carry the parent's session id plus an `agent_id` (measured on
+        2.1.281), and it runs in the parent's process: the same session, the same card."""
+        proc = self.hook("pre-tool", self.tree, hook_event_name="PreToolUse", tool_name="Write",
+                         agent_id="a98bf2d12ecbaa42b", agent_type="general-purpose",
+                         tool_input={"file_path": str(self.tree / "src" / "app.py"),
+                                     "content": "x = 1\n"})
+        self.assertNotEqual("deny", self.hook_decision(proc), self.hook_reason(proc))
+
+    def test_claiming_it_again_hands_it_over_instead_of_refusing_it_as_a_siblings(self):
+        """The remedy the refusal named: `claim` the card you are on. It answered "held by
+        live session S-…" — itself — and the only way on was filing the same work twice."""
+        proc = self.cli(self.tree, "claim", "0001")
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual(sid(self.tree, "S"), plan.find(self.ctx(), "0001").owner)
+
+    def test_it_closes_its_own_card_from_its_tree(self):
+        """`done` refuses a live sibling's card, and the holder here is this session under
+        the id it claimed with — the command the Stop gate's closure demand names."""
+        proc = self.cli(self.tree, "done", "0001")
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual(plan.DONE, plan.find(self.ctx(), "0001").state)
+
+    def test_the_founders_next_message_files_no_second_card(self):
+        """`open_for` asked whether THIS id held a card in flight; the card was the other
+        id's, so the next message in the tree put the same work on the board again."""
+        self.hook("prompt-capture", self.tree, hook_event_name="UserPromptSubmit",
+                  prompt="and make the error message name the empty field")
+        self.assertEqual(["0001"], [task.id for task in plan.load_all(self.ctx())])
+
+    def test_the_finish_does_not_send_it_to_file_another_card(self):
+        self.edit_in_tree()
+        proc = self.hook("evidence-gate", self.tree, hook_event_name="Stop",
+                         stop_hook_active=False)
+        self.assertNotIn("Nothing on the board says this session is working", proc.stderr)
+
+    def test_its_database_is_not_a_collision_with_itself(self):
+        """The tree's `.env` is seeded from the main checkout's, and the only session in
+        the main checkout was this one, under the id it left there."""
+        (self.repo / ".env").write_text(f"DATABASE_URL={DSN}\n", encoding="utf-8")
+        (self.tree / ".env").write_text(f"DATABASE_URL={DSN}\n", encoding="utf-8")
+        proc = self.write_in(self.tree)
+        self.assertNotIn("already using the database", self.hook_reason(proc))
+        self.assertNotEqual("deny", self.hook_decision(proc), self.hook_reason(proc))
+
+    def test_removing_its_own_tree_from_inside_is_done_from_the_main_checkout(self):
+        """Decision 0022, asked from where the session stands. `mine()` found no tree for
+        the id it has in the tree, so the call was approved and run by the shell standing
+        in the directory it deletes."""
+        proc = self.bash(f"git worktree remove {self.tree}")
+        self.assertEqual("deny", self.hook_decision(proc), proc.stdout + proc.stderr)
+        self.assertIn(f"{self.tree} is removed", self.hook_reason(proc))
+        self.assertIn(f"cd {self.main}", self.hook_reason(proc))
+        self.assertFalse(self.tree.is_dir(), "the gate did not remove the tree")
+
+
+class TestASiblingIsStillASibling(MovedSession):
+    """Every rule above relaxed for the same PROCESS under the same harness id, and for
+    nothing looser: another process is refused exactly as before."""
+
+    def test_the_same_harness_id_in_another_process_does_not_lend_its_card(self):
+        """`claude -p` children inherit one harness id. The card claimed in the main
+        checkout is now another process's, and this session holds nothing."""
+        self.pin(self.repo, "S", ANOTHER_PROCESS)
+        proc = self.write_in(self.tree)
+        self.assertEqual("deny", self.hook_decision(proc))
+        self.assertIn("nothing on the board says this session is working", self.hook_reason(proc))
+        claim = self.cli(self.tree, "claim", "0001")
+        self.assertEqual(1, claim.returncode)
+        self.assertIn("held by live session", claim.stderr)
+
+    def test_the_same_harness_id_in_another_process_cannot_close_its_card(self):
+        self.pin(self.repo, "S", ANOTHER_PROCESS)
+        proc = self.cli(self.tree, "done", "0001")
+        self.assertEqual(1, proc.returncode, proc.stdout)
+        self.assertIn("held by live session", proc.stderr)
+        self.assertEqual(plan.DOING, plan.find(self.ctx(), "0001").state)
+
+    def test_a_sibling_on_the_same_database_is_still_refused(self):
+        self.a_sibling(self.repo, "B")
+        (self.repo / ".env").write_text(f"DATABASE_URL={DSN}\n", encoding="utf-8")
+        (self.tree / ".env").write_text(f"DATABASE_URL={DSN}\n", encoding="utf-8")
+        proc = self.write_in(self.tree)
+        self.assertEqual("deny", self.hook_decision(proc))
+        self.assertIn("already using the database", self.hook_reason(proc))
+
+    def test_a_tree_made_for_another_process_is_not_this_ones_to_remove(self):
+        """The interception acts for the session standing in its own tree only; a tree the
+        same harness id holds in another process goes to the cross-tree rule as before."""
+        self.pin(self.repo, "S", ANOTHER_PROCESS)
+        self.pin(self.tree, "S", ANOTHER_PROCESS)
+        me = self.tmp / "mine"
+        git(["worktree", "add", "-q", "-b", "feat/mine", str(me)], self.repo)
+        self.pin(me, "S", THIS_PROCESS)
+        self.bash(f"git worktree remove {self.tree}", cwd=me)
+        self.assertTrue(self.tree.is_dir(), "the gate removed another process's tree")
+
+
+class TestStagingItsOwnTree(MovedSession):
+    """`git add -A` counted every live session's claims in every tree, this session's own
+    earlier id included: the ordinary commit step in the tree this plugin sent it to was
+    refused as carrying "somebody else's" work."""
+
+    def test_the_commit_step_in_its_own_tree_is_not_refused_over_its_own_paths(self):
+        self.edit_in_tree()
+        for command in ("git add -A", "git add .", 'git commit -am "Reject empty input"'):
+            proc = self.bash(command)
+            self.assertNotEqual("deny", self.hook_decision(proc), f"{command}: {proc.stdout}")
+
+    def test_a_sibling_in_another_tree_is_a_merge_not_a_refusal(self):
+        """Its lease and its founder's paths name a file in ITS tree. Two trees are two
+        files, and what comes of it is a merge (#163)."""
+        theirs = self.tmp / "theirs"
+        git(["worktree", "add", "-q", "-b", "feat/theirs", str(theirs)], self.repo)
+        other = self.a_sibling(theirs, "B", paths=["src/app.py"])
+        self.assertIsNone(sessions.acquire_lease(resolve(theirs), other, "src/app.py"))
+        self.edit_in_tree()
+        proc = self.bash("git add -A")
+        self.assertNotEqual("deny", self.hook_decision(proc), proc.stdout)
+
+    def test_a_sibling_standing_in_this_tree_still_refuses_the_sweep(self):
+        other = self.a_sibling(self.tree, "B", paths=["src/app.py"])
+        self.assertIsNone(sessions.acquire_lease(resolve(self.tree), other, "src/app.py"))
+        self.edit_in_tree()
+        proc = self.bash("git add -A")
+        self.assertEqual("deny", self.hook_decision(proc))
+        self.assertIn("src/app.py", self.hook_reason(proc))
+
+    def test_its_own_lease_in_the_tree_is_never_somebody_elses(self):
+        """Staged from the main checkout, into its tree: the lease it took while standing
+        in the tree is under the tree's id, which is this session all the same."""
+        self.assertIsNone(sessions.acquire_lease(resolve(self.tree), sid(self.tree, "S"),
+                                                 "src/app.py"))
+        self.edit_in_tree()
+        proc = self.bash(f"cd {self.tree} && git add -A", cwd=self.repo)
+        self.assertNotEqual("deny", self.hook_decision(proc), proc.stdout)
+
+
+class TestWithNoProcToNameTheProcess(MovedSession):
+    """macOS and Windows have no /proc, so every pid is the hook's own shell, unresolved and
+    different on every call: the process never united anything and every consequence of the
+    split stood there. The registry of trees this plugin made says who is who instead — a
+    tree made for harness id H and the main checkout it came from hold one session."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.pin(self.repo, "S", UNRESOLVED, trust=sessions.PID_TRUST_PARENT)
+        self.pin(self.tree, "S", UNRESOLVED + 1, trust=sessions.PID_TRUST_PARENT)
+
+    def standing_in(self, tree, raw_id: str, pid: int, prompt: str) -> None:
+        self.pin(tree, raw_id, pid, trust=sessions.PID_TRUST_PARENT)
+        self.hook("prompt-capture", tree, raw_id, hook_event_name="UserPromptSubmit",
+                  prompt=prompt)
+
+    def test_its_card_comes_with_it_into_the_tree_the_gate_made(self):
+        proc = self.write_in(self.tree)
+        self.assertNotEqual("deny", self.hook_decision(proc), self.hook_reason(proc))
+        claim = self.cli(self.tree, "claim", "0001")
+        self.assertEqual(0, claim.returncode, claim.stderr)
+        self.assertEqual(sid(self.tree, "S"), plan.find(self.ctx(), "0001").owner)
+
+    def test_removing_that_tree_from_inside_is_still_intercepted(self):
+        proc = self.bash(f"git worktree remove {self.tree}")
+        self.assertEqual("deny", self.hook_decision(proc), proc.stdout + proc.stderr)
+        self.assertIn(f"{self.tree} is removed", self.hook_reason(proc))
+        self.assertFalse(self.tree.is_dir(), "the gate did not remove the tree")
+
+    def test_its_card_comes_with_it_into_a_tree_worktree_create_made(self):
+        made = self.a_tree_the_harness_asked_for()
+        self.standing_in(made, "S", UNRESOLVED + 2, "carry on in the side tree")
+        proc = self.write_in(made)
+        self.assertNotEqual("deny", self.hook_decision(proc), self.hook_reason(proc))
+        self.assertEqual(["0001"], [task.id for task in plan.load_all(self.ctx())],
+                         "the founder's message in that tree filed a second card")
+
+    def test_a_tree_worktree_create_made_is_still_never_the_reapers(self):
+        """The harness id is recorded beside the session id, never in its place: the reaper
+        keys on the session id, and these trees have never been its to remove."""
+        from claude_bestpractice import worktree
+
+        made = self.a_tree_the_harness_asked_for()
+        _path, body = worktree.record_for(self.ctx(), made)
+        self.assertEqual(("S", ""), (body.get("harness_id"), body.get("session_id")))
+        worktree.reap_unused(self.ctx(), set())
+        self.assertTrue(made.is_dir(), "the reaper removed a tree worktree-create made")
+
+    def test_another_harness_id_in_either_tree_is_still_another_session(self):
+        made = self.a_tree_the_harness_asked_for()
+        for tree in (self.tree, made):
+            self.standing_in(tree, "B", UNRESOLVED + 3, "fix the importer in src/app.py")
+            proc = self.write_in(tree, session="B")
+            self.assertEqual("deny", self.hook_decision(proc), f"{tree}: {proc.stdout}")
+            self.assertIn("nothing on the board says this session is working",
+                          self.hook_reason(proc))
+            self.assertNotIn(sid(self.repo, "S"),
+                             sessions.identities(self.ctx(), sid(tree, "B")))
+            self.assertNotIn(sid(tree, "B"),
+                             sessions.identities(self.ctx(), sid(self.repo, "S")))
+
+
+class TestTheInstructionComesWithIt(RepoCase):
+    """The founder's instruction is recorded under the id the session had when it was given,
+    the main checkout's. A session that entered its tree straight after it was a new record
+    there with no statement, and the rule that asks for a card at the first write reads the
+    statement: it never fired in the tree, where the work happens. Seen in live runs on
+    2.1.281, where three files were written in the tree and the card was asked for only at
+    Stop."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        from pathlib import Path
+
+        self.write("src/app.py", "def parse(text):\n    return text.split(',')\n")
+        self.commit("a history to branch from")
+        self.hook("session-start", self.repo, hook_event_name="SessionStart")
+        self.hook("prompt-capture", self.repo, hook_event_name="UserPromptSubmit",
+                  prompt="Validate the input to src/app.py")
+        made = self.hook("worktree-create", self.repo, hook_event_name="WorktreeCreate",
+                         name="side-quest")
+        self.tree = Path(made.stdout.strip())
+        self.assertTrue(self.tree.is_dir(), f"precondition: the hook made a tree: {made.stderr}")
+
+    def hook(self, gate: str, cwd, session: str = "S", **event):
+        return self.run_hook(gate, {"session_id": session, **event}, cwd=cwd)
+
+    def write_in_the_tree(self, session: str = "S"):
+        return self.hook("pre-tool", self.tree, session, hook_event_name="PreToolUse",
+                         tool_name="Write",
+                         tool_input={"file_path": str(self.tree / "src" / "app.py"),
+                                     "content": "x = 1\n"})
+
+    def test_the_first_write_in_its_tree_asks_for_the_card_it_was_given(self):
+        proc = self.write_in_the_tree()
+        self.assertEqual("deny", self.hook_decision(proc), proc.stdout + proc.stderr)
+        self.assertIn("claude-bp-plan update 0001", self.hook_reason(proc))
+
+    def test_another_session_in_that_tree_is_not_given_it(self):
+        self.write_in_the_tree(session="B")
+        record = sessions.get(self.ctx(), sid(self.tree, "B"))
+        self.assertIsNotNone(record, "precondition: the gate registered the other session")
+        self.assertEqual("", record.task_statement)
+
+
+class TestTheBoardDoesNotListItAsASibling(MovedSession):
+    """Started again in its tree — a compaction does it — the session was shown its own id
+    in the main checkout as another live session, on its own task."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        # Unresolved, as on a machine with no /proc: `session-start` resolves the process it
+        # runs under for the tree's id, and whatever it finds, the tree decides the link.
+        self.pin(self.repo, "S", UNRESOLVED, trust=sessions.PID_TRUST_PARENT)
+
+    def board_from(self, tree) -> str:
+        import json
+
+        proc = self.hook("session-start", tree, hook_event_name="SessionStart",
+                         source="compact")
+        return json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
+
+    def test_its_own_id_in_the_main_checkout_is_not_another_session(self):
+        self.assertIn("OTHER LIVE SESSIONS: none", self.board_from(self.tree))
+
+    def test_a_real_sibling_is_still_on_it(self):
+        self.a_sibling(self.repo, "B")
+        body = self.board_from(self.tree)
+        self.assertIn("OTHER LIVE SESSIONS (1)", body)
+        self.assertIn(sid(self.repo, "B")[:8], body)
+
+    def test_the_sweep_still_counts_it_live(self):
+        """The list the board is written from is also the live set the tree sweep reads.
+        Started from another tree of its own, the session's id in the main checkout is what
+        keeps the tree made for that id from being swept as nobody's."""
+        made = self.a_tree_the_harness_asked_for()
+        self.pin(made, "S", UNRESOLVED + 1, trust=sessions.PID_TRUST_PARENT)
+        self.board_from(made)
+        self.assertTrue(self.tree.is_dir(), "the sweep removed the tree made for this session")
+
+
+if __name__ == "__main__":
+    unittest.main()

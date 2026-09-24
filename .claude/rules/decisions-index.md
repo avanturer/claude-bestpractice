@@ -11,4 +11,4 @@
 - [0020] Every refusal leaves at least one command that runs on this machine — `decisions/0020-a-refusal-leaves-a-runnable-command.md`
 - [0021] A gate refuses only where the refusal reaches the model — `decisions/0021-a-gate-refuses-where-the-refusal-reaches-the-model.md`
 - [0022] A removal carries its own cleanup, and happens where the session survives it — `decisions/0022-a-removal-carries-its-own-cleanup.md`
-- ... 11 older, see `decisions/`
+- ... 9 older, see `decisions/`

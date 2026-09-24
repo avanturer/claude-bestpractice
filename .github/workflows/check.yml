@@ -1,10 +1,18 @@
 name: check
 
+# A pull request is checked by `pull_request`, and the default branch by `push` once work
+# lands on it. `push` used to take every branch as well, so each push to a branch with a pull
+# request open ran this job twice over the same commit — minutes spent to learn nothing new.
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
   workflow_dispatch:
+
+# Read-only. The job checks the code out and runs the gates over it; nothing it does writes
+# back, so the token it is handed can write nothing either.
+permissions:
+  contents: read
 
 # The repo layer binds everyone, including a session running without the plugin.
 # That is the point of running the same gates here that run locally.
@@ -43,9 +51,10 @@ jobs:
 
       # The plugin has no dependencies, and `tools/check_stdlib_only.py` enforces that over
       # `plugin/` on every run. Its TEST SUITE is a different thing and this step used to
-      # blur the two: three tests build a throwaway Python project and require the gate to
+      # blur the two: several tests build a throwaway Python project and require the gate to
       # actually drive `python3 -m pytest` over it. A runner with no pytest cannot witness
-      # anything, so the gate correctly declines and those three fail.
+      # anything, so the gate correctly declines and those tests fail — the Makefile now
+      # says so up front instead (`needs-pytest`).
       #
       # Latent until the release workflow became the first thing to run `make check` on a
       # clean runner — this job is gated behind a variable and had never executed.

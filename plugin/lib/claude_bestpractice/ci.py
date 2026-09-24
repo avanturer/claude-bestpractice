@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -63,6 +64,77 @@ FOUNDER_OS_DISPLACED_NAME = "pre-push.founder-os-original"
 DECLINED_NAME = "pre-push-declined"
 CI_VARIABLE = "CLAUDE_BESTPRACTICE_CI"
 WORKFLOW = ".github/workflows/check.yml"
+
+# The verbs only the hook may call. `git push` starts the hook and the hook calls these once
+# it has watched the checks run; no tool call of a session's ever starts the hook, so a
+# session calling one is writing down an observation nobody made. It was approved as one of
+# this plugin's own commands, and a green recorded that way cleared a red suite's record and
+# let this hook, which skips a tree on record as green, wave a red `make check` out (decision
+# 0013: a failure may be remembered, a pass never).
+HOOK_ONLY = ("record-green", "record-run")
+
+# How the program is spelled on a command line: bare on PATH, by path, or behind the
+# interpreter the hook itself uses — `python3 …/claude-bp-ci record-green`, the spelling a
+# session reading the hook would copy first.
+_PROGRAM_NAMES = {"claude-bp-ci", "claude-bp-ci.cmd"}
+
+# For a line the tokeniser declines: the program and the first word after its flags.
+_VERB_IN_TEXT = re.compile(
+    r"claude-bp-ci(?:\.cmd)?[\"']?\s+(?:-\S*\s+)*[\"']?(?P<verb>[a-z][a-z-]*)"
+)
+
+
+def verbs_run(command: str) -> list[str]:
+    """The `claude-bp-ci` verbs a shell line runs, whichever way it names the program.
+
+    Asked of what the line RUNS, never of its text: `grep record-green` and a commit
+    message about `claude-bp-ci off` run neither (shellcmd, #76). A line the tokeniser
+    cannot read falls back to the text, which is the direction every gate here fails in.
+    """
+    from . import shellcmd
+
+    if not shellcmd.commands(command):
+        return [found["verb"] for found in _VERB_IN_TEXT.finditer(command or "")]
+    verbs = []
+    for argv in shellcmd.acting(command):
+        named = [i for i, token in enumerate(argv)
+                 if token.replace("\\", "/").rsplit("/", 1)[-1] in _PROGRAM_NAMES]
+        if named:
+            rest = [token for token in argv[named[0] + 1:] if not token.startswith("-")]
+            # argparse's own default, so a bare `claude-bp-ci` reads as the look it is.
+            verbs.append(rest[0] if rest else "status")
+    return verbs
+
+
+def forged_refusal(verb: str, test_command: list[str]) -> str:
+    """What a session is told when it calls one of the hook's own verbs."""
+    import shlex
+
+    run = shlex.join(test_command) if test_command else ""
+    return (
+        f"claude-bestpractice: `claude-bp-ci {verb}` is the pre-push hook's bookkeeping, "
+        "called once the hook has watched this project's checks run. From a session it "
+        "records a run nobody observed — and a green on record is what lets that hook skip "
+        "the suite on the next push.\n"
+        "  A run counts when this plugin watched it: the Stop gate runs the suite when this "
+        "turn ends, and a push runs it in the hook.\n"
+        + (f"  {run}\n" if run else "")
+        + "  git push"
+    )
+
+
+# The founder's word for the one switch that lives in this clone rather than in
+# `config.json`. On the line that carries it, "gate is switched by the founder": a founder
+# pasting this refusal back is showing it, not saying it (`config._OUR_VOICE`).
+OFF_REFUSAL = (
+    "claude-bestpractice: `claude-bp-ci off` takes out the pre-push hook, which is the gate "
+    "on this session's own pushes, and a gate the gated party can switch off is a "
+    "suggestion.\n"
+    "  This gate is switched by the founder, not by the session it is enforcing. If they "
+    "want it off, one line from them — `pre_push off` — is the whole of it, and then: "
+    "claude-bp-ci off\n"
+    "  `claude-bp-ci status` says what runs where, and needs nobody's word."
+)
 
 # `make check` when the project has one, because that is the command the founder already
 # maintains and the one CI runs. The doctor otherwise, which needs no project setup at
@@ -127,9 +199,10 @@ fi
 
 # A pre-push hook that was already here runs first, with the same stdin and arguments
 # git gave us, and its refusal is still a refusal. Displacing a husky or lefthook hook
-# without running it would switch off a check you rely on.
+# without running it would switch off a check you rely on. Never a hook of ours, though:
+# chained under that name it runs itself, and a push became `sh` forking until killed.
 _original="$(dirname "$0")/{DISPLACED_NAME}"
-if [ -x "$_original" ]; then
+if [ -x "$_original" ] && ! grep -q '{MARKER}' "$_original" 2>/dev/null; then
     "$_original" "$@" || exit $?
 fi
 
@@ -195,7 +268,20 @@ DETECTED_TIER = """# This project's own suite, detected when the hook was instal
 # rather than resolved at push time because git hands a hook a stripped environment
 # in which claude-bp is usually not on PATH. Re-run `claude-bp-ci` if the runner changes.
 _runner={runner}
-if command -v "$_runner" >/dev/null 2>&1; then
+# The module a Python runner is told to run, which is part of the runner: a python3 that
+# cannot import pytest is a missing runner, not a red suite. It was run anyway, so a green
+# stdlib-unittest project was refused on "No module named pytest", and the refusal was
+# recorded as a failed run of a suite that never started.
+_module={module}
+_missing=""
+_remedy="Fix the environment, run 'claude-bp-ci local' if the runner changed,"
+if ! command -v "$_runner" >/dev/null 2>&1; then
+    _missing="$_runner is not on PATH"
+elif [ -n "$_module" ] && ! "$_runner" -c "import $_module" >/dev/null 2>&1; then
+    _missing="$_runner cannot import $_module"
+    _remedy="Install it ($_runner -m pip install $_module), or name the command this project runs as test_command in .claude/claude-bestpractice/config.json and run 'claude-bp-ci local',"
+fi
+if [ -z "$_missing" ]; then
     # NOT `exec`. It replaced the shell, which was harmless while passing or failing was
     # this hook's only job — and silently dropped the second job the moment it had one.
     # #84 added recording to the two literal tiers of the template and never reached this
@@ -216,9 +302,9 @@ if command -v "$_runner" >/dev/null 2>&1; then
     exit "$_status"
 fi
 
-echo "claude-bestpractice: $_runner is not on PATH, so this project's suite could not" >&2
-echo "run. Refusing the push rather than reporting a check that never happened. Fix the" >&2
-echo "environment, run 'claude-bp-ci local' if the runner changed, or push with --no-verify." >&2
+echo "claude-bestpractice: $_missing, so this project's suite could not run." >&2
+echo "Refusing the push rather than reporting a check that never happened." >&2
+echo "$_remedy or push with --no-verify." >&2
 exit 1"""
 
 NO_RUNNER_TIER = "# (no test runner was detectable in this project at install time)"
@@ -288,9 +374,13 @@ def hook_body(ctx: GitContext | None = None) -> str:
 
     command = []
     if ctx is not None:
-        from .config import detect_test_command
+        from . import config
 
-        command = detect_test_command(ctx.worktree_root)
+        # The command the Stop gate runs: the founder's `test_command` when they declared
+        # one, detection when not. Detection alone was baked here, so the one door a founder
+        # has when detection is wrong — that key, in a file no session may write — reached
+        # every surface except the hook that refuses their push.
+        command = config.load(ctx).test_command
 
     from . import __version__
 
@@ -299,6 +389,7 @@ def hook_body(ctx: GitContext | None = None) -> str:
         joined = " ".join(quote(part) for part in command)
         rendered = DETECTED_TIER.format(
             runner=quote(command[0]),
+            module=quote(_module_run(command)),
             command=joined,
             quoted=quote(joined),
         )
@@ -307,6 +398,13 @@ def hook_body(ctx: GitContext | None = None) -> str:
     body = body.replace("__RECORD_RUN__", _run_recorder())
     body = body.replace("__GREEN_COVERS__", _green_check())
     return body.replace("__VERSION__", __version__)
+
+
+def _module_run(command: list[str]) -> str:
+    """The module a Python command runs with `-m` — `pytest` in `python3 -m pytest -q` —
+    or "" when it runs none."""
+    python = "python" in Path(command[0]).name
+    return command[2] if python and len(command) > 2 and command[1] == "-m" else ""
 
 
 def stamped_version(ctx: GitContext) -> str:
@@ -364,20 +462,90 @@ def _carry_the_displaced_hook(ctx: GitContext) -> None:
             old.rename(new)
 
 
+# The scopes whose core.hooksPath names a directory that belongs to this repository. Git
+# reads the setting from every scope, and a GLOBAL one points every repository on the
+# machine at one directory: the hook this module bakes for one repository — its runner, its
+# suite — was written there by `claude-bp-ci local`, `init`, setup and every session start,
+# and the next push from an unrelated Node repository ran `python3 -m pytest` and was
+# refused. The system scope is the same directory for every user as well.
+_OWN_SCOPES = ("local", "worktree")
+
+
+def _hooks_setting(ctx: GitContext) -> tuple[str, str]:
+    """core.hooksPath as git resolves it here: (scope, path), or ("", "") when unset.
+
+    `--type=path` because git expands a leading `~/` in this value when it runs hooks and a
+    plain `--get` does not: `~/.githooks` put the hook in a directory literally named `~`
+    inside the repository, which git never reads and `git status` then listed as untracked.
+    """
+    proc = _read_hooks_path(ctx, "--show-scope", "--type=path")
+    if proc.returncode == _UNKNOWN_OPTION:
+        return _hooks_setting_scope_by_scope(ctx)
+    scope, _, value = proc.stdout.rstrip("\n").partition("\t")
+    return (scope, value) if proc.returncode == 0 and value else ("", "")
+
+
+# What git exits with for an option it does not know. `--show-scope` arrived in 2.26.
+_UNKNOWN_OPTION = 129
+
+
+def _hooks_setting_scope_by_scope(ctx: GitContext) -> tuple[str, str]:
+    """The same answer from a git older than 2.26, which cannot say where a value came from.
+
+    Treated as unset, a hooks directory this repository's own config names — husky's —
+    would be passed over for one git never reads. So this repository's config is asked
+    first, and a value only some other config holds is not this repository's to write in.
+    """
+    own = _read_hooks_path(ctx, "--local", "--path").stdout.strip()
+    if own:
+        return "local", own
+    other = _read_hooks_path(ctx, "--path").stdout.strip()
+    return ("global", other) if other else ("", "")
+
+
+def _read_hooks_path(ctx: GitContext, *flags: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", "config", *flags, "--get", "core.hooksPath"],
+        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=30,
+    )
+
+
 def hooks_dir(ctx: GitContext) -> Path:
     """Honour core.hooksPath, or a repo that configured one gets a hook nothing reads.
 
     Worktrees share the common directory's hooks, which is what we want: the gate should
     not depend on which checkout the push happens from.
     """
-    configured = subprocess.run(
-        ["git", "config", "--get", "core.hooksPath"],
-        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=30,
-    ).stdout.strip()
+    _, configured = _hooks_setting(ctx)
     if configured:
         path = Path(configured)
         return path if path.is_absolute() else ctx.worktree_root / path
     return ctx.common_dir / "hooks"
+
+
+def shared_hooks(ctx: GitContext) -> str:
+    """The scope of a core.hooksPath that is not this repository's own, or "".
+
+    Where it is, git runs the hooks in that directory for every repository that reads the
+    same config, and nothing written for this one belongs there.
+    """
+    scope, configured = _hooks_setting(ctx)
+    return scope if configured and scope not in _OWN_SCOPES else ""
+
+
+def _shared_note(ctx: GitContext, scope: str) -> str:
+    """Why the hook was not installed, and the two commands that give this repository one."""
+    from shlex import quote
+
+    return (
+        f"not installed: core.hooksPath comes from your {scope} git config "
+        f"({hooks_dir(ctx)}), so git runs the hooks in that one directory for every "
+        "repository that reads it — and this hook carries this repository's own checks.\n"
+        "  To check this repository's pushes, give it a hooks directory of its own (copy in "
+        "any of the shared hooks it still needs first), then install:\n"
+        f"    git config core.hooksPath {quote(str(ctx.common_dir / 'hooks'))}\n"
+        "    claude-bp-ci local"
+    )
 
 
 def hook_path(ctx: GitContext) -> Path:
@@ -391,8 +559,13 @@ def installed(ctx: GitContext) -> bool:
     DISPLACES it — chaining `exec make check` in front of a body that then runs the suite
     a second time. Worse than the staleness it was trying to fix.
     """
+    return our_hook(hook_path(ctx))
+
+
+def our_hook(path: Path) -> bool:
+    """Whether the file at `path` is a hook this plugin wrote, in either spelling of its name."""
     try:
-        text = hook_path(ctx).read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return False
     return MARKER in text or FOUNDER_OS_MARKER in text
@@ -451,60 +624,86 @@ def ensure(ctx: GitContext) -> tuple[bool, str]:
 
     SessionStart is the event that reliably fires, so it is the one that arms this. The
     work is skipped outright once the hook is there, which is every session after the
-    first, and the create is O_EXCL, so eight sessions starting at once produce one hook
-    and seven no-ops rather than a torn file.
+    first, and it is done holding the install lock, so eight sessions starting at once
+    produce one hook and seven no-ops rather than a hook that chains itself.
     """
-    if installed(ctx):
-        # Installed, but possibly by an older plugin. An upgrade that fixes the hook has to
-        # reach the repositories that already have one, or the fix ships to nobody who was
-        # already using it.
-        return (True, "refreshed") if refresh(ctx) else (False, "")
-    if declined(ctx):
+    if shared_hooks(ctx):
+        # Nothing of this repository's goes where every repository reads hooks, and nothing
+        # is said about it at a session start either: `claude-bp-ci status` and `local` do.
         return False, ""
-    return install(ctx)
+    from . import store
+
+    try:
+        with _installing(ctx):
+            if installed(ctx):
+                # Installed, but possibly by an older plugin. An upgrade that fixes the hook
+                # has to reach the repositories that already have one, or the fix ships to
+                # nobody who was already using it.
+                return (True, "refreshed") if refresh(ctx) else (False, "")
+            if declined(ctx):
+                return False, ""
+            return _arm(ctx)
+    except (store.LockTimeout, OSError):
+        # A sibling has held the lock for as long as a start will wait — it is arming this
+        # same gate — or there was no lock to be had. Either way this start arms nothing,
+        # and the next one looks again.
+        return False, ""
+
+
+# `ensure` and `install` hold this while they look at the hooks directory and change it.
+# Looking and moving were separate steps, and three to eight sessions start at once: one
+# that looked before a sibling wrote its hook then moved that hook onto the founder's —
+# their hook gone, and ours chained to itself, so the next push forked `sh` until killed.
+INSTALL_LOCK = "pre-push-install.lock"
+
+
+def _installing(ctx: GitContext):
+    from . import store
+
+    return store.file_lock(store.tier_b(ctx, INSTALL_LOCK))
 
 
 def install(ctx: GitContext) -> tuple[bool, str]:
     """Put the hook in place, chaining any hook already there. Returns (changed, note)."""
-    path = hook_path(ctx)
+    shared = shared_hooks(ctx)
+    if shared:
+        return False, _shared_note(ctx, shared)
     # Asking for it back is consent, and it has to clear the opt-out or `claude-bp-ci local`
     # would appear to work and be undone by the next session start.
     with contextlib.suppress(OSError):
         _declined_path(ctx).unlink(missing_ok=True)
-    if installed(ctx):
-        # Installed is not current. `ensure()` has upgraded a stale hook since #33; this
-        # path predates it and short-circuited on existence, so the one command whose whole
-        # purpose is "run the checks locally" was the one that declined to update the
-        # checks — and a founder who ran it after an upgrade reasonably believed they now
-        # had the shipped gate. They had whatever their last session start wrote (#85).
-        #
-        # Not routed through `ensure()`, which honours the opt-out: asking for the hook
-        # back is consent, and that is cleared just above.
-        from . import __version__
+    from . import store
 
-        before = stamped_version(ctx) or "unknown"
-        if refresh(ctx):
-            return True, f"pre-push hook updated {before} -> {__version__}"
-        return False, f"pre-push hook already current ({__version__})"
+    try:
+        with _installing(ctx):
+            return _update(ctx) if installed(ctx) else _arm(ctx)
+    except store.LockTimeout:
+        return False, "another session is installing the pre-push hook right now; run this again"
 
+
+def _arm(ctx: GitContext) -> tuple[bool, str]:
+    """Write our hook, chaining whatever is at its path. Called holding the install lock."""
+    path = hook_path(ctx)
     displaced = ""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.is_symlink() or path.exists():
-            # `path.exists()` follows symlinks and `write_text` writes THROUGH them, so a
-            # hooks directory that symlinks pre-push at a script in the working tree —
-            # husky and lefthook both do this — had our body written over that tracked
-            # source file. `git status` showed the founder's own script modified, and the
-            # undo could not put it back because it restored a hook, not the file.
-            #
-            # Move, never copy: the link itself is what has to go, so what remains is a
-            # real file we own. `os.replace` moves a symlink as a symlink.
-            target = path.parent / DISPLACED_NAME
-            path.replace(target)
-            with contextlib.suppress(OSError):
-                _make_executable(target)
-            displaced = target.name
-
+            if our_hook(path):
+                # Written since this session looked, by one that does not take the lock — an
+                # older copy of this plugin still running in another session. Displacing it
+                # is how ours came to be chained to itself.
+                return False, f"pre-push hook already installed: {path}"
+            # Moved with the mode it has. git runs a hook only when it is executable, and
+            # clearing the bit is how a founder switches one off: setting it here ran their
+            # disabled deploy hook on the next push, and `off` put it back enabled for good.
+            # Through a symlink the chmod also landed on the tracked script it points at.
+            displaced = _displace(path)
+            if not displaced:
+                return False, (
+                    f"not installed: {path} and {DISPLACED_NAME} beside it are two different "
+                    "hooks of yours, and chaining the first would overwrite the second. Remove "
+                    "the one you no longer need, then: claude-bp-ci local"
+                )
         _write_new_file(path, hook_body(ctx))
     except OSError as exc:
         return False, f"could not install the pre-push hook: {exc}"
@@ -518,10 +717,100 @@ def install(ctx: GitContext) -> tuple[bool, str]:
     return True, f"installed {path}"
 
 
+def _displace(path: Path) -> str:
+    """Move the hook at `path` to where ours chains it. Its new name, or "" when that would
+    overwrite a different hook already chained there.
+
+    `path.exists()` follows symlinks and `write_text` writes THROUGH them, so a hooks
+    directory that symlinks pre-push at a script in the working tree — husky and lefthook
+    both do this — had our body written over that tracked source file. So move, never copy:
+    the link itself is what has to go, and a hard link of a symlink is a symlink.
+
+    And never over anything. `os.replace` overwrote the target, and two sessions arming at
+    once each moved what they found at the hook's path: the second moved the first one's
+    hook onto the founder's. `os.link` refuses a target that exists.
+    """
+    target = path.parent / DISPLACED_NAME
+    if our_hook(target):
+        # Ours, chained as the founder's — what that race left behind: a hook that runs
+        # itself. Nothing of theirs is in it to keep.
+        target.unlink()
+    elif _same_hook(path, target):
+        # Already chained. husky and lefthook rewrite the hook they own, and what was moved
+        # aside last time is this same hook.
+        path.unlink()
+        return target.name
+    try:
+        os.link(path, target, follow_symlinks=False)
+    except FileExistsError:
+        return ""
+    except (NotImplementedError, OSError):
+        # No hard links here. Looked at, then moved: the install lock is what keeps a
+        # sibling out of the gap between the two.
+        if target.is_symlink() or target.exists():
+            return ""
+        os.replace(path, target)
+        return target.name
+    path.unlink()
+    return target.name
+
+
+def _same_hook(one: Path, other: Path) -> bool:
+    """Whether two entries are the same hook: one link target, or one content."""
+    try:
+        if one.is_symlink() or other.is_symlink():
+            return one.is_symlink() and other.is_symlink() and os.readlink(one) == os.readlink(other)
+        return one.read_bytes() == other.read_bytes()
+    except OSError:
+        return False
+
+
+def _update(ctx: GitContext) -> tuple[bool, str]:
+    """`install` over a hook that is already ours. Returns (changed, note).
+
+    Installed is not current. `ensure()` has upgraded a stale hook since #33; this path
+    predates it and short-circuited on existence, so the one command whose whole purpose is
+    "run the checks locally" was the one that declined to update the checks — and a founder
+    who ran it after an upgrade reasonably believed they now had the shipped gate. They had
+    whatever their last session start wrote (#85).
+
+    Not routed through `ensure()`, which honours the opt-out: asking for the hook back is
+    consent, and `install` has cleared it by the time this runs.
+    """
+    from . import __version__
+
+    before = stamped_version(ctx) or "unknown"
+    if refresh(ctx):
+        return True, f"pre-push hook updated {before} -> {__version__}"
+    if _rebaked(ctx):
+        return True, f"pre-push hook rewritten for this project as it is now ({__version__})"
+    return False, f"pre-push hook already current ({__version__})"
+
+
+def _rebaked(ctx: GitContext) -> bool:
+    """Rewrite our hook when this project would now get a different one. True when it did.
+
+    This command is the remedy the hook itself names — "run 'claude-bp-ci local' if the
+    runner changed" — and it compared versions only: a hook of this version still baking
+    `go`, in a project that had moved to `make test`, was reported "already current" and
+    every push stayed refused. Here and not at a session start, which keeps comparing
+    versions: the body carries the interpreter that wrote it, and eight sessions each
+    rewriting it in their own would churn a file the founder may be reading.
+    """
+    path = hook_path(ctx)
+    body = hook_body(ctx)
+    try:
+        if path.read_text(encoding="utf-8", errors="replace") == body:
+            return False
+        path.write_text(body, encoding="utf-8")
+        _make_executable(path)
+    except OSError:
+        return False
+    return True
+
+
 def remove(ctx: GitContext) -> tuple[bool, str]:
     """Take the hook out and put back whatever was there before it."""
-    path = hook_path(ctx)
-
     # Recorded before the unlink, and recorded even when there was nothing to remove, so
     # that `off` means "stay off". Without this, SessionStart re-arms what the founder
     # just switched off and the only way to keep it off is to keep running `off` — which
@@ -534,13 +823,27 @@ def remove(ctx: GitContext) -> tuple[bool, str]:
 
     if not installed(ctx):
         return False, "no claude-bestpractice pre-push hook installed"
+    return True, take_out(ctx)
 
+
+def take_out(ctx: GitContext) -> str:
+    """Unlink our hook and put back what it displaced. Returns what was done, for a person.
+
+    Apart from `remove` because not every removal is somebody declining the gate: a hook in
+    a directory every repository reads was only ever in the wrong place, and an opt-out
+    recorded for it would leave this repository unguarded once it has hooks of its own.
+    """
+    path = hook_path(ctx)
     path.unlink(missing_ok=True)
 
     displaced = path.parent / DISPLACED_NAME
+    if our_hook(displaced):
+        # Ours chained as theirs, by two sessions arming at once before that was locked.
+        # Put back, it would be this hook again — calling itself.
+        displaced.unlink()
     if displaced.is_symlink() or displaced.exists():
         displaced.replace(path)
-        return True, f"removed, and put your original {HOOK_NAME} back"
+        return f"removed, and put your original {HOOK_NAME} back"
 
     # The old shape, still honoured so an install from before the chaining change can be
     # undone by a plugin from after it.
@@ -549,8 +852,8 @@ def remove(ctx: GitContext) -> tuple[bool, str]:
         path.write_text(backup.read_text(encoding="utf-8", errors="replace"), encoding="utf-8")
         _make_executable(path)
         backup.unlink(missing_ok=True)
-        return True, f"removed, and restored the previous {HOOK_NAME}"
-    return True, "removed. Nothing checks your pushes from this machine now."
+        return f"removed, and restored the previous {HOOK_NAME}"
+    return "removed. Nothing checks your pushes from this machine now."
 
 
 def workflow_state(ctx: GitContext) -> str:
@@ -580,14 +883,25 @@ def _foreign_workflows(ctx: GitContext) -> int:
         return 0
 
 
+# How long `gh` may take to answer. It talks to the network, and a `gh` that hung held
+# `claude-bp status` for a minute and then ended it in a TimeoutExpired traceback, with not
+# one line of the view printed. Unknown is an answer; a traceback is not.
+_GH_LOOK_SECONDS = 10
+_GH_SET_SECONDS = 30
+
+
 def hosted_enabled(ctx: GitContext) -> bool | None:
     """Whether the hosted workflow is switched on. None when it cannot be determined."""
     if not shutil.which("gh"):
         return None
-    proc = subprocess.run(
-        ["gh", "variable", "list", "--json", "name,value"],
-        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=60,
-    )
+    try:
+        proc = subprocess.run(
+            ["gh", "variable", "list", "--json", "name,value"],
+            cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape",
+            timeout=_GH_LOOK_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
     if proc.returncode != 0:
         return None
     import json
@@ -606,16 +920,20 @@ def set_hosted(ctx: GitContext, on: bool) -> tuple[bool, str]:
     """Flip the repository variable the workflow is gated on."""
     if workflow_state(ctx) == "absent":
         return False, f"no {WORKFLOW} in this repository"
-    if not shutil.which("gh"):
-        return False, (
-            f"gh is not installed, so set it by hand:\n"
-            f"    gh variable set {CI_VARIABLE} --body {'on' if on else 'off'}\n"
-            "or Settings -> Secrets and variables -> Actions -> Variables."
-        )
-    proc = subprocess.run(
-        ["gh", "variable", "set", CI_VARIABLE, "--body", "on" if on else "off"],
-        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=120,
+    by_hand = (
+        f"    gh variable set {CI_VARIABLE} --body {'on' if on else 'off'}\n"
+        "or Settings -> Secrets and variables -> Actions -> Variables."
     )
+    if not shutil.which("gh"):
+        return False, f"gh is not installed, so set it by hand:\n{by_hand}"
+    try:
+        proc = subprocess.run(
+            ["gh", "variable", "set", CI_VARIABLE, "--body", "on" if on else "off"],
+            cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape",
+            timeout=_GH_SET_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"gh did not answer ({type(exc).__name__}), so set it by hand:\n{by_hand}"
     if proc.returncode != 0:
         return False, f"gh refused: {(proc.stderr or proc.stdout).strip()[:300]}"
     return True, f"hosted CI is now {'on' if on else 'off'} for this repository"
@@ -623,8 +941,12 @@ def set_hosted(ctx: GitContext, on: bool) -> tuple[bool, str]:
 
 def status_lines(ctx: GitContext) -> list[str]:
     """What runs where, in the terms a founder cares about: cost and coverage."""
-    local = installed(ctx)
+    shared = shared_hooks(ctx)
+    local = installed(ctx) and not shared
     out = [f"local pre-push: {'ON — ' + str(hook_path(ctx)) if local else 'OFF'}"]
+    if shared:
+        out[0] += (f" — core.hooksPath comes from your {shared} git config, which every "
+                   "repository reads, so no hook of this repository's goes there")
 
     state = workflow_state(ctx)
     if state == "absent":
@@ -634,10 +956,9 @@ def status_lines(ctx: GitContext) -> list[str]:
         # output contradicting each other, and the wrong one sounded authoritative.
         others = _foreign_workflows(ctx)
         if others:
-            out.append(
-                f"hosted CI:      {others} workflow(s) of your own, none of them ours — "
-                "`claude-bp-ci github` adds one"
-            )
+            # Not "`claude-bp-ci github` adds one": that command switches a workflow gated on
+            # CLAUDE_BESTPRACTICE_CI and writes none, so it refused the very step this named.
+            out.append(f"hosted CI:      {others} workflow(s) of your own, none of them ours")
         else:
             out.append("hosted CI:      no workflow in this repository")
     elif state == "always":
@@ -649,5 +970,6 @@ def status_lines(ctx: GitContext) -> list[str]:
 
     if not local:
         out.append("")
-        out.append("Nothing checks a push from this machine. `claude-bp-ci local` fixes that.")
+        fix = "says how to give this repository hooks of its own" if shared else "fixes that"
+        out.append(f"Nothing checks a push from this machine. `claude-bp-ci local` {fix}.")
     return out

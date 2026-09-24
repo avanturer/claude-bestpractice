@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import provenance, store
+from . import provenance, sessions, store
 from .gitctx import GitContext
 from .sessions import SessionRecord
 
@@ -250,6 +250,18 @@ def _alerts(ctx: GitContext) -> list[str]:
     ]
 
 
+def _siblings(ctx: GitContext, me: SessionRecord, others: list[SessionRecord]) -> list[SessionRecord]:
+    """The live sessions that are not this one under any id it has had.
+
+    Listed as another session, its own id in the main checkout told a session that had moved
+    into its own tree that a sibling was on its task, holding its files (`sessions.identities`).
+    Dropped where the board is written and nowhere earlier: the caller's list is also the live
+    set the tree sweep reads, and a tree whose session is missing from it is swept as nobody's.
+    """
+    mine = sessions.identities(ctx, me.session_id)
+    return [rec for rec in others if rec.session_id not in mine]
+
+
 def render(
     ctx: GitContext,
     me: SessionRecord,
@@ -260,6 +272,7 @@ def render(
 ) -> str:
     """Build the board, health footer last and guaranteed present."""
     leases = leases or {}
+    others = _siblings(ctx, me, others)
     now = time.time()
     lines: list[str] = []
 

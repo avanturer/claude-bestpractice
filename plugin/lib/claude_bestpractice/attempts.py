@@ -105,7 +105,10 @@ def _parse(path: Path) -> Attempt | None:
         title=meta.get("title", ""),
         outcome=meta.get("outcome", FAILED),
         why=body.strip()[:MAX_BODY_CHARS],
-        paths=[p for p in meta.get("paths", "").split(",") if p.strip()],
+        # Stripped: `record` writes them joined by ", ", so every path after the first came
+        # back with a space in front and matched no file — a dead end about two files was
+        # surfaced for the first alone, and filed again for the second.
+        paths=[p.strip() for p in meta.get("paths", "").split(",") if p.strip()],
         branch=meta.get("branch", ""),
         session_id=meta.get("session", ""),
         recorded_at=float(meta.get("recorded_at") or 0),
@@ -147,11 +150,31 @@ def drop(ctx: GitContext, attempt_id: str) -> str:
 
 
 def next_id(ctx: GitContext) -> str:
+    """Allocate against every sibling worktree's attempts, not this tree's alone.
+
+    Attempts are committed per branch, so two worktrees counting only their own each filed
+    `0001`: the files merged cleanly under different slugs, `drop 0001` then retired
+    whichever came first, and the two shared one provenance stamp. `plan.next_id` allocates
+    this way for the same reason, and `record` holds a clone-wide lock around the call.
+    """
+    from . import plan
+
     highest = 0
-    for attempt in load_all(ctx):
-        if attempt.id.isdigit():
-            highest = max(highest, int(attempt.id))
+    for root in plan.sibling_worktrees(ctx) or [ctx.worktree_root]:
+        for path in (root / store.TIER_A_DIRNAME / ATTEMPTS_DIR).glob("[0-9][0-9][0-9][0-9]-*.md"):
+            highest = max(highest, int(path.name[:4]))
     return f"{highest + 1:04d}"
+
+
+def _stamp_path(ctx: GitContext, attempt_file: Path) -> Path:
+    """Where one attempt's provenance stamp lives: keyed by its whole file name.
+
+    Keyed by id it was `attempt-0001.stamp`, one file for every attempt a clone ever
+    numbered 0001 — and ids are per branch, so worktree B's stamp for `landing.html` sat
+    where worktree A's for `billing.py` had been, and A's dead end about a rewritten file
+    was shown as current advice with no marker at all.
+    """
+    return store.tier_b(ctx, f"attempt-{attempt_file.stem}.stamp")
 
 
 def record(
@@ -198,7 +221,7 @@ def record(
             ]
         )
         store.atomic_write(path, rendered, mode=0o644)
-        store.write_json(store.tier_b(ctx, f"attempt-{attempt_id}.stamp"), stamped)
+        store.write_json(_stamp_path(ctx, path), stamped)
     return _parse(path)
 
 
@@ -268,7 +291,9 @@ def _staleness(ctx: GitContext, attempt: Attempt) -> str:
     rule is that a claim is marked and counted, never silently deleted. What decays is not
     the fact but its bearing on the code in front of you, so that is what gets said.
     """
-    stamps = store.read_json(store.tier_b(ctx, f"attempt-{attempt.id}.stamp"), default=[])
+    stamps = store.read_json(_stamp_path(ctx, attempt.path), default=None) if attempt.path else None
+    if stamps is None:
+        stamps = _stamped_by_id(ctx, attempt)
     if not isinstance(stamps, list) or not stamps:
         return ""
     status, changed = provenance.check(ctx, stamps)
@@ -277,6 +302,20 @@ def _staleness(ctx: GitContext, attempt: Attempt) -> str:
     if status == provenance.SUSPECT:
         return f"  [{', '.join(changed[:2])} rewritten since — may no longer apply]"
     return ""
+
+
+def _stamped_by_id(ctx: GitContext, attempt: Attempt) -> list:
+    """A stamp written under the id alone, before stamps were keyed by file name.
+
+    Read only when every path in it is one this attempt names: a stamp a sibling's
+    attempt wrote over it is about somebody else's files, and asserting staleness from it
+    is the defect in another form.
+    """
+    stamps = store.read_json(store.tier_b(ctx, f"attempt-{attempt.id}.stamp"), default=[])
+    if not isinstance(stamps, list):
+        return []
+    named = {entry.get("path") for entry in stamps if isinstance(entry, dict)}
+    return stamps if named and named <= set(attempt.paths) else []
 
 
 def summary(ctx: GitContext) -> dict[str, int]:

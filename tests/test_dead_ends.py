@@ -10,9 +10,11 @@ trunk before it is blamed on the session.
 
 from __future__ import annotations
 
+import os
+import subprocess
 import unittest
 
-from helpers import RepoCase, git, sid
+from helpers import BIN, RepoCase, git, sid
 
 from claude_bestpractice import evidence, gitpolicy, plan, sessions
 
@@ -140,6 +142,56 @@ class TestARedSuiteIsJudgedAgainstTheTrunk(RepoCase):
     def test_it_says_nothing_when_no_failing_file_is_known(self):
         self.assertEqual("", evidence.not_this_trees_code(self.ctx(), [], ["src/mine.py"]))
 
+    def test_a_name_git_would_quote_or_split_is_compared_whole(self):
+        """Read split on spaces and quoted, these came back as names that match nothing, and
+        the refusal called the trunk red over files that differ from it."""
+        self.write("tests/test café.py", "def test_a():\n    assert True\n")
+        self.write("tests/test_naïve.py", "def test_a():\n    assert True\n")
+        self.commit("names git quotes")
+        git(["branch", "-f", "origin/main", "HEAD"], self.repo)
+        self.write("tests/test café.py", "def test_a():\n    assert False\n")
+        self.write("tests/test_naïve.py", "def test_a():\n    assert False\n")
+        self.commit("this tree's own edits to them")
+
+        said = evidence.not_this_trees_code(
+            self.ctx(), ["tests/test café.py", "tests/test_naïve.py"], ["src/mine.py"])
+        self.assertNotIn("identical to", said)
+
+
+class TestAFailingRunsOutputIsReadSafely(RepoCase):
+    """The files a failure is about are read out of text the gated project printed."""
+
+    def test_a_name_longer_than_a_file_name_does_not_crash_the_gate(self):
+        """A test about over-long names printed one; `is_file` raised ENAMETOOLONG out of a
+        gate that fails closed, so every Stop said "gate failed (OSError ...)", the counter
+        never moved, and the failure itself was never shown."""
+        from claude_bestpractice import sessions
+
+        self.configure(require_task=False, manage_pull_requests=False)
+        self.write("store.py", "def accepts(name):\n    return len(name) <= 255\n")
+        self.write("tests/test_store.py", (
+            "from store import accepts\n\n\ndef test_rejects_overlong_names():\n"
+            "    name = 'export_' + 'x' * 300 + '.py'\n    assert not accepts(name), name\n"))
+        self.commit("a limit on names")
+        self.write("store.py", "def accepts(name):\n    return True\n")
+
+        proc = self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                               "stop_hook_active": False})
+        self.assertEqual(2, proc.returncode)
+        self.assertNotIn("gate failed", proc.stderr)
+        self.assertIn("FAILS", proc.stderr)
+        record = sessions.get(self.ctx(), sid(self.repo, "s1"))
+        self.assertEqual(1, record.tool_signatures.get("_consecutive_blocks"),
+                         "the escalation counter did not move")
+
+    def test_an_extension_is_the_whole_extension(self):
+        """`app.tsx` was read as `app.ts` and then not found; `.json` was read as `.js`."""
+        self.write("src/app.tsx", "export const x = 1\n")
+        self.write("data/export.json", "{}\n")
+        self.write("data/export.js", "module.exports = {}\n")
+        verdict = evidence.Verdict(False, "FAILED src/app.tsx:3 — reading data/export.json")
+        self.assertEqual(["src/app.tsx"], evidence.failing_files(self.ctx(), verdict))
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -226,3 +278,81 @@ class TestTheSweepIsJudgedWhereItWouldRun(RepoCase):
             worktree.working_context(self.ctx(), me), me)
         self.assertEqual([], found, f"judged the wrong tree: {found}")
         self.assertTrue(tree.is_dir())
+
+
+class TestTheCardARefusalAsksForIsFiledAsPrinted(RepoCase):
+    """The missing-card refusals print `claude-bp-plan add "<…>" --paths X`, then
+    `claude-bp-plan claim <id>` — and `claim` refuses a card with no `--done-when`, so the
+    second command failed on the card the first had just filed. The `git merge` refusal's
+    `add` did not even parse: `--paths <the files this touches>` is a redirect to bash.
+    Where the founder's instruction already opened a card for the session, the refusal
+    names that card with `update <id>` instead, and that has to run just the same.
+
+    Run here the way a session runs them: each printed line through a shell, with this
+    plugin's own commands on PATH, and then the refused call again.
+    """
+
+    def run_as_printed(self, refusal: str) -> None:
+        env = dict(os.environ, PATH=f"{BIN}{os.pathsep}{os.environ.get('PATH', '')}",
+                   CLAUDE_CODE_SESSION_ID="s1")
+        lines = [line.strip() for line in refusal.splitlines()]
+        card = next(line for line in lines
+                    if line.startswith(("claude-bp-plan add", "claude-bp-plan update")))
+        filed = subprocess.run(["bash", "-c", card], cwd=self.repo, env=env,
+                               capture_output=True, text=True, timeout=120)
+        self.assertEqual(0, filed.returncode, f"{card}\n{filed.stderr}")
+        then = next(line for line in lines if line.startswith("then: claude-bp-plan claim"))
+        claim = then.split(":", 1)[1].split("(", 1)[0].strip()
+        if "<id>" in claim:
+            claim = claim.replace("<id>", filed.stdout.split()[0])
+        claimed = subprocess.run(["bash", "-c", claim], cwd=self.repo, env=env,
+                                 capture_output=True, text=True, timeout=120)
+        self.assertEqual(0, claimed.returncode, f"{claim}\n{claimed.stderr}")
+
+    def pre_tool(self, tool_name: str, tool_input: dict):
+        return self.run_hook("pre-tool", {"session_id": "s1", "hook_event_name": "PreToolUse",
+                                          "tool_name": tool_name, "tool_input": tool_input})
+
+    def briefed(self) -> None:
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
+        self.run_hook("prompt-capture", {"session_id": "s1", "hook_event_name": "UserPromptSubmit",
+                                         "prompt": "add a csv export to the billing report"})
+
+    def test_the_write_refusal_on_a_path_with_a_space_in_it(self):
+        self.briefed()
+        write = {"file_path": str(self.repo / "src" / "csv export.py"), "content": "x = 1\n"}
+        refused = self.pre_tool("Write", write)
+        self.assertEqual("deny", self.hook_decision(refused), refused.stdout)
+        self.assertIn("claude-bp-plan update", self.hook_reason(refused))
+        self.run_as_printed(self.hook_reason(refused))
+        self.assertNotEqual("deny", self.hook_decision(self.pre_tool("Write", write)))
+
+    def test_the_refusal_of_work_that_writes_no_file(self):
+        git(["branch", "feat/theirs"], self.repo)
+        self.briefed()
+        merge = {"command": "git merge feat/theirs"}
+        refused = self.pre_tool("Bash", merge)
+        self.assertEqual("deny", self.hook_decision(refused), refused.stdout)
+        self.assertIn("claude-bp-plan update", self.hook_reason(refused))
+        self.run_as_printed(self.hook_reason(refused))
+        self.assertNotEqual("deny", self.hook_decision(self.pre_tool("Bash", merge)))
+
+    def test_the_refusal_of_work_that_writes_no_file_before_any_instruction(self):
+        """No founder's message, so no card to name: `add` is what has to run as printed."""
+        git(["branch", "feat/theirs"], self.repo)
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
+        merge = {"command": "git merge feat/theirs"}
+        refused = self.pre_tool("Bash", merge)
+        self.assertEqual("deny", self.hook_decision(refused), refused.stdout)
+        self.assertIn("claude-bp-plan add", self.hook_reason(refused))
+        self.run_as_printed(self.hook_reason(refused))
+        self.assertNotEqual("deny", self.hook_decision(self.pre_tool("Bash", merge)))
+
+    def test_the_demand_at_the_finish(self):
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
+        self.write("src/billing.py", "TOTAL = 1\n")
+        stop = {"session_id": "s1", "hook_event_name": "Stop", "stop_hook_active": False}
+        demanded = self.run_hook("evidence-gate", stop)
+        self.assertIn("Nothing on the board", demanded.stderr)
+        self.run_as_printed(demanded.stderr)
+        self.assertNotIn("Nothing on the board", self.run_hook("evidence-gate", stop).stderr)

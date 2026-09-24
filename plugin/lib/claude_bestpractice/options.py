@@ -285,14 +285,29 @@ def _show(ctx: GitContext, ref: str, rel: str) -> str:
 
 
 def covered(ctx: GitContext, names: list[str]) -> set[str]:
-    """Dependencies that already have a comparison naming them."""
+    """Dependencies that already have a comparison naming them — as a name, not as letters.
+
+    A substring test counted a comparison about "the reviews screen" as one about the new
+    `ws` dependency, so that one was never asked for and the demand named only `pg`.
+    """
     seen: set[str] = set()
     for comparison in load_all(ctx):
         text = json.dumps(
-            [comparison.problem, comparison.chosen, [o.name for o in comparison.options]]
+            [comparison.problem, comparison.chosen, [o.name for o in comparison.options]],
+            ensure_ascii=False,
         ).lower()
-        seen |= {name for name in names if name.lower() in text}
+        seen |= {name for name in names if _names(text, name.lower())}
     return seen
+
+
+def _names(text: str, name: str) -> bool:
+    """Whether `text` names the package `name` whole.
+
+    A package name carries dots, dashes and slashes of its own — `socket.io`,
+    `react-native-view-shot`, `types/node` behind its `@` — so a boundary is any other
+    character, or a full stop that ends the sentence rather than continuing the name.
+    """
+    return re.search(rf"(?<![\w./-]){re.escape(name)}(?![\w@/-]|\.\w)", text) is not None
 
 
 def demand(ctx: GitContext, changed: list[str], baseline: str) -> str:

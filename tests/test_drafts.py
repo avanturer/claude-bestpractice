@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import time
 import unittest
 
 from helpers import BIN, RepoCase
@@ -146,12 +147,21 @@ class TestCli(RepoCase):
         self.assertEqual(proc.returncode, 0)
         self.assertIn("no pending drafts", proc.stdout)
 
+    def ids(self, tree=None) -> dict[str, str]:
+        """What `list` shows, here or in `tree`: each draft's id, and the quote beside it."""
+        import re
+
+        listed = self.decide_in(tree, "list") if tree else self.run_cli("list")
+        shown = re.findall(r"^\s+\[(\w+)\] \([^)]*\)(?: ×\d+)? (.*)$", listed.stdout, re.M)
+        return {quote: draft for draft, quote in shown}
+
     def test_accept_writes_a_record_and_clears_the_draft(self):
         ctx = self.ctx()
         drafts.record(
             ctx, drafts.extract(["We decided to use SQLite because ops matter"], "main", "s1", [])
         )
-        proc = self.run_cli("accept", "1")
+        (draft,) = self.ids().values()
+        proc = self.run_cli("accept", draft)
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
         from claude_bestpractice import knowledge
@@ -164,15 +174,55 @@ class TestCli(RepoCase):
     def test_discard_clears_without_writing(self):
         ctx = self.ctx()
         drafts.record(ctx, drafts.extract(["We decided to drop the queue"], "main", "s1", []))
-        self.assertEqual(self.run_cli("discard", "1").returncode, 0)
+        (draft,) = self.ids().values()
+        self.assertEqual(self.run_cli("discard", draft).returncode, 0)
         self.assertEqual(drafts.pending(ctx), [])
 
         from claude_bestpractice import knowledge
 
         self.assertEqual(knowledge.decision_files(ctx), [])
 
-    def test_out_of_range_index_is_refused(self):
+    def test_a_draft_that_is_not_pending_is_refused(self):
         self.assertEqual(self.run_cli("accept", "9").returncode, 1)
+
+    def decide_in(self, tree, *args) -> subprocess.CompletedProcess:
+        """`claude-bp-decide` run in another working tree of this repository."""
+        return subprocess.run([sys.executable, str(BIN / "claude-bp-decide"), *args],
+                              capture_output=True, text=True, cwd=str(tree), timeout=120)
+
+    def test_two_worktrees_accepting_a_draft_each_get_two_numbers(self):
+        """Decisions are committed per branch and were numbered per tree, so both wrote
+        `0001-…md` — two records answering to one number once the branches merged."""
+        from claude_bestpractice import knowledge
+        from claude_bestpractice.gitctx import resolve
+
+        numbers = []
+        for name, said in (("billing", "We decided to keep rates per tenant"),
+                           ("landing", "We decided to keep the hero static")):
+            tree = self.add_worktree(name)
+            drafts.record(resolve(tree), drafts.extract([said], name, "s1", []))
+            proc = self.decide_in(tree, "accept", self.ids(tree)[said])
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            numbers += [path.name[:4] for path in knowledge.decision_files(resolve(tree))]
+        self.assertEqual(["0001", "0002"], numbers)
+
+    def test_an_id_names_the_same_draft_after_a_sibling_files_another(self):
+        """The list was numbered newest first, so a draft a sibling filed between `list`
+        and `discard 2` moved every number along: the founder discarded the wrong draft,
+        and was told only "discarded"."""
+        ctx = self.ctx()
+        for quote in ("We decided to use floats for the ledger totals",
+                      "We decided to keep Postgres, not SQLite"):
+            drafts.record(ctx, drafts.extract([quote], "main", "s1", []))
+            time.sleep(0.01)
+        floats = self.ids()["We decided to use floats for the ledger totals"]
+        drafts.record(ctx, drafts.extract(["We decided to run a sibling's migration"], "main", "s2", []))
+
+        said = self.run_cli("discard", floats).stdout
+        self.assertIn("discarded: We decided to use floats", said)
+        left = {item["quote"] for item in drafts.pending(ctx)}
+        self.assertIn("We decided to keep Postgres, not SQLite", left)
+        self.assertNotIn("We decided to use floats for the ledger totals", left)
 
 
 class TestGateIntegration(RepoCase):

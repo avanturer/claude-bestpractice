@@ -82,6 +82,85 @@ class TestTheLedgerIsKeptOutOfGit(RepoCase):
         migrate._untrack_the_ledger(self.ctx())
         self.assertIn("src/app.py", git(["ls-files", "src"], self.repo))
 
+    def test_an_index_git_would_not_write_is_tried_again_next_time(self):
+        """An editor or a sibling holding `index.lock` for a moment made `git rm --cached`
+        fail, and the step was recorded as done anyway: never run again, and the ledger
+        stayed in git in that clone for good."""
+        self.a_committed_card()
+        store.write_json(store.tier_b(self.ctx(), migrate.LEDGER), {
+            name: {"revision": revision} for name, (revision, _) in migrate._REPAIRS.items()
+            if name != "0015-untrack-the-ledger"
+        })
+        busy = self.repo / ".git" / "index.lock"
+        busy.write_text("", encoding="utf-8")
+        migrate.repair(self.ctx())
+        self.assertEqual(["0015-untrack-the-ledger"], migrate.pending(self.ctx()))
+
+        busy.unlink()
+        migrate.repair(self.ctx())
+        self.assertEqual([], self.tracked())
+        self.assertEqual([], migrate.pending(self.ctx()))
+
+    def test_a_clone_where_it_was_recorded_over_a_refusal_gets_it_again(self):
+        """Revision 1 recorded itself done whatever git said, so those clones still carry
+        their ledger in git; the next revision reaches them."""
+        self.a_committed_card()
+        store.write_json(store.tier_b(self.ctx(), migrate.LEDGER), {
+            name: {"revision": 1 if name == "0015-untrack-the-ledger" else revision}
+            for name, (revision, _) in migrate._REPAIRS.items()
+        })
+        migrate.repair(self.ctx())
+        self.assertEqual([], self.tracked())
+
+
+class TestEverySessionStartKeepsItOut(RepoCase):
+    """The upgrade's untrack ran once per clone, in the trees that existed that day, and
+    recorded itself done. A tree cut afterwards from a trunk that still tracked the cards had
+    them in its index again, and so did a checkout whose index got them back: a transition
+    there staged a rename, and the next commit put the ledger back into git."""
+
+    def start(self, cwd=None):
+        return self.run_hook("session-start", {
+            "session_id": "s1", "hook_event_name": "SessionStart", "source": "startup",
+        }, cwd=cwd)
+
+    def tracked(self, tree) -> list[str]:
+        return [line for line in git(["ls-files", LEDGER], tree).splitlines() if line]
+
+    def a_committed_card(self):
+        plan.add(self.ctx(), "a card somebody committed", paths=["src/app.py"],
+                 done_when="stated")
+        self.commit("commit the ledger, as this repository's founder had")
+
+    def test_a_card_back_in_the_index_is_taken_out_at_the_next_start(self):
+        self.a_committed_card()
+        self.start()
+        self.assertEqual([], self.tracked(self.repo), "precondition: the upgrade untracked it")
+        git(["reset", "-q", "HEAD", "--", LEDGER], self.repo)
+        self.assertEqual(1, len(self.tracked(self.repo)), "precondition: it is back")
+
+        said = self.start().stdout
+
+        self.assertEqual([], self.tracked(self.repo))
+        self.assertIn("ledger file(s) taken out of git's index", said)
+
+    def test_a_tree_cut_after_the_upgrade_is_cleared_where_a_session_starts_in_it(self):
+        self.a_committed_card()
+        self.start()
+        tree = self.add_worktree("feat-x")
+        self.assertEqual(1, len(self.tracked(tree)), "precondition: the new tree tracks it")
+
+        self.start(cwd=tree)
+
+        self.assertEqual([], self.tracked(tree))
+        self.assertTrue(any((tree / LEDGER).rglob("*.md")), "the card left the tree's disk")
+
+    def test_a_clone_that_never_committed_it_is_not_touched(self):
+        plan.add(self.ctx(), "never committed", paths=["src/a.py"], done_when="stated")
+        self.start()
+        self.start()
+        self.assertEqual("", git(["diff", "--cached", "--name-only"], self.repo))
+
 
 class TestTheHealthLineStopsReportingOurOwnRule(RepoCase):
     def test_our_rule_over_the_ledger_is_not_a_hidden_tier_a(self):
@@ -135,6 +214,39 @@ class TestAClosedCardCountsAsHavingWorked(RepoCase):
             "tool_input": {"file_path": str(self.repo / "src" / "app.py"), "content": "x = 2\n"},
         })
         self.assertNotIn("nothing on the board", (proc.stdout or "").lower())
+
+    def a_session_that_closed_its_card(self) -> None:
+        """Told what to do by the founder — which is what arms the demand at all — and done."""
+        self.write("src/app.py", "x = 1\n")
+        self.commit("a history to branch from")
+        self.run_hook("prompt-capture", {"session_id": "s1", "hook_event_name": "UserPromptSubmit",
+                                         "prompt": "add a csv export to src/app.py"})
+        self.a_card_done_by(sid(self.repo, "s1"))
+
+    def pre_tool(self, tool: str, tool_input: dict):
+        return self.run_hook("pre-tool", {"session_id": "s1", "hook_event_name": "PreToolUse",
+                                          "tool_name": tool, "tool_input": tool_input})
+
+    def test_a_closed_card_covers_its_own_files_and_nothing_else(self):
+        """Counted for any path, one closed card was a licence to write anything for the
+        rest of the session: the founder's next card was advertised as ready to start while
+        this session was already writing it, and no card said so."""
+        self.a_session_that_closed_its_card()
+        own = self.pre_tool("Write", {"file_path": str(self.repo / "src" / "app.py"),
+                                      "content": "x = 2\n"})
+        self.assertNotEqual("deny", self.hook_decision(own), self.hook_reason(own))
+        other = self.pre_tool("Write", {"file_path": str(self.repo / "src" / "unrelated.py"),
+                                        "content": "x = 2\n"})
+        self.assertEqual("deny", self.hook_decision(other))
+        self.assertIn("working on src/unrelated.py", self.hook_reason(other))
+
+    def test_a_closed_card_does_not_start_work_that_names_no_file(self):
+        """`git merge` writes no file, so there is nothing a closed card's files can cover:
+        taking a branch in after the card is closed is new work, and it needs a card."""
+        self.a_session_that_closed_its_card()
+        proc = self.pre_tool("Bash", {"command": "git merge feat/theirs"})
+        self.assertEqual("deny", self.hook_decision(proc))
+        self.assertIn("nothing on the board says this session is working", self.hook_reason(proc))
 
 
 class TestATreeBehindTheTrunkSaysSo(RepoCase):

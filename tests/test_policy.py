@@ -146,10 +146,44 @@ class TestItConverges(PolicyCase):
         self.assertTrue(self.settings.exists())
 
     def test_an_unreadable_settings_file_is_not_overwritten_blind(self):
-        """Whatever is in there, it is the founder's, and half-parsed is not permission."""
+        """Whatever is in there, it is the founder's, and half-parsed is not permission.
+
+        This test used to assert `autoMode` was in the file afterwards — which is the file
+        having been replaced. A trailing comma left mid-edit cost the founder every
+        permission, deny rule, hook and env key in it, on the next session start.
+        """
+        broken = '{\n  "permissions": {"deny": ["Read(./.env)"]},\n  "env": {"A": "1"},\n}\n'
+        for body in ("{ not json", broken, "[]"):
+            self.settings.write_text(body, encoding="utf-8")
+            found = policy.apply(self.ctx(), self.checks(), self.home)
+            self.assertFalse(found.in_sync, "the delta is still worth reporting")
+            self.assertTrue(found.unreadable)
+            self.assertEqual(body, self.settings.read_text(encoding="utf-8"), body)
+            self.assertEqual([], policy.prune(self.home))
+            self.assertEqual(body, self.settings.read_text(encoding="utf-8"), body)
+
+    def test_the_board_does_not_claim_a_refresh_it_did_not_write(self):
+        """It said "refreshed 4 fact(s)" over a file it had just declined to touch."""
         self.settings.write_text("{ not json", encoding="utf-8")
+        said = policy.refresh(self.ctx(), self.checks(), self.home)
+        self.assertNotIn("refreshed", said)
+        self.assertIn("not valid JSON", said)
+
+    def test_a_byte_order_mark_is_read_and_carried_through(self):
+        """How several Windows editors save UTF-8. The founder's keys survive the write."""
+        self.settings.write_bytes(b"\xef\xbb\xbf" + json.dumps(HAND_WRITTEN).encode("utf-8"))
         policy.apply(self.ctx(), self.checks(), self.home)
-        self.assertIn("autoMode", self.read())
+        written = json.loads(self.settings.read_text(encoding="utf-8"))
+        self.assertIn("autoMode", written)
+        for key in HAND_WRITTEN:
+            self.assertIn(key, written)
+
+    def test_the_status_line_is_not_installed_over_a_broken_file(self):
+        from claude_bestpractice import limits
+
+        self.settings.write_text("{ not json", encoding="utf-8")
+        self.assertEqual((False, ""), limits.install("claude-bp-statusline", self.home))
+        self.assertEqual("{ not json", self.settings.read_text(encoding="utf-8"))
 
     def test_the_board_says_nothing_once_it_is_current(self):
         self.assertNotEqual("", policy.refresh(self.ctx(), self.checks(), self.home))

@@ -13,6 +13,7 @@ So the founder's instruction, in their words: "когда из ворктри у
 
 from __future__ import annotations
 
+import re
 import unittest
 
 from helpers import RepoCase, git, sid
@@ -263,13 +264,13 @@ class TestTheBoardNamesWhatNobodyWillComeBackTo(TreeCase):
     def test_a_merged_tree_that_is_not_ours_is_named(self):
         tree = self.a_tree_nobody_made_for_us()
         found = worktree.needs_a_decision(self.ctx())
-        self.assertEqual([(str(tree), "hand-rolled")], found)
+        self.assertEqual([(str(tree), "hand-rolled", "")], found)
 
     def test_a_detached_tree_is_named_with_no_branch(self):
         """Its commits are on no branch, so the directory is the only thing holding them."""
         tree = self.add_worktree("was-a-branch")
         git(["checkout", "-q", "--detach"], tree)
-        self.assertEqual([(str(tree), "")], worktree.needs_a_decision(self.ctx()))
+        self.assertEqual([(str(tree), "", "")], worktree.needs_a_decision(self.ctx()))
 
     def test_an_unmerged_tree_is_not(self):
         tree = self.add_worktree("still-working")
@@ -386,6 +387,54 @@ class TestTheBoardSaysIt(TreeCase):
         body = self.board()
         self.assertNotIn("TREES NOBODY IS IN", body)
         self.assertNotIn("NOBODY IS COMING BACK", body)
+
+    def test_a_tree_deleted_by_hand_is_named_with_the_prune_that_forgets_it(self):
+        """It read as a DETACHED HEAD, and `git -C <path> log` died on `cannot change to`:
+        a command named on the board that cannot run here (decision 0020)."""
+        import shutil
+        import subprocess
+
+        tree = self.add_worktree("deleted-by-hand")
+        shutil.rmtree(tree)
+
+        body = self.board()
+
+        self.assertNotIn("DETACHED HEAD", body)
+        named = re.search(r"`(git -C \S+ worktree prune)`", body)
+        self.assertIsNotNone(named, body)
+        ran = subprocess.run(named.group(1).split(), capture_output=True, text=True)
+        self.assertEqual(0, ran.returncode, ran.stderr)
+        self.assertNotIn("deleted-by-hand", git(["worktree", "list"], self.repo))
+
+    def test_a_locked_tree_is_not_offered_for_removal(self):
+        """Claude Code locks the tree of every agent it is running; `worktree remove` on it
+        exits 128, and a lock set by hand says to leave it."""
+        tree = self.add_worktree("an-agent-is-in-it")
+        git(["worktree", "lock", "--reason", "claude agent agent-a1b2", str(tree)], self.repo)
+
+        self.assertEqual([], worktree.needs_a_decision(self.ctx()))
+        self.assertNotIn("TREES NOBODY IS IN", self.board())
+
+    def test_a_tree_holding_a_submodule_is_named_with_what_git_takes(self):
+        import subprocess
+
+        from helpers import make_repo
+
+        library = make_repo(self.tmp, "library")
+        tree = self.add_worktree("with-a-submodule")
+        git(["-c", "protocol.file.allow=always", "submodule", "add", "-q", str(library),
+             "vendor/library"], tree)
+        git(["commit", "-qm", "vendor the library"], tree)
+        git(["merge", "--no-ff", "-q", "-m", "merge", "with-a-submodule"], self.repo)
+        self.trunk()
+
+        found = worktree.needs_a_decision(self.ctx())
+
+        self.assertEqual([(str(tree), "with-a-submodule", worktree.SUBMODULES)], found)
+        self.assertIn("--force", self.board())
+        plain = subprocess.run(["git", "worktree", "remove", str(tree)], cwd=str(self.repo),
+                               capture_output=True, text=True)
+        self.assertNotEqual(0, plain.returncode, "the fixture proves nothing: git took it")
 
 
 class TestTheSweepFinishesTheJobToo(TreeCase):

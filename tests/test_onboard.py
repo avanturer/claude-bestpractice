@@ -90,12 +90,43 @@ class TestWriting(RepoCase):
             "My real answer", (self.repo / knowledge.RULES_DIR / knowledge.PRODUCT).read_text()
         )
 
-    def test_force_regenerates(self):
-        self.write(f"{knowledge.RULES_DIR}/{knowledge.PRODUCT}", "# Product\n\nstale\n")
+    def test_force_regenerates_what_nobody_answered(self):
+        """A template whose slots are all still slots, derived from a repository that has
+        since grown code: nothing in it is anybody's, and `--force` brings it up to date."""
+        onboard.write(self.ctx())
+        entities = self.repo / knowledge.DOMAIN_DIR / knowledge.ENTITIES
+        self.assertNotIn("Invoice", entities.read_text())
+        self.seed_code()
         onboard.write(self.ctx(), force=True)
-        self.assertIn(
-            "ANSWER THIS", (self.repo / knowledge.RULES_DIR / knowledge.PRODUCT).read_text()
-        )
+        self.assertIn("Invoice", entities.read_text())
+        self.assertIn("3 source files", (self.repo / knowledge.RULES_DIR / knowledge.PRODUCT).read_text())
+
+    def test_force_never_takes_an_answer(self):
+        """`claude-bp init` said "use --force to regenerate", and `--force` replaced an
+        answered product.md and glossary with placeholders, keeping no copy."""
+        self.seed_code()
+        onboard.write(self.ctx())
+        product = self.repo / knowledge.RULES_DIR / knowledge.PRODUCT
+        glossary = self.repo / knowledge.RULES_DIR / knowledge.GLOSSARY
+        product.write_text(product.read_text().replace(
+            "<ANSWER THIS. One or two sentences: the thing a user gets, not the tech.>",
+            "Payroll for bakeries."))
+        # Half a line is an answer too: the definition is theirs, the synonyms still a slot.
+        glossary.write_text(glossary.read_text().replace("Invoice — <definition>.",
+                                                         "Invoice — what a bakery bills."))
+        onboard.write(self.ctx(), force=True)
+        self.assertIn("Payroll for bakeries.", product.read_text())
+        self.assertIn("what a bakery bills", glossary.read_text())
+
+    def test_init_force_names_what_it_kept(self):
+        subprocess.run([sys.executable, str(BIN / "claude-bp"), "init"],
+                       capture_output=True, text=True, cwd=str(self.repo), timeout=180)
+        product = self.repo / knowledge.RULES_DIR / knowledge.PRODUCT
+        product.write_text(product.read_text() + "\nSold to bakeries.\n")
+        said = subprocess.run([sys.executable, str(BIN / "claude-bp"), "init", "--force"],
+                              capture_output=True, text=True, cwd=str(self.repo), timeout=180).stdout
+        self.assertIn("kept, because they carry your answers", said)
+        self.assertIn(f"{knowledge.RULES_DIR}/{knowledge.PRODUCT}", said.split("kept,")[1])
 
     def test_product_is_not_invented(self):
         """A fabricated product description is worse than none: the agent believes it."""
@@ -265,6 +296,45 @@ class TestWorktreeCreate(RepoCase):
         entries = list(config["projects"].values())
         self.assertTrue(any(e.get("hasTrustDialogAccepted") for e in entries))
 
+    def test_trees_made_at_once_are_all_trusted(self):
+        """Four isolation agents started in one message each wrote back the `~/.claude.json`
+        they had read, and one trust survived: three trees whose hooks never ran."""
+        from helpers import hooks_at_once
+
+        (self.tmp / ".claude.json").write_text(json.dumps({"numStartups": 7}))
+
+        made = hooks_at_once("worktree-create", [
+            {"session_id": "s1", "hook_event_name": "WorktreeCreate", "name": f"agent-{i}"}
+            for i in range(4)
+        ], self.repo, env={"HOME": str(self.tmp), "PATH": "/usr/bin:/bin:/usr/local/bin"})
+
+        config = json.loads((self.tmp / ".claude.json").read_text())
+        trusted = {path for path, entry in config["projects"].items()
+                   if entry.get("hasTrustDialogAccepted")}
+        self.assertEqual({path.strip() for path in made}, trusted)
+        self.assertEqual(7, config["numStartups"], "a key that was not ours was lost")
+
+    def test_every_trust_in_a_burst_is_kept(self):
+        """The same race without the `git worktree add` in front of it, which spreads the
+        writes out and lets a lost update slip past now and then."""
+        import os
+        import time
+
+        from helpers import LIB
+
+        code = ("import sys, time; from claude_bestpractice import worktree; "
+                "time.sleep(max(0.0, float(sys.argv[2]) - time.time())); "
+                "worktree.trust(sys.argv[1])")
+        start = str(time.time() + 1.5)
+        env = {**os.environ, "HOME": str(self.tmp), "PYTHONPATH": str(LIB)}
+        burst = [subprocess.Popen([sys.executable, "-c", code, f"/trees/t{i}", start], env=env)
+                 for i in range(6)]
+        for proc in burst:
+            proc.wait()
+
+        config = json.loads((self.tmp / ".claude.json").read_text())
+        self.assertEqual({f"/trees/t{i}" for i in range(6)}, set(config["projects"]))
+
     def test_derives_a_deterministic_port_and_database(self):
         """Worktrees isolate files but share the daemon, ports and caches."""
         self.hook(branch="feature-z")
@@ -319,6 +389,44 @@ class TestStatusCommand(RepoCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("derived from your code", proc.stdout)
         self.assertIn("waiting on you", proc.stdout)
+
+
+class TestTheMachineWideCommandsRunAnywhere(unittest.TestCase):
+    """`claude-bp doctor`, `statusline` and `policy --prune` are about this machine: the
+    doctor builds throwaway repositories of its own, and the other two touch only the
+    settings in the home directory. Each refused with "not inside a git repository"."""
+
+    def setUp(self) -> None:
+        import shutil
+        import tempfile
+        from pathlib import Path
+
+        self.tmp = Path(tempfile.mkdtemp(prefix="claude-bestpractice-anywhere-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.home = self.tmp / "home"
+        self.nowhere = self.tmp / "not-a-repository"
+        self.home.mkdir()
+        self.nowhere.mkdir()
+
+    def claude_bp(self, *args: str, timeout: int = 120) -> subprocess.CompletedProcess:
+        import os
+
+        return subprocess.run([sys.executable, str(BIN / "claude-bp"), *args],
+                              capture_output=True, text=True, cwd=str(self.nowhere),
+                              timeout=timeout, env={**os.environ, "HOME": str(self.home)})
+
+    def test_the_status_line_and_the_prune(self):
+        for args in (["statusline"], ["statusline", "--install"], ["policy", "--prune"]):
+            with self.subTest(args=args):
+                proc = self.claude_bp(*args)
+                self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
+        settings = json.loads((self.home / ".claude" / "settings.json").read_text())
+        self.assertIn("claude-bp-statusline", settings["statusLine"]["command"])
+
+    def test_the_doctor(self):
+        proc = self.claude_bp("doctor", timeout=600)
+        self.assertNotIn("not inside a git repository", proc.stderr)
+        self.assertIn("checks passed", proc.stdout)
 
 
 class TestSlopChecker(RepoCase):

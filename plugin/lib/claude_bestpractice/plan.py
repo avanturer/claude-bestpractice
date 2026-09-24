@@ -51,6 +51,9 @@ MAX_BODY_CHARS = 2_000
 # quietly answering yes for every card ever filed.
 NO_DETAIL = "(no detail)"
 
+# The front-matter key naming the session a founder's message opened a card for.
+OPENED_BY = "opened_by"
+
 
 @dataclass
 class Task:
@@ -87,6 +90,9 @@ class Task:
     # Empty when the task file is in THIS checkout. The sibling's directory name
     # otherwise, so the board can say where the work actually is.
     worktree: str = ""
+    # The harness session whose founder's message opened this card — the one session whose
+    # later messages may retitle it while it sits unclaimed. Empty on every other card.
+    opened_by: str = ""
 
     @property
     def number(self) -> int:
@@ -147,23 +153,36 @@ def named_for(ctx: GitContext, path: Path) -> str:
         return str(path)
 
 
+# The closing delimiter is a LINE of three dashes and nothing else. The front matter was cut
+# at the first three dashes ANYWHERE, so a card titled "Split parser --- phase 2" read back
+# as "Split parser", every key after the title became its handoff note, and `claim` refused
+# it for want of the plan it carried. A founder's sentence with a dash run in it did the same
+# to the card their message opened: it lost `source`, and their next message filed another.
+_DELIMITER = re.compile(r"^---[ \t]*\r?$", re.M)
+
+
 def _frontmatter(text: str) -> tuple[dict[str, str], str]:
-    if not text.startswith("---"):
+    opening, newline, rest = text.partition("\n")
+    if opening.rstrip() != "---" or not newline:
         return {}, text
-    parts = text.split("---", 2)
-    if len(parts) < 3:
+    closing = _DELIMITER.search(rest)
+    if closing is None:
         return {}, text
     meta: dict[str, str] = {}
-    for line in parts[1].splitlines():
+    for line in rest[:closing.start()].splitlines():
         if ":" in line and not line.startswith((" ", "\t")):
             key, _, value = line.partition(":")
             meta[key.strip()] = value.strip()
-    return meta, parts[2].strip()
+    return meta, rest[closing.end():].strip()
 
 
 def _load(path: Path, state: str) -> Task | None:
+    # `replace`, here and wherever a card is read: one card saved in cp1251 raised
+    # UnicodeDecodeError out of every reader, so every write in every session was refused
+    # with a message naming neither the file nor a way out. A garbled title still says
+    # which card, who holds it and on what files; a traceback says nothing.
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
     meta, body = _frontmatter(text)
@@ -185,6 +204,7 @@ def _load(path: Path, state: str) -> Task | None:
         blocker=meta.get("blocker", ""),
         after=_ids(meta.get("after", "")),
         together=_ids(meta.get("with", "")),
+        opened_by=meta.get(OPENED_BY, ""),
     )
 
 
@@ -300,29 +320,50 @@ def next_id(ctx: GitContext) -> str:
     return f"{highest + 1:04d}"
 
 
+# Six words say what a card is; a length says what a filesystem will take. One long word —
+# a pasted hash, a URL with the punctuation stripped out — was a single 300-character
+# "word", and `add` died on ENAMETOOLONG with a traceback after allocating the id. Sixty
+# is above every slug six ordinary words have produced here, so no name changes because
+# of it.
+MAX_SLUG_CHARS = 60
+
+
 def slug(text: str) -> str:
     words = re.findall(r"[a-z0-9]+", text.lower())[:6]
-    return "-".join(words) or "task"
+    return "-".join(words)[:MAX_SLUG_CHARS].rstrip("-") or "task"
+
+
+def _one_line(value: str) -> str:
+    """A front-matter value on the single line the reader takes it from.
+
+    The reader takes one key per line, so a newline inside a value ended the value there and
+    made the rest into keys of its own: a title reading "Third\\nstate: done" was filed as
+    "Third". Split exactly as the reader splits, so no separator it honours survives.
+    """
+    return " ".join(str(value).splitlines())
 
 
 def _render(task_id: str, title: str, state: str, owner: str, branch: str, body: str,
             paths: list[str] | None = None, source: str = "",
             done_when: str = "", blocker: str = "", created_at: str = "",
-            after: list[str] | None = None, together: list[str] | None = None) -> str:
+            after: list[str] | None = None, together: list[str] | None = None,
+            opened_by: str = "") -> str:
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     lines = [
         "---",
         f"id: {task_id}",
-        f"title: {title[:MAX_TITLE_CHARS]}",
+        f"title: {_one_line(title)[:MAX_TITLE_CHARS]}",
         f"state: {state}",
-        f"owner: {owner}",
-        f"branch: {branch}",
-        f"paths: {', '.join(paths or [])}",
-        f"source: {source}",
-        f"done_when: {done_when[:MAX_TITLE_CHARS]}",
-        f"blocker: {blocker[:MAX_TITLE_CHARS]}",
-        f"after: {', '.join(after or [])}",
-        f"with: {', '.join(together or [])}",
+        f"owner: {_one_line(owner)}",
+        f"branch: {_one_line(branch)}",
+        f"paths: {_one_line(', '.join(paths or []))}",
+        f"source: {_one_line(source)}",
+        # Only on the cards it concerns, so every other card keeps the shape it has always had.
+        *([f"{OPENED_BY}: {_one_line(opened_by)}"] if opened_by else []),
+        f"done_when: {_one_line(done_when)[:MAX_TITLE_CHARS]}",
+        f"blocker: {_one_line(blocker)[:MAX_TITLE_CHARS]}",
+        f"after: {_one_line(', '.join(after or []))}",
+        f"with: {_one_line(', '.join(together or []))}",
         # Preserved across a move. Rewriting it on every transition made every task look
         # created at the moment it was last touched, which is the one thing `created_at`
         # is for.
@@ -368,7 +409,17 @@ ALLOC_LOCK = "plan-alloc.lock"
 FROM_THE_FOUNDER = "the founder's message"
 
 
-def open_for(ctx: GitContext, statement: str, session_id: str) -> Task | None:
+def opened_for(ctx: GitContext, opener: str) -> Task | None:
+    """The unclaimed card a founder's message opened for this session, if there is one."""
+    if not opener:
+        return None
+    for task in load_all(ctx, NEXT):
+        if task.source == FROM_THE_FOUNDER and task.opened_by == opener:
+            return task
+    return None
+
+
+def open_for(ctx: GitContext, statement: str, session_id: str, opener: str = "") -> Task | None:
     """Put the founder's instruction on the board the moment it arrives. None if one is.
 
     The demand fired at the first WRITE, so between "the founder gave a task" and "the
@@ -385,33 +436,42 @@ def open_for(ctx: GitContext, statement: str, session_id: str) -> Task | None:
 
     One per session. A founder who sends three messages about one task gets one card, not
     three, because the ledger is only worth reading while it does not drift.
+
+    `opener` is the harness session id, which survives the move into a worktree that
+    `session_id` does not. It used to be the BRANCH that decided whose card this was, and
+    every session starts in the main checkout on the trunk: the second session's first
+    message retitled the first session's card, and the first session's work left the board.
     """
     if not statement.strip():
         return None
-    for task in load_all(ctx, DOING):
-        if task.owner == session_id:
-            return None
+    opener = opener or session_id
+    # Held under any id this session has had. Claimed in the main checkout and spoken to
+    # again from its own tree, it is one session on one card — and the founder's next line
+    # filed a second card for work already on the board, the drift #131 describes.
+    if held_by(ctx, session_id):
+        return None
     said = statement.strip().splitlines()[0][:120]
-    for task in load_all(ctx, NEXT):
-        if task.source == FROM_THE_FOUNDER and task.branch == ctx.branch:
-            # FOLLOWS the founder while nobody has claimed it. Their first message is
-            # often a remark rather than the work — «потом как все задачи на доске
-            # доделаю» cleared the bar and sat on the board as a task, which is the drift
-            # the ledger exists not to have. The statement itself already follows them;
-            # the card had no reason not to (#170).
-            #
-            # Only while UNCLAIMED. Once a session has claimed it, that session wrote a
-            # plan — a `done_when` and the paths — and overwriting its title with whatever
-            # was said next would clobber work with conversation.
-            if task.title != said:
-                amend(ctx, task.id, title=said)
-            return None
-    return add(ctx, said, branch=ctx.branch, source=FROM_THE_FOUNDER)
+    mine = opened_for(ctx, opener)
+    if mine is not None:
+        # FOLLOWS the founder while nobody has claimed it. Their first message is often a
+        # remark rather than the work — «потом как все задачи на доске доделаю» cleared the
+        # bar and sat on the board as a task, which is the drift the ledger exists not to
+        # have. The statement itself already follows them; the card had no reason not to
+        # (#170).
+        #
+        # Only while UNCLAIMED. Once a session has claimed it, that session wrote a plan —
+        # a `done_when` and the paths — and overwriting its title with whatever was said
+        # next would clobber work with conversation.
+        if mine.title != said:
+            amend(ctx, mine.id, title=said)
+        return None
+    return add(ctx, said, branch=ctx.branch, source=FROM_THE_FOUNDER, opened_by=opener)
 
 
 def add(ctx: GitContext, title: str, body: str = "", branch: str = "",
         paths: list[str] | None = None, done_when: str = "", source: str = "",
-        after: list[str] | None = None, together: list[str] | None = None) -> Task:
+        after: list[str] | None = None, together: list[str] | None = None,
+        opened_by: str = "") -> Task:
     """Allocate an id and create the task under one lock.
 
     Scanning for the highest id and then writing the file is a read-modify-write, and
@@ -422,12 +482,13 @@ def add(ctx: GitContext, title: str, body: str = "", branch: str = "",
     first. The lock is held across both steps or it buys nothing.
     """
     return park(ctx, title, body=body, branch=branch, paths=paths or [], source=source,
-                done_when=done_when, after=after, together=together)
+                done_when=done_when, after=after, together=together, opened_by=opened_by)
 
 
 def park(ctx: GitContext, title: str, body: str = "", branch: str = "",
          paths: list[str] | None = None, source: str = "", done_when: str = "",
-         after: list[str] | None = None, together: list[str] | None = None) -> Task:
+         after: list[str] | None = None, together: list[str] | None = None,
+         opened_by: str = "") -> Task:
     """Hand a task to a session that has not happened yet.
 
     The scene this exists for: a chat with more work in it than belongs in one chat, and
@@ -441,7 +502,8 @@ def park(ctx: GitContext, title: str, body: str = "", branch: str = "",
         store.atomic_write(
             path,
             _render(task_id, title, NEXT, "", branch, body, paths, source,
-                    done_when=done_when, after=after, together=together),
+                    done_when=done_when, after=after, together=together,
+                    opened_by=opened_by),
             mode=0o644
         )
     return _load(path, NEXT)
@@ -573,30 +635,34 @@ def _git(args: list[str], cwd: Path) -> tuple[int, str]:
 
 
 def follow_in_git(source: Path, target: Path) -> bool:
-    """Carry a TRACKED task file's move into the index, so git records a rename.
+    """Take a TRACKED task file out of the index when it moves, rather than carry it along.
 
-    A transition has always been a rename on disk and nothing in git, which is invisible
-    while both paths look the same to git and a disaster the moment they do not. The
-    founder's global ignore covers `.claude/claude-bestpractice/`, and `plan/paused/` was
-    never committed, so pausing a task committed earlier deleted a tracked file and
-    created an ignored one: `git status` showed a bare `D` with no counterpart anywhere,
-    fifty times over, and every one of them looked like lost work (#208).
+    A transition is a rename on disk, and a bare unstaged `D` with no counterpart is what it
+    left in git while the founder's ignore rule hid the new copy — fifty of them, each one
+    looking like lost work (#208). The answer to that was `add -f` of the new path, a staged
+    rename, and it is what put the ledger BACK into git after decision 0018 took it out: a
+    tree cut from a trunk that still tracked its cards staged `R next/0061 -> done/0061` on
+    the first `done`, and the tree's next commit carried the card back in.
 
-    Only ever for a file git is ALREADY tracking. Adding an ignored file the founder never
-    committed would be the plugin granting itself a place in their history, which is the
-    line decision 0008 draws; preserving what they already track is the opposite.
+    So nothing is added any more. The path the card left is taken out of the index — the
+    one staged deletion 0018 accepts, committed with whatever the tree commits next — and so
+    is the path it arrived at, if some commit had put it there; the card stays on disk,
+    where the exclude rule hides it. Only for a file git ALREADY tracks: a ledger the founder
+    never committed is not touched, and nothing is granted a place in their history (0008).
 
-    `add -f` is what makes it work at all: without the force the target is ignored and the
-    add is a silent no-op, which is exactly the bug. Never raises, and answers whether the
-    index actually moved — a ledger transition that fails because git is busy is a task
-    the founder cannot pause.
+    Never raises, and answers whether the index actually moved — a ledger transition that
+    fails because git is busy is a task the founder cannot pause.
     """
     tree = target.parent
-    if not _tracked(source, tree):
+    if not _git(["ls-files", "--", str(source), str(target)], tree)[1]:
         return False
-    if _git(["add", "-f", "--", str(target)], tree)[0] != 0:
-        return False
-    return _git(["add", "-A", "--", str(source)], tree)[0] == 0
+    return _untrack([source, target], tree)
+
+
+def _untrack(paths: list[Path], tree: Path) -> bool:
+    """Take these paths out of one tree's index, leaving the files where they are."""
+    names = [str(path) for path in paths]
+    return _git(["rm", "--cached", "--quiet", "--ignore-unmatch", "--", *names], tree)[0] == 0
 
 
 def _tracked(path: Path, tree: Path | None = None) -> bool:
@@ -611,21 +677,21 @@ def _tracked(path: Path, tree: Path | None = None) -> bool:
 
 
 def follow_across_trees(source: Path, target: Path) -> bool:
-    """Carry a tracked ledger file's move into both indexes when it changes CHECKOUT.
+    """Take a tracked ledger file out of both indexes when it changes CHECKOUT.
 
-    Two worktrees of one clone have two indexes, so a move between them cannot be one
-    rename however git is asked: the deletion belongs to the tree the file left and the
-    addition to the tree it arrived in. Staging both is what keeps the move from reading
-    as the loss it is not — the bare `D` with no counterpart that fifty stranded files
-    taught this repository to recognise (#208).
+    Two worktrees of one clone have two indexes, so a move between them touches two: the
+    deletion belongs to the tree the file left, and is staged there rather than left as
+    the bare `D` fifty stranded files taught this repository to read as lost work (#208).
+    The tree it arrived in — the main checkout — no longer gets an addition: that was the
+    ledger coming back into git (0018). Its index loses the path too if it held one.
 
     Same rule as `follow_in_git`: only for a file git ALREADY tracks. Where the founder
     does not commit the ledger, neither index is touched and nothing is granted (0008).
     """
     if not _tracked(source):
         return False
-    staged = _git(["add", "-f", "--", str(target)], target.parent)[0] == 0
-    return _git(["add", "-A", "--", str(source)], source.parent)[0] == 0 and staged
+    arrived = _untrack([target], target.parent)
+    return _untrack([source], source.parent) and arrived
 
 
 def stranded_deletions(root: Path, base: Path) -> list[Path]:
@@ -644,11 +710,12 @@ def stranded_deletions(root: Path, base: Path) -> list[Path]:
 
 def _move(task: Task, state: str, owner: str = "", branch: str = "",
           blocker: str | None = None) -> Task:
-    """A state transition is a rename, in the working tree and in the index alike.
+    """A state transition is a rename in the working tree, and never an addition in git.
 
-    Git records it as a rename, which merges cleanly — but only because `follow_in_git`
-    puts it there. The move itself is plain filesystem work, so that a repository where
-    git is unavailable or the file untracked still transitions.
+    Where git still tracks the card, `follow_in_git` takes it out of the index rather than
+    staging the rename, because the ledger is out of git (decision 0018). The move itself is
+    plain filesystem work, so that a repository where git is unavailable or the file
+    untracked still transitions.
 
     The rename happens where the FILE is, not where the caller is. Now that the ledger
     reads across siblings, `plan_dir(ctx, ...)` would have written the moved copy into
@@ -659,7 +726,7 @@ def _move(task: Task, state: str, owner: str = "", branch: str = "",
     store.ensure_dir(target_dir)
     target = target_dir / task.path.name
 
-    text = task.path.read_text(encoding="utf-8")
+    text = task.path.read_text(encoding="utf-8", errors="replace")
     meta, body = _frontmatter(text)
     updated = _render(
         task.id,
@@ -685,6 +752,7 @@ def _move(task: Task, state: str, owner: str = "", branch: str = "",
         meta.get("created_at", ""),
         _ids(meta.get("after", "")),
         _ids(meta.get("with", "")),
+        opened_by=meta.get(OPENED_BY, ""),
     )
     store.atomic_write(target, updated, mode=0o644)
     if target != task.path:
@@ -723,9 +791,14 @@ def _still_on_it(ctx: GitContext, task: Task) -> bool:
     holder = sessions.get(ctx, task.owner) if task.owner else None
     if holder is None or not sessions.is_live(ctx, holder):
         return False
+    # The owner under every id it has had. It claims in the main checkout and works in its
+    # own tree, where every touch lands on the tree's id — read from the id the card names,
+    # a session that never stopped looked idle from the moment it moved.
+    records = [sessions.get(ctx, one) for one in sessions.identities(ctx, task.owner)]
+    working = [record for record in records if record is not None]
     if not task.paths:
-        return not sessions.is_idle(holder)
-    return any(touched in task.paths for touched in holder.last_touched)
+        return not all(sessions.is_idle(record) for record in working)
+    return any(touched in task.paths for record in working for touched in record.last_touched)
 
 
 def sweep_idle(ctx: GitContext, hours: float = IDLE_HOURS) -> list[Task]:
@@ -792,7 +865,7 @@ def sweep_queue(ctx: GitContext, days: float = QUEUE_STALE_DAYS) -> list[Task]:
 
 def _rewrite_body(task: Task) -> None:
     """Persist an amended body in place, leaving the frontmatter as it stands."""
-    meta, _ = _frontmatter(task.path.read_text(encoding="utf-8"))
+    meta, _ = _frontmatter(task.path.read_text(encoding="utf-8", errors="replace"))
     head = "\n".join(f"{k}: {v}" for k, v in meta.items())
     store.atomic_write(task.path, f"---\n{head}\n---\n\n{task.body}\n", mode=0o644)
 
@@ -859,8 +932,9 @@ def _ago(seconds: float) -> str:
     return f"{int(seconds // 3600)}h"
 
 
-def pause(ctx: GitContext, task_id: str, blocker: str) -> tuple[Task | None, str]:
-    """Stop work and say what would restart it.
+def pause(ctx: GitContext, task_id: str, blocker: str,
+          session_id: str = "") -> tuple[Task | None, str]:
+    """Stop work and say what would restart it. `session_id` is who asks (see `_not_theirs`).
 
     The blocker is required. "Paused" without one is indistinguishable from abandoned, and
     the next session has no way to tell whether it is waiting on a decision, a credential,
@@ -871,12 +945,32 @@ def pause(ctx: GitContext, task_id: str, blocker: str) -> tuple[Task | None, str
             "a pause needs to say what would lift it — name the decision, the credential, "
             "the merge or the answer this is waiting on"
         )
-    task = find(ctx, task_id)
-    if task is None:
-        return None, f"no task {task_id}"
-    if task.state == DONE:
-        return None, f"task {task.id} is already done"
-    return _move_every(ctx, task_id, PAUSED, blocker=blocker.strip()) or task, ""
+    with store.file_lock(store.tier_b(ctx, CLAIM_LOCK)):
+        task = find(ctx, task_id)
+        if task is None:
+            return None, f"no task {task_id}"
+        if task.state == DONE:
+            return None, f"task {task.id} is already done"
+        refused = _not_theirs(ctx, task, session_id)
+        if refused:
+            return None, refused
+        return _move_every(ctx, task_id, PAUSED, blocker=blocker.strip()) or task, ""
+
+
+def _not_theirs(ctx: GitContext, task: Task, session_id: str) -> str:
+    """Why the session asking may not pause or close `task`, or "" when it may.
+
+    A live sibling's card is its own to hand back or to finish. `claude-bp-plan claim` refused
+    one while `pause` and `done` took it, and the sibling's next write was then refused for
+    having nothing on the board. Only a session this clone has registered is asked: the
+    founder at a terminal, this plugin closing the cards a delivery carried, and a process
+    that merely inherited somebody's session id are nobody's sibling here.
+    """
+    from . import sessions
+
+    if not session_id or sessions.get(ctx, session_id) is None:
+        return ""
+    return _held_elsewhere(ctx, task, sessions.identities(ctx, session_id))
 
 
 def resume(ctx: GitContext, task_id: str) -> tuple[Task | None, str]:
@@ -923,7 +1017,7 @@ def _amended(task: Task, note: str, paths: list[str] | None, done_when: str, tit
     were dropped by omission here, so a note on an ordered task silently cut it loose from
     the order it was written to respect.
     """
-    meta, body = _frontmatter(task.path.read_text(encoding="utf-8"))
+    meta, body = _frontmatter(task.path.read_text(encoding="utf-8", errors="replace"))
     return _render(
         task.id, title.strip() or meta.get("title", task.title), task.state, task.owner,
         task.branch,
@@ -935,6 +1029,7 @@ def _amended(task: Task, note: str, paths: list[str] | None, done_when: str, tit
         meta.get("created_at", ""),
         task.after,
         task.together,
+        opened_by=meta.get(OPENED_BY, ""),
     )
 
 
@@ -962,12 +1057,35 @@ def _unplanned(task: Task) -> str:
     )
 
 
-def claim(ctx: GitContext, task_id: str, session_id: str, branch: str) -> tuple[Task | None, str]:
-    """Take ownership. Returns (task, error). A task owned by a LIVE session is refused.
+# Held from the read to the rename by every transition that decides WHO holds a card —
+# `claim`, `pause`, `done`. Unlocked, two sessions claiming one card both read it free, both
+# printed "claimed", and the file named whichever wrote last; or one of them died on a file
+# the other had already moved.
+CLAIM_LOCK = "plan-claim.lock"
+
+# How many times a claim reads a card that keeps moving under it. `resume`, the sweeps and
+# the reaper move files without the lock, and a card that moved once has been re-read.
+CLAIM_READS = 2
+
+
+def _held_elsewhere(ctx: GitContext, task: Task, mine: set[str]) -> str:
+    """Why a LIVE session other than this one holds `task`, or "" when none does.
 
     Liveness is checked rather than assumed: a claim held by a crashed session is taken
     over, which is the difference between a work ledger and a graveyard.
     """
+    from . import sessions
+
+    if not task.owner or task.owner in mine:
+        return ""
+    holder = sessions.get(ctx, task.owner)
+    if holder is None or not sessions.is_live(ctx, holder):
+        return ""
+    return f"task {task.id} is held by live session {task.owner[:8]}"
+
+
+def _claimable(ctx: GitContext, task_id: str, session_id: str) -> tuple[Task | None, str]:
+    """The card as it stands now, when this session may take it. (None, why not) otherwise."""
     from . import sessions
 
     task = find(ctx, task_id)
@@ -975,12 +1093,13 @@ def claim(ctx: GitContext, task_id: str, session_id: str, branch: str) -> tuple[
         return None, f"no task {task_id}"
     if task.state == DONE:
         return None, f"task {task.id} is already done"
-
-    if task.owner and task.owner != session_id:
-        holder = sessions.get(ctx, task.owner)
-        if holder and sessions.is_live(ctx, holder):
-            return None, f"task {task.id} is held by live session {task.owner[:8]}"
-
+    mine = sessions.identities(ctx, session_id)
+    # This session's already, under the id it had where it claimed it: in the main
+    # checkout, before it entered its own tree. Handed to the id it has now, never refused
+    # as a live sibling's — that sibling is itself, and the only other way out was filing
+    # the same work twice (#131). Its plan was demanded when it was first claimed.
+    if task.owner in mine:
+        return task, ""
     # The plan, demanded where the plan has to exist. `pre-tool` already refuses a write
     # that no claimed card covers, so requiring it HERE is what makes "no code without a
     # plan" binding — and it costs the founder nothing, where the harness's own plan mode
@@ -988,27 +1107,49 @@ def claim(ctx: GitContext, task_id: str, session_id: str, branch: str) -> tuple[
     #
     # At `claim` and not at `add`: filing a rough card has to stay a single line, or the
     # board stops being written to. Starting one is the moment the plan is owed.
-    if task.owner != session_id:
-        unplanned = _unplanned(task)
-        if unplanned:
-            return None, unplanned
-
-    return _move(task, DOING, owner=session_id, branch=branch), ""
+    refused = _held_elsewhere(ctx, task, mine) or _unplanned(task)
+    return (None, refused) if refused else (task, "")
 
 
-def complete(ctx: GitContext, task_id: str) -> tuple[Task | None, str]:
+def claim(ctx: GitContext, task_id: str, session_id: str, branch: str) -> tuple[Task | None, str]:
+    """Take ownership. Returns (task, error). A task owned by a LIVE session is refused.
+
+    Read, judged and moved under one lock (`CLAIM_LOCK`), and read again if the card moved
+    anyway — a transition that takes no lock can still move the file between the read and
+    the rename, and a claim that dies on a traceback has told nobody anything.
+    """
+    with store.file_lock(store.tier_b(ctx, CLAIM_LOCK)):
+        for _ in range(CLAIM_READS):
+            task, error = _claimable(ctx, task_id, session_id)
+            if task is None:
+                return None, error
+            try:
+                return _move(task, DOING, owner=session_id, branch=branch), ""
+            except FileNotFoundError:
+                continue
+    return None, f"task {task_id} kept moving while it was being claimed — claim it again"
+
+
+def complete(ctx: GitContext, task_id: str, session_id: str = "") -> tuple[Task | None, str]:
     """Close a card. The finish condition is demanded at `claim`, not here.
 
     v1.26.0 demanded it at this end, which was the right rule at the wrong moment: a card
     that reaches `doing` has been through `claim`, so by the time anything is closed the
     condition already exists, and the check here could only ever fire for a file edited by
     hand. Asked where the plan is owed instead — before the work, not after it.
+
+    `session_id` is who asks, and a live sibling's card is not theirs to close
+    (`_not_theirs`).
     """
-    task = find(ctx, task_id)
-    if task is None:
-        return None, f"no task {task_id}"
-    # Every copy, not the one this directory happens to hold: see `_move_every`.
-    landed = _move_every(ctx, task_id, DONE) or _move(task, DONE)
+    with store.file_lock(store.tier_b(ctx, CLAIM_LOCK)):
+        task = find(ctx, task_id)
+        if task is None:
+            return None, f"no task {task_id}"
+        refused = _not_theirs(ctx, task, session_id)
+        if refused:
+            return None, refused
+        # Every copy, not the one this directory happens to hold: see `_move_every`.
+        landed = _move_every(ctx, task_id, DONE) or _move(task, DONE)
 
     # Whoever was waiting on this is waiting right now, in a session that will not be
     # restarted for hours. `startable` already answers "what can begin"; nobody reads it
@@ -1017,7 +1158,7 @@ def complete(ctx: GitContext, task_id: str) -> tuple[Task | None, str]:
 
     live = {s.session_id for s in sessions.live_sessions(ctx)}
     for waiting in load_all(ctx):
-        if task_id in waiting.after and waiting.owner in live and not blockers(ctx, waiting):
+        if task.id in waiting.after and waiting.owner in live and not blockers(ctx, waiting):
             inbox.post(
                 ctx, waiting.owner,
                 f"{task_id} is done — {waiting.id} is no longer blocked.",
@@ -1074,9 +1215,9 @@ def settle_delivered(ctx: GitContext, session_id: str, delivered: list[str],
                      what: str) -> list[Task]:
     """Close this session's cards whose files the delivery carried. Returns what closed.
 
-    Owned by THIS session only. A sibling's card over the same files is its own to close:
-    it may be mid-change on top of what just landed, and taking its row off the board is
-    the same lie in the other direction.
+    Owned by THIS session only, under any id it has had (`held_by`). A sibling's card over
+    the same files is its own to close: it may be mid-change on top of what just landed,
+    and taking its row off the board is the same lie in the other direction.
 
     What closed it is written into the card before it moves, because a closure nobody can
     account for is worse than a card left open — the founder reads outcomes, and "who
@@ -1086,9 +1227,7 @@ def settle_delivered(ctx: GitContext, session_id: str, delivered: list[str],
         return []
     closed: list[Task] = []
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    for task in load_all(ctx, DOING):
-        if task.owner != session_id:
-            continue
+    for task in held_by(ctx, session_id):
         carried = carried_by(task, delivered)
         if not carried:
             continue
@@ -1102,8 +1241,28 @@ def settle_delivered(ctx: GitContext, session_id: str, delivered: list[str],
 
 
 def held_by(ctx: GitContext, session_id: str) -> list[Task]:
-    """The cards this session is holding in `doing`."""
-    return [task for task in load_all(ctx, DOING) if task.owner == session_id]
+    """The cards this session is holding in `doing`, under any id it has had.
+
+    A session that claims its card in the main checkout and then enters its own tree is a
+    second identity there (`sessions.identities`), and the card is still its own. Asked by
+    id alone, the gates told it nothing on the board said it was working, and the remedy
+    they named — claim it — was refused as a live session's, which was itself.
+    """
+    return _owned(ctx, session_id, DOING)
+
+
+def closed_by(ctx: GitContext, session_id: str) -> list[Task]:
+    """The cards this session has closed, under any id it has had. `done` keeps the owner
+    precisely so this can be asked (#220)."""
+    return _owned(ctx, session_id, DONE)
+
+
+def _owned(ctx: GitContext, session_id: str, state: str) -> list[Task]:
+    """The cards in `state` whose owner is this session by any of its ids."""
+    from . import sessions
+
+    owners = sessions.identities(ctx, session_id)
+    return [task for task in load_all(ctx, state) if task.owner in owners]
 
 
 def closure_demand(tasks: list[Task]) -> str:
@@ -1208,7 +1367,7 @@ def reclaim(ctx: GitContext, session_id: str) -> list[str]:
 def _move_to(path: Path, target_dir: Path, task: Task) -> None:
     """Rename a task file within the worktree that owns it, not the caller's."""
     store.ensure_dir(target_dir)
-    meta, body = _frontmatter(path.read_text(encoding="utf-8"))
+    meta, body = _frontmatter(path.read_text(encoding="utf-8", errors="replace"))
     # Everything, not just the title. Reclaiming a crashed session's task rewrote the
     # document without its files, its finish condition or its relations — handing the
     # next session the thin task the ledger exists to prevent, at the exact moment it
@@ -1218,6 +1377,7 @@ def _move_to(path: Path, target_dir: Path, task: Task) -> None:
         [p.strip() for p in meta.get("paths", "").split(",") if p.strip()],
         meta.get("source", ""), meta.get("done_when", ""), "", meta.get("created_at", ""),
         _ids(meta.get("after", "")), _ids(meta.get("with", "")),
+        opened_by=meta.get(OPENED_BY, ""),
     )
     store.atomic_write(target_dir / path.name, updated, mode=0o644)
     if target_dir / path.name != path:

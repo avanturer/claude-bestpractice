@@ -106,6 +106,20 @@ def _autonomy_line(mode: str) -> str:
     return _AUTONOMY_LINES.get(mode, _AUTONOMY_LINES["vibecode"])
 
 
+def _config_line(ctx: GitContext, complaints: list) -> str:
+    """What in the founder's config no gate can read, said where somebody will see it.
+
+    A `config.json` that did not parse was read as no config at all — every key at its
+    default, `enabled: false` included — and the one reader that says so had no caller
+    outside the tests. Sessions are refused the file, so the line is the founder's to act on.
+    """
+    if not complaints:
+        return ""
+    more = f" (+{len(complaints) - 1} more in `claude-bp status`)" if len(complaints) > 1 else ""
+    return (f"\nconfig: {complaints[0]}{more}. {config.config_path(ctx)} is the founder's to "
+            "fix — tell them; no session may edit it.")
+
+
 def _armed_line(ctx: GitContext) -> str:
     """Arm the push gate on the first session that finds it missing, and say so once.
 
@@ -134,8 +148,6 @@ def _armed_line(ctx: GitContext) -> str:
     # `claude-bp-doctor` by name, finds neither on a marketplace user's PATH, and exits 0.
     # A promise larger than the fact is the exact failure this project is written against,
     # and it was this project making it. Reported from a real install.
-    from claude_bestpractice.config import detect_test_command
-
     makefile = ctx.worktree_root / "Makefile"
     if makefile.is_file() and any(
         line.startswith("check:") for line in makefile.read_text(
@@ -143,7 +155,8 @@ def _armed_line(ctx: GitContext) -> str:
     ):
         what = "`make check`"
     else:
-        command = detect_test_command(ctx.worktree_root)
+        # What the hook bakes: the founder's declared command, or detection.
+        command = config.load(ctx).test_command
         what = "`" + " ".join(command) + "`" if command else ""
 
     if not what:
@@ -181,14 +194,17 @@ def _swept_line(removed: list) -> str:
     six to five with nothing said anywhere.
 
     To someone returning to a tree they had committed in, a directory that is simply gone
-    reads as lost work, so the line leads with the part that makes that false. Empty on
-    every session that swept nothing, which is nearly all of them.
+    reads as lost work, so the line leads with the part that makes that false — and says
+    it the way it is true. "Their branches are kept" was printed on every sweep while the
+    sweep deleted every branch whose work was in the trunk. Empty on every session that
+    swept nothing, which is nearly all of them.
     """
     if not removed:
         return ""
     return (
-        f"\nremoved {len(removed)} unused worktree(s) no live session was in — their "
-        "branches are kept, so nothing committed is gone; `git branch` lists them."
+        f"\nremoved {len(removed)} unused worktree(s) no live session was in — a branch went "
+        "with its tree only where its work is already in the trunk, so nothing committed is "
+        "gone; `git branch` lists the rest."
     )
 
 
@@ -217,7 +233,7 @@ def _restored_line(ctx: GitContext, event) -> str:
     if len(body) > MAX_RESTORED:
         # Name the directory. "on disk" without a path is a pointer to nowhere, and the
         # session it is addressed to has just been compacted and knows least of anyone.
-        where = store.tier_a(ctx, "checkpoints")
+        where = store.checkpoint_dir(ctx)
         try:
             where = where.relative_to(ctx.worktree_root)
         except ValueError:
@@ -289,16 +305,18 @@ def _removable_line(ctx: GitContext) -> str:
     left = worktree.needs_a_decision(ctx)
     if not left:
         return ""
-    merged = [(path, branch) for path, branch in left if branch]
-    adrift = [path for path, branch in left if not branch]
+    main = worktree.main_checkout(ctx)
+    merged = [(path, branch) for path, branch, held in left if branch and not held]
+    adrift = [path for path, branch, held in left if not branch and not held]
     shown = ", ".join(f"{Path(path).name} ({branch})" for path, branch in merged[:3])
     more = f" (+{len(merged) - 3} more)" if len(merged) > 3 else ""
+    # `-D` and not `-d`: `-d` asks this checkout's HEAD, which lags the trunk for as long as
+    # nobody pulls, and refused the very branches this line had just called merged.
     said = (
         f"\nTREES NOBODY IS IN: {len(merged)} whose branch is already in the trunk — "
-        f"{shown}{more}; nothing in them is unmerged, so "
-        f"`git -C {worktree.main_checkout(ctx)} worktree remove <path>` and "
-        "`git branch -d <branch>` lose nothing. This plugin removes the trees IT made and "
-        "leaves these."
+        f"{shown}{more}; nothing in them is unmerged, so `git -C {main} worktree remove "
+        f"<path>` and `git -C {main} branch -D <branch>` lose nothing. This plugin removes "
+        "the trees IT made and leaves these."
     ) if merged else "\nTREES NOBODY IS IN:"
     if adrift:
         # A detached HEAD is worse than a stale tree and reads the same from outside: the
@@ -309,6 +327,26 @@ def _removable_line(ctx: GitContext) -> str:
             "`git -C <path> log --oneline -3` says what is in one; `git -C <path> branch "
             "<name>` keeps it."
         )
+    return said + _held_by_git(main, left)
+
+
+def _held_by_git(main: Path, left: list) -> str:
+    """The trees on that line that `git worktree remove` refuses as it stands, and what runs.
+
+    The ordinary command named for them was a dead end (decision 0020): a directory deleted
+    by hand read as a DETACHED HEAD and its `git -C <path> …` died on `cannot change to`,
+    and a tree holding a submodule answered `worktree remove` with exit 128.
+    """
+    gone = [Path(path).name for path, _branch, held in left if held == worktree.GONE]
+    tied = [Path(path).name for path, _branch, held in left if held == worktree.SUBMODULES]
+    said = ""
+    if gone:
+        said += (f" {len(gone)} whose directory is already gone ({', '.join(gone[:3])}) — "
+                 f"`git -C {main} worktree prune` forgets them, and their branches stay.")
+    if tied:
+        said += (f" {len(tied)} holding a submodule ({', '.join(tied[:3])}), which `worktree "
+                 "remove` refuses without `--force` — and `--force` also takes anything "
+                 "uncommitted, so `git -C <path> status --porcelain` first.")
     return said
 
 
@@ -486,8 +524,8 @@ def main() -> None:
     # The plugin creates worktrees unasked, so clearing away the ones nobody is in is the
     # plugin's job too — nine accumulated on one repository in a single run, each an empty
     # branch over an empty directory. Only trees it provisioned, only for sessions that are
-    # gone, and only via `git worktree remove` and `git branch -d`, both of which refuse
-    # rather than destroy when there is anything there.
+    # gone, and only via `git worktree remove`, which refuses rather than destroys when
+    # there is anything there — and a branch only where its work is already in the trunk.
     swept = worktree.reap_unused(ctx, {rec.session_id for rec in others} | {me.session_id})
     leases = {rec.session_id: sessions.leases_held_by(ctx, rec.session_id) for rec in others}
 
@@ -495,8 +533,17 @@ def main() -> None:
     # the founder's repository and does not — it is surfaced by `_knowledge_line` and
     # applied by one command.
     repaired = migrate.repair(ctx)
+    # Every start, not once per clone: a tree added or pulled since the upgrade can track the
+    # ledger again, and its next transition put it back into git (decision 0018).
+    kept_out = migrate.keep_the_ledger_out(ctx)
+    repaired += [f"ledger: {kept_out}"] if kept_out else []
 
-    cfg = config.load(ctx)
+    # Settled before the board names them. A pull request closed on the website, or merged
+    # there with its branch deleted, was read out at every session start for thirty days,
+    # because only the Stop gate and the status line ever reconciled one.
+    pullrequest.reconcile(ctx, ctx.branch)
+
+    cfg, complaints = config.load_checked(ctx)
     # Work that stopped moving. `reap` covers the session that DIED; this covers the
     # commoner case — a live chat that claimed 0007, moved on, and left it reading `doing`
     # on every board for the rest of the week. Before the board is rendered, because the
@@ -514,6 +561,7 @@ def main() -> None:
     body = board.render(ctx, me, others, len(reaped), leases)
     body += f"\nstage: {resolved_stage} (computed from the repository, not configured)"
     body += "\n" + _autonomy_line(cfg.autonomy)
+    body += _config_line(ctx, complaints)
     body += _armed_line(ctx)
     body += _swept_line(swept)
     body += _reclaimed_line(returned)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 import unittest
 
 from helpers import RepoCase  # noqa: F401  (ensures sys.path is set up)
@@ -175,6 +176,134 @@ class TestACodeReferenceIsNotACredential(unittest.TestCase):
     def test_scrub_leaves_the_reference_alone(self):
         line = "max_tokens=args.max_new_tokens"
         self.assertEqual(line, redact.scrub(line))
+
+
+class TestTheAssignmentFormOfADevelopmentDefault(unittest.TestCase):
+    """`postgres://postgres:postgres@localhost` was exempt as a URL (#75) while the same
+    default in the variable the image reads was refused, and so was the address of an
+    endpoint whose name happened to contain TOKEN."""
+
+    def test_a_default_that_names_what_it_unlocks_is_not_a_secret(self):
+        for text in ("POSTGRES_PASSWORD: postgres", '"postgres_password": "postgres"',
+                     "RABBITMQ_PASSWORD=rabbitmq", "PASSWORD=password"):
+            self.assertEqual([], redact.find(text), text)
+
+    def test_a_bare_address_is_not_a_secret(self):
+        for text in ('TOKEN_URL = "https://oauth2.googleapis.com/token"',
+                     "TOKEN_URL=https://oauth2.googleapis.com/token"):
+            self.assertEqual([], redact.find(text), text)
+
+    def test_the_same_shapes_still_catch_the_real_thing(self):
+        """Narrow on purpose, like the URL rule: a default under another service's name,
+        an address carrying a query or a login, and a value that is only test-flavoured."""
+        for text in ("PROD_DB_PASSWORD=postgres",
+                     'CALLBACK_TOKEN_URL = "https://hooks.example.com/cb?token=abcdef123456"',
+                     'API_TOKEN = "https://deploy:s3cretpw@registry.example.com/"',
+                     "SECRET_KEY=test-secret-key"):
+            self.assertIn("assigned-secret", redact.find(text), text)
+
+
+class TestTheScanTakesTimeInProportionToTheText(RepoCase):
+    """The credential scan reads every Write and every Bash line. Anchored on `\\b` alone,
+    the connection-string pattern began a fresh scan of the rest of the run at every dot of
+    `a.a.a…`: 20 KB took a second and 40 KB 3.6 s, in a gate with a fifteen-second budget."""
+
+    DOTTED = "a." * 30_000
+
+    def test_sixty_kilobytes_of_dotted_text_is_read_in_well_under_a_second(self):
+        for scan in (redact.find, redact.scrub):
+            started = time.monotonic()
+            scan(self.DOTTED)
+            self.assertLess(time.monotonic() - started, 1.0, scan.__name__)
+
+    def test_the_gate_writes_it_without_stalling(self):
+        started = time.monotonic()
+        proc = self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Write",
+            "tool_input": {"file_path": str(self.repo / "data.txt"), "content": self.DOTTED}})
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertNotEqual("deny", self.hook_decision(proc), proc.stdout)
+        self.assertLess(time.monotonic() - started, 3.0)
+
+    def test_anchoring_the_scheme_loses_no_connection_string(self):
+        for text, secret in (("postgres://admin:s3cretpw@db.internal:5432/app", "s3cretpw"),
+                             ("DATABASE_URL=mysql+pymysql://root:hunter2hunter2@db/app",
+                              "hunter2hunter2"),
+                             ("cloned https://deploy:t0kenvalue@git.example.com/r.git",
+                              "t0kenvalue"),
+                             ('{"url": "amqp://guest:rabbitpass@mq:5672"}', "rabbitpass"),
+                             ("a.b.c.git+ssh://git:s3cretpw@host/repo", "s3cretpw")):
+            with self.subTest(text=text):
+                self.assertIn("url-credentials", redact.find(text))
+                self.assertNotIn(secret, redact.scrub(text))
+
+
+class TestTheWholeCredentialIsTakenOut(unittest.TestCase):
+    """A batch of error-tracker signals reached `.claude/signals/` with a private key's body
+    and END line, a Redis password, a Basic credential and an API key in it: only the BEGIN
+    line was known, a URL needed a user name, and a header was known only as `Bearer`."""
+
+    KEY = ("-----BEGIN EC PRIVATE KEY-----\n"
+           "MHcCAQEEIBzfZzzrxvZYjEeV5N9Ls7AutBIEi4rjqsMrhSfciX+MoAoGCCqGSM49\n"
+           "AwEHoUQDQgAE+kh1eriJpHy/jd1g9suOCfcrUVHN3TP9HQv4kj8M6R7wMhPvQO5e\n"
+           "-----END EC PRIVATE KEY-----")
+
+    def test_a_private_key_goes_whole(self):
+        self.assertEqual("cannot load:\n[REDACTED]\nretrying",
+                         redact.scrub(f"cannot load:\n{self.KEY}\nretrying"))
+
+    def test_a_key_cut_off_before_its_end_line_loses_its_body_too(self):
+        cut = self.KEY.rsplit("\n", 1)[0]
+        self.assertNotIn("MHcCAQEEIBzfZzzrxvZYjEeV5N9Ls7", redact.scrub(cut))
+        self.assertIn("private-key-block", redact.find(cut))
+
+    def test_a_pgp_private_key_block_is_one_too(self):
+        block = "-----BEGIN PGP PRIVATE KEY BLOCK-----\n\nlQOYBF9x2wQBCAC7\n-----END PGP PRIVATE KEY BLOCK-----"
+        self.assertEqual("[REDACTED]", redact.scrub(block))
+
+    def test_a_password_with_no_user_name(self):
+        url = "redis://:Prod-R3dis-Passw0rd-2026@redis-master:6379/0"
+        self.assertEqual("redis://[REDACTED]@redis-master:6379/0", redact.scrub(url))
+        self.assertIn("url-credentials", redact.find(url))
+
+    def test_what_a_header_carries_by_name(self):
+        for text, secret in (
+            ("headers: {'Authorization': 'Basic YWRtaW46UzNjcjN0LUJpbGxpbmctUGFzcw=='}", "YWRtaW46"),
+            ("request headers X-Api-Key: 9f8e7d6c5b4a39281706f5e4d3c2b1a0 was rejected", "9f8e7d6c"),
+            ('curl -H "api-key: 3c2b1a0f9e8d7c6b" https://api.example.com', "3c2b1a0f"),
+            ("Cookie: theme=dark; sessionid=4b1d2e9a7f", "4b1d2e9a7f"),
+            ("Set-Cookie: session=eyJ1c2VyIjo0Mn0.aB3; Path=/; HttpOnly", "eyJ1c2VyIjo0Mn0"),
+        ):
+            with self.subTest(text=text):
+                self.assertNotIn(secret, redact.scrub(text))
+
+    def test_a_line_of_header_names_is_read_in_linear_time(self):
+        """Looked for without a bound, the digit made every `cookie:` in a line of them
+        scan to the end of it: 42 KB of them took 3.1 s."""
+        for text in ("cookie:" * 6_000, "api-key=" * 5_000):
+            started = time.monotonic()
+            redact.scrub(text)
+            self.assertLess(time.monotonic() - started, 1.0, text[:8])
+
+    def test_a_header_is_scrubbed_and_never_refused(self):
+        """Read by the header's name, a value has no shape of its own to refuse a write on."""
+        self.assertEqual([], redact.find("X-Api-Key: 9f8e7d6c5b4a39281706f5e4d3c2b1a0"))
+
+    def test_prose_and_code_about_headers_are_left_alone(self):
+        for text in (
+            "Use basic authentication for the admin API.",
+            "The Authorization header is required.",
+            "authorization: required",
+            'headers = {"Authorization": f"Bearer {token}"}',
+            'headers = {"X-Api-Key": api_key}',
+            "Authorization: Bearer ${API_TOKEN}",
+            'cookie = request.cookies.get("session")',
+            "Set the Cookie header on the response",
+            "redis://localhost:6379/0",
+            "http://[::1]:8080/health",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(text, redact.scrub(text))
 
 
 if __name__ == "__main__":

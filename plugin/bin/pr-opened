@@ -7,8 +7,14 @@ this merge about this branch?" check then had nothing to compare against, and a 
 merge of somebody else's pull request was judged against whatever branch the session
 happened to be standing in, and refused with that branch's problems (#135).
 
-This event is the only one that carries the answer. It writes exactly one field onto a
-record that already exists, blocks nothing, and is silent.
+This event is the only one that carries the answer. It writes the number onto the record
+pre-tool filed, blocks nothing, and is silent — and files the record itself when nothing did,
+which is every pull request the structured tool opens: PreToolUse never sees that tool.
+
+It is also the only event that sees the structured tool close one. PreToolUse is matched on
+the built-in tools, so `update_pull_request` with `state: closed` reaches this hook and no
+other — and a pull request closed without merging used to stay OPEN on every board for
+thirty days. Here the close has already succeeded, so it is settled rather than guessed.
 
 Fails open. A number that did not get learned costs a numbered merge its judgement, which
 is the conservative direction; a hook that raised would cost the founder a tool call.
@@ -22,24 +28,37 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import hookio, pullrequest  # noqa: E402
+from claude_bestpractice import config, gitpolicy, hookio, pullrequest  # noqa: E402
 
 
 def main() -> None:
     event = hookio.read_event()
     command = str(event.tool_input.get("command", "")) if event.tool_name == "Bash" else ""
+    ctx = hookio.repo(event.cwd or os.getcwd())
+    # It files and settles obligations now, so it stands down where pre-tool does: with the
+    # pull-request flow switched off, and with the plugin switched off (decision 0016).
+    if not (config.enforcing(ctx)[0] and config.load(ctx).manage_pull_requests):
+        hookio.emit_silent()
     if not pullrequest.opens_a_pull_request(event.tool_name, command):
+        closed = pullrequest.closes(ctx, event.tool_name, command, event.tool_input,
+                                    event.cwd or os.getcwd())
+        if closed:
+            pullrequest.settle(ctx, closed, pullrequest.CLOSED)
         hookio.emit_silent()
 
-    ctx = hookio.repo(event.cwd or os.getcwd())
     number = pullrequest.number_in(event.raw.get("tool_response"))
-    if number:
-        # The same branch the obligation was filed under, derived the same way, or the
-        # record this is meant to complete is not the one that gets stamped.
-        head = pullrequest.head_of(
-            event.tool_name, command, event.tool_input, event.cwd or os.getcwd()
-        ) or ctx.branch
-        pullrequest.learn_number(ctx, head, number)
+    # The same branch the obligation was filed under, derived the same way, or the
+    # record this is meant to complete is not the one that gets stamped.
+    head = pullrequest.head_of(
+        event.tool_name, command, event.tool_input, event.cwd or os.getcwd()
+    ) or ctx.branch
+    if not pullrequest.learn_number(ctx, head, number):
+        # Nothing filed it. PreToolUse is matched on the built-in tools by exact name, so a
+        # pull request the structured tool opened reached this hook and no other: there was
+        # no record to stamp, and it never reached the board. `opened` leaves an open
+        # record alone, so a call pre-tool did see is filed once.
+        base = str(event.tool_input.get("base") or "") or gitpolicy.default_branch(ctx) or "main"
+        pullrequest.opened(ctx, head, base, event.session_id, number=number)
     hookio.emit_silent()
 
 

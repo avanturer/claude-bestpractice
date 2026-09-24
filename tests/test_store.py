@@ -196,6 +196,14 @@ class TestAtomicWrite(RepoCase):
         path.write_text("{ this is not json")
         self.assertEqual(store.read_json(path, default={"fallback": True}), {"fallback": True})
 
+    def test_a_directory_where_a_file_belongs_reads_as_default(self):
+        """`IsADirectoryError` is an OSError, not a decode error, so it went straight past
+        this reader — into the config every gate reads first, where a directory named
+        `config.json` refused every tool call in the repository."""
+        path = store.tier_b(self.ctx(), "d.json")
+        path.mkdir(parents=True)
+        self.assertEqual(store.read_json(path, default={"fallback": True}), {"fallback": True})
+
     def test_failed_write_leaves_no_partial_file(self):
         ctx = self.ctx()
         path = store.tier_b(ctx, "fail.json")
@@ -211,6 +219,59 @@ class TestAtomicWrite(RepoCase):
             store.atomic_write(path, Exploding("x"))
         self.assertFalse(path.exists())
         self.assertEqual([p for p in path.parent.iterdir() if p.name.endswith(".tmp")], [])
+
+
+class TestAShortWriteIsNeverTakenForAWholeOne(RepoCase):
+    """`os.write` may write less than it is handed and say so only in what it returns. It was
+    ignored everywhere, so a nearly full disk fsynced a truncated temp file and renamed it
+    over the good one with nothing raised — and the reader took the damage for an absent
+    file, putting a founder's whole config back at its defaults.
+    """
+
+    @staticmethod
+    def dribbling(limit: int = 7):
+        """`os.write` as a kernel that writes at most `limit` bytes per call."""
+        from unittest import mock
+
+        real = os.write
+        return mock.patch.object(os, "write", lambda fd, data: real(fd, bytes(data[:limit])))
+
+    def test_a_write_cut_short_is_finished(self):
+        path = store.tier_b(self.ctx(), "long.json")
+        with self.dribbling():
+            store.write_json(path, {"items": list(range(200))})
+        self.assertEqual({"items": list(range(200))}, store.read_json(path))
+
+    def test_an_append_cut_short_is_finished(self):
+        path = store.tier_b(self.ctx(), "log.jsonl")
+        with self.dribbling():
+            store.append_jsonl(path, {"reason": "x" * 300})
+        self.assertEqual([{"reason": "x" * 300}], store.read_jsonl(path))
+
+    @unittest.skipUnless(os.name == "posix", "RLIMIT_FSIZE is how a full disk looks to write(2)")
+    def test_a_full_disk_raises_and_the_good_record_survives(self):
+        """The real kernel, not a stand-in: a file-size limit makes write(2) come back
+        short exactly as a full disk does."""
+        from helpers import LIB
+
+        path = store.tier_b(self.ctx(), "record.json")
+        store.write_json(path, {"keep": "the good one"})
+        child = (
+            "import json, resource, sys\n"
+            f"sys.path.insert(0, {str(LIB)!r})\n"
+            "from pathlib import Path\n"
+            "from claude_bestpractice import store\n"
+            "resource.setrlimit(resource.RLIMIT_FSIZE, (1000, resource.RLIM_INFINITY))\n"
+            "try:\n"
+            f"    store.write_json(Path({str(path)!r}), list(range(400)))\n"
+            "except OSError:\n"
+            "    sys.exit(3)\n"
+        )
+        proc = subprocess.run([sys.executable, "-c", child], capture_output=True, text=True,
+                              timeout=60)
+        self.assertEqual(3, proc.returncode, proc.stderr)
+        self.assertEqual({"keep": "the good one"}, store.read_json(path))
+        self.assertEqual([], [p.name for p in path.parent.iterdir() if p.name.endswith(".tmp")])
 
 
 class TestJsonl(RepoCase):
@@ -229,6 +290,89 @@ class TestJsonl(RepoCase):
             fh.write('{"i": 2, truncat\n')
         store.append_jsonl(path, {"i": 3})
         self.assertEqual([r["i"] for r in store.read_jsonl(path)], [1, 3])
+
+    def test_one_record_torn_inside_a_character_does_not_hide_the_rest(self):
+        """The file was decoded whole, so a partial write that stopped inside `é` made every
+        record in it unreadable — and the pull-request checks reading `unverified.jsonl`
+        found no unverified finish at all."""
+        path = store.tier_b(self.ctx(), "unverified.jsonl")
+        for i in range(3):
+            store.append_jsonl(path, {"i": i, "reason": "café"})
+        torn = json.dumps({"i": 3, "reason": "café"}, ensure_ascii=False).encode("utf-8")
+        with path.open("ab") as fh:
+            fh.write(torn[: torn.index("é".encode("utf-8")) + 1])
+        self.assertEqual([0, 1, 2], [r["i"] for r in store.read_jsonl(path)])
+
+    def test_a_line_separator_inside_a_record_is_not_the_end_of_it(self):
+        """Records are written with `ensure_ascii=False`, so U+2028 reaches the file raw —
+        and text splitting took it for a line break and lost the record."""
+        path = store.tier_b(self.ctx(), "log.jsonl")
+        store.append_jsonl(path, {"said": "one two"})
+        self.assertEqual([{"said": "one two"}], store.read_jsonl(path))
+
+
+class TestAReindexKeepsWhatItSaysItKeeps(RepoCase):
+    """`claude-bp-reindex` read the carried logs, deleted Tier B, and wrote them back through
+    a decode and an encode. One log torn inside a multibyte character raised at the encode —
+    after the delete — so that log was lost, and the inbox waiting in the carry directory
+    beside the root was never put back, and was the first thing the next reindex deleted.
+    """
+
+    def reindex(self):
+        from helpers import BIN
+
+        return subprocess.run([sys.executable, str(BIN / "claude-bp-reindex")],
+                              capture_output=True, text=True, cwd=str(self.repo), timeout=120)
+
+    def test_a_torn_log_comes_back_byte_for_byte_with_the_inbox(self):
+        ctx = self.ctx()
+        log = store.tier_b(ctx, "unverified.jsonl")
+        store.append_jsonl(log, {"branch": "feat", "reason": "café"})
+        with log.open("ab") as fh:
+            fh.write('{"branch": "fix", "reason": "caf'.encode("utf-8") + b"\xc3")
+        before = log.read_bytes()
+        store.write_json(store.tier_b(ctx, "inbox", "peer.json"), [{"text": "queued"}])
+
+        proc = self.reindex()
+
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual(before, log.read_bytes())
+        self.assertEqual([{"text": "queued"}],
+                         store.read_json(store.tier_b(ctx, "inbox", "peer.json")))
+        beside = [p.name for p in store.tier_b(ctx).parent.iterdir() if ".carry" in p.name]
+        self.assertEqual([], beside)
+
+    def test_the_repairs_had_and_the_attempt_stamps_are_not_rebuilt_but_kept(self):
+        """Neither can be derived again. An emptied repair ledger re-armed every one-shot
+        repair, and a lost stamp is a dead end about rewritten code shown as current."""
+        from claude_bestpractice import attempts, migrate
+
+        ctx = self.ctx()
+        self.write("billing.py", "rates = {}\n")
+        self.commit("billing")
+        migrate.repair(ctx)
+        attempts.record(ctx, "cache fee rates in a module dict", "leaks across tenants",
+                        ["billing.py"])
+
+        proc = self.reindex()
+
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual([], migrate.pending(ctx))
+        self.assertIn("attempt stamp", proc.stdout)
+        self.write("billing.py", "rates = {}  # per tenant now\n")
+        self.assertIn("rewritten since", attempts.render_for_board(ctx, ["billing.py"]))
+
+    def test_what_an_interrupted_run_left_beside_the_root_is_put_back(self):
+        ctx = self.ctx()
+        store.ensure_dir(store.tier_b(ctx))
+        stranded = store.tier_b(ctx).parent / f".{store.TIER_B_DIRNAME}.carry" / "inbox"
+        store.write_json(stranded / "peer.json", [{"text": "queued before the crash"}])
+
+        store.purge_tier_b(ctx)
+
+        self.assertEqual([{"text": "queued before the crash"}],
+                         store.read_json(store.tier_b(ctx, "inbox", "peer.json")))
+        self.assertFalse(stranded.parent.exists())
 
 
 class TestLocks(RepoCase):

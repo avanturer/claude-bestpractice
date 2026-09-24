@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -77,7 +78,7 @@ def worktree_advice(ctx: GitContext, task: str = "") -> str:
         part for part in "".join(c.lower() if c.isalnum() else " " for c in task).split()[:5]
     ) or "work"
     target = ctx.worktree_root.parent / f"{ctx.worktree_root.name}-{slug}"
-    return f"git worktree add -b feat/{slug} {target}"
+    return f"git worktree add -b feat/{slug} {shlex.quote(str(target))}"
 
 
 def worktree_refusal(ctx: GitContext, task: str = "", session_id: str = "") -> str:
@@ -93,6 +94,10 @@ def worktree_refusal(ctx: GitContext, task: str = "", session_id: str = "") -> s
     own rule being satisfied. A hook runs without a permission prompt, so the plugin does it
     and says where to go. The last line is there because the measured failure was the agent
     being polite rather than the agent being unable.
+
+    Every path put into a command here is quoted for the shell. Unquoted, a repository under
+    `…/final space ü/app` was told `cd …/final space ü/app/.claude/worktrees/…`, which bash
+    answers with "too many arguments" — a refusal whose one way out does not run.
     """
     from . import worktree
 
@@ -113,8 +118,8 @@ def worktree_refusal(ctx: GitContext, task: str = "", session_id: str = "") -> s
         "claude-bestpractice: this is the main checkout, not a worktree. Several sessions "
         "sharing one working tree overwrite each other silently — git does not notice, and "
         "neither will you.\n"
-        f"  A worktree has been created for you at {ready} — `cd {ready}` and redo this "
-        "write there.\n"
+        f"  A worktree has been created for you at {ready} — `cd {shlex.quote(str(ready))}` "
+        "and redo this write there.\n"
         "  This is not a question for the founder: do not ask whether to use a worktree, "
         "just move.\n"
         "  If this repository is genuinely single-session: "
@@ -135,10 +140,13 @@ def violations(ctx: GitContext, task: str = "", session_id: str = "") -> list[st
     if not ctx.is_worktree:
         out.append(worktree_refusal(ctx, task, session_id))
     if on_trunk(ctx):
+        # Quoted: the name is the founder's words, and `fix the user's login` put an
+        # unterminated quote into the one command this refusal offers.
+        branch = f"feat/{'-'.join(task.lower().split()[:4]) or 'work'}"
         out.append(
             f"claude-bestpractice: {ctx.branch} is the trunk. Work on a branch so it can be "
             "reverted and merged as one unit.\n"
-            f"  git switch -c feat/{'-'.join(task.lower().split()[:4]) or 'work'}\n"
+            f"  git switch -c {shlex.quote(branch)}\n"
             + config.switch_advice("protect_trunk", False)
         )
     return out
@@ -336,13 +344,42 @@ def ignored_by_git(tree: Path, target: Path) -> bool:
         return False
     from .gitctx import _run
 
-    if _run(["check-ignore", "--", relative.as_posix()], tree, check=False).strip():
+    if git_ignores(tree, relative.as_posix()):
         return True
-    if not target.exists():
+    # A name the filesystem refuses to look up — longer than it allows, or under a
+    # directory it may not read — raises from `exists()` rather than answering, and this
+    # runs inside a gate that fails closed: `echo x > <300 characters>.txt` was a crash.
+    # Such a file is not present, which is all this line is asking.
+    try:
+        present = target.exists()
+    except OSError:
+        present = False
+    if not present:
         return False
     return not _run(
         ["ls-files", "--error-unmatch", "--", relative.as_posix()], tree, check=False
     ).strip()
+
+
+def git_ignores(tree: Path, relative: str) -> bool:
+    """Does git in `tree` ignore this path, whether or not it exists yet?
+
+    Asked a second time with a trailing slash when nothing is there. A rule written for a
+    directory, `build/`, matches only what git can see is a directory, and one that does
+    not exist yet is not — so `rm -rf build`, with `build/` ignored and absent, was read as
+    a write to a path a commit would carry: refused in the main checkout, and a worktree
+    provisioned to hold nothing.
+    """
+    from .gitctx import _run
+
+    asked = [relative]
+    try:
+        absent = not (tree / relative).exists()
+    except OSError:
+        absent = True
+    if absent:
+        asked.append(relative.rstrip("/") + "/")
+    return bool(_run(["check-ignore", "--", *asked], tree, check=False).strip())
 
 
 def owned_by_session(ctx: GitContext, target: Path) -> bool:
@@ -390,19 +427,26 @@ def foreign_refusal(target: Path, owner: Path, ctx: GitContext) -> str:
 
 
 def _provisioned_trees(ctx: GitContext, session_id: str) -> list[Path]:
-    """Every working tree this plugin made for THIS session."""
+    """Every working tree this plugin made for THIS session, under any id it has had.
+
+    The tree is recorded for the id the session had when it was refused in the main
+    checkout, and the session is a new id wherever else it stands (`sessions.identities`).
+    `worktree.mine` answers the same question the same way: two readers of this one fact
+    that disagree are how #89 and #100 happened.
+    """
     if not session_id:
         return []
-    from . import store
+    from . import sessions, store
 
     try:
         records = sorted(store.tier_b(ctx, "worktrees").glob("*.json"))
     except OSError:
         return []
+    mine = sessions.identities(ctx, session_id)
     out: list[Path] = []
     for path in records:
         body = store.read_json(path, default={}) or {}
-        if not body.get("provisioned_by_plugin") or body.get("session_id") != session_id:
+        if not body.get("provisioned_by_plugin") or body.get("session_id") not in mine:
             continue
         try:
             out.append(Path(str(body.get("path") or "")).resolve())
@@ -455,16 +499,50 @@ def foreign_git_refusal(owner: Path, ctx: GitContext) -> str:
     should be told which one happened: no path is named, nothing appears in a diff, and
     `reset --hard` or `clean -fd` takes uncommitted work that was never written anywhere
     else. Every rule keyed on "which files does this write" saw nothing at all here.
+
+    Nobody owns the main checkout, so for it the second half of that advice named nobody —
+    and it is the tree decision 0018 needs kept level with the trunk. It is told the one
+    update that is allowed there instead.
     """
-    kind = "the main checkout" if owner == ctx.common_dir.parent.resolve() else "another session's worktree"
+    main = owner == ctx.common_dir.parent.resolve()
+    kind = "the main checkout" if main else "another session's worktree"
     return (
         f"claude-bestpractice: this git command operates on {kind} ({owner}), not on this "
         f"session's working tree ({ctx.worktree_root}).\n"
         "  reset, checkout, switch, clean and stash discard uncommitted work and move the "
         "HEAD another session is standing on. Nothing names a file, so nothing shows up in "
         "a diff and no lease covers it.\n"
-        "  Run it in your own tree, or let the session that owns that one run it."
+        + (
+            "  Run it in your own tree. Bringing the main checkout up to the trunk is allowed, "
+            "and so is anything that only reads it:\n"
+            f"  git -C {shlex.quote(str(owner))} pull --ff-only"
+            if main else
+            "  Run it in your own tree, or let the session that owns that one run it."
+        )
     )
+
+
+def split_git(argv: list[str]) -> tuple[list[str], str, list[str]]:
+    """A git command as the trees `-C` and `--work-tree` point it at, its subcommand, and
+    that subcommand's own arguments. All three empty for anything that is not git.
+
+    From the words the shell hands git, so a quoted `-C "<a path with a space>"` is the
+    path: read off the text with quoted spans blanked, it came back as whatever word
+    followed, and the command was judged in the session's own tree instead.
+    """
+    if not argv or argv[0].rsplit("/", 1)[-1] != "git":
+        return [], "", []
+    pointed: list[str] = []
+    index = 1
+    while index < len(argv) and argv[index].startswith("-"):
+        word = argv[index]
+        if word in ("-C", "--work-tree") and index + 1 < len(argv):
+            pointed.append(argv[index + 1])
+        elif word.startswith("--work-tree="):
+            pointed.append(word.split("=", 1)[1])
+        index += 2 if word in _GLOBAL_WITH_VALUE else 1
+    subcommand = argv[index] if index < len(argv) else ""
+    return pointed, subcommand, argv[index + 1:]
 
 
 def worktree_paths_in_use(ctx: GitContext) -> dict[str, str]:
@@ -510,6 +588,24 @@ COMMIT_MESSAGE = re.compile(
     r"""git\s+commit\b[^\n]*?(?:-[a-zA-Z]*m|--message=?)\s*(?P<q>["'])(?P<message>.*?)(?P=q)""",
     re.S,
 )
+
+# The same flag with the message handed over by a heredoc — `-m "$(cat <<'EOF' … EOF)"`,
+# which is how Claude Code writes every multi-line commit. Anchored on the terminator, so a
+# quote inside the message cannot end it early the way it ends the pattern above.
+_HEREDOC_MESSAGE = re.compile(
+    r"""git(?:\s+-[cC]\s+\S+|\s+--\S+)*\s+commit\b[^\n]*?(?:-[a-zA-Z]*m|--message=?)\s*"\$\(\s*cat\s*<<-?\s*"""
+    r"""(?P<q>['"]?)(?P<tag>\w+)(?P=q)[ \t]*\n(?P<body>.*?)\n[ \t]*(?P=tag)[ \t]*\n\s*\)""",
+    re.S,
+)
+
+# What the shell rewrites inside double quotes before git ever sees the message.
+_EXPANDED = re.compile(r"\$[({\w]|`")
+
+# Any other heredoc is data handed to a command — a script being written, a query being
+# run — and a `git commit` inside one is not being run. Its body was tokenised with the rest
+# of the line, so `cat > release.sh <<'EOF'` over a body holding `git add -A && git commit
+# -m "Release"` split out a commit of "Release" and refused it as seven characters.
+_HEREDOC_DATA = re.compile(r"<<-?\s*(['\"]?)(?P<tag>\w+)\1.*?^\s*(?P=tag)\s*$", re.S | re.M)
 
 # `=======` alone is also how Markdown and reStructuredText underline a seven-character
 # heading, so requiring the OPENING marker as well is what stops `Options` under a row of
@@ -666,16 +762,11 @@ def whose_work_is_in_the_way(ctx: GitContext, session_id: str) -> tuple[list[str
     everybody. Everything else is this session's, because a gate that has to guess whose a
     file is should be deciding in the session's favour.
     """
-    from . import sessions
-
     dirty = _dirty_paths(ctx)
     if not dirty:
         return [], []
-    claimed: set[str] = set()
     try:
-        for record in sessions.live_sessions(ctx, exclude=session_id):
-            claimed.update(sessions.leases_held_by(ctx, record.session_id))
-            claimed.update(path for path in record.task_paths if path)
+        claimed = _claimed_here(ctx, session_id)
     except Exception:  # noqa: BLE001 - a refusal must never come out of a crashed read
         return [], []
     foreign = [
@@ -683,6 +774,32 @@ def whose_work_is_in_the_way(ctx: GitContext, session_id: str) -> tuple[list[str
         if path.startswith(_LEDGER_PREFIX) or any(_under(path, claim) for claim in claimed)
     ]
     return sorted(foreign), sorted(path for path in dirty if path not in set(foreign))
+
+
+def _claimed_here(ctx: GitContext, session_id: str) -> set[str]:
+    """What the live sessions standing in THIS tree have leased or named — other than this one.
+
+    This tree only, because a file of the same name in another tree is another file: two
+    sessions in two trees each staging their own `README.md` is a merge later, never one
+    commit carrying the other's work (#163). Counting every tree refused a session's
+    `git add -A` in its own tree over a sibling's lease in the sibling's tree.
+
+    Never this session's, under any id it has had. It files its card in the main checkout
+    and then moves into its own tree, which makes it a second identity with the first one
+    still live — and that first record, naming the very paths being staged, was read as a
+    sibling's, refusing the ordinary commit in the tree this plugin sent it to.
+    """
+    from . import sessions
+
+    here = ctx.worktree_root.resolve()
+    mine = sessions.identities(ctx, session_id)
+    claimed: set[str] = set()
+    for record in sessions.live_sessions(ctx):
+        if record.session_id in mine or Path(record.worktree).resolve() != here:
+            continue
+        claimed.update(sessions.leases_held_by(ctx, record.session_id, here))
+        claimed.update(path for path in record.task_paths if path)
+    return claimed
 
 
 def _under(path: str, claim: str) -> bool:
@@ -714,9 +831,74 @@ def _dirty_paths(ctx: GitContext) -> list[str]:
 
 
 def commit_message(command: str) -> str:
-    """The message out of a `git commit -m` command line, or empty if there is none."""
+    """The message out of a `git commit -m` command line, or empty if there is none.
+
+    Empty, too, when the shell writes the message rather than the command line: judging
+    `"$(cat <<'EOF'"` as a thirteen-character subject refused every multi-line commit Claude
+    Code makes, and a `"$MSG"` is a variable name, not a message.
+    """
+    heredoc = _HEREDOC_MESSAGE.search(command)
+    if heredoc:
+        return heredoc.group("body")
+    command = _HEREDOC_DATA.sub(" ", command)
+    parsed = shellcmd.commands(command)
+    if not parsed:
+        # Not tokenisable here, so the text is all there is to go on.
+        return _message_by_pattern(command)
+    # From the shell's own reading of the line, not a pattern over its text. The pattern
+    # ended the message at the first quote it met: `-m "Handle \"quoted\" fields …"` was
+    # judged as `Handle \`, `-m 'Don'\''t crash …'` as `Don` — refusals no rewording could
+    # satisfy — and a `git commit` inside a heredoc being written to a script was judged
+    # as if it were being run.
+    for argv in parsed:
+        if argv[0].rsplit("/", 1)[-1] != "git":
+            continue
+        # Past git's own options: `git -C <tree> commit -m …` is how a session commits in
+        # its tree from anywhere, and reading only `argv[1]` let every such message through.
+        verb, args = _subcommand_of(argv)
+        if verb == "commit":
+            message = _message_argument(args)
+            if message is not None:
+                return "" if _EXPANDED.search(message) else message
+    return ""
+
+
+def _message_by_pattern(command: str) -> str:
     match = COMMIT_MESSAGE.search(command)
-    return match.group("message") if match else ""
+    if not match or (match.group("q") == '"' and _EXPANDED.search(match.group("message"))):
+        return ""
+    return match.group("message")
+
+
+# `git commit` flags that take no value, so `-am`, `-qm` and `-vm` are still the message flag.
+_VALUELESS = set("aeinqsvz")
+
+
+def _message_argument(args: list[str]) -> str | None:
+    """The first `-m`/`--message` value among `git commit`'s arguments, None for none."""
+    for index, arg in enumerate(args):
+        if arg == "--":
+            return None
+        if arg.startswith("--message="):
+            return arg.split("=", 1)[1]
+        glued = _glued_message(arg)
+        if glued:
+            return glued
+        if arg == "--message" or glued == "":
+            return args[index + 1] if index + 1 < len(args) else ""
+    return None
+
+
+def _glued_message(arg: str) -> str | None:
+    """For a short-flag cluster that ends in the message flag: what is glued after the `m`.
+
+    `-m` and `-am` give "" (the message is the next argument), `-mwip` gives "wip", and
+    anything that is not such a cluster gives None.
+    """
+    if not arg.startswith("-") or arg.startswith("--") or "m" not in arg:
+        return None
+    before, _, after = arg[1:].partition("m")
+    return after if set(before) <= _VALUELESS else None
 
 
 # How many recent subjects decide whether this repository has a convention, and how many

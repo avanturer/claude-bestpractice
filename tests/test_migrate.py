@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shlex
 import subprocess
 import sys
 import contextlib
@@ -10,7 +12,7 @@ import unittest
 
 from helpers import BIN, RepoCase, git
 
-from claude_bestpractice import migrate, plan, store
+from claude_bestpractice import limits, migrate, plan, store
 
 
 class TestAHandoffIsRefusedUntilItIsOne(RepoCase):
@@ -117,6 +119,38 @@ class TestTheWorkaroundIsTakenOver(RepoCase):
         self.write("TODO.md", "- ship the thing\n")
         self.assertEqual([], migrate.parked_by_hand(self.ctx()))
 
+    def test_the_hyphen_is_the_convention_and_the_underscore_is_not(self):
+        """`TODO_LIST.md` is somebody's list; the comment above the pattern always said so."""
+        self.write("docs/TODO_LIST.md", "# a list\n\nnot a stand-in\n")
+        self.assertEqual([], migrate.parked_by_hand(self.ctx()))
+
+    def test_another_repositorys_files_are_not_this_ones(self):
+        """A submodule, a nested repository and ignored vendored code all matched the name,
+        and the upgrade rewrote them: ` m vendor/upstream` in the founder's status, and a
+        card on the board for somebody else's plan."""
+        from helpers import make_repo
+
+        upstream = make_repo(self.tmp, "upstream")
+        (upstream / "TODO-v2.md").write_text("# upstream's own plan\n\ntheirs\n", encoding="utf-8")
+        git(["add", "-A"], upstream)
+        git(["commit", "-qm", "their plan"], upstream)
+        git(["-c", "protocol.file.allow=always", "submodule", "add", "-q", str(upstream),
+             "vendor/upstream"], self.repo)
+        self.write(".gitignore", "scratch/\n")
+        self.write("scratch/TODO-generated.md", "# generated\n\nignored\n")
+        self.commit("vendor it, and ignore the scratch area")
+        nested = self.repo / "third_party" / "libfoo"
+        nested.mkdir(parents=True)
+        git(["init", "-q"], nested)
+        (nested / "TODO-list.md").write_text("# libfoo's own\n\ntheirs\n", encoding="utf-8")
+
+        self.assertEqual([], migrate.parked_by_hand(self.ctx()))
+        migrate.repair(self.ctx())
+        self.assertEqual("", git(["status", "--porcelain", "--", "vendor"], self.repo))
+        self.assertEqual("# libfoo's own\n\ntheirs\n",
+                         (nested / "TODO-list.md").read_text(encoding="utf-8"))
+        self.assertEqual([], plan.load_all(self.ctx()))
+
     def test_adoption_carries_the_files_the_note_mentions(self):
         self.seed()
         task_id = migrate.adopt(self.ctx(), migrate.parked_by_hand(self.ctx())[0])
@@ -198,6 +232,49 @@ class TestRepairsRunThemselvesAndRunOnce(RepoCase):
         self.assertFalse(broken.exists())
         self.assertTrue(broken.with_suffix(".json.broken").exists(), "the original was deleted")
 
+    def test_the_founders_config_is_never_set_aside(self):
+        """It is theirs and committed, a file they edit by hand: moving it aside to fix a
+        parse error left `git status` showing their config deleted, and every gate on the
+        defaults in silence."""
+        config = store.tier_a(self.ctx(), "config.json")
+        config.write_text('{"enabled": false,}', encoding="utf-8")
+        self.commit("the founder's config")
+
+        migrate.repair(self.ctx())
+        self.assertTrue(config.is_file())
+        self.assertFalse(config.with_suffix(".json.broken").exists())
+
+    def test_a_config_an_earlier_upgrade_set_aside_is_put_back(self):
+        config = store.tier_a(self.ctx(), "config.json")
+        config.replace(config.with_suffix(".json.broken"))
+
+        changed = migrate.repair(self.ctx())
+        self.assertEqual({"require_worktree": False, "protect_trunk": False},
+                         json.loads(config.read_text(encoding="utf-8")))
+        self.assertFalse(config.with_suffix(".json.broken").exists())
+        self.assertTrue([line for line in changed if "config.json" in line], changed)
+
+    def test_it_is_put_back_in_whichever_tree_it_was_set_aside_in(self):
+        """The quarantine ran in the tree that happened to start first; this runs once per
+        clone, so it cannot wait for that tree to start again."""
+        tree = self.add_worktree("elsewhere")
+        config = tree / store.TIER_A_DIRNAME / "config.json"
+        config.replace(config.with_suffix(".json.broken"))
+
+        migrate.repair(self.ctx())
+        self.assertTrue(config.is_file())
+        self.assertEqual("", git(["status", "--porcelain"], tree))
+
+    def test_one_the_founder_has_written_since_is_left_alone(self):
+        config = store.tier_a(self.ctx(), "config.json")
+        broken = config.with_suffix(".json.broken")
+        broken.write_text('{"old": true,}', encoding="utf-8")
+
+        migrate.repair(self.ctx())
+        self.assertEqual({"require_worktree": False, "protect_trunk": False},
+                         json.loads(config.read_text(encoding="utf-8")))
+        self.assertTrue(broken.exists())
+
     def test_readable_state_is_untouched(self):
         good = store.tier_a(self.ctx(), "fine.json")
         good.parent.mkdir(parents=True, exist_ok=True)
@@ -229,6 +306,78 @@ class TestRepairsRunThemselvesAndRunOnce(RepoCase):
         """An upgrade that dies halfway leaves the repository worse than the defect."""
         with only_repair("9999-explodes", 1, lambda ctx: 1 / 0):
             migrate.repair(self.ctx())
+
+    def test_sessions_that_start_together_run_each_repair_once(self):
+        """Restarting sessions after an upgrade starts them together, and each ran every
+        pending repair: in five trials out of five one scratch TODO became two to four cards
+        on the one board."""
+        self.write("TODO-refactor-parser.md",
+                   "# Refactor the parser\n\nThe tokenizer in a.py double-counts newlines.\n")
+        self.commit("a scratch todo from an older session")
+        starts = [
+            subprocess.Popen([sys.executable, str(BIN / "session-start")], stdin=subprocess.PIPE,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             cwd=str(self.repo), text=True)
+            for _ in range(4)
+        ]
+        for index, proc in enumerate(starts):
+            proc.stdin.write(json.dumps({"session_id": f"s{index}", "cwd": str(self.repo),
+                                         "hook_event_name": "SessionStart", "source": "startup"}))
+            proc.stdin.close()
+        for proc in starts:
+            proc.wait(timeout=180)
+
+        self.assertEqual(["Refactor the parser"], [t.title for t in plan.load_all(self.ctx())])
+
+    def test_a_session_that_cannot_have_the_lock_starts_without_them(self):
+        """Its sibling is running them. Waiting its whole start out, or running them beside
+        the sibling, is what the lock is for."""
+        from unittest import mock
+
+        ctx = self.ctx()
+        with mock.patch.object(migrate, "_LOCK_TIMEOUT", 0.1):
+            with store.file_lock(store.tier_b(ctx, migrate.REPAIR_LOCK)):
+                self.assertEqual([], migrate.repair(ctx))
+        self.assertEqual(len(migrate._REPAIRS), len(migrate.pending(ctx)))
+
+    def board(self) -> str:
+        proc = self.run_hook("session-start", {
+            "session_id": "s1", "hook_event_name": "SessionStart", "source": "startup",
+        })
+        payload = json.loads(proc.stdout or "{}")
+        return payload.get("hookSpecificOutput", {}).get("additionalContext", "")
+
+    def test_a_revision_that_is_not_a_number_does_not_take_the_board_with_it(self):
+        """`repair` promises never to raise, and `_ran_at` sat outside its guard: one
+        revision that was not a number raised, and the session started with no board."""
+        store.write_json(store.tier_b(self.ctx(), migrate.LEDGER),
+                         {"0001-task-paths": {"revision": "one"}})
+        self.assertIn("OTHER LIVE SESSIONS", self.board())
+        self.assertEqual([], migrate.pending(self.ctx()),
+                         "a garbled record is run again and written properly")
+
+    def test_bookkeeping_that_cannot_be_written_stops_no_repair(self):
+        """An unrecorded step costs a re-run that finds nothing to do. A raising `_mark`
+        cost every repair after the first, on every start, for as long as it lasted."""
+        store.tier_b(self.ctx(), migrate.LEDGER).mkdir(parents=True)
+        config = store.tier_a(self.ctx(), "config.json")
+        config.replace(config.with_suffix(".json.broken"))
+
+        self.assertIn("OTHER LIVE SESSIONS", self.board())
+        self.assertTrue(config.is_file(), "the repairs after the first never ran")
+
+    def test_an_inbox_an_interrupted_reindex_stranded_is_put_back(self):
+        """A reindex that raised between its purge and its put-back left the queued notes
+        in the carry directory beside Tier B, where nothing reads them."""
+        ctx = self.ctx()
+        stranded = store.tier_b(ctx).parent / f".{store.TIER_B_DIRNAME}.carry" / "inbox"
+        store.write_json(stranded / "peer.json", [{"text": "queued before the crash"}])
+
+        changed = migrate.repair(ctx)
+
+        self.assertEqual([{"text": "queued before the crash"}],
+                         store.read_json(store.tier_b(ctx, "inbox", "peer.json")))
+        self.assertTrue([line for line in changed if "claude-bp-reindex" in line], changed)
 
 
 @contextlib.contextmanager
@@ -386,6 +535,19 @@ class TestTheCeilingIsTakenBackOutOnUpgrade(RepoCase):
         path = self.configured(5000)
         migrate.repair(self.ctx())
         self.assertEqual(5000, self.value(path))
+
+    def test_the_copy_every_tree_reads_is_the_one_lifted_from_any_tree(self):
+        """Revision 1 repaired whichever tree started first. Every tree reads the main
+        checkout's copy now, so a 2000 left there would bind every worktree again."""
+        from claude_bestpractice.gitctx import resolve
+
+        path = self.configured(2000)
+        store.write_json(store.tier_b(self.ctx(), migrate.LEDGER),
+                         {"0004-lift-the-tool-call-ceiling": {"revision": 1}})
+        tree = self.add_worktree("elsewhere")
+
+        migrate.repair(resolve(tree))
+        self.assertEqual(0, self.value(path))
 
     def test_a_config_without_the_key_does_not_gain_one(self):
         path = store.tier_a(self.ctx(), "config.json")
@@ -1059,12 +1221,62 @@ class TestCardsLeftInFlightByTheMissingClosingHalf(RepoCase):
         return claimed
 
     def test_a_card_over_work_already_on_the_trunk_is_closed(self):
-        self.shipped("src/app.py")
         task = self.in_flight("a-session-that-is-gone", "src/app.py")
+        self.shipped("src/app.py")
 
         changed = migrate.repair(self.ctx())
         self.assertEqual(plan.DONE, plan.find(self.ctx(), task.id).state)
         self.assertTrue([line for line in changed if "already on the trunk" in line])
+
+    def test_a_card_whose_work_sits_unmerged_in_a_sibling_tree_is_left_alone(self):
+        """The default workflow: the work is in a worktree, and the tree that happens to run
+        the repair — the main checkout — never touched the files, so they equal the trunk
+        there. It closed the card with a delivery note over work that never left the sibling."""
+        from claude_bestpractice.gitctx import resolve
+
+        self.shipped("src/app.py")
+        tree = self.add_worktree("rework")
+        task = plan.add(self.ctx(), "rework the app", paths=["src/app.py"], done_when="stated")
+        plan.claim(resolve(tree), task.id, "a-session-that-is-gone", "rework")
+        (tree / "src" / "app.py").write_text("x = 2  # the rework\n", encoding="utf-8")
+        git(["commit", "-qam", "the rework, not merged"], tree)
+
+        migrate.repair(self.ctx())
+        self.assertEqual(plan.DOING, plan.find(self.ctx(), task.id).state)
+
+    def test_a_card_whose_branch_never_touched_its_files_is_left_alone(self):
+        """A branch standing where it was cut holds the trunk's content too."""
+        import os
+        import subprocess
+
+        self.write("src/app.py", "x = 1\n")
+        git(["add", "-A"], self.repo)
+        subprocess.run(["git", "commit", "-qm", "long before the card"], cwd=str(self.repo),
+                       check=True, env={**os.environ, "GIT_COMMITTER_DATE": "2026-01-01T00:00:00Z"})
+        git(["update-ref", "refs/remotes/origin/main", "HEAD"], self.repo)
+        git(["branch", "never-started"], self.repo)
+        task = plan.add(self.ctx(), "work never begun", paths=["src/app.py"], done_when="stated")
+        plan.claim(self.ctx(), task.id, "a-session-that-is-gone", "never-started")
+
+        migrate.repair(self.ctx())
+        self.assertEqual(plan.DOING, plan.find(self.ctx(), task.id).state)
+
+    def test_a_squash_merge_is_a_delivery_too(self):
+        """Its branch is never an ancestor of the trunk; its content is on it all the same."""
+        from claude_bestpractice.gitctx import resolve
+
+        self.shipped("src/app.py")
+        tree = self.add_worktree("squashed")
+        task = plan.add(self.ctx(), "rework the app", paths=["src/app.py"], done_when="stated")
+        plan.claim(resolve(tree), task.id, "a-session-that-is-gone", "squashed")
+        (tree / "src" / "app.py").write_text("x = 2  # the rework\n", encoding="utf-8")
+        git(["commit", "-qam", "the rework"], tree)
+        self.write("src/app.py", "x = 2  # the rework\n")
+        self.commit("the rework (squashed)")
+        git(["update-ref", "refs/remotes/origin/main", "HEAD"], self.repo)
+
+        migrate.repair(self.ctx())
+        self.assertEqual(plan.DONE, plan.find(self.ctx(), task.id).state)
 
     def test_a_card_a_live_session_is_holding_is_left_alone(self):
         """A card a chat is holding right now is that chat's to close."""
@@ -1099,8 +1311,8 @@ class TestCardsLeftInFlightByTheMissingClosingHalf(RepoCase):
         self.assertEqual(plan.DOING, plan.find(self.ctx(), task.id).state)
 
     def test_it_runs_once_and_says_nothing_the_second_time(self):
-        self.shipped("src/app.py")
         self.in_flight("a-session-that-is-gone", "src/app.py")
+        self.shipped("src/app.py")
 
         migrate.repair(self.ctx())
         self.assertEqual([], [line for line in migrate.repair(self.ctx())
@@ -1125,17 +1337,17 @@ class TestRenamesGitWasNeverToldAbout(RepoCase):
         task.path.unlink()
         return task, target
 
-    def test_the_deletion_becomes_the_rename_it_always_was(self):
-        """This repair on its own. The chain it sits in now ends with the ledger out of
-        git altogether (#219), which is the end state the test below asserts — but a repair
-        is worth testing for what IT does, or a later change to a neighbour silently retires
-        it."""
-        _task, target = self.stranded()
+    def test_the_bare_deletion_becomes_a_staged_one_and_nothing_is_added(self):
+        """This repair on its own. It restaged these as renames until the ledger left git
+        (#219); a rename is the card going back in with the next commit, so the deletion is
+        staged instead — but a repair is worth testing for what IT does, or a later change
+        to a neighbour silently retires it."""
+        task, target = self.stranded()
         migrate._restage_ledger_moves_git_lost(self.ctx())
 
-        staged = git(["diff", "--cached", "--name-status", "-M"], self.repo)
-        self.assertTrue(staged.startswith("R"), staged)
-        self.assertIn(target.name, staged)
+        staged = git(["diff", "--cached", "--name-status"], self.repo).splitlines()
+        self.assertEqual([f"D\t{task.path.relative_to(self.repo).as_posix()}"], staged)
+        self.assertTrue(target.is_file(), "the moved card left the disk")
 
     def test_a_deletion_with_no_counterpart_is_left_alone(self):
         """It may be one somebody meant; a repair that guesses is worse than the defect."""
@@ -1195,16 +1407,16 @@ class TestCarryingATaskHomeIsAMoveInBothIndexes(RepoCase):
         self.assertIn("D\t", staged)
         self.assertIn(card.name, staged)
 
-    def test_the_tree_it_arrived_in_has_the_addition_staged(self):
-        """This repair on its own: both sides of the move were staged, which is what kept a
-        carried-home card from reading as the loss it is not. The chain now ends by taking
-        the ledger out of git entirely (#219), so the addition does not survive the upgrade
-        — the file does, which is the part that was ever at risk."""
+    def test_the_tree_it_arrived_in_gets_the_card_and_no_addition(self):
+        """This repair on its own. It used to stage the addition as well, which kept a
+        carried-home card from reading as a loss — and put the ledger back into the main
+        checkout's index, which decision 0018 took it out of. The file is the part that was
+        ever at risk, and it is there."""
         elsewhere, _tree, card = self.a_committed_card_in_a_worktree()
         migrate._carry_this_worktrees_tasks_home(elsewhere)
 
         self.assertTrue((plan.plan_dir(self.ctx(), plan.NEXT) / card.name).is_file())
-        self.assertIn(card.name, git(["diff", "--cached", "--name-only"], self.repo))
+        self.assertEqual("", git(["diff", "--cached", "--name-only"], self.repo))
 
     def test_after_the_whole_upgrade_the_card_is_home_and_untracked(self):
         elsewhere, _tree, card = self.a_committed_card_in_a_worktree()
@@ -1231,3 +1443,206 @@ class TestCarryingATaskHomeIsAMoveInBothIndexes(RepoCase):
         migrate.repair(resolve(tree))
         self.assertEqual("", git(["diff", "--cached", "--name-only"], tree).strip())
         self.assertEqual("", git(["diff", "--cached", "--name-only"], self.repo).strip())
+
+
+class TestANumberCarriedToTheNextPullRequestIsForgotten(RepoCase):
+    """`opened` filled a new obligation's number from the branch's previous record, so the
+    second pull request on a branch whose first had merged was filed as that first number.
+    The fix stops new ones; the ones already filed stay up to thirty days unless repaired."""
+
+    def filed(self, **row) -> None:
+        from claude_bestpractice import pullrequest
+
+        store.append_jsonl(store.tier_b(self.ctx(), pullrequest.PR_FILE), {
+            "branch": "feat/x", "base": "main", "url": "", "session_id": "s1",
+            "opened_at": 1.0, "handed_off_at": 0.0, **row,
+        })
+
+    def test_the_inherited_number_is_taken_back(self):
+        from claude_bestpractice import pullrequest
+
+        self.filed(number=41, state="open")
+        self.filed(number=41, state="merged")
+        self.filed(number=41, state="open")
+
+        changed = migrate.repair(self.ctx())
+
+        self.assertEqual(0, pullrequest._records(self.ctx())["feat/x"]["number"])
+        self.assertTrue([line for line in changed if "previous one" in line], changed)
+
+    def test_a_number_the_next_one_learned_for_itself_is_kept(self):
+        from claude_bestpractice import pullrequest
+
+        self.filed(number=41, state="merged")
+        self.filed(number=42, state="open")
+        migrate.repair(self.ctx())
+        self.assertEqual(42, pullrequest._records(self.ctx())["feat/x"]["number"])
+
+
+class TestARedSuiteThatNeverRanIsForgotten(RepoCase):
+    """`No module named pytest` was filed as a red suite until 1.69.0 — on every board as
+    "fix it before new work", and against every merge — for a run that reached no code.
+    The gate stopped writing them; this takes back the one already on disk, which nothing
+    the gate runs could ever clear.
+    """
+
+    def recorded(self, tail: str) -> None:
+        from claude_bestpractice import evidence
+
+        evidence.record_red(self.ctx(), ["python3", "-m", "pytest", "-q"], tail)
+
+    def test_a_record_of_a_runner_that_was_not_installed_is_dropped(self):
+        from claude_bestpractice import evidence
+
+        self.recorded("/usr/local/bin/python3: No module named pytest")
+        changed = migrate.repair(self.ctx())
+
+        self.assertIsNone(evidence.red(self.ctx()))
+        self.assertTrue([line for line in changed if "never reached the code" in line],
+                        "a repair that changes what the board says must say so")
+
+    def test_a_suite_that_really_failed_stays_red(self):
+        from claude_bestpractice import evidence
+
+        self.recorded("E   ModuleNotFoundError: No module named 'calc'\n1 error in 0.12s")
+        migrate.repair(self.ctx())
+        self.assertIsNotNone(evidence.red(self.ctx()))
+
+
+class TestCredentialsAFailingSuitePrintedAreScrubbed(RepoCase):
+    """Until 1.69.0 the end of a failing run's output was kept unscrubbed: in the red-suite
+    record, and through an unverified finish's reason in its attempt, the unverified marker
+    and the open item. The gate scrubs before it writes now; this is what it wrote before."""
+
+    SAID = "ConnectionError: could not reach postgres://billing:Pr0dS3cretPass99@db.prod.example.com/b"
+
+    def test_every_record_of_it_is_scrubbed_and_nothing_else_moves(self):
+        from claude_bestpractice import attempts, board, evidence
+
+        ctx = self.ctx()
+        store.write_json(store.tier_a(ctx, evidence.RED_SUITE_FILE),
+                         {"command": ["make", "test"], "tail": self.SAID, "executed": 1})
+        attempts.record(ctx, title="unverified finish", why=f"Finished without proof. {self.SAID}",
+                        paths=["db.py"])
+        attempts.record(ctx, title="a session's own note", why="kept as the session wrote it",
+                        paths=["db.py"])
+        store.append_jsonl(store.tier_b(ctx, "unverified.jsonl"),
+                           {"branch": "main", "reason": self.SAID})
+        store.append_jsonl(store.tier_b(ctx, board.OPEN_ITEMS_FILE),
+                           {"id": "x", "text": f"UNVERIFIED finish on main: {self.SAID}"})
+
+        changed = migrate.repair(ctx)
+
+        written = [store.tier_a(ctx, evidence.RED_SUITE_FILE),
+                   store.tier_b(ctx, "unverified.jsonl"), store.tier_b(ctx, board.OPEN_ITEMS_FILE),
+                   *attempts.attempts_dir(ctx).glob("*.md")]
+        self.assertEqual([], [p.name for p in written if "Pr0dS3cretPass99" in p.read_text()])
+        self.assertEqual(["make", "test"], evidence.red(ctx)["command"])
+        self.assertIn("kept as the session wrote it",
+                      "".join(p.read_text() for p in attempts.attempts_dir(ctx).glob("*.md")))
+        self.assertTrue([line for line in changed if "scrubbed" in line])
+
+
+class TestAGreenStampedOverAChangedTrackedFileIsRunAgain(RepoCase):
+    """Until 1.69.0 a green was stamped with HEAD's tree while a tracked file whose name looked
+    like a run's leftovers was changed, and the pre-push hook skips a tree on record as green.
+    Which stamps were written that way cannot be told, so every older stamp goes."""
+
+    def test_the_stamp_goes_and_the_green_stays(self):
+        from claude_bestpractice import evidence
+
+        self.write("src/app.py", "x = 1\n")
+        self.commit("the app")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.assertTrue(evidence.green_covers_tree(self.ctx()), "precondition: stamped")
+
+        changed = migrate.repair(self.ctx())
+
+        self.assertFalse(evidence.green_covers_tree(self.ctx()))
+        self.assertEqual(["pytest"], evidence.last_green(self.ctx())["command"])
+        self.assertTrue([line for line in changed if "green record" in line])
+
+
+class TestTheSharedVerificationTokenIsTakenAway(RepoCase):
+    """Every worktree's verification run shared one token file, and the clean re-run left its
+    token in it. Each run holds its own now; the old file is read by nothing."""
+
+    def test_it_is_dropped(self):
+        path = store.tier_b(self.ctx(), "verifying.nonce")
+        store.atomic_write(path, "0" * 32)
+        changed = migrate.repair(self.ctx())
+        self.assertFalse(path.exists())
+        self.assertTrue([line for line in changed if "verification token" in line])
+
+
+class TestAStatusLineSplitAtASpaceIsQuoted(RepoCase):
+    """Ours was written as a bare path, and a shell split it at the first space in an
+    install path: the bar showed nothing, and installing it again said it was there."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.home = self.tmp / "home"
+        (self.home / ".claude").mkdir(parents=True)
+        self.bar = self.tmp / "Jane Doe" / "bin" / "claude-bp-statusline"
+        self.bar.parent.mkdir(parents=True)
+        self.bar.write_text("#!/bin/sh\necho bar\n", encoding="utf-8")
+        self.bar.chmod(0o755)
+
+    def start_with(self, command: str) -> str:
+        """A session start over a status line of `command`; what is configured after it."""
+        settings = self.home / ".claude" / "settings.json"
+        settings.write_text(json.dumps({"statusLine": {"type": "command", "command": command}}))
+        proc = self.run_hook(
+            "session-start",
+            {"session_id": "s1", "hook_event_name": "SessionStart", "source": "startup"},
+            env={**os.environ, "HOME": str(self.home)},
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        return json.loads(settings.read_text(encoding="utf-8"))["statusLine"]["command"]
+
+    def test_the_next_session_start_quotes_it(self):
+        command = self.start_with(str(self.bar))
+        self.assertEqual(shlex.quote(str(self.bar)), command)
+        shown = subprocess.run(["sh", "-c", command], capture_output=True, text=True, timeout=30)
+        self.assertEqual("bar", shown.stdout.strip(), shown.stderr)
+        self.assertEqual("", limits.requote(self.home), "a second run has nothing left to fix")
+
+    def test_their_own_status_line_is_left_alone(self):
+        theirs = str(self.tmp / "Jane Doe" / "my bar.sh")
+        self.assertEqual(theirs, self.start_with(theirs))
+
+
+class TestASecretTheOldRedactionMissedIsTakenOut(RepoCase):
+    """A batch of ingested signals kept a production Redis password and an API key, and a
+    captured turn could keep a private key's body: the redaction knew none of those shapes.
+    The fix changes what is written next; this is what had already been written."""
+
+    def signal_and_checkpoint(self):
+        signal = self.write(".claude/signals/redis1.md", (
+            "```text\nmessage: Error 111 connecting to "
+            "redis://:Prod-R3dis-Passw0rd-2026@redis-master:6379/0\n"
+            "X-Api-Key: 9f8e7d6c5b4a39281706f5e4d3c2b1a0\n```\n"))
+        checkpoint = store.tier_a(self.ctx(), "checkpoints", "20260901-000000-s1.md")
+        checkpoint.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint.write_text(
+            "## Recent turns\n\n- -----BEGIN RSA PRIVATE KEY-----\n"
+            "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun\n"
+            "-----END RSA PRIVATE KEY-----\n", encoding="utf-8")
+        return signal, checkpoint
+
+    def test_the_next_session_start_takes_it_out_and_says_so(self):
+        signal, checkpoint = self.signal_and_checkpoint()
+        proc = self.run_hook("session-start", {
+            "session_id": "s1", "hook_event_name": "SessionStart", "source": "startup"})
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        for secret in ("Prod-R3dis-Passw0rd-2026", "9f8e7d6c5b4a3928"):
+            self.assertNotIn(secret, signal.read_text(encoding="utf-8"))
+        self.assertNotIn("MIIEowIBAAKCAQEAu1SU1Lf", checkpoint.read_text(encoding="utf-8"))
+        self.assertIn("redis-master", signal.read_text(encoding="utf-8"), "only the secret goes")
+        self.assertIn("signal or checkpoint", proc.stdout, "a repair that rewrites files says so")
+
+    def test_a_clean_file_is_not_touched(self):
+        clean = self.write(".claude/signals/clean.md", "```text\nmessage: KeyError 'rate'\n```\n")
+        before = clean.stat().st_mtime_ns
+        self.assertFalse([line for line in migrate.repair(self.ctx()) if "0018" in line])
+        self.assertEqual(before, clean.stat().st_mtime_ns)

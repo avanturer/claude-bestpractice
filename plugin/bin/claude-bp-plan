@@ -112,7 +112,9 @@ def cmd_claim(ctx, task_id: str, session_id: str) -> int:
 
 
 def cmd_done(ctx, task_id: str) -> int:
-    task, error = plan.complete(ctx, task_id)
+    # Who is asking, so a live sibling's card is refused here the way `claim` refuses it.
+    # Nobody, at a terminal outside any session: the founder closes what they like.
+    task, error = plan.complete(ctx, task_id, hookio.current_session_id(str(ctx.worktree_root)))
     if error:
         print(error, file=sys.stderr)
         return 1
@@ -323,7 +325,8 @@ def main() -> int:
     if args.command == "done":
         return cmd_done(ctx, args.task_id)
     if args.command == "pause":
-        task, problem = plan.pause(ctx, args.id, args.blocker)
+        task, problem = plan.pause(ctx, args.id, args.blocker,
+                                   hookio.current_session_id(str(ctx.worktree_root)))
         if task is None:
             print(problem, file=sys.stderr)
             return 1

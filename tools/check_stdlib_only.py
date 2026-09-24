@@ -18,14 +18,15 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # Enough of the 3.9 standard library for this codebase; the check is "did someone add a
 # dependency", not "is this a complete stdlib inventory".
 _STDLIB_39 = {
-    "abc", "argparse", "ast", "base64", "collections", "concurrent", "contextlib", "copy",
-    "csv", "dataclasses", "datetime", "difflib", "enum", "errno", "fnmatch", "functools",
-    "glob", "hashlib", "heapq", "hmac", "html", "http", "importlib", "inspect", "io",
-    "itertools", "json", "logging", "math", "os", "pathlib", "pickle", "platform", "pprint",
-    "queue", "random", "re", "secrets", "select", "shlex", "shutil", "signal", "socket",
-    "sqlite3", "stat", "statistics", "string", "subprocess", "sys", "tempfile", "textwrap",
-    "threading", "time", "token", "tokenize", "traceback", "types", "typing", "unicodedata",
-    "unittest", "urllib", "uuid", "warnings", "xml", "zipfile", "zlib", "__future__",
+    "abc", "argparse", "ast", "base64", "calendar", "collections", "concurrent",
+    "contextlib", "copy", "csv", "dataclasses", "datetime", "difflib", "enum", "errno",
+    "fnmatch", "functools", "glob", "hashlib", "heapq", "hmac", "html", "http",
+    "importlib", "inspect", "io", "itertools", "json", "logging", "math", "os",
+    "pathlib", "pickle", "platform", "pprint", "queue", "random", "re", "secrets",
+    "select", "shlex", "shutil", "signal", "socket", "sqlite3", "stat", "statistics",
+    "string", "subprocess", "sys", "tempfile", "textwrap", "threading", "time", "token",
+    "tokenize", "traceback", "types", "typing", "unicodedata", "unittest", "urllib",
+    "uuid", "warnings", "xml", "zipfile", "zlib", "__future__",
 }
 
 LOCAL = {"claude_bestpractice", "helpers"}

@@ -77,9 +77,15 @@ def repo_relative(frame: object, root: Path) -> str:
         raw, lineno = str(frame), ""
     text = clean(raw)
     for part in (text, text.lstrip("/")):
+        # `root / "/usr/lib/…"` is `/usr/lib/…`: an absolute frame that exists on this
+        # machine — any standard-library frame — reached `relative_to` and raised, and the
+        # traceback took every other signal in the batch with it.
         candidate = root / part
+        try:
+            rel = candidate.resolve().relative_to(root.resolve()).as_posix()
+        except (OSError, ValueError):
+            continue
         if candidate.exists():
-            rel = candidate.relative_to(root).as_posix()
             return f"{rel}:{lineno}" if lineno else rel
     return f"{text}:{lineno}" if lineno else text
 
@@ -182,7 +188,11 @@ def main() -> int:
     parser.add_argument("--file", help="read JSON from a file instead of stdin")
     args = parser.parse_args()
 
-    text = Path(args.file).read_text(encoding="utf-8") if args.file else sys.stdin.read()
+    try:
+        text = Path(args.file).read_text(encoding="utf-8") if args.file else sys.stdin.read()
+    except (OSError, UnicodeDecodeError) as exc:
+        print(f"ingest: cannot read {args.file}: {exc}", file=sys.stderr)
+        return 1
     if not text.strip():
         print("ingest: no input")
         return 0

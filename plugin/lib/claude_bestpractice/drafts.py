@@ -402,8 +402,17 @@ def render(draft: dict) -> str:
 
 
 def next_number(ctx: GitContext) -> int:
-    from . import knowledge
+    """The next decision number, allocated against every sibling worktree's records.
 
-    existing = knowledge.decision_files(ctx)
-    numbers = [int(p.name.split("-", 1)[0]) for p in existing if p.name[:4].isdigit()]
+    Decisions are committed per branch, so two worktrees each accepting a draft both wrote
+    `0001-…md`: after the merge two records answered to one number, and one `supersedes:
+    0001` would retire both. The same union `plan.next_id` allocates from.
+    """
+    from . import knowledge, plan
+
+    numbers = [
+        int(path.name[:4])
+        for root in plan.sibling_worktrees(ctx) or [ctx.worktree_root]
+        for path in (root / knowledge.DECISIONS_DIR).glob("[0-9][0-9][0-9][0-9]-*.md")
+    ]
     return (max(numbers) + 1) if numbers else 1

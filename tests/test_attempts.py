@@ -87,6 +87,15 @@ class TestSurfacing(AttemptCase):
         self.assertIn("websockets", attempts.render_for_board(ctx, ["src/ws.ts"]))
         self.assertEqual(attempts.render_for_board(ctx, ["src/landing.tsx"]), "")
 
+    def test_every_file_it_names_is_its_subject_not_only_the_first(self):
+        """The paths are written joined by ", ", and every one after the first was read back
+        with a space in front: a dead end about two files warned on the first alone, and
+        the same one on the second was filed again as new."""
+        ctx = self.ctx()
+        attempts.record(ctx, "websockets", "reconnect storms", ["src/client.ts", "src/ws.ts"])
+        self.assertIn("websockets", attempts.render_for_board(ctx, ["src/ws.ts"]))
+        self.assertIsNone(attempts.record(ctx, "websockets", "again", ["src/ws.ts"]))
+
     def test_no_subject_at_all_falls_back_to_the_most_recent(self):
         """At SessionStart there is no subject — and `paths` was empty EVERY time.
 
@@ -243,6 +252,75 @@ class TestADeadEndAboutRewrittenCodeIsMarked(RepoCase):
         (self.repo / "svc" / "gone.py").unlink()
         self.commit()
         self.assertIn("kept as history", attempts.render_for_board(self.ctx(), []))
+
+
+class TestTwoWorktreesFileTwoDeadEnds(RepoCase):
+    """Ids were counted per tree and stamps were keyed by id. Two worktrees each filed
+    `0001`, the one `attempt-0001.stamp` held whichever came last, and a dead end about a
+    rewritten `billing.py` was shown as current advice because its stamp named
+    `landing.html`. After the merge `drop 0001` retired whichever file came first.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.write("billing.py", "rates = {}\n")
+        self.write("landing.html", "<h1>hi</h1>\n")
+        self.commit("the files")
+        self.a = self.add_worktree("billing")
+        self.b = self.add_worktree("landing")
+
+    def file(self, tree, title: str, path: str):
+        return subprocess.run(
+            [sys.executable, str(BIN / "claude-bp-attempt"), "add", title,
+             "--why", "did not work", "--paths", path],
+            capture_output=True, text=True, cwd=str(tree), timeout=180,
+        )
+
+    def test_each_gets_its_own_id_and_its_own_stamp(self):
+        from claude_bestpractice.gitctx import resolve
+
+        self.file(self.a, "cache fee rates in a module dict", "billing.py")
+        self.file(self.b, "hero video autoplay", "landing.html")
+        ids = [a.id for tree in (self.a, self.b) for a in attempts.load_all(resolve(tree))]
+        self.assertEqual(2, len(set(ids)), ids)
+
+        (self.a / "billing.py").write_text("rates = {}  # per tenant now\n", encoding="utf-8")
+        self.assertIn("rewritten since", attempts.render_for_board(resolve(self.a), ["billing.py"]))
+        self.assertNotIn("rewritten since",
+                         attempts.render_for_board(resolve(self.b), ["landing.html"]))
+
+    def test_a_number_that_comes_round_again_does_not_share_a_stamp(self):
+        """Allocation can only see the trees that exist. One removed before its branch
+        merged takes its attempts out of sight, so its number is handed out again — and
+        keyed by that number, the second stamp replaced the first."""
+        from helpers import git
+
+        self.file(self.a, "cache fee rates in a module dict", "billing.py")
+        git(["add", "-A"], self.a)
+        git(["commit", "-qm", "the dead end"], self.a)
+        git(["worktree", "remove", "--force", str(self.a)], self.repo)
+        self.file(self.b, "hero video autoplay", "landing.html")
+        git(["merge", "-q", "--no-edit", "billing"], self.repo)
+
+        self.write("billing.py", "rates = {}  # per tenant now\n")
+        self.assertIn("rewritten since", attempts.render_for_board(self.ctx(), ["billing.py"]))
+
+    def test_a_stamp_an_older_version_keyed_by_id_is_read_only_for_its_own_files(self):
+        """Stamps already on disk keep working — unless a sibling's overwrote them, and
+        then they say nothing rather than something about somebody else's file."""
+        from claude_bestpractice import store
+        from claude_bestpractice.gitctx import resolve
+
+        ctx = resolve(self.a)
+        attempt = attempts.record(ctx, "cache fee rates in a module dict", "leaks",
+                                  ["billing.py"])
+        store.tier_b(ctx, f"attempt-{attempt.path.stem}.stamp").unlink()
+        legacy = store.tier_b(ctx, f"attempt-{attempt.id}.stamp")
+
+        store.write_json(legacy, [{"path": "landing.html", "blob": "0" * 40}])
+        self.assertNotIn("rewritten since", attempts.render_for_board(ctx, ["billing.py"]))
+        store.write_json(legacy, [{"path": "billing.py", "blob": "0" * 40}])
+        self.assertIn("billing.py rewritten since", attempts.render_for_board(ctx, ["billing.py"]))
 
 
 class TestAnAttemptCanBeRetired(RepoCase):

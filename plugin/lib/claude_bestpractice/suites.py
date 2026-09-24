@@ -28,7 +28,8 @@ subproject with no test declarations is therefore not a subproject this gate kno
 
 Bounded on purpose. This runs inside the Stop gate, once per turn, so the scan is shallow,
 the number of runner probes is capped, and more subprojects than `MAX_SUITES` collapses
-back to one wide run rather than spending the hook's whole budget on five of them.
+back to one wide run rather than spending the hook's whole budget on five of them — where
+there is a wide run to collapse to. Where there is not, no suite is cut; see `for_changes`.
 """
 
 from __future__ import annotations
@@ -95,18 +96,33 @@ class Suite:
 
 
 def declared(commands: Any) -> list[Suite]:
-    """The suites config.json names, in path order. Malformed entries are skipped."""
+    """The suites config.json names, in path order. Malformed entries are skipped.
+
+    A command string that does not even split is one of them. One unbalanced quote in one
+    entry raised out of `shlex.split` inside the Stop gate, which fails closed: every finish
+    in the repository was refused with "gate failed (ValueError: No closing quotation)",
+    whatever the diff touched and without the escalation counter ever moving — and the file
+    that fixes it is the one file a session is refused.
+    """
     found: list[Suite] = []
     if not isinstance(commands, dict):
         return found
     for where, command in sorted(commands.items()):
-        argv = shlex.split(command) if isinstance(command, str) else [
-            str(part) for part in command if str(part).strip()
-        ]
+        argv = _argv(command)
         path = str(where).strip().strip("/")
         if argv and path and path != ".":
             found.append(Suite(f"{path}/", tuple(argv), True))
     return found
+
+
+def _argv(command: Any) -> list[str]:
+    """One declared command as argv, or [] when it cannot be one."""
+    if not isinstance(command, str):
+        return [str(part) for part in command if str(part).strip()]
+    try:
+        return shlex.split(command)
+    except ValueError:
+        return []
 
 
 def detected(root: Path) -> list[Suite]:
@@ -176,11 +192,17 @@ def for_changes(ctx: GitContext, cfg: Any, changed: list[str]) -> list[Suite]:
     scoped suite — which is every single-project repository, so nothing changes there. When
     a scoped suite covers every changed file, the wide command is not run at all, and that
     is the whole of the fix: a mobile-only diff stops being refused over a backend suite.
+
+    More than `MAX_SUITES` collapses to that one wide run, and only when there IS one. With
+    no repository-wide command the plan kept the first three and never mentioned the rest,
+    so a fourth suite that failed by hand finished green with no record anywhere. Nothing
+    the diff reaches is cut now: the gate runs the suites against one shared deadline and
+    names any it has no time left for.
     """
     everything = Suite("", tuple(cfg.test_command or ()), True)
     chosen, unclaimed = _claimed([suite for suite in scoped(ctx, cfg) if suite.path], changed)
-    if len(chosen) > MAX_SUITES:
-        return [everything] if everything.command else chosen[:MAX_SUITES]
+    if len(chosen) > MAX_SUITES and everything.command:
+        return [everything]
     if everything.command and (unclaimed or not chosen):
         chosen.append(everything)
     return chosen

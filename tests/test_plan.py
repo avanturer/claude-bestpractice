@@ -113,6 +113,108 @@ class TestClaiming(PlanCase):
         self.assertEqual(released.state, plan.NEXT)
         self.assertEqual(released.owner, "")
 
+    def test_two_claims_at_once_give_the_card_to_exactly_one_session(self):
+        """Read, judged and moved with nothing held across the three: two sessions claiming
+        one card both read it free, both printed "claimed", and the file named whichever
+        wrote last — or one of them died on a file the other had already moved."""
+        ctx = self.ctx()
+        contenders = [sid(self.repo, "alpha"), sid(self.repo, "beta")]
+        for contender in contenders:
+            self.session(contender)
+        for attempt in range(6):
+            task = plan.add(ctx, f"contested {attempt}", done_when="stated", paths=["src/app.py"])
+            racing = [subprocess.Popen(
+                [sys.executable, str(BIN / "claude-bp-plan"), "claim", task.id, "--session", who],
+                cwd=str(self.repo), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            ) for who in contenders]
+            said = [(proc.communicate(timeout=120), proc.returncode) for proc in racing]
+            self.assertEqual([0, 1], sorted(code for _, code in said), said)
+            self.assertFalse(any("Traceback" in err for (_, err), _ in said), said)
+            loser = next(err for (_, err), code in said if code == 1)
+            self.assertIn("held by live session", loser)
+            winner = contenders[[code for _, code in said].index(0)]
+            self.assertEqual(winner, plan.find(ctx, task.id).owner)
+
+    def test_a_card_moved_between_the_read_and_the_rename_is_read_again(self):
+        """`resume`, the sweeps and the reaper move cards without the lock. A claim that read
+        the card before one of them moved it died on the file that was no longer there."""
+        from unittest import mock
+
+        ctx = self.ctx()
+        task = plan.add(ctx, "on the move", done_when="stated", paths=["src/app.py"])
+        stale = plan.find(ctx, task.id)
+        plan.pause(ctx, task.id, "waiting on the schema decision")
+        reads = []
+        current = plan.find
+
+        def find(where, task_id):
+            reads.append(task_id)
+            return stale if len(reads) == 1 else current(where, task_id)
+
+        with mock.patch.object(plan, "find", find):
+            claimed, error = plan.claim(ctx, task.id, "s1", "main")
+        self.assertEqual("", error)
+        self.assertEqual(plan.DOING, claimed.state)
+        self.assertEqual(2, len(reads), "it did not read the card again")
+
+
+class TestOnlyItsHolderHandsACardBack(PlanCase):
+    """`claim` refused a card a live session held; `pause` and `done` took it, clearing the
+    owner, and the holder's next write was refused for having nothing on the board."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.holder = sid(self.repo, "s2")
+        self.session(self.holder)
+        self.session(sid(self.repo, "s1"))
+        self.task = plan.add(self.ctx(), "the holder's work", done_when="stated",
+                             paths=["src/app.py"])
+        plan.claim(self.ctx(), self.task.id, self.holder, "main")
+
+    def cli(self, *args: str, session: str = "") -> subprocess.CompletedProcess:
+        """As a session runs it, or — with no session — as the founder does at a terminal."""
+        import os
+
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_SESSION_ID"}
+        if session:
+            env["CLAUDE_CODE_SESSION_ID"] = session
+        return subprocess.run([sys.executable, str(BIN / "claude-bp-plan"), *args],
+                              capture_output=True, text=True, cwd=str(self.repo), env=env,
+                              timeout=120)
+
+    def state(self) -> tuple[str, str]:
+        found = plan.find(self.ctx(), self.task.id)
+        return found.state, found.owner
+
+    def test_a_sibling_cannot_pause_it(self):
+        proc = self.cli("pause", self.task.id, "--blocker", "waiting on the schema decision",
+                        session="s1")
+        self.assertEqual(1, proc.returncode, proc.stdout)
+        self.assertIn("held by live session", proc.stderr)
+        self.assertEqual((plan.DOING, self.holder), self.state())
+
+    def test_a_sibling_cannot_close_it(self):
+        proc = self.cli("done", self.task.id, session="s1")
+        self.assertEqual(1, proc.returncode, proc.stdout)
+        self.assertIn("held by live session", proc.stderr)
+        self.assertEqual((plan.DOING, self.holder), self.state())
+
+    def test_its_holder_still_closes_it(self):
+        self.assertEqual(0, self.cli("done", self.task.id, session="s2").returncode)
+        self.assertEqual(plan.DONE, self.state()[0])
+
+    def test_the_founder_at_a_terminal_is_never_asked(self):
+        proc = self.cli("pause", self.task.id, "--blocker", "waiting on the schema decision")
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual(plan.PAUSED, self.state()[0])
+
+    def test_a_dead_holders_card_is_anybodys_to_hand_back(self):
+        self.session(self.holder, pid=999_999_999)
+        proc = self.cli("pause", self.task.id, "--blocker", "waiting on the schema decision",
+                        session="s1")
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual(plan.PAUSED, self.state()[0])
+
 
 class TestParallelWorktrees(PlanCase):
     def test_ids_do_not_collide_across_worktrees(self):
@@ -285,6 +387,18 @@ class TestCli(PlanCase):
 
     def test_empty_plan_says_so(self):
         self.assertIn("plan is empty", self.run_cli("list").stdout)
+
+    def test_a_title_that_is_one_very_long_word_is_filed(self):
+        """A pasted hash or a URL with its punctuation stripped is one 300-character word,
+        and the slug made from it was longer than a filename may be: `add` died with a
+        traceback after the id was already allocated."""
+        filed = self.run_cli("add", "x" * 300)
+
+        self.assertEqual(0, filed.returncode, filed.stderr)
+        self.assertNotIn("Traceback", filed.stderr)
+        [card] = plan.load_all(self.ctx())
+        self.assertLessEqual(len(card.path.name), len("0001-.md") + plan.MAX_SLUG_CHARS)
+        self.assertEqual("x" * plan.MAX_TITLE_CHARS, card.title, "the slug's cap reached the title")
 
 
 class TestClosingATaskSticksAcrossWorktrees(RepoCase):
@@ -738,6 +852,79 @@ class TestTasksThatAreNotIndependent(PlanCase):
         startable = {t.title for t in plan.startable(ctx)}
         self.assertEqual({"lands first", "independent"}, startable)
 
+    def test_the_waiter_is_told_whichever_way_the_id_was_typed(self):
+        """`claude-bp-plan done 7` is how the id is typed and `0007` is how `after` files it.
+        The unpadded one was compared as typed, so the session waiting on the card was told
+        nothing, while `done 0007` told it at once."""
+        from claude_bestpractice import inbox
+
+        ctx = self.ctx()
+        first = plan.add(ctx, "lands first", done_when="stated", paths=["src/app.py"])
+        second = plan.add(ctx, "comes after", after=[first.id], done_when="stated",
+                          paths=["src/other.py"])
+        self.session("waiter")
+        plan.claim(ctx, second.id, "waiter", "main")
+
+        done = subprocess.run(
+            [sys.executable, str(BIN / "claude-bp-plan"), "done", first.id.lstrip("0")],
+            capture_output=True, text=True, cwd=str(self.repo), timeout=120,
+        )
+
+        self.assertEqual(0, done.returncode, done.stderr)
+        told = [n["text"] for n in inbox.pending(ctx, "waiter")]
+        self.assertTrue(any("no longer blocked" in text for text in told), told)
+
+
+class TestAValueStaysOnItsOwnLine(PlanCase):
+    """Three dashes inside a title, a finish condition or a blocker cut the card at them,
+    because the front matter ended at the first `---` anywhere: the title read back short,
+    the rest of the keys became the handoff note, and `claim` refused a planned card as
+    unplanned. A newline inside a value ended it the same way."""
+
+    def cli(self, *args: str) -> subprocess.CompletedProcess:
+        command = [sys.executable, str(BIN / "claude-bp-plan"), *args]
+        return subprocess.run(command, capture_output=True, text=True, cwd=str(self.repo),
+                              timeout=120)
+
+    def test_a_title_with_three_dashes_reads_back_whole_and_can_be_claimed(self):
+        self.cli("add", "Split parser --- phase 2", "--paths", "src/parser.py",
+                 "--done-when", "both phases pass --- including the empty file")
+
+        shown = self.cli("show", "1").stdout
+        self.assertIn("Split parser --- phase 2", shown)
+        self.assertIn("both phases pass --- including the empty file", shown)
+        self.assertNotIn("state:", shown, "the front matter leaked into the handoff")
+        claimed = self.cli("claim", "1", "--session", "s1")
+        self.assertEqual(0, claimed.returncode, claimed.stderr)
+
+    def test_a_blocker_with_three_dashes_is_not_the_handoff(self):
+        self.cli("add", "Wire the vendor feed", "--paths", "src/feed.py", "--done-when", "ok")
+        self.cli("pause", "1", "--blocker", "waiting on --- the vendor's API key")
+
+        card = plan.find(self.ctx(), "1")
+        self.assertEqual("waiting on --- the vendor's API key", card.blocker)
+        self.assertEqual(plan.NO_DETAIL, card.body)
+        self.assertEqual(["src/feed.py"], card.paths)
+
+    def test_a_newline_in_a_value_cannot_become_a_key(self):
+        task = plan.add(self.ctx(), "Third\nstate: done\nowner: somebody", paths=["src/a.py"],
+                        done_when="stated")
+
+        card = plan.find(self.ctx(), task.id)
+        self.assertEqual(plan.NEXT, card.state)
+        self.assertEqual("", card.owner, "a title wrote the owner")
+        self.assertEqual("Third state: done owner: somebody", card.title)
+
+    def test_the_founders_card_keeps_where_it_came_from(self):
+        """Their sentence carried the dashes, the card lost `source`, and the next message
+        filed a second card beside the orphan."""
+        plan.open_for(self.ctx(), "split the parser --- phase 2 first", "s1", "h1")
+        plan.open_for(self.ctx(), "and then the exporter", "s1", "h1")
+
+        cards = plan.load_all(self.ctx())
+        self.assertEqual(1, len(cards), [c.title for c in cards])
+        self.assertEqual(plan.FROM_THE_FOUNDER, cards[0].source)
+
 
 class TestTheOrderIsVisibleWithoutOpeningTheTask(PlanCase):
     def plan_cli(self, *args) -> subprocess.CompletedProcess:
@@ -827,6 +1014,23 @@ class TestWorkThatStoppedMoving(PlanCase):
 
         self.assertEqual([], plan.sweep_idle(self.ctx(), 24.0))
         self.assertEqual([task.id], [t.id for t in plan.sweep_idle(self.ctx(), 2.0)])
+
+    def test_a_session_working_on_it_from_its_own_tree_keeps_it(self):
+        """Claimed in the main checkout, worked on from the tree it was sent to: every
+        touch lands on the tree's id, and the id the card names never moves again."""
+        from claude_bestpractice.gitctx import resolve
+
+        from helpers import session_record_for
+
+        task = self.claimed_by(sid(self.repo, "s1"), touching=[], paths=["app.py"])
+        tree = self.add_worktree("feat-x")
+        there = session_record_for(resolve(tree), sid(tree, "s1"))
+        there.last_touched = ["app.py"]
+        sessions.register(resolve(tree), there)
+        self.aged(task, 30)
+
+        self.assertEqual([], plan.sweep_idle(self.ctx(), 24.0))
+        self.assertEqual(plan.DOING, plan.find(self.ctx(), task.id).state)
 
 
 class TestTheBoardLearnsTheTaskWhenItArrives(RepoCase):
@@ -921,6 +1125,78 @@ class TestTheBoardLearnsTheTaskWhenItArrives(RepoCase):
         self.say("почини импортер")
         self.assertEqual(plan.FROM_THE_FOUNDER, self.board("next")[0].source)
 
+    def test_a_second_session_does_not_retitle_the_first_ones_card(self):
+        """Every session starts in the main checkout on the trunk, and the BRANCH used to
+        decide whose card this was: the second session's first message retitled the first
+        session's card, and the first session's work left the board."""
+        self.say("add a CSV export to the billing report", session="s1")
+        self.say("rewrite the login form validation", session="s2")
+        titles = sorted(t.title for t in self.board("next"))
+        self.assertEqual(["add a CSV export to the billing report",
+                          "rewrite the login form validation"], titles)
+
+    def test_the_card_follows_its_own_session_into_a_worktree(self):
+        """The harness id survives the move; the composed session id does not."""
+        from claude_bestpractice import plan
+
+        self.say("почини импортер", session="s1")
+        tree = self.add_worktree("feat-importer")
+        self.run_hook("prompt-capture", {
+            "session_id": "s1", "hook_event_name": "UserPromptSubmit",
+            "prompt": "а теперь почини импортер для пустого CSV",
+        }, cwd=tree)
+        cards = self.board("next")
+        self.assertEqual(1, len(cards), [c.title for c in cards])
+        self.assertIn("пустого CSV", cards[0].title)
+        self.assertEqual(cards[0].id, plan.opened_for(self.ctx(), "s1").id)
+
+    def test_a_transition_keeps_who_opened_the_card(self):
+        from claude_bestpractice import plan
+
+        self.say("почини импортер", session="s1")
+        card = self.board("next")[0]
+        moved, _ = plan.amend(self.ctx(), card.id, paths=["importer.py"], done_when="stated")
+        self.assertEqual("s1", moved.opened_by)
+        claimed, _ = plan.claim(self.ctx(), card.id, sid(self.repo, "s1"), self.ctx().branch)
+        self.assertEqual("s1", claimed.opened_by)
+        self.assertIsNone(plan.opened_for(self.ctx(), "s1"), "a claimed card is not unclaimed")
+
+    def test_the_finish_names_the_card_instead_of_asking_for_another(self):
+        """Told to `add`, a real session filed a duplicate and left its own card in NEXT
+        over finished work — an invitation to the next session to do the job again."""
+        self.say("почини импортер", session="s1")
+        card = self.board("next")[0]
+        self.write("importer.py", "x = 1\n")
+        proc = self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop"})
+        self.assertIn(f"claude-bp-plan claim {card.id}", proc.stderr)
+        self.assertIn(f"claude-bp-plan update {card.id} --paths importer.py", proc.stderr)
+        self.assertNotIn("claude-bp-plan add", proc.stderr)
+
+    def test_the_write_refusal_names_the_card_too_and_what_it_prints_runs(self):
+        """The Stop demand learned to name the card; the refusal at the first write did not,
+        and a real session followed its `add` and filed the founder's instruction twice."""
+        import os
+        import re
+
+        self.say("почини импортер", session="s1")
+        card = self.board("next")[0]
+        write = {"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Write",
+                 "tool_input": {"file_path": str(self.repo / "importer.py"), "content": "x = 1\n"}}
+        said = self.hook_reason(self.run_hook("pre-tool", write))
+        self.assertIn(f"claude-bp-plan claim {card.id}", said)
+        self.assertNotIn("claude-bp-plan add", said)
+
+        env = {**os.environ, "CLAUDE_CODE_SESSION_ID": "s1",
+               "PATH": f"{BIN}{os.pathsep}{os.environ.get('PATH', '')}"}
+        for command in re.findall(r"^ +(?:then: )?(claude-bp-plan .+)$", said, re.M):
+            done = subprocess.run(["bash", "-c", command], cwd=str(self.repo), env=env,
+                                  capture_output=True, text=True, timeout=120)
+            self.assertEqual(0, done.returncode, f"{command}\n{done.stderr}")
+        again = self.run_hook("pre-tool", write)
+        self.assertNotEqual("deny", self.hook_decision(again), self.hook_reason(again))
+        self.assertEqual([card.id], [task.id for task in self.board("doing")])
+        self.assertEqual([], self.board("next"), "a second card was filed for the same work")
+
 
 class TestDeliveryClosesTheCard(PlanCase):
     """The ledger had no closing half: `complete` had one caller, the CLI, so a card left
@@ -1010,12 +1286,15 @@ class TestDeliveryClosesTheCard(PlanCase):
 
 
 class TestATransitionIsARenameInGitToo(PlanCase):
-    """A tracked task file that moves must move in the index as well (#208).
+    """A tracked task file that moves must not leave git guessing (#208), and must not be
+    carried back into it (decision 0018).
 
     The founder's global ignore covers `.claude/claude-bestpractice/`, so a state the
     repository never committed — `paused` — is invisible to git. Moving a committed task
     into it deleted a tracked file and created a hidden one: fifty unstaged `D` rows in a
-    working checkout, each one indistinguishable from lost work.
+    working checkout, each one indistinguishable from lost work. The answer was to stage a
+    rename with `add -f`, and that is how the ledger came back into git after it was taken
+    out: the path the card left is taken out of the index now, and nothing is added.
     """
 
     def ignore_the_ledger(self) -> None:
@@ -1032,18 +1311,34 @@ class TestATransitionIsARenameInGitToo(PlanCase):
 
     def test_pausing_a_committed_task_leaves_no_phantom_deletion(self):
         task = self.committed_task()
-        plan.pause(self.ctx(), task.id, "waiting on the API key")
+        paused, _ = plan.pause(self.ctx(), task.id, "waiting on the API key")
 
-        status = git(["status", "--short"], self.repo)
-        self.assertNotIn(" D ", f" {status} ", status)
-        self.assertIn("plan/paused/", git(["diff", "--cached", "--name-only"], self.repo))
+        unstaged = [line for line in git(["status", "--porcelain"], self.repo).splitlines()
+                    if line[1:2] == "D"]
+        self.assertEqual([], unstaged, "a bare deletion git was never told about")
+        self.assertTrue(paused.path.is_file(), "the paused card left the disk")
 
-    def test_git_records_it_as_a_rename(self):
+    def test_the_card_leaves_the_index_rather_than_moving_in_it(self):
+        """A staged rename is the ledger being put back into git by the next commit."""
         task = self.committed_task()
         plan.claim(self.ctx(), task.id, sid(self.repo, "s1"), "main")
 
-        moved = git(["diff", "--cached", "--name-status", "-M"], self.repo)
-        self.assertTrue(moved.startswith("R"), moved)
+        staged = git(["diff", "--cached", "--name-status"], self.repo).splitlines()
+        self.assertEqual([f"D\t{task.path.relative_to(self.repo).as_posix()}"], staged)
+        self.assertEqual("", git(["ls-files", ".claude/claude-bestpractice/plan"], self.repo))
+
+    def test_a_tree_whose_trunk_still_tracks_the_cards_commits_no_card(self):
+        """The shape reported: a tree cut after the upgrade from a trunk that still tracked
+        its cards, one `done` there, and the tree's next commit carrying the card back."""
+        task = self.committed_task()
+        tree = self.add_worktree("feat-x")
+        done = subprocess.run([sys.executable, str(BIN / "claude-bp-plan"), "done", task.id],
+                              capture_output=True, text=True, cwd=str(tree), timeout=120)
+        self.assertEqual(0, done.returncode, done.stderr)
+
+        git(["commit", "-qm", "the work in that tree"], tree)
+        self.assertEqual("", git(["ls-files", ".claude/claude-bestpractice/plan"], tree),
+                         "the card went back into git with the tree's commit")
 
     def test_an_untracked_ledger_is_not_quietly_added_to_git(self):
         """Preserving what the founder tracks is not the same as granting a place in it."""
@@ -1141,3 +1436,35 @@ class TestATransitionReachesEveryCopy(RepoCase):
         plan.claim(self.ctx(), task.id, "s1", "main")
         self.assertEqual(1, plan.reconcile_copies(self.ctx()))
         self.assertEqual([plan.DOING], sorted({c.state for c in plan.copies(self.ctx(), task.id)}))
+
+
+class TestOneCardInAnotherEncodingStopsNothing(PlanCase):
+    """A card saved in cp1251 raised UnicodeDecodeError out of every reader of the ledger:
+    `claude-bp-plan list` died on a traceback, and every Write in every session was refused
+    with "gate failed (UnicodeDecodeError…)", naming neither the file nor a way out."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        ours = plan.add(self.ctx(), "Fix the parser", paths=["a.py"], done_when="stated")
+        (ours.path.parent / "0002-importer.md").write_bytes(
+            "---\ntitle: Починить импорт\npaths: b.py\ndone_when: цены\n---\n\nПочинить импорт\n"
+            .encode("cp1251"))
+
+    def test_the_ledger_still_reads_and_says_which_card(self):
+        proc = subprocess.run([sys.executable, str(BIN / "claude-bp-plan"), "list"],
+                              capture_output=True, text=True, cwd=str(self.repo), timeout=120)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn("0002", proc.stdout)
+        self.assertEqual(["b.py"], plan.find(self.ctx(), "0002").paths)
+
+    def test_a_write_is_judged_rather_than_refused_on_a_codec(self):
+        proc = self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Write",
+            "tool_input": {"file_path": str(self.repo / "a.py"), "content": "x = 1\n"},
+        })
+        self.assertNotIn("gate failed", proc.stdout + proc.stderr)
+
+    def test_the_card_itself_can_still_move(self):
+        _claimed, error = plan.claim(self.ctx(), "0002", "s1", "main")
+        self.assertEqual("", error)
+        self.assertEqual(plan.DOING, plan.find(self.ctx(), "0002").state)

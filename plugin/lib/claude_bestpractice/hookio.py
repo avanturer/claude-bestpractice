@@ -134,6 +134,22 @@ def compose_session_id(harness_id: str, cwd: str) -> str:
     return f"{harness_id}-{tag}" if harness_id else f"anon-{tag}"
 
 
+def harness_of(session_id: str, worktree: str) -> str:
+    """The harness id `compose_session_id` built this identity from, or "" if that is unknown.
+
+    Answered only where it is exact: the tag has to be the one THIS worktree hashes to, so
+    an id composed for another tree, or never composed at all, gives nothing rather than a
+    guess. An anonymous identity has no harness id to share, and gives nothing either.
+
+    Hashed as `compose_session_id` hashes it, through `realpath`. A record stores its tree
+    in posix form and the id was composed from the native one, and on Windows those are two
+    strings: hashed as stored, nothing there was ever anybody's.
+    """
+    tag = hashlib.sha1(os.path.realpath(worktree).encode("utf-8")).hexdigest()[:8]
+    harness, _, found = session_id.rpartition("-")
+    return harness if found == tag and harness not in ("", "anon") else ""
+
+
 def current_session_id(cwd: str) -> str:
     """This process's session identity, for a CLI running inside a session. "" outside."""
     harness = os.environ.get("CLAUDE_CODE_SESSION_ID", "")

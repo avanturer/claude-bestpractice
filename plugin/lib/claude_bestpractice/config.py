@@ -6,12 +6,14 @@ detection that got it wrong.
 
 Config lives in Tier A (committed) so all worktrees and all sessions agree. Eight
 sessions reading different settings is the contradictory-instruction failure this
-plugin exists to prevent.
+plugin exists to prevent — which is why every tree reads the MAIN checkout's copy
+(`founders_tree`) rather than its own.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import re
 import shlex
 from dataclasses import dataclass, field
@@ -180,6 +182,10 @@ class Config:
     # An earlier round exempted the ARTIFACT (junit.xml) and not the test SOURCE that
     # produces it, which is why the README already boasts of fixing this deadlock while
     # the deadlock was still there.
+    #
+    # From scope drift ONLY. Read as "cannot break anything" too, this list let a turn
+    # whose whole diff was a failing test finish without the suite being run at all;
+    # `evidence.material_changes` now never lets a test directory hide a change.
     exempt_paths: list[str] = field(
         default_factory=lambda: [
             ".claude/", "docs/", "README.md", "CHANGELOG.md",
@@ -230,16 +236,8 @@ def detect_test_command(root: Path) -> list[str]:
     for marker, runner, command in _TEST_RUNNERS:
         if not (root / marker).exists():
             continue
-        if runner == "npm":
-            # A package.json without a test script, or with the npm placeholder that
-            # exits 1, is not a test command.
-            try:
-                pkg = json.loads((root / "package.json").read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError, UnicodeDecodeError):
-                continue
-            script = (pkg.get("scripts") or {}).get("test", "")
-            if not script or "no test specified" in script:
-                continue
+        if runner == "npm" and not _npm_has_test(root):
+            continue
         if runner == "pytest" and marker == "pyproject.toml" and not _has_tests(root):
             continue
         if runner == "make" and not _make_has_test(root):
@@ -248,6 +246,24 @@ def detect_test_command(root: Path) -> list[str]:
     if _has_tests(root):
         return ["python3", "-m", "pytest", "-q"]
     return []
+
+
+def _npm_has_test(root: Path) -> bool:
+    """A package.json with a test script in it — not absent, and not npm's placeholder.
+
+    A package.json without a test script, or with the placeholder that exits 1, is not a
+    test command. Its SHAPE is checked rather than assumed, because the file is the
+    project's and not ours: `"scripts": ["test"]` and `"test": 1` each raised inside the
+    config reader every gate calls first, so one malformed manifest refused every tool
+    call in the repository and crashed the command that switches this plugin off.
+    """
+    try:
+        pkg = json.loads((root / "package.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    scripts = pkg.get("scripts") if isinstance(pkg, dict) else None
+    script = scripts.get("test") if isinstance(scripts, dict) else None
+    return isinstance(script, str) and bool(script) and "no test specified" not in script
 
 
 def _has_tests(root: Path) -> bool:
@@ -345,6 +361,12 @@ EVIDENCE_KEYS = {"test_command", "test_commands", "artifact_globs", "clean_rerun
 # about the repository.
 SWITCH_REQUESTS = "switch-requests.json"
 
+# A switch with no key in `config.json`. Whether this clone's pushes are gated is a fact
+# about the clone — the hook is per-clone and never committed, and so is the decision to be
+# rid of it (`ci.declined`) — so its door is `claude-bp-ci off` rather than `claude-bp set`,
+# and its key is the founder's word, read here like every other one (decision 0006).
+PUSH_GATE = "pre_push"
+
 # `scope_drift_block off`, `require_worktree: false`, `task_idle_hours = 4`. Deliberately
 # narrow: the key is a literal this plugin printed for them to repeat, so there is no
 # prose to interpret and no way for an agent to phrase its way into a match.
@@ -430,9 +452,14 @@ def switches_in(text: str) -> dict[str, str]:
             out[key] = _spoken_value(key, found["value"])
     for found in _SWITCH.finditer(text or ""):
         key = found["key"].lower()
-        if key in _EXPECTED and key not in EVIDENCE_KEYS:
+        if _a_switch(key):
             out[key] = found["value"].lower()
     return out
+
+
+def _a_switch(key: str) -> bool:
+    """A key the founder throws by saying it: a settable config key, or the push gate."""
+    return key == PUSH_GATE or (key in _EXPECTED and key not in EVIDENCE_KEYS)
 
 
 # The founder's acceptance of work, in the same store and on the same terms as a switch:
@@ -572,9 +599,7 @@ def is_only_a_switch(text: str) -> bool:
 
 
 def _blank_if_ours(found: "re.Match[str]") -> str:
-    key = found["key"].lower()
-    settable = key in _EXPECTED and key not in EVIDENCE_KEYS
-    return " " if settable else found.group(0)
+    return " " if _a_switch(found["key"].lower()) else found.group(0)
 
 
 def switch_advice(key: str, value: Any) -> str:
@@ -628,9 +653,15 @@ def _as_number(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         return None
     try:
-        return float(value)
-    except ValueError:
+        number = float(value)
+    except (ValueError, OverflowError):
         return None
+    # Finite, or not a number at all. `"inf"`, `"nan"` and `1e999` all parse as floats, and
+    # the first whole-number key handed one raised — `int(inf)` is an OverflowError — inside
+    # the reader every gate calls first, so every tool call was refused. Where nothing
+    # raised it was quieter and no better: an infinite lease never expires, and NaN
+    # compares false with everything, so a sweep asked "is this above zero" read it as off.
+    return number if math.isfinite(number) else None
 
 
 def _as_int(value: Any) -> int | None:
@@ -687,9 +718,90 @@ def load(ctx: GitContext) -> Config:
     return cfg
 
 
+# One lookup per process and clone. Every gate asks on every tool call, and the answer is a
+# `git worktree list` that cannot change while the process lives: the main checkout of a
+# clone is wherever its `.git` directory is. None where the clone has no main checkout.
+_MAIN_CHECKOUT: dict[str, Path | None] = {}
+
+
+def founders_tree(ctx: GitContext) -> Path:
+    """The checkout whose config and settings speak for every tree of this clone.
+
+    The main one, from whichever tree is asking, as `plan.plan_dir` already resolves it.
+    A worktree's copy of `config.json` is its branch's snapshot, and `settings.local.json`
+    is in no branch at all, so the founder's word — an edit not yet committed, a `claude-bp
+    set`, the local switch — is only ever in the main checkout. Read per tree, `enabled off`
+    stood the plugin down there and nowhere a session was working, because sessions work
+    in worktrees by default, and the founder's `test_command` gave way to a detected one
+    in the Stop gate the same way. The harness reads the local settings file from the main
+    checkout for the same reason.
+
+    `git worktree list` names the git directory itself as the main tree of a bare clone and
+    of one made with `--separate-git-dir`. Neither is a checkout, so there the tree asking
+    is the tree that answers.
+    """
+    # The main checkout asking is its own answer: no subprocess, and the right answer even
+    # where the listing would name a separate git directory instead of it.
+    if not ctx.is_worktree:
+        return ctx.worktree_root
+    key = str(ctx.common_dir)
+    if key not in _MAIN_CHECKOUT:
+        from . import worktree
+
+        try:
+            main: Path | None = worktree.main_checkout(ctx)
+        except Exception:  # noqa: BLE001 - an unlistable clone still has its own tree
+            main = None
+        # A linked worktree is never the main tree; hearing that it is means git could not
+        # list the trees, and that answer is this tree's alone, not the clone's.
+        if main == ctx.worktree_root:
+            return ctx.worktree_root
+        _MAIN_CHECKOUT[key] = main if main is not None and (main / ".git").exists() else None
+    return _MAIN_CHECKOUT[key] or ctx.worktree_root
+
+
+def config_path(ctx: GitContext) -> Path:
+    """The `config.json` every tree reads — and the one `claude-bp set` writes."""
+    return founders_tree(ctx) / store.TIER_A_DIRNAME / CONFIG_NAME
+
+
+def _shown(ctx: GitContext, path: Path) -> str:
+    """A path as a session standing in this tree should read it."""
+    try:
+        return path.relative_to(ctx.worktree_root).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def _read_config(path: Path) -> tuple[Any, str]:
+    """The founder's file as it parses, and what is wrong with it when it does not.
+
+    `read_json` answers its default for a missing file and a broken one alike, and here
+    those are opposite facts: no file is a founder content with every default, and a broken
+    one is a founder whose every key — `enabled` among them — is being ignored in silence.
+    A trailing comma was enough, and nothing anywhere said so.
+    """
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except FileNotFoundError:
+        return {}, ""
+    except (OSError, ValueError) as exc:
+        return {}, f"{CONFIG_NAME} cannot be read ({exc})"
+    try:
+        return json.loads(text), ""
+    except ValueError as exc:
+        return {}, f"{CONFIG_NAME} does not parse ({exc})"
+
+
 def load_checked(ctx: GitContext) -> tuple[Config, list[str]]:
-    raw = store.read_json(store.tier_a(ctx, CONFIG_NAME), default={}) or {}
-    complaints: list[str] = []
+    """The config, and every complaint about it a human should be shown.
+
+    Shown on the board and by `claude-bp status`, because a complaint only this function
+    could see was one nobody saw.
+    """
+    raw, broken = _read_config(config_path(ctx))
+    raw = raw or {}
+    complaints: list[str] = [f"{broken}, so every key is at its default"] if broken else []
     if not isinstance(raw, dict):
         raw = {}
         complaints.append(f"{CONFIG_NAME} is not a JSON object; every value defaulted")
@@ -698,7 +810,10 @@ def load_checked(ctx: GitContext) -> tuple[Config, list[str]]:
     known = cfg.to_dict()
     for key, value in raw.items():
         if key not in known:
-            complaints.append(f"unknown key {key!r} ignored")
+            # `$comment` and its kind are notes: JSON has no comments, and this plugin's
+            # own hooks.json uses the same convention. Theirs to keep, not to hear about.
+            if not key.startswith("$"):
+                complaints.append(f"unknown key {key!r} ignored")
             continue
         if value is None:
             continue
@@ -748,12 +863,16 @@ def disabled_for_project(ctx: GitContext) -> str:
     for the rest of that session — worktrees provisioned, writes blocked, and the switch
     they just threw having no effect until they restart (#215). Nothing here can unload a
     hook; what it can do is stand down when the answer is written down.
+
+    Asked of the main checkout first, where the founder throws it, and then of the tree
+    asking: a copy there is one the harness also reads for a session started in it.
     """
-    for rel in PROJECT_SETTINGS:
-        raw = store.read_json(ctx.worktree_root / rel, default={})
-        wanted = raw.get("enabledPlugins") if isinstance(raw, dict) else None
-        if isinstance(wanted, dict) and wanted.get(PLUGIN_KEY) is False:
-            return rel
+    for root in dict.fromkeys((founders_tree(ctx), ctx.worktree_root)):
+        for rel in PROJECT_SETTINGS:
+            raw = store.read_json(root / rel, default={})
+            wanted = raw.get("enabledPlugins") if isinstance(raw, dict) else None
+            if isinstance(wanted, dict) and wanted.get(PLUGIN_KEY) is False:
+                return _shown(ctx, root / rel)
     return ""
 
 
@@ -764,7 +883,7 @@ def enforcing(ctx: GitContext) -> tuple[bool, str]:
     fourth is the shape this is fixing rather than a smaller version of it.
     """
     if not load(ctx).enabled:
-        return False, "`enabled off` in .claude/claude-bestpractice/config.json"
+        return False, f"`enabled off` in {_shown(ctx, config_path(ctx))}"
     off = disabled_for_project(ctx)
     if off:
         return False, f"{off} switches this plugin off for this project"
@@ -772,6 +891,30 @@ def enforcing(ctx: GitContext) -> tuple[bool, str]:
 
 
 def save(ctx: GitContext, cfg: Config) -> Path:
-    path = store.tier_a(ctx, CONFIG_NAME)
+    path = config_path(ctx)
     store.write_json(path, cfg.to_dict(), mode=0o644)
+    return path
+
+
+def set_key(ctx: GitContext, key: str, value: Any) -> Path:
+    """Write one key into the founder's file, and leave every other key as they wrote it.
+
+    `claude-bp set` used to `save` the whole defaulted view: their `$comment` and every key
+    this version does not know were deleted, every default was pinned into a committed file
+    (the pattern repairs 0004 and 0006 exist to undo), and the DETECTED `test_command` was
+    written in as if the founder had chosen it — an evidence key no command may set. On a
+    file that did not parse it wrote the defaults over it.
+
+    Raises ValueError, saying what is wrong, rather than write over a file it cannot read.
+    Their keys keep their order and a new one goes last, so the change reads as the one
+    they asked for.
+    """
+    path = config_path(ctx)
+    raw, broken = _read_config(path)
+    if broken:
+        raise ValueError(broken)
+    if not isinstance(raw, dict):
+        raise ValueError(f"{CONFIG_NAME} is not a JSON object")
+    raw[key] = value
+    store.atomic_write(path, store.dumps(raw, indent=2) + "\n", mode=0o644)
     return path

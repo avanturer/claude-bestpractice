@@ -31,10 +31,11 @@ Three rules keep a predicate from becoming a bypass:
 
 from __future__ import annotations
 
+import functools
 import re
 from pathlib import Path
 
-from . import shellcmd
+from . import ci, shellcmd
 from .gitctx import GitContext
 
 WORKTREE = (
@@ -126,6 +127,62 @@ _CHECK_SCRIPTS = {
 }
 _SCRIPT_RUNNERS = {"npm", "pnpm", "yarn", "bun"}
 
+# A formatter REWRITES what it is pointed at unless it is told to check instead, and the
+# families above named black and isort as though running one were running a test. `black
+# src/` and `ruff check --fix src/` in the main checkout on the trunk were vouched as "this
+# project's checks", while `sed -i` there was refused — the same edit to a checkout every
+# session shares, approved for being spelled as a tool. So a formatter is a check only with
+# its own non-writing flag on the line...
+_CHECK_MODE = {
+    "black": {"--check", "--diff"},
+    "isort": {"--check-only", "--check", "-c", "--diff", "--df"},
+    "ruff format": {"--check", "--diff"},
+    "cargo fmt": {"--check"},
+    # Not a formatter, and the same act: without `--noEmit` the compiler writes its output
+    # beside the sources or into `outDir`, which in the shared checkout is a write like any
+    # other. `tsc --noEmit` is the type check the families above meant.
+    "tsc": {"--noEmit"},
+}
+# ...and a linter, or a runner that rewrites expectations, is one only WITHOUT the flag that
+# makes it fix: `--fix`, a snapshot update, Go's golden-file `-update`. Matched whole, never
+# by prefix: `--fix-dry-run` and `--no-fix` are the reports they sound like.
+_FIXES = {"--fix", "--fix-only", "--add-noqa", "-u", "--update", "-update", "--updateSnapshot"}
+
+# Options that turn a program on the lists above into one that RUNS something, DELETES
+# something, or writes where it was asked to read. The program is whitelisted; these are the
+# doors its own flags open, named per program because the same letter is harmless anywhere
+# else — `-x` stops pytest at its first failure and hands tox a command to run. Read off each
+# program's own reference, and the first four run on a machine to see what they do:
+#
+#   rg --pre=rm zzz .               ran `rm` on every file it searched: the tracked tree, gone
+#   pytest --basetemp=DIR           emptied DIR the moment a test asked for `tmp_path`
+#   git grep --open-files=CMD       ran CMD on every matching file
+#   make --eval='check: ; CMD' check    ran CMD as the recipe of a target named `check`
+#
+# A long option matches by PREFIX, because git and make take any unambiguous abbreviation —
+# `--open-files` above is `--open-files-in-pager`. A single letter matches anywhere in a
+# cluster, because `-nOcmd` is `-n -Ocmd`. A bare word is a subcommand that runs whatever
+# follows it.
+_DOORS = {
+    "rg": ("--pre", "--pre-glob", "--hostname-bin"),
+    "git": ("--output", "--open-files-in-pager", "-O"),
+    "tree": ("-o",),
+    "file": ("-C", "--compile"),
+    "pytest": ("--basetemp", "--override-ini", "-o", "-c", "--pastebin"),
+    "pylint": ("--init-hook",),
+    "mypy": ("--install-types",),
+    "tox": ("--override", "-x", "exec", "e"),
+    "make": ("--eval", "-E", "--file", "--makefile", "-f", "--directory", "-C",
+             "--include-dir", "-I"),
+    "go": ("-exec", "-toolexec", "-vettool", "-ldflags"),
+    "cargo": ("--config", "-Z"),
+}
+# What follows a bare `--`, and whatever a script runner passes on, is read by a program this
+# cannot see: `tox -e py -- --basetemp=src` is pytest's door opened through tox. So those
+# words are held to every long door above, whoever's it was.
+_BLIND = tuple(sorted({door for doors in _DOORS.values() for door in doors
+                       if door.startswith("--")}))
+
 # What this plugin will not vouch for reading, whatever the program. The boundary names
 # these explicitly rather than trusting "it is inside the repository": a credential in the
 # tree is still a credential, and putting it in the transcript is the loss.
@@ -186,13 +243,23 @@ def _arguments(argv: list[str]) -> list[str]:
     return [t for t in argv[1:] if not t.startswith("-")]
 
 
+def _option_values(argv: list[str]) -> list[str]:
+    """`--basetemp=/elsewhere` names a path as surely as `/elsewhere` does.
+
+    Only the positional arguments used to be resolved, so a value joined to its option was
+    never looked at: `python3 -m pytest -q --basetemp=<a directory outside the repository>`
+    was vouched as this project's checks, and the run emptied that directory.
+    """
+    return [t.split("=", 1)[1] for t in argv[1:] if t.startswith("-") and "=" in t]
+
+
 def _paths_are_ours(root: Path, here: Path, argv: list[str]) -> bool:
     """Every path-shaped argument lands inside this tree, and none of them is a credential.
 
     An argument that is a pattern rather than a path — `grep TODO src/` — resolves under
     the segment's own directory and passes, which is correct: it names nothing outside.
     """
-    for token in _arguments(argv):
+    for token in _arguments(argv) + _option_values(argv):
         if _SECRETISH.search(token):
             return False
         resolved = _resolve(here, token)
@@ -226,11 +293,11 @@ def _reads(root: Path, here: Path, argv: list[str]) -> bool:
         arguments = _git_arguments(argv)
         if not arguments or arguments[0] not in _GIT_READS:
             return False
-        # `git diff --output f` writes a file; the rest of git's read verbs have no such
-        # flag, and one that grows one should not be discovered here.
-        return not any(a.startswith("--output") for a in arguments) and _paths_are_ours(
-            root, here, ["git", *arguments[1:]])
-    return program in _READ_ONLY and _paths_are_ours(root, here, argv)
+        return _paths_are_ours(root, here, ["git", *arguments[1:]]) and not _opens_a_door(argv)
+    # `uniq in out` WRITES `out`: the one reader here whose output is an operand.
+    if program == "uniq" and len(_arguments(argv)) > 1:
+        return False
+    return program in _READ_ONLY and _paths_are_ours(root, here, argv) and not _opens_a_door(argv)
 
 
 def _module_check(argv: list[str]) -> bool:
@@ -279,19 +346,67 @@ def _syntax_check(argv: list[str]) -> bool:
 def _checks(root: Path, here: Path, argv: list[str], test_command: list[str]) -> bool:
     if argv == list(test_command):
         return True
-    program = _program(argv)
-    if program in _DELEGATING:
+    if _program(argv) in _DELEGATING:
         return _delegated(root, here, argv, test_command)
-    named = (
+    # `make` included: `make --file=/elsewhere/Makefile test` and `--eval` are its doors.
+    if not (_names_a_check(argv) or _make_check(argv, test_command)):
+        return False
+    return _paths_are_ours(root, here, argv) and not _opens_a_door(argv) and not _rewrites(argv)
+
+
+def _names_a_check(argv: list[str]) -> bool:
+    """A check by its family — program, `-m` module, script name or subcommand."""
+    program = _program(argv)
+    return (
         program in _CHECKERS
         or _module_check(argv)
         or _script_check(argv)
         or (program in _CHECK_SUBCOMMANDS and _subcommand_check(argv))
         or _syntax_check(argv)
     )
-    if not named:
-        return _make_check(argv, test_command)
-    return _paths_are_ours(root, here, argv)
+
+
+def _opens_a_door(argv: list[str]) -> bool:
+    """Does a word on this line make its program run, delete or write something?"""
+    name, args = _tool(argv)
+    doors = _BLIND if name in _SCRIPT_RUNNERS else _DOORS.get(name, ())
+    for index, token in enumerate(args):
+        if token == "--":
+            return any(_is_door(word, _BLIND) for word in args[index + 1:])
+        if _is_door(token, doors):
+            return True
+    return False
+
+
+def _is_door(token: str, doors: tuple[str, ...]) -> bool:
+    """Is this one word one of these doors, in any spelling its program accepts?"""
+    if not token.startswith("-"):
+        return token in doors
+    names = [door.lstrip("-") for door in doors if door.startswith("-")]
+    given = token.lstrip("-").partition("=")[0]
+    if token.startswith("--"):
+        return bool(given) and any(len(name) > 1 and name.startswith(given) for name in names)
+    # `-exec` is one option to go; `-Otouch` is `-O touch` to git.
+    return given in names or any(len(name) == 1 and name in token for name in names)
+
+
+def _tool(argv: list[str]) -> tuple[str, list[str]]:
+    """The program that actually runs and its own arguments: `python -m black` is black."""
+    if _module_check(argv):
+        return argv[2], argv[3:]
+    return _program(argv), argv[1:]
+
+
+def _rewrites(argv: list[str]) -> bool:
+    """Would this check change the files it names — a formatter without its check flag,
+    or anything told to fix?"""
+    name, args = _tool(argv)
+    if _FIXES.intersection(args):
+        return True
+    # `ruff format` and `cargo fmt` are formatters by subcommand; `ruff check` is not.
+    subcommand = [arg for arg in args if not arg.startswith("-")][:1]
+    modes = _CHECK_MODE.get(" ".join([name, *subcommand])) or _CHECK_MODE.get(name)
+    return modes is not None and not modes.intersection(args)
 
 
 def _delegated(root: Path, here: Path, argv: list[str], test_command: list[str]) -> bool:
@@ -337,8 +452,14 @@ def _walk(here: Path, root: Path, argv: list[str], clone: Path | None = None) ->
     return moved if _inside(root, moved) or (clone and _inside(clone, moved)) else None
 
 
-def for_bash(ctx: GitContext, line: str, test_command: list[str], cwd: Path | None = None) -> str:
-    """Why this shell line needs no prompt, or "" to leave the decision where it was."""
+def for_bash(ctx: GitContext, line: str, test_command: list[str], cwd: Path | None = None, *,
+             require_worktree: bool, protect_trunk: bool) -> str:
+    """Why this shell line needs no prompt, or "" to leave the decision where it was.
+
+    `require_worktree` and `protect_trunk` are the founder's switches as the caller holds
+    them: the rules that refuse a file written in the main checkout and on the trunk, which
+    a commit is by another spelling.
+    """
     parsed = shellcmd.segments(line)
     if not parsed:
         return ""
@@ -351,10 +472,11 @@ def for_bash(ctx: GitContext, line: str, test_command: list[str], cwd: Path | No
         clone = ctx.common_dir.parent.resolve()
     except OSError:
         clone = None
+    may_commit = _may_commit(ctx, parsed, require_worktree, protect_trunk)
 
     reasons: list[str] = []
     for argv in parsed:
-        here, reason = _judge(root, here, clone, argv, test_command)
+        here, reason = _judge(root, here, clone, argv, test_command, may_commit)
         if here is None:
             return ""
         if reason and reason not in reasons:
@@ -366,23 +488,47 @@ def for_bash(ctx: GitContext, line: str, test_command: list[str], cwd: Path | No
     return "\n".join(reasons) if reasons else MOVE
 
 
+def _may_commit(ctx: GitContext, parsed: list[list[str]], require_worktree: bool,
+                protect_trunk: bool) -> bool:
+    """Would this plugin let a file be written in the tree this line commits in?
+
+    A commit is a write by another spelling. `sed -i` in the main checkout on the trunk was
+    refused while `git commit -am` there was vouched for as "the working tree this session
+    occupies" — the same change to a checkout every session shares, approved for being
+    spelled as git. So this asks what `gitpolicy.violations` asks of a write, without its
+    side effect: that one provisions a tree on its way to no.
+
+    Only of a line that commits, because `on_trunk` asks git and nothing else here does.
+    """
+    from . import gitpolicy
+
+    if not any(_git_arguments(argv)[:1] in (["add"], ["commit"]) for argv in parsed):
+        return True
+    if not gitpolicy.has_history(ctx):
+        return True
+    if require_worktree and not ctx.is_worktree:
+        return False
+    return not (protect_trunk and gitpolicy.on_trunk(ctx))
+
+
 def _judge(root: Path, here: Path, clone: Path | None, argv: list[str],
-           test_command: list[str]) -> tuple:
+           test_command: list[str], may_commit: bool) -> tuple:
     """One segment: where the next one runs, and why this one needs no permission.
 
     `(None, "")` ends the vouch for the whole line — one unqualified segment takes the
     line with it, because `allow_tool` approves the line and there is no half of it to
-    approve.
+    approve. A commit is judged only where `may_commit` says a write would be allowed.
     """
     if not _accountable(argv):
         return None, ""
     if _program(argv) in _NAVIGATION:
         return _walk(here, root, argv, clone), ""
-    reason = _classify(root, here, argv, test_command)
+    reason = _classify(root, here, argv, test_command, may_commit)
     return (here, reason) if reason else (None, "")
 
 
-def _classify(root: Path, here: Path, argv: list[str], test_command: list[str]) -> str:
+def _classify(root: Path, here: Path, argv: list[str], test_command: list[str],
+              may_commit: bool) -> str:
     if _own_command(argv):
         return OWN
     if _orders_a_worktree(argv):
@@ -391,7 +537,7 @@ def _classify(root: Path, here: Path, argv: list[str], test_command: list[str]) 
         return READ
     if _checks(root, here, argv, test_command):
         return SUITE
-    if _commits_here(root, here, argv):
+    if may_commit and _commits_here(root, here, argv):
         return WRITE
     return ""
 
@@ -425,7 +571,13 @@ _OWN_BIN = Path(__file__).resolve().parents[2] / "bin"
 # here writes only this plugin's own state, or — in `policy`'s case — facts it re-derives
 # from the repository. Rewriting somebody else's configuration is not in that family and
 # is left to the permission layer on purpose.
-_NOT_OURS_TO_VOUCH = {"adopt"}
+#
+# Nor is the pre-push hook's bookkeeping. It writes this plugin's own state, but what it
+# writes is an OBSERVATION — a run the hook watched — and no refusal names it, because no
+# session has a reason to call it. Vouched, it put a green on record for a red suite
+# (decision 0013); `pre-tool` refuses it outright, and this keeps it from ever being the
+# plugin's own word that it was fine.
+_NOT_OURS_TO_VOUCH = {"adopt", *ci.HOOK_ONLY}
 
 
 def own_command(line: str) -> bool:
@@ -462,9 +614,16 @@ def _from_our_install(argv: list[str]) -> bool:
     resolved through PATH, and a `claude-bp` on PATH belonging to some other install must
     not answer for this one.
     """
+    return _in_our_bin(argv[0] if argv else "")
+
+
+# Once per name per hook call. Every segment of a line asks, the ceiling's escape and the
+# vouch both, and `shutil.which` walks every directory on PATH each time: a chain of
+# thousands of `echo`s walked it thousands of times.
+@functools.lru_cache(maxsize=64)
+def _in_our_bin(token: str) -> bool:
     import shutil
 
-    token = argv[0] if argv else ""
     if not token:
         return False
     found = token if ("/" in token or "\\" in token) else (shutil.which(token) or "")
@@ -520,12 +679,15 @@ def surface(ctx: GitContext, test_command: list[str]) -> list[str]:
     detected = " ".join(test_command) if test_command else "none detected"
     return [
         f"reads inside {ctx.worktree_root.name}/ that write nothing (git log/diff/status, cat, grep)",
-        f"this project's checks in any spelling (detected: {detected})",
+        f"this project's checks in any spelling (detected: {detected}); a formatter only "
+        "with --check or --diff, tsc only with --noEmit, and nothing told to --fix",
         "git worktree add/remove/list, entering and leaving one, and writes and commits "
-        "in this session's own tree",
+        "in this session's own tree — never a commit where a write would be refused",
         "opening a pull request, and merging one this gate has just found no blockers for",
         "this plugin's own commands, which are what its refusals tell you to run",
         "moving around inside this repository: cd, pwd, and doing nothing at all",
         "each segment of a compound command judged alone; one unvouched segment ends it",
-        "not: the network, production, git push, credentials, anything outside this tree",
+        "not: the network, production, git push, credentials, anything outside this tree "
+        "(an option's value included), or an option that makes a program run or delete "
+        "something (rg --pre, pytest --basetemp)",
     ]

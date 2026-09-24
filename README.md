@@ -4,9 +4,9 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-1.68.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-1669%20passing-2ea44f)](#verified)
-[![doctor](https://img.shields.io/badge/doctor-34%20checks-2ea44f)](#verified)
+[![version](https://img.shields.io/badge/version-1.69.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-2130%20passing-2ea44f)](#verified)
+[![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
 [![context](https://img.shields.io/badge/always--on%20context-332%20tokens-blue)](#context-cost)
@@ -64,11 +64,12 @@ in your shell.
 
 The push gate does not wait for either of them. The first session started in a repository
 that has no `pre-push` hook installs one, and says so on the board; after that it stays
-quiet. `claude-bp-ci off` removes it and the removal sticks — the next session will not
-put it back. It arms itself rather than waiting for a command because a gate that only
-fires when someone remembers to run something is the gate this whole project exists to
-replace — and verification found exactly that, an install reporting `✓ enabled` over a
-push path with nothing on it.
+quiet. `claude-bp-ci off` removes it — from your own terminal, or from a session once you
+have said `pre_push off` — and the removal sticks: the next session will not put it back.
+It arms itself rather than waiting for a command because a gate that only fires when
+someone remembers to run something is the gate this whole project exists to replace —
+and verification found exactly that, an install reporting `✓ enabled` over a push path
+with nothing on it.
 
 In any repository afterwards — from your terminal, or by asking Claude to run them:
 
@@ -82,7 +83,7 @@ any gate fails to fire. Gates that silently do nothing are worse than no gates.
 
 Read that claim narrowly, because it is narrow: the doctor builds its own throwaway
 repository and attacks that. It proves **the gates work**, not that they are correctly
-wired into *your* project — so "All 33 checks passed" is a statement about this software,
+wired into *your* project — so "All 36 checks passed" is a statement about this software,
 never a clean bill of health for your repository. `claude-bp status` is the one that
 looks at yours.
 
@@ -276,9 +277,10 @@ So a tree this plugin provisioned **removes itself** on the turn that finishes t
 branch in the trunk (by ancestry or by content, which is what a squash leaves), every card
 this session holds closed and at least one of them closed, `git status` in it empty including
 untracked files, and it is not the main checkout. The act is `git worktree remove` with no
-`--force`, so git refuses over anything at all in the tree; the branch goes with `-d`, or
-`-D` on one proof and no other — every file it delivers already byte-identical to the trunk.
-You are not asked, which is the point. `{"remove_finished_trees": false}` turns it off.
+`--force`, so git refuses over anything at all in the tree; the branch goes with `-D` on one
+proof asked of the trunk and no other — its tip already in it, or every file it delivers
+already identical there, mode included. You are not asked, which is the point.
+`{"remove_finished_trees": false}` turns it off.
 
 The removal carries what the tree was given: the branch, the database this plugin derived for
 it when no other working tree points at it, and the local branches beside it whose work is
@@ -409,7 +411,7 @@ configuration silently.
 | `claude-bp doctor` | Prove each gate by attempting a known-bad action |
 | `claude-bp-plan` | The work ledger: `add`, `list`, `claim`, `done` |
 | `claude-bp-decide` | Accept a decision drafted from your own corrections |
-| `claude-bp-ingest` | Sanitise production errors into fenced task files |
+| `claude-bp-ingest` | Sanitise production errors into files an agent reads as data (`.claude/signals/`) |
 | `claude-bp-knowledge` | Validate the decided layer, refresh its index |
 | `claude-bp-reindex` | Drop and rebuild everything derived |
 | `claude-bp-ci` | Where the checks run: local pre-push by default, hosted CI opt-in |
@@ -433,16 +435,19 @@ In a session: `/claude-bestpractice:status` · `/claude-bestpractice:plan` · `/
 | `subagent-brief` | SubagentStart | fails open | Non-goals, entities and a query-biased map to agents that inherit no rules |
 | `checkpoint` | PreCompact | fails open | Extractive checkpoint, zero model calls, secrets scrubbed. **Never refuses a compaction** — a refusal there reaches the founder, never the model (decision 0021) |
 | `evidence-gate` | Stop | **fails closed** | Scope drift, test evidence, clean re-run, a turn ending on an unanswered block; harvests decision drafts; asks once for what only this window knows; puts a finished worktree away |
+| `pr-opened` | PostToolUse `.*(create\|update)_pull_request` | fails open | Files the pull request just opened and learns its number, so the merge gate can tell its own from somebody else's; settles one closed through the tool |
+| `permission-denied` | PermissionDenied | fails open | Records what auto mode refused, so a repeated prompt can be traced to its rule; never overturns one |
 
-Nine entries against a self-imposed budget of twelve. Always-on context **~332 tokens**
-against a cap of 400 — roughly 0.1 % of a 200k window.
+Eleven entries — `pre-tool` and `review-commit` share the PreToolUse event — against a
+self-imposed budget of twelve. Always-on context **~332 tokens** against a cap of 400 —
+roughly 0.1 % of a 200k window.
 
 ---
 
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 1669 tests · 35 doctor checks · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2130 tests · 36 doctor checks · budget
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration
@@ -492,8 +497,10 @@ written under 1.0.1 was still there and still readable after. It lives in your r
 and in your git common directory, never in the plugin cache, which is what the version
 bump replaces.
 
-Installed with `install.sh` instead? That path is a clone, so it updates with `git pull`
-in the directory you cloned into, and needs no version bump to do it.
+Installed with `install.sh` instead? Run it again. The clone is only the source: Claude Code
+runs a copy in its own plugin cache, so `git pull` in the clone updates the terminal commands
+and leaves every session's gates on the old code. The installer fetches, runs the doctor,
+and refreshes that copy.
 
 ## Requirements
 
@@ -502,7 +509,7 @@ tool call, so a dependency tree is latency, an extra failure mode and a supply-c
 surface for the component whose whole job is to be trustworthy. Enforced in CI.
 
 Tested on Python 3.9, 3.11 and 3.13. `claude plugin validate --strict` passes against
-Claude Code 2.1.247.
+Claude Code 2.1.281.
 
 Everything works on any recent Claude Code; two features need a floor, and both fail
 quiet rather than loud, which is why they are written down:
@@ -558,6 +565,7 @@ plugin down — on the next tool call, not after a restart:
 
 ```
 enabled off          # then: claude-bp set enabled off
+pre_push off         # then: claude-bp-ci off   (the pre-push hook only)
 ```
 
 Or, in the project's `.claude/settings.json`, the harness's own entry:
@@ -574,7 +582,8 @@ enforces nothing.
 
 - **Not a memory engine.** The harness stores and loads memory. This owns curation.
 - **Not a code reviewer.** Several first-party review paths exist; pick one and integrate.
-- **Not a task manager.** The native task system is subsumed and gated, never replaced.
+- **Not a task manager.** The ledger is the only board; the harness's own task tools are
+  left unused rather than mirrored.
 - **Not for teams.** Every trade-off assumes one owner and no reviewer.
 
 ## Four things it cannot enforce

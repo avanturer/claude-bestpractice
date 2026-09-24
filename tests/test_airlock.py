@@ -78,11 +78,49 @@ class TestIngest(RepoCase):
         self.assertNotIn("AKIAIOSFODNN7EXAMPLE", text)
         self.assertIn("[REDACTED]", text)
 
+    def test_a_credential_is_scrubbed_in_every_shape_a_signal_carries_one(self):
+        """A real batch reached `.claude/signals/` with a key's body, a Redis password, a
+        Basic credential and an API key intact — files that sit untracked in the tree."""
+        body = "MHcCAQEEIBzfZzzrxvZYjEeV5N9Ls7AutBIEi4rjqsMrhSfciX+MoAoGCCqGSM49"
+        proc = self.ingest([
+            self.full_signal(fingerprint="pem", message=(
+                f"bad key:\n-----BEGIN EC PRIVATE KEY-----\n{body}\n-----END EC PRIVATE KEY-----")),
+            self.full_signal(fingerprint="redis", message=(
+                "Error 111 connecting to redis://:Prod-R3dis-Passw0rd-2026@redis-master:6379/0")),
+            self.full_signal(fingerprint="basic", message=(
+                "401 for /v1/charge; sent {'Authorization': 'Basic YWRtaW46UzNjcjN0LUJpbGxpbmc='}")),
+            self.full_signal(fingerprint="key", message="X-Api-Key: 9f8e7d6c5b4a39281706f5e4d3c2b1a0"),
+        ])
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        written = "\n".join(path.read_text() for path in self.signals())
+        for secret in (body, "END EC PRIVATE KEY", "Prod-R3dis-Passw0rd-2026",
+                       "YWRtaW46UzNjcjN0", "9f8e7d6c5b4a3928"):
+            self.assertNotIn(secret, written)
+
     def test_frames_resolve_to_repo_relative_paths(self):
         """A frame the agent cannot map to a file is a frame it hallucinates around."""
         self.write("src/app.py", "x = 1\n")
         self.ingest(self.full_signal(frames=[{"filename": "/build/src/app.py", "lineno": 9}]))
         self.assertIn("src/app.py:9", self.signals()[0].read_text())
+
+    def test_a_frame_outside_the_repository_is_kept_as_it_was(self):
+        """A standard-library frame exists on this machine and is not in the tree: it
+        raised out of `relative_to` and the whole batch was lost with it."""
+        outside = json.__file__
+        proc = self.ingest([self.full_signal(fingerprint="a", frames=[{"abs_path": outside, "lineno": 3}]),
+                            self.full_signal(fingerprint="b")])
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual(2, len(self.signals()))
+        self.assertIn(f"{outside}:3", self.signals()[0].read_text())
+
+    def test_a_missing_input_file_is_a_message_not_a_traceback(self):
+        proc = subprocess.run(
+            [sys.executable, str(BIN / "claude-bp-ingest"), "--file", "nope.json"],
+            capture_output=True, text=True, cwd=str(self.repo), timeout=60,
+        )
+        self.assertEqual(1, proc.returncode)
+        self.assertIn("cannot read nope.json", proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
 
     def test_control_characters_are_stripped(self):
         self.ingest(self.full_signal(message="hello​world"))
@@ -323,6 +361,22 @@ class TestReviewCommit(GateCase):
         body = self.context(self.review())
         self.assertIn("swallowed-exception", body)
         self.assertIn("bad.py", body)
+
+    def test_a_file_named_with_a_space_or_an_accent_is_reviewed_too(self):
+        """Git ends `+++ b/<name>` with a TAB when the name holds a space, and quotes a name
+        outside ASCII, so neither file was ever reviewed: the swallowed exception that was a
+        finding in `app/cafe.py` was silence in `app/café.py`."""
+        names = ("app/my module.py", "app/café.py")
+        for name in names:
+            self.write(name, "def f():\n    return 1\n")
+        self.commit("the modules, clean")
+        self.start()
+        for name in names:
+            self.write(name, "def f():\n    try:\n        go()\n    except Exception:\n        pass\n")
+        self.write("app/naïve.py", "def g():\n    try:\n        go()\n    except ValueError:\n        pass\n")
+        body = self.context(self.review())
+        for name in (*names, "app/naïve.py"):
+            self.assertIn(f"swallowed-exception at {name}:", body)
 
     def test_does_not_blame_pre_existing_problems(self):
         """Rewriting a file that already had the issue is not this turn's doing."""

@@ -69,6 +69,25 @@ _VISIBILITY_PROBE = (".visibility-probe",)
 _LEDGER_PREFIX = "plan/"
 
 
+def checkpoint_dir(ctx: GitContext) -> Path:
+    """Where compaction checkpoints live: the MAIN checkout's Tier A, whichever tree writes.
+
+    Written into the tree the session was standing in — and the hook's working directory
+    follows the session into its worktree — each checkpoint was an untracked file there, so
+    `git worktree remove` without `--force` refused that tree for good. The reaper could not
+    clear it, a finished tree could not remove itself, and `stranded()`, which exempts
+    `.claude/`, never named it. The main checkout is the one tree that outlives the others,
+    which is why the ledger lives there too (decision 0018).
+    """
+    from . import worktree
+
+    try:
+        root = worktree.main_checkout(ctx)
+    except Exception:  # noqa: BLE001 - an unlistable clone still has a tree to write in
+        root = ctx.worktree_root
+    return root.joinpath(TIER_A_DIRNAME, "checkpoints")
+
+
 def newest_checkpoint(ctx: GitContext, session_id: str) -> str:
     """The last thing written before this session's context was compacted, or "".
 
@@ -77,12 +96,16 @@ def newest_checkpoint(ctx: GitContext, session_id: str) -> str:
     every checkpoint and never look at it again. Compaction is the largest destroyer of
     in-context state, so the half that matters is the restore.
     """
-    directory = tier_a(ctx, "checkpoints")
+    directory = checkpoint_dir(ctx)
     try:
         found = sorted(directory.glob("*.md"))
     except OSError:
         return ""
-    mine = [p for p in found if session_id and session_id[:8] in p.name] or found
+    # This session's own, or nothing. Falling back to whichever checkpoint was newest
+    # handed a session whose own capture had failed ANOTHER session's work, under
+    # "RESTORED AFTER COMPACTION … keep working from it" — a sibling's instruction, obeyed
+    # as this session's own.
+    mine = [p for p in found if session_id and session_id[:8] in p.name]
     if not mine:
         return ""
     try:
@@ -154,8 +177,9 @@ def ensure_dir(path: Path) -> Path:
     return path
 
 
-def atomic_write(path: Path, data: str, mode: int = 0o600, follow_symlink: bool = False) -> None:
-    """Write via temp-in-same-dir, fsync, rename.
+def atomic_write(path: Path, data: str | bytes, mode: int = 0o600,
+                 follow_symlink: bool = False) -> None:
+    """Write via temp-in-same-dir, fsync, rename. Text is written as UTF-8, bytes as they are.
 
     Same directory matters: `os.replace` is only atomic within a filesystem, and a
     temp file in /tmp may be on a different one. The fsync is what makes the content
@@ -188,7 +212,7 @@ def atomic_write(path: Path, data: str, mode: int = 0o600, follow_symlink: bool 
     try:
         fd = os.open(str(tmp), os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
         try:
-            os.write(fd, data.encode("utf-8"))
+            _write_all(fd, data if isinstance(data, bytes) else data.encode("utf-8"))
             os.fsync(fd)
         finally:
             os.close(fd)
@@ -198,15 +222,42 @@ def atomic_write(path: Path, data: str, mode: int = 0o600, follow_symlink: bool 
         raise
 
 
+def _write_all(fd: int, data: bytes) -> None:
+    """Every byte, or an exception — never a short file that passes for a whole one.
+
+    `os.write` may write less than it was handed and say so only in its return value; a
+    nearly full disk does, and so does a file-size limit. Every writer here ignored that
+    value, so `atomic_write` fsynced a truncated temp file and renamed it over the good one
+    without raising anything, and `read_json` then read the damage as absent: a config
+    back at every default, reproduced under RLIMIT_FSIZE, which is how a full disk looks
+    to write(2). The remainder is retried, and a write that makes no progress raises.
+    """
+    view = memoryview(data)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError(errno.ENOSPC, f"write stopped with {len(view)} byte(s) unwritten")
+        view = view[written:]
+
+
 def read_json(path: Path, default: Any = None) -> Any:
-    """Tolerate a torn or absent file by returning `default`.
+    """Tolerate a torn, absent or unreadable file by returning `default`.
 
     A single corrupt record must never make the whole store unreadable — that failure
     mode is why one widely-used memory server can be bricked by one bad line.
+
+    Any OSError, not only a missing file. A directory where the file belongs raised
+    `IsADirectoryError` straight past this reader and into the config every gate reads
+    first, so one `mkdir` refused every tool call in the repository — and the command that
+    switches the plugin off died on the same traceback.
+
+    `utf-8-sig`, so a byte-order mark is not a parse error. PowerShell 5.1's `Set-Content
+    -Encoding UTF8` writes one, and a founder's `"enabled": false` saved that way was read
+    as no config at all.
     """
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError):
+        return json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
         return default
 
 
@@ -257,7 +308,7 @@ def append_jsonl(path: Path, obj: Any, mode: int = 0o600) -> None:
         path.unlink()
     fd = os.open(str(path), os.O_CREAT | os.O_WRONLY | os.O_APPEND | nofollow, mode)
     try:
-        os.write(fd, line.encode("utf-8"))
+        _write_all(fd, line.encode("utf-8"))
     finally:
         os.close(fd)
 
@@ -275,19 +326,26 @@ def rewrite_jsonl(path: Path, rows: list[Any], mode: int = 0o600) -> None:
 
 
 def read_jsonl(path: Path) -> list[Any]:
-    """Read an append-only log, skipping records damaged by a partial write."""
+    """Read an append-only log, skipping records damaged by a partial write.
+
+    Decoded a LINE at a time. The whole file used to be decoded at once, so one record
+    torn inside a multibyte character — a partial write lands mid-`é` as easily as
+    anywhere — made the entire log read as empty, and the pull-request checks reading
+    `unverified.jsonl` then found no unverified finish at all. Split on bytes, too, so a
+    raw U+2028 inside a record's string is not taken for the end of it.
+    """
     out: list[Any] = []
     try:
-        text = path.read_text(encoding="utf-8")
-    except (FileNotFoundError, UnicodeDecodeError):
+        raw = path.read_bytes()
+    except OSError:
         return out
-    for line in text.splitlines():
+    for line in raw.splitlines():
         line = line.strip()
         if not line:
             continue
         try:
-            out.append(json.loads(line))
-        except json.JSONDecodeError:
+            out.append(json.loads(line.decode("utf-8")))
+        except ValueError:
             continue
     return out
 
@@ -419,7 +477,13 @@ def file_lock(
         try:
             fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             try:
-                os.write(fd, payload)
+                _write_all(fd, payload)
+            except OSError:
+                # Ours, and naming nobody: a holder that cannot be identified is only
+                # reclaimed by age, so every sibling would wait out the mtime backstop
+                # for a lock this process never went on to use.
+                lock_path.unlink(missing_ok=True)
+                raise
             finally:
                 os.close(fd)
             break
@@ -456,7 +520,7 @@ def guarded_json(
         write_json(path, box[0])
 
 
-# Tier B is DESCRIBED as entirely derived, and four of its files are not. These record
+# Tier B is DESCRIBED as entirely derived, and several of its files are not. These record
 # events — a finish that could not be proved, a suite observed failing, a decision the
 # agent drafted and nobody has accepted yet — and no amount of rescanning the repository
 # brings an event back. Purging them was silent, permanent, and `claude-bp reindex`
@@ -468,9 +532,30 @@ CARRIED = (
     "open-items.jsonl",       # board.OPEN_ITEMS_FILE — including UNVERIFIED warnings
     "decision-inbox.jsonl",   # drafts.INBOX_FILE — drafted, not yet accepted
     "unverified.jsonl",       # the evidence gate's record of a finish it could not prove
+    # migrate.LEDGER — which repairs this clone has had. Purged, it re-armed every one of
+    # them, the ones that rewrite files in the founder's tree among them.
+    "migrations.json",
 )
 # `failing-suite.json` is deliberately absent: the red ledger is Tier A, committed, and
 # this function never reaches it.
+
+# The same rule for a family of files. Each attempt's provenance stamp is the content of its
+# subject when the dead end was hit, and the file has moved on since by definition — so a
+# purged stamp is a staleness marker that can never be shown again.
+CARRIED_PATTERNS = (
+    "attempt-*.stamp",        # attempts.record — the blobs a dead end was about
+)
+
+
+def carried_files(ctx: GitContext) -> list[str]:
+    """The files in Tier B that a purge keeps, by name."""
+    root = tier_b(ctx)
+    named = [name for name in CARRIED if (root / name).is_file()]
+    try:
+        matched = sorted({p.name for pattern in CARRIED_PATTERNS for p in root.glob(pattern)})
+    except OSError:
+        matched = []
+    return named + [name for name in matched if (root / name).is_file()]
 
 # Same rule, one directory rather than one file. A note another session queued is an event
 # too — the lease conflict that produced it happened at a moment that rescanning cannot
@@ -487,28 +572,69 @@ def purge_tier_b(ctx: GitContext) -> None:
     Everything else here IS derivable — session records re-register on the next hook, the
     repomap cache rescans, the stage signals re-probe, locks are meaningless once the
     holders are gone. Those are what this is for.
+
+    What is kept goes back byte for byte, and in a `finally`. It was decoded and encoded
+    again on the way, after the `rmtree`, so one log torn inside a multibyte character
+    raised UnicodeEncodeError at that point: the log was gone, the rest was never written
+    back, and the inbox stayed stranded in the carry directory beside the root.
     """
     import shutil
+    import tempfile
 
+    restore_carried(ctx)
     root = tier_b(ctx)
     if not root.exists():
         return
 
-    kept = {name: (root / name).read_bytes() for name in CARRIED if (root / name).is_file()}
+    kept = {name: (root / name).read_bytes() for name in carried_files(ctx)}
     # Held BESIDE the root, not in the system temp directory: a move within one filesystem
-    # is atomic and cannot half-copy, and `/tmp` is frequently a different mount.
-    carry = root.parent / f".{root.name}.carry"
-    shutil.rmtree(carry, ignore_errors=True)
+    # is atomic and cannot half-copy, and `/tmp` is frequently a different mount. A fresh
+    # one per run, so one a crashed run left behind is never overwritten or deleted.
+    carry = Path(tempfile.mkdtemp(prefix=f".{root.name}.carry-", dir=str(root.parent)))
     for name in CARRIED_DIRS:
         if (root / name).is_dir():
-            ensure_dir(carry)
             shutil.move(str(root / name), str(carry / name))
 
-    shutil.rmtree(root)
-    ensure_dir(root)
-    for name, blob in kept.items():
-        atomic_write(root / name, blob.decode("utf-8", "surrogateescape"))
-    for name in CARRIED_DIRS:
-        if (carry / name).is_dir():
-            shutil.move(str(carry / name), str(root / name))
-    shutil.rmtree(carry, ignore_errors=True)
+    try:
+        shutil.rmtree(root)
+    finally:
+        ensure_dir(root)
+        for name, blob in kept.items():
+            atomic_write(root / name, blob)
+        restore_carried(ctx)
+
+
+def restore_carried(ctx: GitContext) -> list[str]:
+    """Put back what a purge moved aside and never returned. Answers with what came back.
+
+    A carry directory outlives its run only when that run died between the purge and the
+    put-back, and then it holds the ONLY copy of what it carried — which the next purge used
+    to delete before doing anything else. Whatever would land on a newer copy of the same
+    name stays where it is for a person to look at, rather than being chosen between.
+    """
+    import shutil
+
+    root = tier_b(ctx)
+    back: list[str] = []
+    for carry in sorted(root.parent.glob(f".{root.name}.carry*")):
+        for name in CARRIED_DIRS:
+            source, target = carry / name, root / name
+            if not source.is_dir():
+                continue
+            if not target.exists():
+                ensure_dir(root)
+                shutil.move(str(source), str(target))
+                back.append(name)
+                continue
+            moved = [item for item in sorted(source.iterdir()) if not (target / item.name).exists()]
+            for item in moved:
+                shutil.move(str(item), str(target / item.name))
+            back.extend([name] if moved else [])
+            _remove_if_empty(source)
+        _remove_if_empty(carry)
+    return back
+
+
+def _remove_if_empty(directory: Path) -> None:
+    if directory.is_dir() and not any(directory.iterdir()):
+        directory.rmdir()

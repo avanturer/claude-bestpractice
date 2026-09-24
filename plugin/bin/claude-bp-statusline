@@ -12,6 +12,7 @@ status line the founder turns off, and then the bridge is gone with it.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
@@ -19,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import limits  # noqa: E402
+from claude_bestpractice import __version__, limits  # noqa: E402
 from claude_bestpractice.gitctx import resolve  # noqa: E402
 
 
@@ -29,6 +30,13 @@ def _bar(used: float, width: int = 10) -> str:
 
 
 def main() -> int:
+    # `--help` read stdin for a payload and printed "claude-bestpractice". Known arguments
+    # only, though: Claude Code runs this with none, and a status line that exits on one it
+    # does not recognise is one the founder turns off.
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--version", action="version", version=__version__)
+    parser.parse_known_args()
+
     try:
         payload = json.loads(sys.stdin.read() or "{}")
     except (ValueError, OSError):

@@ -24,7 +24,7 @@ CONFIGURATION out. One line of `addopts = --ignore=tests/test_total.py`, a `pyte
 the repository's PARENT directory, or `go env -w GOFLAGS=-run=TestAdd` — one command,
 outside the repo, in no diff — all narrowed the run this gate was driving. The gate had
 chosen where the report went and not what was executed. So `addopts` is blanked, the
-config file is pinned to one inside the repository, GOFLAGS is cleared, and the count is
+config file is pinned to one inside the repository, GOFLAGS is overridden, and the count is
 compared against the tree on this path too.
 
 What genuinely remains, and the earlier claim here was wrong to call it all diff-visible:
@@ -40,15 +40,17 @@ witness" rather than as a pass.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import hookio
+from . import hookio, testcount
 from .gitctx import GitContext
 
 # Floor and margin, not a ceiling. The ceiling is DERIVED from what the harness gives the
@@ -105,6 +107,10 @@ def _stop_hook_budget() -> float:
     return FLOOR
 
 
+# pytest's own exit status for "no tests were collected".
+PYTEST_NO_TESTS = 5
+
+
 @dataclass
 class Witnessed:
     """A run this gate performed itself, counted from its own report."""
@@ -118,6 +124,16 @@ class Witnessed:
     @property
     def passed(self) -> bool:
         return self.returncode == 0 and self.failed == 0 and self.executed > 0
+
+    @property
+    def ran_nothing(self) -> bool:
+        """Nothing executed and nothing broke — which pytest reports as exit status 5.
+
+        Read as a failure, that status was filed as a red suite: "0 failing of 0", a record
+        no fix to the code could clear, because nothing about the code had been observed.
+        """
+        quiet = (0, PYTEST_NO_TESTS) if self.runner == "pytest" else (0,)
+        return self.executed == 0 and self.failed == 0 and self.returncode in quiet
 
 
 def _python_has_pytest() -> bool:
@@ -141,11 +157,43 @@ def detect(root: Path) -> str:
     return ""
 
 
+# What makes a shared config file pytest's, rather than a file that merely exists:
+# `pyproject.toml` configures Black and Ruff in plenty of repositories with no Python test
+# in them. Empty means the file is pytest's by its name alone. In pytest's own order of
+# precedence, because `_pytest_config` pins the first of them that carries its section.
+_PYTEST_SECTIONS = {
+    "pytest.toml": "",
+    ".pytest.toml": "",
+    "pytest.ini": "",
+    ".pytest.ini": "",
+    "pyproject.toml": "[tool.pytest",
+    "tox.ini": "[pytest]",
+    "setup.cfg": "[tool:pytest]",
+}
+
+
+def _carries_pytest(root: Path, name: str) -> bool:
+    """Whether `name` here is pytest's configuration, rather than a file that exists."""
+    try:
+        text = (root / name).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return _PYTEST_SECTIONS[name] in text
+
+
 def _has_python_tests(root: Path) -> bool:
-    for name in ("pytest.ini", "tox.ini", "pyproject.toml", "setup.cfg"):
-        if (root / name).exists():
-            return True
-    return (root / "tests").is_dir() or (root / "test").is_dir()
+    """Whether pytest has anything here to run: its own configuration, or a Python test.
+
+    A directory called `test` or `tests` used to be enough, and it is not evidence of
+    Python: it is where Node's built-in runner, Cargo's integration tests and Go's end-to-end
+    suites live too. Driven over one of those, pytest collected nothing and exited 5, and the
+    gate reported "the suite FAILS — 0 failing of 0" over correct work, on every machine
+    whose `python3` can import pytest. A Node session spent its whole turn budget on that
+    refusal; in a Go repository with a `test/` directory it also stood in front of `go`.
+    """
+    if any(_carries_pytest(root, name) for name in _PYTEST_SECTIONS):
+        return True
+    return testcount.declares(root, ".py")
 
 
 def run(ctx: GitContext, env: dict[str, str] | None = None,
@@ -173,20 +221,53 @@ def _spawn(ctx: GitContext, argv: list[str], env: dict[str, str] | None,
            where: Path | None = None, seconds: float | None = None) -> subprocess.CompletedProcess | None:
     limit = timeout_for() if seconds is None else max(FLOOR, seconds)
     try:
-        return subprocess.run(
-            argv,
-            cwd=str(where or ctx.worktree_root),
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=limit,
-            env={**os.environ, **(env or {})},
-            start_new_session=True,
-        )
-    except subprocess.TimeoutExpired as killed:
-        raise RanOutOfTime(killed.timeout or limit) from None
+        return run_bounded(argv, where or ctx.worktree_root, {**os.environ, **(env or {})}, limit)
     except OSError:
         return None
+
+
+def run_bounded(argv: list[str], where: Path, env: dict[str, str],
+                limit: float) -> subprocess.CompletedProcess:
+    """Run a suite this gate started, for at most `limit` seconds, and leave none of it running.
+
+    Every run the Stop gate makes goes through here, because every one of them had the same
+    two holes. A timeout killed only the process the gate started, never what IT started:
+    the database or dev server a suite brings up outlived the gate that was waiting on it,
+    once per Stop, with nothing left to stop it. And the output came back through pipes, so
+    one such process still holding the suite's stdout kept the gate waiting after the suite
+    itself had exited, until the limit — a run that finished in a second reported as one
+    that outran the hook.
+
+    So the run gets a session of its own, its output goes to files nothing else can hold
+    open, and when it ends — finished or killed at the limit — whatever is left of its
+    process group is killed with it. Raises `RanOutOfTime` at the limit and OSError when the
+    program cannot be started.
+    """
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        proc = subprocess.Popen(argv, cwd=str(where), stdout=out, stderr=err, env=env,
+                                start_new_session=True)
+        try:
+            proc.wait(timeout=limit)
+        except subprocess.TimeoutExpired:
+            raise RanOutOfTime(limit) from None
+        finally:
+            _end(proc)
+        return subprocess.CompletedProcess(argv, proc.returncode, _read(out), _read(err))
+
+
+def _end(proc: subprocess.Popen) -> None:
+    """Kill the process group a run leads, and reap its leader."""
+    if os.name == "posix":
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(proc.pid, signal.SIGKILL)
+    elif proc.poll() is None:
+        proc.kill()
+    proc.wait()
+
+
+def _read(handle) -> str:
+    handle.seek(0)
+    return handle.read().decode("utf-8", errors="replace")
 
 
 def _tail(proc: subprocess.CompletedProcess) -> str:
@@ -200,10 +281,18 @@ def _pytest_config(root: Path, scratch: Path) -> Path:
     repository's parent directory, a file the founder will never see in any diff, silently
     configured the run this gate was driving. Pinning the config to something inside the
     repository keeps every knob that shapes the run inside the thing being reviewed.
+
+    The file pinned is the first to CARRY pytest's section, in pytest's own order. The first
+    that merely existed used to win, so a `pyproject.toml` holding only `[tool.black]` was
+    pinned over the `setup.cfg` or `tox.ini` that configured pytest: `pythonpath = src` was
+    never read, every import failed, and a suite that passes was filed red. A file without
+    the section is still pinned when none carries one — pytest reads it as empty, as it
+    would itself, and the rootdir stays in the repository rather than moving to ours.
     """
-    for name in ("pytest.ini", "pyproject.toml", "tox.ini", "setup.cfg"):
-        if (root / name).is_file():
-            return root / name
+    present = [name for name in _PYTEST_SECTIONS if (root / name).is_file()]
+    present.sort(key=lambda name: not _carries_pytest(root, name))
+    if present:
+        return root / present[0]
     empty = scratch / "pytest.ini"
     empty.write_text("[pytest]\n", encoding="utf-8")
     return empty
@@ -260,6 +349,13 @@ def _run_pytest(ctx: GitContext, report: Path, env: dict[str, str] | None,
     return Witnessed(proc.returncode, executed, artifact.failed, _tail(proc), "pytest")
 
 
+# What the gate's own `go test` runs under in place of anything `go env -w` left behind.
+# Its only job is to be non-empty; see `_run_go`. `-short=false` is what go does with no
+# flags at all, and a flag every go release that reads GOFLAGS knows, so the run is the
+# default one everywhere.
+GOFLAGS = "-short=false"
+
+
 def _run_go(ctx: GitContext, env: dict[str, str] | None,
             where: Path | None = None, seconds: float | None = None) -> Witnessed | None:
     """`go test -json` emits one event per test action on stdout.
@@ -268,11 +364,17 @@ def _run_go(ctx: GitContext, env: dict[str, str] | None,
     the `go` binary this gate invoked, not from a recipe the project wrote, which is the
     property that matters.
     """
-    # GOFLAGS blanked: `go env -w GOFLAGS=-run=TestAdd` is ONE command, writes
+    # GOFLAGS overridden: `go env -w GOFLAGS=-run=TestAdd` is ONE command, writes
     # ~/.config/go/env outside the repository, appears in no diff and no commit, and
     # silently restricted the gate's own `go test` to a test that passes. Zero bytes
     # changed inside the thing under review.
-    proc = _spawn(ctx, ["go", "test", "-json", "./..."], {**(env or {}), "GOFLAGS": ""},
+    #
+    # Overridden with a VALUE, never blanked. go reads an empty variable as an unset one
+    # and falls back to that very file, so the blank this used to pass restored the attack
+    # it was written to stop: a regression failed the first Stop and passed the next one,
+    # after one `go env -w`, and the red record was cleared on the way. Any value at all
+    # replaces the file's; this one is the default, so it replaces it with nothing.
+    proc = _spawn(ctx, ["go", "test", "-json", "./..."], {**(env or {}), "GOFLAGS": GOFLAGS},
                   where, seconds)
     if proc is None:
         return None

@@ -8,6 +8,8 @@ passing and the suite reported OK.
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import time
 import subprocess
 import sys
@@ -112,6 +114,58 @@ class TestByproductDirectoriesDoNotHideSource(RepoCase):
                 evidence.material_changes([path], exempt=()),
                 f"{path} is reported as a material change",
             )
+
+
+class TestATurnThatOnlyTouchesTestsIsStillJudged(RepoCase):
+    """The cheapest way past the gate was to leave the code alone and change the tests.
+
+    `tests/`, `test/`, `spec/` and `__tests__/` are exempt from scope drift by default,
+    because this plugin demands the test and a test the task did not name is not spill. The
+    same list also decided what counted as a material change, so a turn whose whole diff was
+    a test — a new failing one, an assertion broken, an existing one skipped — had nothing to
+    verify: Stop exited 0 without running anything while the suite run by hand said FAILED.
+    """
+
+    def a_passing_suite(self) -> None:
+        self.write("app.py", "def add(a, b):\n    return a + b\n")
+        self.write("tests/test_app.py",
+                   "from app import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n")
+        self.commit("a passing suite")
+        self.claim_a_task("s1", "tests/")
+
+    def stop(self):
+        return self.run_hook(
+            "evidence-gate",
+            {"session_id": "s1", "hook_event_name": "Stop", "cwd": str(self.repo)},
+        )
+
+    def test_a_new_failing_test_is_run_and_refused(self):
+        self.a_passing_suite()
+        self.write("tests/test_more.py",
+                   "from app import add\n\n\ndef test_negative():\n    assert add(-1, -1) == -3\n")
+        proc = self.stop()
+        self.assertEqual(2, proc.returncode, "a failing test finished the turn unverified")
+        self.assertIn("FAILS on the code as it stands", proc.stderr)
+
+    def test_breaking_an_existing_test_is_run_and_refused(self):
+        self.a_passing_suite()
+        self.write("tests/test_app.py",
+                   "from app import add\n\n\ndef test_add():\n    assert add(1, 2) == 4\n")
+        proc = self.stop()
+        self.assertEqual(2, proc.returncode, "a broken test finished the turn unverified")
+        self.assertIn("FAILS on the code as it stands", proc.stderr)
+
+    def test_a_test_the_task_did_not_name_is_still_not_drift(self):
+        """The exemption this came from stays where it belongs: a fix and its new test pass."""
+        self.a_passing_suite()
+        self.run_hook("prompt-capture", {"session_id": "s1", "hook_event_name": "UserPromptSubmit",
+                                         "prompt": "fix the rounding in app.py"})
+        self.write("app.py", "def add(a, b):\n    return int(a + b)\n")
+        self.write("tests/test_rounding.py",
+                   "from app import add\n\n\ndef test_whole():\n    assert add(1.2, 1.9) == 3\n")
+        proc = self.stop()
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertNotIn("Scope drift", proc.stderr)
 
 
 class TestTheGatedPartyCannotAmendTheRules(RepoCase):
@@ -243,6 +297,87 @@ class TestARedLedgerSurvivesAShrinkingSuite(RepoCase):
         self.assertFalse(self.still_red())
 
 
+class TestARedRecordIsClearedByItsOwnSuite(RepoCase):
+    """Which suite passed, before which command it was.
+
+    Every run the gate witnesses records itself as the bare runner, so the command could
+    not tell two suites apart: one green `pytest` in `backend/` erased the record of `web/`
+    while `web/` was still failing. And the reverse, from the other side of the same
+    record: a suite recorded red as `python3 -m pytest -q`, while the gate's interpreter
+    had no pytest, stayed red on every board and in every merge gate after the gate had
+    watched that same suite pass — the gate drove pytest itself from then on and recorded
+    the run as `pytest`, so the declared command never ran again to match.
+    """
+
+    def a_suite(self, path: str, tests: int):
+        from claude_bestpractice import suites
+
+        self.write(f"{path}tests/test_{path.strip('/') or 'all'}.py",
+                   "".join(f"def test_{n}():\n    assert True\n" for n in range(tests)))
+        return suites.Suite(path, ("pytest",), False)
+
+    def witnessed_green(self, suite, executed: int):
+        from claude_bestpractice import evidence, witness
+
+        seen = witness.Witnessed(0, executed, 0, f"{executed} passed in 0.1s", "pytest")
+        return evidence._judge_witnessed(self.ctx(), seen, suite, "")
+
+    def test_a_green_in_one_suite_leaves_anothers_failure_standing(self):
+        from claude_bestpractice import evidence
+
+        web, backend = self.a_suite("web/", 1), self.a_suite("backend/", 3)
+        evidence.record_red(self.ctx(), ["pytest"], "1 failed in 0.1s", web)
+
+        self.assertTrue(self.witnessed_green(backend, 3).ok)
+        self.assertEqual("web/", (evidence.red(self.ctx()) or {}).get("path"),
+                         "a backend green erased web/'s failure")
+
+    def test_the_gates_own_run_of_the_same_runner_clears_it(self):
+        """End to end: recorded red by the declared command, then witnessed green."""
+        from claude_bestpractice import evidence
+        from helpers import BIN
+
+        self.configure(require_task=False, manage_pull_requests=False)
+        self.write("pyproject.toml", "[project]\nname = 'calc'\nversion = '0'\n")
+        self.write("calc.py", "def add(a, b):\n    return a - b\n")
+        self.write("tests/test_calc.py", "from calc import add\n\n\ndef test_add():\n"
+                                         "    assert add(2, 3) == 5\n")
+        self.commit("a suite that fails")
+        evidence.record_red(self.ctx(), ["python3", "-m", "pytest", "-q"],
+                            "F\nFAILED tests/test_calc.py::test_add\n1 failed in 0.05s")
+        self.write("calc.py", "def add(a, b):\n    return a + b\n")
+
+        proc = subprocess.run(
+            [sys.executable, str(BIN / "evidence-gate")],
+            input=json.dumps({"session_id": "s1", "hook_event_name": "Stop",
+                              "cwd": str(self.repo)}),
+            capture_output=True, text=True, cwd=str(self.repo), timeout=180,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual(["pytest"], (evidence.last_green(self.ctx()) or {}).get("command"),
+                         "precondition: the gate has to have driven pytest itself")
+        self.assertIsNone(evidence.red(self.ctx()),
+                          "the same suite passed under the gate's eyes and stayed red")
+
+    def test_a_recipe_is_not_the_runner_it_wraps(self):
+        """`make check` may lint as well as test; a pytest green says nothing about it."""
+        from claude_bestpractice import evidence, suites
+
+        self.a_suite("", 1)
+        evidence.record_red(self.ctx(), ["make", "check"], "1 failed in 0.1s")
+        self.witnessed_green(suites.Suite("", ("make", "check"), True), 1)
+        self.assertIsNotNone(evidence.red(self.ctx()))
+
+    def test_a_narrower_command_line_does_not_answer_for_the_runner(self):
+        """Never the other way: `pytest tests/test_new.py` passing is not `pytest` passing."""
+        from claude_bestpractice import evidence
+
+        self.a_suite("", 2)
+        evidence.record_red(self.ctx(), ["pytest"], "1 failed, 1 passed in 0.1s")
+        self.assertFalse(evidence.clear_red(self.ctx(), ["pytest", "tests/test_new.py"], 5))
+        self.assertIsNotNone(evidence.red(self.ctx()))
+
+
 class TestCannotTellIsNotGreen(RepoCase):
     """"The output said nothing I can count" was being reported as "the tests passed"."""
 
@@ -266,6 +401,135 @@ class TestCannotTellIsNotGreen(RepoCase):
         from claude_bestpractice import evidence
 
         self.assertIsNone(evidence.last_green(self.ctx()))
+
+
+# The ends of real runs: node 22's `node --test` with its output not a terminal (TAP), the
+# spec reporter newer releases default to, and mocha 10. Two tests pass and one is skipped
+# or pending in each green one; the red ones fail one of the two.
+NODE_TAP_GREEN = """# Subtest: later
+ok 3 - later # SKIP
+  ---
+  duration_ms: 0.120827
+  type: 'test'
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 1
+# todo 0
+# duration_ms 94.231798
+"""
+NODE_TAP_RED = NODE_TAP_GREEN.replace("# pass 2", "# pass 1").replace("# fail 0", "# fail 1")
+NODE_SPEC_GREEN = """✔ adds (1.245084ms)
+✔ subtracts (0.163997ms)
+﹣ later (0.098348ms) # SKIP
+ℹ tests 3
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 96.017251
+"""
+MOCHA_GREEN = """
+
+  calc
+    ✔ adds
+    ✔ subtracts
+    - later
+
+
+  2 passing (3ms)
+  1 pending
+
+"""
+MOCHA_RED = """
+
+  calc
+    ✔ adds
+    1) subtracts
+    - later
+
+
+  1 passing (4ms)
+  1 pending
+  1 failing
+
+  1) calc
+       subtracts:
+
+      AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+1 !== 2
+"""
+
+
+class TestNodeAndMochaSummariesAreRead(RepoCase):
+    """node:test writes `# pass 2` and mocha writes `2 passing` — the word before the number,
+    or another word — so neither was counted, and a Node project whose suite the gate had run
+    and seen pass finished UNVERIFIED as "reported no test counts": a failed attempt filed
+    against correct work, and its pull request held."""
+
+    def two_declared_tests(self) -> None:
+        self.write("test/calc.test.js", "test('adds', () => {});\ntest('subtracts', () => {});\n")
+
+    def test_what_ran_is_counted(self):
+        from claude_bestpractice import evidence
+
+        for said in (NODE_TAP_GREEN, NODE_SPEC_GREEN, MOCHA_GREEN):
+            self.assertEqual(2, evidence._executed_from_output(said), said)
+            self.assertEqual(0, evidence._failures_from_output(said), said)
+        for said in (NODE_TAP_RED, MOCHA_RED):
+            self.assertEqual(1, evidence._failures_from_output(said), said)
+
+    def test_a_green_run_is_a_witnessed_green(self):
+        from claude_bestpractice import evidence
+
+        self.two_declared_tests()
+        for said in (NODE_TAP_GREEN, NODE_SPEC_GREEN, MOCHA_GREEN):
+            verdict = evidence._judge_green_run(self.ctx(), [], ["npm", "test"], said, 0)
+            self.assertTrue(verdict.ok and not verdict.unverified, verdict.reason)
+
+    def test_a_failure_behind_a_swallowed_status_is_still_refused(self):
+        from claude_bestpractice import evidence
+
+        self.two_declared_tests()
+        for said in (NODE_TAP_RED, MOCHA_RED):
+            verdict = evidence._judge_green_run(self.ctx(), [], ["npm", "test"], said, 0)
+            self.assertFalse(verdict.ok, said)
+
+    def test_nothing_run_is_nothing(self):
+        from claude_bestpractice import evidence
+
+        self.assertEqual(0, evidence._executed_from_output("1..0\n# tests 0\n# pass 0\n# fail 0\n"))
+        self.assertEqual(0, evidence._executed_from_output("\n  0 passing (1ms)\n"))
+
+    @unittest.skipUnless(shutil.which("npm") and shutil.which("node"),
+                         "no node on this machine")
+    def test_a_node_project_finishes_verified(self):
+        """End to end: `npm test` running `node --test`, through the real Stop gate."""
+        from claude_bestpractice import store
+
+        self.configure(require_task=False, manage_pull_requests=False)
+        self.write("package.json", json.dumps({"name": "calc", "scripts": {"test": "node --test"}}))
+        self.write("calc.js", "module.exports = { add: (a, b) => a + b };\n")
+        self.write("test/calc.test.js", (
+            "const { test } = require('node:test');\nconst assert = require('node:assert');\n"
+            "const { add } = require('../calc');\n"
+            "test('adds', () => { assert.strictEqual(add(1, 2), 3); });\n"
+            "test('adds zero', () => { assert.strictEqual(add(1, 0), 1); });\n"))
+        self.commit("a node project")
+        self.write("calc.js", "module.exports = { add: (a, b) => b + a };\n")
+
+        proc = self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                               "stop_hook_active": False})
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual([], store.read_jsonl(store.tier_b(self.ctx(), "unverified.jsonl")),
+                         f"a suite the gate ran and saw pass finished unverified: {proc.stderr}")
 
 
 if __name__ == "__main__":
@@ -382,6 +646,57 @@ class TestTheCeilingCarriesTheReason(RepoCase):
             "no subjects, so this warning can never be retired when the code is rewritten",
         )
 
+    def test_a_tool_call_between_blocks_keeps_what_they_were_about(self):
+        """What a real session does between blocks: it looks. `pre-tool` rewrote the record on
+        that call and kept integers only, so the reason, the files and the tree were gone by
+        the time the ceiling needed them — #31 again, everywhere but in the test above."""
+        import json
+
+        from claude_bestpractice import attempts, evidence, store
+
+        self.seed_red()
+        for _ in range(evidence.MAX_CONSECUTIVE_BLOCKS + 1):
+            self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                            "stop_hook_active": True, "cwd": str(self.repo)})
+            self.run_hook("pre-tool", {"session_id": "s1", "hook_event_name": "PreToolUse",
+                                       "tool_name": "Bash", "tool_input": {"command": "cat a.py"},
+                                       "cwd": str(self.repo)})
+
+        rows = store.tier_b(self.ctx(), "unverified.jsonl").read_text(encoding="utf-8")
+        self.assertIn("suite FAILS", json.loads(rows.strip().splitlines()[-1])["reason"])
+        items = store.tier_b(self.ctx(), "open-items.jsonl").read_text(encoding="utf-8")
+        self.assertTrue(json.loads(items.strip().splitlines()[-1]).get("subject_paths"))
+        self.assertTrue(attempts.load_all(self.ctx()), "the unverified finish filed no attempt")
+
+
+PRODUCTION_DSN = "postgres://billing:Pr0dS3cretPass99@db.prod.example.com/billing"
+
+
+class TestWhatAFailingSuitePrintedIsScrubbedBeforeItIsKept(RepoCase):
+    """A failing suite prints what it had, and the gate kept the end of it in the red-suite
+    record and, through an unverified finish, in `attempts/` — files under `.claude/` that
+    are untracked and not ignored. A DSN with a production password went in whole."""
+
+    def test_no_file_the_gate_writes_holds_the_password(self):
+        from claude_bestpractice import evidence
+
+        self.configure(require_task=False, manage_pull_requests=False)
+        self.write("db.py", "def connect(url):\n    return True\n")
+        self.write("tests/test_db.py", (
+            "import os\n\nfrom db import connect\n\n\ndef test_connects():\n"
+            f"    assert connect(os.environ.get('DATABASE_URL', '{PRODUCTION_DSN}'))\n"))
+        self.commit("a suite that connects")
+        self.write("db.py", "def connect(url):\n    raise ConnectionError(f'no {url}')\n")
+        for attempt in range(evidence.MAX_CONSECUTIVE_BLOCKS + 1):
+            self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                            "stop_hook_active": attempt > 0})
+
+        self.assertIsNotNone(evidence.red(self.ctx()), "precondition: the failure was recorded")
+        kept = [path for root in (self.repo / ".claude", self.repo / ".git" / "claude-bestpractice")
+                for path in root.rglob("*") if path.is_file()
+                and "Pr0dS3cretPass99" in path.read_text(encoding="utf-8", errors="replace")]
+        self.assertEqual([], kept)
+
 
 class TestAMissingRunnerIsNotACodeFailure(RepoCase):
     """"The suite FAILS on the code as it stands" is a claim about the CODE.
@@ -422,6 +737,64 @@ class TestAMissingRunnerIsNotACodeFailure(RepoCase):
         self.assertFalse(verdict.ok)
         self.assertIn("environment problem", verdict.reason)
         self.assertIsNone(evidence.red(self.ctx()), "an unrunnable suite was filed as red")
+
+    def test_an_interpreter_without_the_runner_is_a_missing_runner(self):
+        """`python3 -m pytest`, which this plugin itself detects, on a `python3` whose
+        pytest is in somebody's virtualenv: exit 1 rather than 127, and the module named."""
+        from claude_bestpractice import evidence
+
+        said = evidence._missing_runner(1, "/usr/local/bin/python3: No module named pytest",
+                                        ["python3", "-m", "pytest", "-q"])
+        self.assertIn("pytest", said)
+        self.assertIn("not installed", said)
+
+    def test_a_test_importing_what_the_tree_lacks_is_still_a_code_failure(self):
+        """The same words about any module but the one after `-m` are the code's problem."""
+        from claude_bestpractice import evidence
+
+        command = ["python3", "-m", "pytest", "-q"]
+        for tail in ("E   ModuleNotFoundError: No module named 'calc'\n1 error in 0.12s",
+                     "E   ModuleNotFoundError: No module named 'pytest_django'\n1 error"):
+            self.assertEqual("", evidence._missing_runner(1, tail, command), tail)
+        self.assertEqual("", evidence._missing_runner(
+            1, "No module named integration", ["pytest", "-m", "integration"]),
+            "pytest's own -m is a marker, not a module")
+
+    def test_pytest_only_in_the_projects_virtualenv_is_not_a_red_suite(self):
+        """End to end, on an interpreter that really has no pytest: refused as the
+        environment problem it is, with nothing filed red and nothing sent to the others."""
+        from claude_bestpractice import evidence, inbox, sessions
+        from helpers import BIN, session_record_for, sid
+
+        bare = self.tmp / "bare"
+        made = subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(bare)],
+                              capture_output=True, timeout=120)
+        if made.returncode != 0 or not (bare / "bin" / "python3").exists():
+            self.skipTest("cannot make a virtualenv here")
+        self.configure(require_task=False, manage_pull_requests=False)
+        self.write("pyproject.toml", "[project]\nname = 'calc'\nversion = '0'\n")
+        self.write("calc.py", "def add(a, b):\n    return a + b\n")
+        self.write("tests/test_calc.py", "from calc import add\n\n\ndef test_add():\n"
+                                         "    assert add(2, 3) == 5\n")
+        self.commit("a project whose pytest lives in its own virtualenv")
+        watcher = sid(self.repo, "watching")
+        sessions.register(self.ctx(), session_record_for(self.ctx(), watcher))
+        self.write("calc.py", 'def add(a, b):\n    """Sum."""\n    return a + b\n')
+
+        env = dict(os.environ)
+        env["PATH"] = f"{bare / 'bin'}:{env.get('PATH', '')}"
+        proc = subprocess.run(
+            [sys.executable, str(BIN / "evidence-gate")],
+            input=json.dumps({"session_id": "s1", "hook_event_name": "Stop",
+                              "cwd": str(self.repo)}),
+            capture_output=True, text=True, cwd=str(self.repo), env=env, timeout=180,
+        )
+        self.assertEqual(2, proc.returncode, proc.stderr or proc.stdout)
+        self.assertIn("environment problem", proc.stderr)
+        self.assertNotIn("FAILS", proc.stderr)
+        self.assertIsNone(evidence.red(self.ctx()), "a runner that never ran was filed red")
+        self.assertEqual([], inbox.pending(self.ctx(), watcher),
+                         "every sibling was told the suite is red")
 
 
 class TestAGreenRunReportedByTheHookClearsTheRed(RepoCase):
@@ -589,6 +962,67 @@ class TestASuiteSlowerThanTheCeiling(RepoCase):
 
         self.assertIn("stopped at 1s", self.verdict(ceiling=1).reason,
                       "an addopts line narrowed the run the gate drives")
+
+
+class TestTheProjectsOwnCommandRunsOnTheSameClock(RepoCase):
+    """#158 put the witnessed run on the hook's budget and never reached the project's own
+    command: `make test` of five minutes and five seconds was killed at a fixed 300, the kill
+    came back as "No machine-readable test artifact found", and the service the suite had
+    started was still running after the gate returned.
+    """
+
+    def verdict(self, command: list[str], ceiling: float):
+        from unittest import mock
+
+        from claude_bestpractice import evidence, suites, witness
+
+        with mock.patch.object(witness, "timeout_for", return_value=ceiling):
+            return evidence.verify(self.ctx(), [], ["src/app.py"], command,
+                                   [suites.Suite("", tuple(command), True)])
+
+    def test_it_is_given_what_the_stop_has_left(self):
+        from unittest import mock
+
+        from claude_bestpractice import evidence, witness
+
+        given = []
+
+        def bounded(argv, _where, _env, limit):
+            given.append(limit)
+            return subprocess.CompletedProcess(argv, 0, "1 passed", "")
+
+        with mock.patch.object(witness, "run_bounded", bounded):
+            evidence.run_suite(self.ctx(), ["make", "test"], None, 700)
+        self.assertEqual([700], given, "the project's command was capped below the hook's time")
+
+    def test_running_out_is_said_as_running_out(self):
+        said = self.verdict(["sh", "-c", "sleep 30"], ceiling=1).reason
+        self.assertIn("stopped at", said, "a time limit was reported as a missing artifact")
+        self.assertIn("`sh -c sleep 30`", said)
+
+    def test_nothing_it_started_outlives_it(self):
+        from helpers import process_gone
+
+        pidfile = self.tmp / "service.pid"
+        self.verdict(["sh", "-c", f"sleep 300 & echo $! > '{pidfile}'; sleep 30"], ceiling=1)
+        self.assertTrue(pidfile.is_file(), "precondition: the suite started its service")
+        self.assertTrue(process_gone(int(pidfile.read_text())),
+                        "the service the suite started outlived the gate")
+
+    def test_a_process_it_leaves_behind_does_not_hold_the_gate(self):
+        """Still holding the suite's output, it kept the gate waiting until the limit, and a
+        run that had finished at once was reported as one that outran the hook."""
+        from claude_bestpractice import evidence
+        from helpers import process_gone
+
+        pidfile = self.tmp / "stray.pid"
+        began = time.time()
+        code, tail = evidence.run_suite(
+            self.ctx(), ["sh", "-c", f"sleep 300 & echo $! > '{pidfile}'; echo '1 passed'"],
+            None, 20)
+        self.assertLess(time.time() - began, 10, "the gate waited on a process it did not need")
+        self.assertEqual((0, "1 passed"), (code, tail))
+        self.assertTrue(process_gone(int(pidfile.read_text())))
 
 
 class TestARedRunInASharedTreeIsNotEverybodysProblemYet(RepoCase):

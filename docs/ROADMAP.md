@@ -6,9 +6,10 @@ is required for anything earlier to pay off.
 ## Where this actually stands
 
 **Shipped and verified.** Every item below is implemented, wired and covered:
-**345 tests, 20 doctor checks, `make check` green on Python 3.9 / 3.11 / 3.13**, and
-`claude plugin validate --strict` passing against the installed CLI. One command installs it into any
-repository, and the installer refuses to register the plugin if the doctor fails.
+**2130 tests, 36 doctor checks, `make check` green on Python 3.9 / 3.11 / 3.13**, and
+`claude plugin validate --strict` passing against the installed CLI (2.1.281). One command
+installs it into any repository, and the installer refuses to register the plugin if the doctor
+fails.
 
 What remains is not code. The gate-metrics file has to accumulate real fire counts before any gate can
 be judged worth keeping, and FOLKLORE-tier rules expire on their own after ninety days unless a logged

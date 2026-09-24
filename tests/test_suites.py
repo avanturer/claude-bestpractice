@@ -15,10 +15,11 @@ from __future__ import annotations
 import json
 import time
 import unittest
+from unittest import mock
 
 from helpers import RepoCase
 
-from claude_bestpractice import config, evidence, suites
+from claude_bestpractice import config, evidence, suites, witness
 
 # Exits 0 and says three tests passed, which the count floor accepts against the three
 # declarations in the fixture below.
@@ -93,6 +94,13 @@ class TestWhichSuitesAChangeSelects(SuiteCase):
         plan = suites.for_changes(self.ctx(), cfg, [f"p{i}/x.py" for i in range(5)])
         self.assertEqual([""], [s.path for s in plan])
 
+    def test_with_no_wide_run_to_collapse_to_no_suite_is_cut(self):
+        """Cutting the plan to three is a saving only when one wide run replaces it. With no
+        repository-wide command the fourth suite was cut and never mentioned again."""
+        cfg = self.cfg(test_command=[], test_commands={f"p{i}/": f"make p{i}" for i in range(5)})
+        plan = suites.for_changes(self.ctx(), cfg, [f"p{i}/x.py" for i in range(5)])
+        self.assertEqual([f"p{i}/" for i in range(5)], [s.path for s in plan])
+
     def test_a_subproject_runner_is_detected_without_being_declared(self):
         """config.json is for correcting a detection, not for having one at all."""
         self.a_mobile_app()
@@ -119,6 +127,26 @@ class TestWhichSuitesAChangeSelects(SuiteCase):
         cfg = self.cfg(test_command=["make", "test"],
                        test_commands={"mobile/": "npx jest", "backend/": 7})
         self.assertEqual(["mobile/"], [s.path for s in suites.scoped(self.ctx(), cfg)])
+
+    def test_a_command_that_does_not_split_is_malformed_too(self):
+        """One unbalanced quote raised out of the Stop gate on every finish in the repository."""
+        cfg = self.cfg(test_command=["make", "test"],
+                       test_commands={"web/": "npx jest --testPathIgnorePatterns='e2e",
+                                      "mobile/": "npx jest"})
+        self.assertEqual(["mobile/"], [s.path for s in suites.scoped(self.ctx(), cfg)])
+
+    def test_the_stop_gate_is_not_wedged_by_it(self):
+        self.configure(require_task=False, manage_pull_requests=False,
+                       test_commands={"web/": "npx jest --testPathIgnorePatterns='e2e"})
+        self.write("app.py", "X = 1\n")
+        self.write("tests/test_app.py", "def test_a():\n    assert True\n")
+        self.write("web/index.js", "module.exports = 1\n")
+        self.commit("a founder's config with one typo in it")
+        self.write("app.py", "X = 2\n")
+        proc = self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                               "stop_hook_active": False})
+        self.assertNotIn("gate failed", proc.stderr)
+        self.assertEqual(0, proc.returncode, proc.stderr)
 
     def test_a_repository_with_no_command_at_all_plans_nothing(self):
         """Nothing to run is not something to invent; the artifact path answers instead."""
@@ -269,6 +297,48 @@ class TestOnlyTheSuitesTheDiffTouchesRun(SuiteCase):
         self.assertTrue(evidence.green_covers_tree(self.ctx()))
 
 
+class TestNoSuiteTheDiffReachesIsDroppedInSilence(SuiteCase):
+    """Four suites declared, no repository-wide command, and a diff reaching all four.
+
+    The plan kept the first three and said nothing about the fourth, so a suite that failed
+    when run by hand finished green, with no UNVERIFIED record anywhere. Every suite the diff
+    reaches is now run against the shared deadline, and one the deadline leaves no room for
+    is named in an unverified verdict rather than cut.
+    """
+
+    def four_subprojects(self, first=PASSES, fourth=FAILS) -> tuple:
+        commands = {"api/": first, "backend/": PASSES, "mobile/": PASSES, "users/": fourth}
+        for where in commands:
+            self.write(f"{where}__tests__/app.test.js", MOBILE_TESTS)
+            self.write(f"{where}src/app.js", "export const x = 1\n")
+        cfg = self.cfg(test_command=[], test_commands=commands)
+        self.commit("four subprojects, and nothing at the root that runs them")
+        return cfg, [f"{where}src/app.js" for where in commands]
+
+    def verdict(self, cfg, changed):
+        plan = suites.for_changes(self.ctx(), cfg, changed)
+        return evidence.verify(self.ctx(), cfg.artifact_globs, changed, cfg.test_command, plan)
+
+    def test_the_fourth_suite_is_run_and_its_failure_refuses(self):
+        cfg, changed = self.four_subprojects()
+        verdict = self.verdict(cfg, changed)
+        self.assertFalse(verdict.ok, "the fourth suite was dropped and the finish was green")
+        self.assertIn("users/", verdict.reason)
+
+    def test_a_suite_past_the_shared_deadline_is_named_not_dropped(self):
+        """Every run is floored at a few seconds, so suites started after the deadline would
+        carry the gate past the Stop hook's own budget, where the harness kills it and nobody
+        is told. One that does not fit is not started, and the finish says which it was."""
+        slow = ["python3", "-c", "import time; time.sleep(0.6); print('3 passed in 0.6s')"]
+        cfg, changed = self.four_subprojects(first=slow, fourth=PASSES)
+        with mock.patch.object(witness, "timeout_for", return_value=0.3):
+            verdict = self.verdict(cfg, changed)
+        self.assertTrue(verdict.ok, verdict.reason)
+        self.assertTrue(verdict.unverified, "suites that never ran counted as a witnessed green")
+        for where in ("backend/", "mobile/", "users/"):
+            self.assertIn(where, verdict.reason)
+
+
 class TestAFailureIsNotRediscoveredFourTimes(SuiteCase):
     """The suite ran for three and a half minutes to say what it had just said, four times,
     on a tree nobody had touched in between. Remembering a FAILURE is not the result cache
@@ -332,6 +402,114 @@ class TestAFailureIsNotRediscoveredFourTimes(SuiteCase):
         record.pop("tree_hash")
         evidence.store.write_json(path, record)
         self.assertTrue(self.verdict().ok)
+
+
+class TestAGuessThatCannotStartIsDropped(SuiteCase):
+    """Decision 0012: a guessed suite that cannot run is dropped for the repository-wide one.
+
+    It was not dropped, it was fatal. The plan held `web/` (detected; jest not installed) and
+    the repository's own command; the repository's run passed, `web/` could not start, and
+    the whole plan was thrown away — the wide command was not run again because it already
+    had been, so the finish was refused over "No machine-readable test artifact found". The
+    same turn with detection switched off finished.
+    """
+
+    def a_web_app_with_no_runner_installed(self) -> None:
+        self.write("web/package.json", json.dumps({"scripts": {"test": "jest"}}))
+        self.write("web/src/app.test.js", "test('one', () => {});\n")
+        self.write("web/src/app.js", "module.exports = () => 1;\n")
+        self.write("app.py", "X = 1\n")
+
+    def test_the_repository_wide_pass_still_answers(self):
+        from claude_bestpractice import store
+
+        self.a_web_app_with_no_runner_installed()
+        cfg = self.cfg(require_task=False, manage_pull_requests=False, test_command=PASSES)
+        self.commit("a web app whose runner is not installed here")
+        changed = ["app.py", "web/src/app.js"]
+        plan = suites.for_changes(self.ctx(), cfg, changed)
+        self.assertEqual([("web/", False), ("", True)], [(s.path, s.declared) for s in plan],
+                         "precondition: a guess and the repository's own command")
+        self.write("app.py", "X = 2\n")
+        self.write("web/src/app.js", "module.exports = () => 2;\n")
+
+        proc = self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                               "stop_hook_active": False})
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual([], store.read_jsonl(store.tier_b(self.ctx(), "unverified.jsonl")),
+                         "the guess made the finish unverified where no guess leaves it verified")
+
+    def test_with_no_repository_command_what_ran_answers(self):
+        """Nothing is owed a turn when there is nothing to stand in for the guess."""
+        self.a_web_app_with_no_runner_installed()
+        self.a_mobile_app()
+        cfg = self.cfg(test_command=[])
+        self.commit("two subprojects")
+        plan = [suites.Suite("web/", ("npm", "test", "--silent"), False),
+                suites.Suite("mobile/", tuple(PASSES), True)]
+        verdict = evidence.verify(self.ctx(), cfg.artifact_globs, ["web/src/app.js"],
+                                  cfg.test_command, plan)
+        self.assertTrue(verdict.ok, verdict.reason)
+        self.assertFalse(verdict.unverified, verdict.reason)
+
+    def test_a_declared_suite_that_cannot_start_is_not_dropped(self):
+        """The founder's word about how those files are tested; it does not quietly lapse."""
+        self.a_web_app_with_no_runner_installed()
+        cfg = self.cfg(test_command=PASSES)
+        self.commit("a web app")
+        plan = [suites.Suite("web/", ("definitely-not-an-installed-runner",), True),
+                suites.Suite("", tuple(PASSES), True)]
+        verdict = evidence.verify(self.ctx(), cfg.artifact_globs, ["web/src/app.js", "app.py"],
+                                  cfg.test_command, plan)
+        self.assertFalse(verdict.ok and not verdict.unverified,
+                         "a declared suite nobody could run was answered for by another")
+
+
+class TestARedRecordKeepsItsOwnSuitesNumbers(SuiteCase):
+    """`web/` went red after `backend/` had, and inherited `backend/`'s high-water marks.
+
+    Six tests executed and six declared, carried from another suite onto the record of a
+    suite of two: `web/` then passed both of them every turn and never cleared its record,
+    the merge gate went on saying "that same command passing clears it", and every board
+    went on saying RED SUITE.
+    """
+
+    UNITTEST = "python3 -m unittest discover -s tests -t ."
+
+    def a_suite(self, where: str, tests: int) -> None:
+        self.write(f"{where}app.py", "def value():\n    return 1\n")
+        self.write(f"{where}tests/__init__.py", "")
+        self.write(f"{where}tests/test_{where.strip('/')}.py", (
+            "import unittest\n\nfrom app import value\n\n\nclass T(unittest.TestCase):\n"
+            + "".join(f"    def test_{n}(self):\n        self.assertEqual(value(), 1)\n"
+                      for n in range(tests))))
+
+    def stop(self):
+        return self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                               "stop_hook_active": False})
+
+    def test_a_suite_that_passes_again_clears_its_own_record(self):
+        from helpers import git
+
+        self.configure(require_task=False, manage_pull_requests=False, detect_suites=False,
+                       test_commands={"backend/": self.UNITTEST, "web/": self.UNITTEST})
+        self.a_suite("backend/", 6)
+        self.a_suite("web/", 2)
+        self.commit("two suites")
+
+        self.write("backend/app.py", "def value():\n    return 2\n")
+        self.assertEqual(2, self.stop().returncode, "precondition: backend/ has to go red")
+        git(["checkout", "--", "backend/app.py"], self.repo)
+        self.write("web/app.py", "def value():\n    return 2\n")
+        self.assertEqual(2, self.stop().returncode, "precondition: web/ has to go red")
+        record = evidence.red(self.ctx())
+        self.assertEqual("web/", record["path"])
+        self.assertLessEqual(record["executed"], 2, "web/'s record carries backend/'s count")
+
+        self.write("web/app.py", "def value():\n    return 1  # fixed\n")
+        proc = self.stop()
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIsNone(evidence.red(self.ctx()), "web/ passed again and stayed red")
 
 
 if __name__ == "__main__":

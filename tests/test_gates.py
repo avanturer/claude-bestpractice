@@ -404,6 +404,14 @@ class TestAHarnessBlockIsNeverTheTask(GateCase):
         self.assertTrue(pc.is_harness_block(future))
         self.assertFalse(pc.is_statement_of_work(future, []))
 
+    def test_two_blocks_side_by_side_are_not_a_statement_either(self):
+        """One element was the whole test, so the pair `!` shell mode records for a command
+        — its output and its errors — read as the founder's instruction."""
+        pc = self.capture()
+        shell = "<bash-stdout>deployed three services to staging</bash-stdout><bash-stderr></bash-stderr>"
+        self.assertTrue(pc.is_harness_block(shell))
+        self.assertFalse(pc.is_statement_of_work(shell, []))
+
     def test_a_founder_pasting_xml_is_still_instructing(self):
         """They paste it INTO a sentence. Asking about the whole message rather than about
         brackets appearing in it is what keeps this from eating their real instruction."""
@@ -531,6 +539,12 @@ class TestWhatCompactionDestroysIsHandedBack(GateCase):
         said = self.context(self.compacted())
         self.assertIn("RESTORED AFTER COMPACTION", said)
         self.assertIn("written at the time", said)
+
+    def test_another_sessions_checkpoint_is_never_restored_as_this_ones(self):
+        """A session whose own capture produced nothing was handed the newest checkpoint in
+        the tree — a sibling's request, under "keep working from it"."""
+        self.long_session()
+        self.assertNotIn("RESTORED AFTER COMPACTION", self.context(self.compacted("zz-other")))
 
     def test_an_ordinary_start_pays_nothing_for_this(self):
         """It costs the always-on budget exactly zero, which is why it can afford to be
@@ -860,10 +874,27 @@ class TestTheNotesAreAskedForOnceAtStop(GateCase):
         self.assertIn(ours.id, said)
         self.assertNotIn(theirs.id, said, "it named a card this session does not hold")
 
+    def test_the_ask_settles_the_turn_like_any_verified_finish(self):
+        """The ask ends the hook, so what `_allow` does was skipped: a turn refused twice and
+        then fixed kept both blocks on the counter, and its lease stayed held against every
+        sibling."""
+        from claude_bestpractice import sessions
+
+        self.a_long_verified_turn()
+        me = sid(self.repo, "s1")
+        self.assertIsNone(sessions.acquire_lease(self.ctx(), me, "feature.py"))
+        payload = {**sessions.get(self.ctx(), me).tool_signatures, "_consecutive_blocks": 2}
+        sessions.touch(self.ctx(), me, tool_signatures=payload)
+
+        self.assertTrue(self.asked(self.stop()), "precondition: this Stop asks for the notes")
+        self.assertFalse(sessions.get(self.ctx(), me).tool_signatures.get("_consecutive_blocks"))
+        self.assertEqual([], sessions.leases_held_by(self.ctx(), me))
+
     def test_the_mark_survives_the_session_s_next_tool_call(self):
-        """`pre-tool` rewrites `tool_signatures` on every allowed call and keeps only the
-        integer-valued keys. A mark stored as anything else is dropped by the next Write,
-        and a once-per-session ask whose mark evaporates is an ask on every turn."""
+        """`pre-tool` rewrites `tool_signatures` on every allowed call and keeps the signature
+        counts and the Stop gate's own `_` keys, nothing else. A mark under any other name is
+        dropped by the next Write, and a once-per-session ask whose mark evaporates is an ask
+        on every turn."""
         self.a_long_verified_turn()
         self.assertTrue(self.asked(self.stop()))
         self.gate("pre-tool", {
@@ -1313,6 +1344,24 @@ class TestEvidenceGate(GateCase):
         self.assertIn("Scope drift", proc.stderr)
         self.assertIn("src/billing.py", proc.stderr)
 
+    def test_drift_sees_a_new_directory_and_a_name_git_quotes(self):
+        """`git status` said `?? payments/` and `"src/caf\\303\\251.py"`, and neither names
+        the file that changed — so both read as already committed and were forgiven."""
+        self.write("src/auth.py", "x = 1\n")
+        self.write("src/café.py", "x = 1\n")
+        self.commit()
+        self.start()
+        self.gate("prompt-capture", {"session_id": "s1", "hook_event_name": "UserPromptSubmit",
+                                     "prompt": "update src/auth.py only"})
+        self.write("src/auth.py", "x = 2\n")
+        self.write("payments/stripe.py", "KEY = 'x'\n")
+        self.write("src/café.py", "x = 2\n")
+        proc = self.stop()
+        self.assertEqual(proc.returncode, 2)
+        drift = next((part for part in proc.stderr.split("\n\n") if "Scope drift" in part), "")
+        self.assertIn("payments/stripe.py", drift)
+        self.assertIn("src/café.py", drift)
+
     def test_gives_up_after_the_escalation_ceiling(self):
         """A gate that wedges the workflow forever gets uninstalled, and then enforces nothing."""
         self.start()
@@ -1591,6 +1640,14 @@ class TestDoctorAndReindex(GateCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("All", proc.stdout)
 
+    def test_help_says_what_it_is_and_runs_nothing(self):
+        """`--help` ran the whole doctor, twenty seconds of it, and said nothing about itself."""
+        proc = subprocess.run([sys.executable, str(BIN / "claude-bp-doctor"), "--help"],
+                              capture_output=True, text=True, timeout=600)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn("usage:", proc.stdout)
+        self.assertNotIn("checks passed", proc.stdout)
+
     def test_reindex_rebuilds_tier_b(self):
         self.start()
         from claude_bestpractice import store
@@ -1620,6 +1677,42 @@ class TestDoctorAndReindex(GateCase):
         from claude_bestpractice import sessions
 
         self.assertIsNotNone(sessions.get(self.ctx(), sid(self.repo, "keepme")))
+
+
+class TestTheDoctorLeavesTheFoundersGitAlone(RepoCase):
+    """`install.sh` runs the doctor before it registers anything, on a machine whose git
+    config nobody here controls — and the doctor's own git calls read it.
+
+    With a global core.hooksPath, the pushes check installed this plugin's hook into the
+    founder's GLOBAL hooks, moved theirs aside and never put it back. With a global
+    commit-msg hook that wants a ticket id, the first fixture commit died in a traceback
+    and not one result was printed. And every run left two directories in the temp dir.
+    """
+
+    def test_a_machine_with_global_hooks_is_proven_and_left_as_it_was(self):
+        home = self.tmp / "founder-home"
+        hooks = home / ".githooks"
+        hooks.mkdir(parents=True)
+        (home / ".gitconfig").write_text(f"[core]\n\thooksPath = {hooks}\n")
+        mine = {
+            "pre-push": "#!/bin/sh\necho FOUNDERS-GLOBAL-PRE-PUSH\n",
+            "commit-msg": '#!/bin/sh\ngrep -qE "[A-Z]+-[0-9]+" "$1" || exit 1\n',
+        }
+        for name, body in mine.items():
+            (hooks / name).write_text(body)
+            (hooks / name).chmod(0o755)
+        scratch = self.tmp / "scratch"
+        scratch.mkdir()
+
+        proc = subprocess.run(
+            [sys.executable, str(BIN / "claude-bp-doctor")], capture_output=True, text=True,
+            timeout=600, env={**os.environ, "HOME": str(home), "TMPDIR": str(scratch)},
+        )
+        self.assertEqual(0, proc.returncode, proc.stdout[-1500:] + proc.stderr[-1500:])
+        self.assertEqual(mine, {p.name: p.read_text() for p in hooks.iterdir()},
+                         "the doctor changed the founder's global hooks")
+        self.assertEqual([], sorted(p.name for p in scratch.iterdir()),
+                         "the doctor left its temporary directories behind")
 
 
 class TestTheBoardIsDemandedBeforeAShellWrite(RepoCase):
@@ -1665,6 +1758,19 @@ class TestTheBoardIsDemandedBeforeAShellWrite(RepoCase):
         self.working_on()
         self.claim_a_task("s1", "src/billing.js")
         self.assertNotEqual("deny", self.decision(self.writing("sed -i 's/a/b/' src/billing.js")))
+
+    def test_a_path_git_ignores_is_owed_no_card(self):
+        """The board is how a sibling decides what is safe to touch, and no commit carries
+        an ignored file to one. A log `tee`d out of a test run was refused for want of a
+        card, and so was removing an ignored build directory that was not there yet — git
+        matches a `build/` rule only against what it can see is a directory."""
+        self.write(".gitignore", "*.log\nbuild/\n")
+        self.commit("ignore logs and builds")
+        self.working_on()
+        for command in ("pytest -q 2>&1 | tee test-output.log", "rm -rf build"):
+            self.assertNotEqual("deny", self.decision(self.writing(command)), command)
+        self.assertEqual("deny", self.decision(self.writing("rm -rf src")),
+                         "a path git would carry lost its card")
 
 
 if __name__ == "__main__":
@@ -1739,6 +1845,58 @@ class TestAdoptDoesNotWriteADeadProductNameIntoYourSettings(GateCase):
         self.contested()
         conflicts.quarantine_loose_hooks(self.ctx())
         self.assertEqual(["PostToolUse"], list(self.settings()["hooks"].keys()))
+
+
+class TestAdoptLeavesAFileItTakesNothingFrom(RepoCase):
+    """`claude-bp adopt` counted what it parked across both settings files.
+
+    settings.json having a hook to park was enough to rewrite settings.local.json too —
+    reformatted, given an empty quarantine block, and moved from 0600 to 0644. That is the
+    file personal tokens live in, and `adopt --restore` left it at 0644.
+    """
+
+    THEIRS = {"SessionStart": [{"hooks": [{"type": "command", "command": "./theirs.sh"}]}]}
+    LOCAL = ('{"env": {"TOKEN": "s3cret"}, "hooks": {"PostToolUse": [{"matcher": "Write", '
+             '"hooks": [{"type": "command", "command": "prettier"}]}]}}\n')
+
+    def setUp(self) -> None:
+        super().setUp()
+        claude = self.repo / ".claude"
+        claude.mkdir(exist_ok=True)
+        (claude / "settings.json").write_text(json.dumps({"hooks": self.THEIRS}))
+        self.local = claude / "settings.local.json"
+        self.local.write_text(self.LOCAL)
+        self.local.chmod(0o600)
+
+    def adopt(self, *args: str) -> None:
+        subprocess.run([sys.executable, str(BIN / "claude-bp"), "adopt", *args],
+                       capture_output=True, text=True, cwd=str(self.repo), timeout=120)
+
+    def mode(self) -> int:
+        return self.local.stat().st_mode & 0o777
+
+    def test_a_file_with_nothing_to_move_is_not_touched(self):
+        self.adopt()
+        self.assertEqual(self.LOCAL, self.local.read_text())
+        self.assertEqual(0o600, self.mode())
+
+    def test_a_file_it_does_move_something_from_keeps_its_mode_both_ways(self):
+        from claude_bestpractice import conflicts
+
+        self.local.write_text(json.dumps({"env": {"TOKEN": "s3cret"}, "hooks": self.THEIRS}))
+        self.adopt()
+        self.assertIn(conflicts.QUARANTINE_KEY, json.loads(self.local.read_text()))
+        self.assertEqual(0o600, self.mode(), "adopt loosened the file tokens live in")
+        self.adopt("--restore")
+        self.assertEqual(0o600, self.mode(), "adopt --restore loosened it")
+
+    def test_an_upgrade_drops_the_empty_block_an_older_adopt_left(self):
+        from claude_bestpractice import conflicts, migrate
+
+        self.local.write_text(json.dumps({"env": {"TOKEN": "s3cret"}, conflicts.QUARANTINE_KEY: {}}))
+        migrate.repair(self.ctx())
+        self.assertEqual({"env": {"TOKEN": "s3cret"}}, json.loads(self.local.read_text()))
+        self.assertEqual(0o600, self.mode())
 
 
 class TestTheGateNamesADoorThatOpens(GateCase):
@@ -1881,6 +2039,46 @@ class TestTheGateNamesADoorThatOpens(GateCase):
 
         self.assertEqual({}, config.switches_in("I set exempt_paths and it broke everything"))
         self.assertEqual({}, config.switches_in("по-моему worktree_setup сейчас пустой"))
+
+    FOUNDERS = {
+        "$comment": "require_worktree off: single-dev repo, agreed with Alice 2026-09-01",
+        "require_worktree": False,
+        "protect_trunk": False,
+        "a_key_this_version_does_not_know": 7,
+    }
+
+    def founders_config(self, text: str) -> Path:
+        path = self.repo / ".claude" / "claude-bestpractice" / "config.json"
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def test_set_writes_one_key_and_leaves_the_rest_as_the_founder_wrote_it(self):
+        """It saved the whole defaulted view: their note and every key this version does
+        not know were deleted, and every default was pinned into a committed file — the
+        DETECTED test command among them, an evidence key no command may set."""
+        path = self.founders_config(json.dumps(self.FOUNDERS))
+        self.write("Makefile", "test:\n\techo ok\n")
+        self.start()
+        self.founder_says("scope_drift_block off")
+        proc = self.cli("set", "scope_drift_block", "off")
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual({**self.FOUNDERS, "scope_drift_block": False},
+                         json.loads(path.read_text(encoding="utf-8")))
+
+    def test_set_will_not_write_over_a_file_it_cannot_read(self):
+        """Handed a file with a trailing comma it wrote the defaults over it."""
+        from claude_bestpractice import config
+
+        text = '{"enabled": true, "require_worktree": false,}'
+        path = self.founders_config(text)
+        self.start()
+        self.founder_says("scope_drift_block off")
+        proc = self.cli("set", "scope_drift_block", "off")
+        self.assertEqual(1, proc.returncode)
+        self.assertIn("does not parse", proc.stderr)
+        self.assertEqual(text, path.read_text(encoding="utf-8"))
+        self.assertEqual("off", config.asked_for(self.ctx(), "scope_drift_block"),
+                         "a word the write never happened for was spent anyway")
 
     def test_no_gate_advertises_the_file_the_write_hook_refuses(self):
         """The defect was a pattern, not one message: seven places named `config.json`."""
@@ -2081,6 +2279,16 @@ class TestTheCeilingCountsALoopNotAnAfternoon(GateCase):
         self.stop()
         self.age_the_last_block(600)
         self.assertIn(f"[2/{ceiling}]", self.stop().stderr)
+
+    def test_the_clock_survives_the_sessions_next_tool_call(self):
+        """`pre-tool` kept integers only, so the first call after a block took the block's
+        time with it and the streak could never age — in any session that did anything."""
+        ceiling = self.blocked_work()
+        self.stop()
+        self.age_the_last_block(6 * 3600)
+        self.gate("pre-tool", {"session_id": "s1", "hook_event_name": "PreToolUse",
+                               "tool_name": "Bash", "tool_input": {"command": "git status"}})
+        self.assertIn(f"[1/{ceiling}]", self.stop().stderr)
 
     def test_a_record_written_before_this_existed_is_not_reset(self):
         """No timestamp means an in-flight streak from an older version; keep counting."""
@@ -2298,7 +2506,12 @@ class TestACardBeforeTheCode(RepoCase):
         self.start()
         proc = self.gate("pre-tool", self.write_event("backend/new.py"))
         self.assertEqual("deny", self.decision(proc), proc.stdout)
-        self.assertIn("claude-bp-plan add", proc.stdout, "a refusal must name the way through")
+        # The founder's instruction is already a card, so the way through is that card, not
+        # a second one beside it.
+        self.assertIn("claude-bp-plan update 0001", proc.stdout,
+                      "a refusal must name the way through")
+        self.assertIn("claude-bp-plan claim 0001", proc.stdout)
+        self.assertNotIn("claude-bp-plan add", proc.stdout)
 
     def test_the_card_the_refusal_names_clears_it(self):
         self.start()

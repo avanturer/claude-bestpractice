@@ -92,8 +92,9 @@ class TheRefusalSaysWhoseItIs(RefusalCase):
         self.assertEqual(1, len(defects.unsent(self.ctx())))
 
     def test_a_report_that_says_nothing_is_not_recorded(self):
+        """And the exit code says so. It was 0, which a session reads as "filed"."""
         proc = self.run_cli("claude-bp-report", "defect", "broken")
-        self.assertEqual(0, proc.returncode)
+        self.assertEqual(1, proc.returncode)
         self.assertIn("say what was refused", proc.stdout)
         self.assertEqual([], defects.unsent(self.ctx()))
 

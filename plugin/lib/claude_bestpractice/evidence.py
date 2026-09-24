@@ -41,14 +41,12 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from . import hookio, provenance, store, suites, testcount, witness
+from . import hookio, provenance, redact, store, suites, testcount, witness
 from .gitctx import GitContext, changed_files
 
 # Consecutive Stop blocks before we stop blocking and leave a durable marker instead.
 # The platform overrides the hook after 8, so escalating past that just burns turns.
 MAX_CONSECUTIVE_BLOCKS = 4
-
-CLEAN_RERUN_TIMEOUT = 300
 
 # How much of the declared suite a run may miss before it stops counting as a witnessed
 # green. Loose on purpose: parametrisation, generated cases and language-specific
@@ -142,7 +140,10 @@ def _junit_failures(root: "ET.Element") -> tuple[str, ...]:
     """
     out: list[str] = []
     for case in root.iter("testcase"):
-        if not any(case.iter("failure")) and not any(case.iter("error")):
+        # Found or not, never the element's truth value: an element is falsy when it has
+        # no children, which a `<failure>` holding only its message and traceback does not
+        # have, so every failing case read as passing and this returned nothing.
+        if case.find(".//failure") is None and case.find(".//error") is None:
             continue
         where = (case.get("file") or "").strip()
         if where and where not in out:
@@ -231,6 +232,12 @@ def _is_exempt(rel: str, exempt: list[str], globs: list[str], byproducts: set[st
     called docs/ or target/ invisible, so a red suite in ordinary domain code finished
     silently green.
 
+    A TEST DIRECTORY is exempt from scope drift and from nothing else. It is on the default
+    list so that the test this gate demands is not called spill, and read here as well it
+    left a turn whose whole diff was a test with nothing to verify: a new failing test, or
+    an existing one broken or skipped, finished silently while the suite run by hand said
+    FAILED. A change to a test is exactly a change the suite has to answer for.
+
     A byproduct directory never hides SOURCE. `coverage/` is a report directory in most
     repositories and a package in some, `reports/` is a service in plenty, and only the
     extension separates them — a coverage report is not written in Python. The rule leans
@@ -242,7 +249,8 @@ def _is_exempt(rel: str, exempt: list[str], globs: list[str], byproducts: set[st
     under reports/ — so a repository whose source lived there had that service made
     invisible and Stop exited 0 over a real regression.
     """
-    if any(rel == p or rel.startswith(p.rstrip("/") + "/") for p in exempt):
+    if any(rel == p or rel.startswith(p.rstrip("/") + "/") for p in exempt
+           if not testcount.in_test_directory(p.rstrip("/") + "/")):
         return True
     if byproducts & set(rel.split("/")) and not rel.endswith(SOURCE_SUFFIXES):
         return True
@@ -264,8 +272,6 @@ def material_changes(
 
 
 
-RUN_TIMEOUT = 300
-
 # POSIX shells report "command not found" this way, and it is the difference
 # between "your tests fail" and "your test runner is not installed".
 NOT_EXECUTABLE = 127
@@ -275,7 +281,8 @@ NOT_EXECUTABLE = 127
 # would otherwise switch the whole evidence gate off for every session on the machine,
 # which is a recursion guard doubling as an off switch.
 VERIFYING_ENV = "CLAUDE_BESTPRACTICE_VERIFYING"
-NONCE_FILE = "verifying.nonce"
+NONCE_DIR = "verifying"
+_NONCE = re.compile(r"^[0-9a-f]{32}$")
 
 
 def _issue_nonce(ctx: GitContext) -> str:
@@ -286,25 +293,26 @@ def _issue_nonce(ctx: GitContext) -> str:
     work either: `export CLAUDE_BESTPRACTICE_VERIFYING=1` in a shell profile would switch the
     evidence gate off everywhere. So the token is unguessable AND shared, and it only
     exists on disk while a run this gate started is actually in flight.
+
+    One file per run, named by its token. It was one file for the whole clone — Tier B is
+    the common git directory, shared by every worktree — so a Stop in a sibling tree
+    overwrote a run's token mid-flight, whichever run ended first deleted the other's, and
+    the clean re-run never deleted its own: the guard lapsed exactly while two sessions
+    were verifying at once, which is the ordinary state of this product.
     """
     nonce = hashlib.sha256(os.urandom(32)).hexdigest()[:32]
-    store.atomic_write(store.tier_b(ctx, NONCE_FILE), nonce, mode=0o600)
+    store.atomic_write(store.tier_b(ctx, NONCE_DIR, nonce), "", mode=0o600)
     return nonce
 
 
-def _retire_nonce(ctx: GitContext) -> None:
-    store.tier_b(ctx, NONCE_FILE).unlink(missing_ok=True)
+def _retire_nonce(ctx: GitContext, nonce: str) -> None:
+    store.tier_b(ctx, NONCE_DIR, nonce).unlink(missing_ok=True)
 
 
 def _inside_our_own_run(ctx: GitContext) -> bool:
     """True only for a process this gate spawned, not for anything that set the name."""
     seen = os.environ.get(VERIFYING_ENV, "")
-    if not seen:
-        return False
-    try:
-        return seen == store.tier_b(ctx, NONCE_FILE).read_text(encoding="utf-8").strip()
-    except OSError:
-        return False
+    return bool(_NONCE.match(seen)) and store.tier_b(ctx, NONCE_DIR, seen).is_file()
 
 # What running a test suite leaves behind. The gate runs the suite itself now, so
 # without this the gate creates these files and then reports them to the agent as its
@@ -333,29 +341,24 @@ def run_suite(ctx: GitContext, command: list[str], where: Path | None = None,
     tests passed — writing one by hand takes four lines, and `touch` defeats any
     freshness check based on mtime. Both were demonstrated against the previous version
     of this gate. So the gate stops reading claims and runs the suite itself.
+
+    `seconds` is what the Stop hook has left, and it is the only limit: a fixed 300 on this
+    path outlived #158's fix for the witnessed one, so a project's own `make test` of five
+    minutes and a few seconds was killed at five, and the kill was then reported as a missing
+    JUnit file. Running out raises `witness.RanOutOfTime`, which the caller turns into
+    the same verdict as a witnessed run that outlasted the hook.
     """
     env = dict(os.environ)
     env[VERIFYING_ENV] = _issue_nonce(ctx)
-    limit = RUN_TIMEOUT if seconds is None else max(1.0, min(RUN_TIMEOUT, seconds))
+    limit = witness.timeout_for() if seconds is None else max(1.0, seconds)
     try:
-        proc = subprocess.run(
-            command,
-            cwd=str(where or ctx.worktree_root),
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=limit,
-            env=env,
-            start_new_session=True,
-        )
+        proc = witness.run_bounded(command, where or ctx.worktree_root, env, limit)
     except FileNotFoundError:
         return -1, f"test command not found: {command[0]}"
     except OSError as exc:
         return -1, f"could not run the test command: {exc}"
-    except subprocess.TimeoutExpired:
-        return -1, f"the suite exceeded {int(limit)}s and was killed"
     finally:
-        _retire_nonce(ctx)
+        _retire_nonce(ctx, env[VERIFYING_ENV])
 
     tail = hookio.tail_of(proc.stdout + proc.stderr)
     if proc.returncode == NOT_EXECUTABLE:
@@ -367,7 +370,7 @@ def run_suite(ctx: GitContext, command: list[str], where: Path | None = None,
 
 
 def verify(ctx: GitContext, globs: list[str], changed: list[str], command: list[str] | None = None,
-           plan: list | None = None) -> Verdict:
+           plan: list | None = None, deadline: float | None = None) -> Verdict:
     """Tier 1: the suite must have actually run, here, on this code, and passed.
 
     `changed` is passed in rather than recomputed so the caller decides what counts as
@@ -379,13 +382,18 @@ def verify(ctx: GitContext, globs: list[str], changed: list[str], command: list[
     first and `command` is what answers for whatever it could not: a guessed subproject
     runner that will not start must leave the repository no worse verified than it was
     before anybody guessed (#206).
+
+    `deadline` is when the Stop hook's time for running suites is spent, and everything run
+    here shares it — the plan, and the repository's command after it. It is the caller's
+    because the clean re-run that follows shares it too. Left out, the plan starts its own
+    clock and a lone repository-wide run is given the whole budget, as before.
     """
     if not changed:
         return Verdict(True, "no changes to verify")
 
     wide = list(command or ())
     if plan:
-        settled = _verify_the_plan(ctx, globs, changed, plan)
+        settled = _verify_the_plan(ctx, globs, changed, plan, deadline, bool(wide))
         if settled is not None:
             return settled
         if any(not suite.path for suite in plan):
@@ -394,46 +402,89 @@ def verify(ctx: GitContext, globs: list[str], changed: list[str], command: list[
             wide = []
 
     if wide:
-        bound = _verify_by_running(ctx, globs, wide, changed)
+        bound = _verify_by_running(ctx, globs, wide, changed, deadline)
         if bound is not None:
             return bound
 
     return _verify_by_reading(ctx, globs, changed)
 
 
-def _verify_the_plan(ctx: GitContext, globs: list[str], changed: list[str], plan: list) -> Verdict | None:
-    """Run the suites this change touched. None when none of them could be witnessed.
+def _verify_the_plan(ctx: GitContext, globs: list[str], changed: list[str], plan: list,
+                     deadline: float | None = None, stand_in: bool = False) -> Verdict | None:
+    """Run the suites this change touched. None when the plan could not answer for them.
 
     A hard failure in any suite settles the turn immediately — there is nothing a later
     suite can say that makes a failing one pass. An unverified answer does not settle it,
     because a suite further down the plan may still be outright red, and the difference
     between "could not check" and "checked and broken" is the whole of decision 0002.
 
-    The suites SHARE one deadline. Each one used to be handed the Stop hook's entire
-    budget, which is only sound while there is exactly one of them.
+    The suites SHARE one deadline, the Stop's own. Each one used to be handed the Stop hook's
+    entire budget, which is only sound while there is exactly one of them. A suite whose turn
+    comes after that deadline is not started: every run is floored at a few seconds, so a long
+    plan would carry the gate past the hook's own budget, where the harness kills it and
+    nobody is told anything. It is named instead, and the finish is unverified.
+
+    A suite that could not be witnessed at all is weighed by `_plan_answered`; `stand_in` is
+    whether a repository-wide command exists to answer for one when nothing here already has.
     """
-    deadline = time.time() + witness.timeout_for()
+    deadline = time.time() + witness.timeout_for() if deadline is None else deadline
     answers: list = []
+    unreached: list = []
+    unwitnessed: list = []
     for suite in plan:
+        if time.time() >= deadline:
+            unreached.append(suite)
+            continue
         verdict = _verify_one(ctx, globs, changed, suite, deadline)
         if verdict is not None and not verdict.ok:
             return verdict
-        if verdict is not None:
-            answers.append((suite, verdict))
-    if not answers or len(answers) != len(plan):
+        (unwitnessed if verdict is None else answers).append((suite, verdict))
+    if not _plan_answered(answers, unwitnessed, stand_in):
         return None
-    return _plan_verdict(answers)
+    return _plan_verdict(answers, unreached)
 
 
-def _plan_verdict(answers: list) -> Verdict:
-    """One verdict for a whole plan that passed.
+def _plan_answered(answers: list, unwitnessed: list, stand_in: bool) -> bool:
+    """Whether the suites that ran answer for the plan without the ones that could not start.
+
+    A DETECTED suite that cannot start is a guess, and by decision 0012 it is dropped in
+    favour of the repository-wide command — the finish must come out exactly as it would
+    have had nobody guessed. It did not: one `web/` suite whose jest was not installed threw
+    away the repository-wide run that had just passed, and the finish was refused over "No
+    machine-readable test artifact found", while the same turn with detection off finished.
+    So when that command has already answered here, or when there is none to answer, what
+    ran is the answer; only a command that exists and has not run yet is still owed a turn.
+
+    A DECLARED suite that cannot start is the founder's promise unmet, and is never dropped:
+    the plan does not answer, and the caller falls back as it always has.
+    """
+    if not answers or any(suite.declared for suite, _ in unwitnessed):
+        return False
+    return not unwitnessed or any(not suite.path for suite, _ in answers) or not stand_in
+
+
+def _plan_verdict(answers: list, unreached: list) -> Verdict:
+    """One verdict for a whole plan that passed, as far as it was run.
 
     An UNVERIFIED answer from any suite carries: a suite that could only be read rather
     than witnessed does not become witnessed by standing next to one that was. A plan of
     one keeps that suite's own words, which is every single-project repository and every
     message this gate printed before plans existed.
+
+    So does a suite the deadline left no time for, NAMED with the command that runs it:
+    part of a plan passing is not the plan passing, and the files only that suite answers
+    for were never looked at.
     """
     soft = next((verdict for _, verdict in answers if verdict.unverified), None)
+    if unreached:
+        missed = "; ".join(f"{suite.label}: `{' '.join(suite.command)}`" for suite in unreached)
+        return Verdict(
+            True,
+            f"NOT RUN — {missed}. The Stop hook's time ran out after {len(answers)} of "
+            f"{len(answers) + len(unreached)} suites, so nothing witnessed the files only "
+            f"those answer for.\n{(soft or answers[-1][1]).reason[:600]}",
+            unverified=True,
+        )
     if soft is not None:
         return soft
     if len(answers) == 1:
@@ -474,8 +525,14 @@ def _verify_one(ctx: GitContext, globs: list[str], changed: list[str], suite,
     # verification since round four has forged one. Cutting the wrapper out of the trust
     # path is the only move that ends that, because the count then comes from a report
     # file at a path the recipe has no name for.
+    #
+    # Under this gate's recursion token like every other run it starts: a suite that fires
+    # the Stop gate on this clone — this plugin's own does — would otherwise have the gate
+    # it started drive the suite again, one level deeper each time, until the hook's budget
+    # ran out. Only the project's own command and the clean re-run carried one.
+    nonce = _issue_nonce(ctx)
     try:
-        seen = witness.run(ctx, None, suite.root(ctx), seconds)
+        seen = witness.run(ctx, {VERIFYING_ENV: nonce}, suite.root(ctx), seconds)
     except witness.RanOutOfTime as killed:
         # FALLS THROUGH, and this is the whole correction. A suite longer than the hook
         # lives cannot be witnessed here by anyone — the harness kills the process, and no
@@ -483,17 +540,26 @@ def _verify_one(ctx: GitContext, globs: list[str], changed: list[str], suite,
         # blocked on every turn; reading the artifact its own run wrote is weaker evidence,
         # says so in the verdict, and is the only thing that can be true (#158).
         return _too_long_to_witness(ctx, globs, changed, killed.seconds)
+    finally:
+        _retire_nonce(ctx, nonce)
     if seen is not None:
         return _judge_witnessed(ctx, seen, suite, tree)
 
-    return _verify_by_declared_command(ctx, globs, suite, tree, seconds)
+    try:
+        return _verify_by_declared_command(ctx, globs, suite, tree, seconds)
+    except witness.RanOutOfTime as killed:
+        # The same correction for the project's own command, which it never reached: this
+        # run was capped at 300 seconds, and the kill was read as "no machine-readable test
+        # artifact found" — advice to add a JUnit reporter to a suite that was simply long.
+        return _too_long_to_witness(ctx, globs, changed, killed.seconds, suite)
 
 
 # Paths in a failing run's output, by extension. Matched loosely and then checked against
 # the filesystem, because the check is what makes it safe: a sentence that happens to read
-# like a path is not one if no such file exists.
+# like a path is not one if no such file exists. The extension ends at a word boundary, or
+# `export.json` was read as a path ending `.js` and `app.tsx` as one ending `.ts`.
 _SOURCE_PATH = re.compile(
-    r"(?<![\w/.-])((?:[\w.-]+/)*[\w.-]+\.(?:py|js|jsx|mjs|cjs|ts|tsx|go|rb|rs|java|kt|php|cs))"
+    r"(?<![\w/.-])((?:[\w.-]+/)*[\w.-]+\.(?:py|js|jsx|mjs|cjs|ts|tsx|go|rb|rs|java|kt|php|cs)\b)"
 )
 
 
@@ -509,9 +575,23 @@ def failing_files(ctx: GitContext, verdict: "Verdict") -> list[str]:
     out: list[str] = []
     for candidate in dict.fromkeys(found):
         rel = candidate.lstrip("./")
-        if rel not in out and (ctx.worktree_root / rel).is_file():
+        if rel not in out and _is_file(ctx.worktree_root / rel):
             out.append(rel)
     return out[:8]
+
+
+def _is_file(path: Path) -> bool:
+    """`Path.is_file`, for a name read out of somebody's test output.
+
+    Such a name can be longer than a file name may be: a test about over-long names printed
+    one, and `is_file` raised ENAMETOOLONG out of a gate that fails closed — every Stop
+    refused with "gate failed (OSError ...)", the escalation counter never moving, and the
+    failure the session had to fix never shown to it.
+    """
+    try:
+        return path.is_file()
+    except OSError:
+        return False
 
 
 def not_this_trees_code(ctx: GitContext, failing: list[str], changed: list[str]) -> str:
@@ -574,14 +654,21 @@ def _none_of_them_mine(failing: list[str], changed: list[str]) -> list[str]:
 
 
 def _differing_from(ctx: GitContext, trunk: str, files: list[str]) -> set[str]:
-    """Which of these files this tree holds differently from the trunk. Empty if unaskable."""
+    """Which of these files this tree holds differently from the trunk. Empty if unaskable.
+
+    Names read as git writes them with `-z`: whole, unquoted, never split at a space. Split
+    on whitespace and quoted, `src/my notes.py` came back as two names and `src/café.py` as
+    `"src/caf\\303\\251.py"` — neither matched, and the refusal told the session its failing
+    file was "identical to" a trunk it differed from.
+    """
     from .gitctx import _run
 
     try:
-        return set(_run(["diff", "--name-only", trunk, "--", *files],
-                        ctx.worktree_root, check=False).split())
+        listed = _run(["-c", "core.quotePath=false", "diff", "--name-only", "-z", trunk, "--",
+                       *files], ctx.worktree_root, check=False)
     except Exception:  # noqa: BLE001 - a diagnostic line must never fail a verdict
         return set()
+    return {name for name in listed.split("\0") if name}
 
 
 def _behind(ctx: GitContext, trunk: str) -> int:
@@ -674,18 +761,30 @@ def _the_same_run(entry: dict | None, suite, tree: str) -> bool:
 
 
 def _too_long_to_witness(
-    ctx: GitContext, globs: list[str], changed: list[str], seconds: float
+    ctx: GitContext, globs: list[str], changed: list[str], seconds: float, declared=None
 ) -> Verdict:
-    """The suite outran the hook. Read what the project's own run left, and name why."""
+    """The suite outran the hook. Read what the project's own run left, and name why.
+
+    `declared` is the suite when what was stopped is the project's OWN command rather than a
+    runner this gate drove. The lever is different then: `witness_exclude` only reaches a run
+    the gate builds itself, and naming it for `make test` would be naming a switch that is
+    not connected to anything.
+    """
     verdict = _verify_by_reading(ctx, globs, changed)
+    lever = (
+        "  `witness_exclude` in .claude/claude-bestpractice/config.json names paths this "
+        "gate should skip, if part of the suite is what makes it long."
+        if declared is None else
+        f"  `{' '.join(declared.command)}` is the project's own command. `test_commands` in "
+        ".claude/claude-bestpractice/config.json can split it into suites by path, so a "
+        "change runs only the part it reaches."
+    )
     return Verdict(
         verdict.ok,
         f"This gate's own run was stopped at {int(seconds)}s — longer than the Stop hook "
         "lives, so it cannot be witnessed here whatever the settings say. Falling back to "
         "the artifact your run wrote.\n"
-        f"  {verdict.reason}\n"
-        "  `witness_exclude` in .claude/claude-bestpractice/config.json names paths this "
-        "gate should skip, if part of the suite is what makes it long.",
+        f"  {verdict.reason}\n" + lever,
         verdict.artifact,
         unverified=True,
     )
@@ -754,14 +853,16 @@ def _skipped(ctx: GitContext) -> list[str]:
 
 
 def _verify_by_running(
-    ctx: GitContext, globs: list[str], command: list[str], changed: list[str]
+    ctx: GitContext, globs: list[str], command: list[str], changed: list[str],
+    deadline: float | None = None,
 ) -> Verdict | None:
     """Witness the REPOSITORY'S OWN command. Returns None to fall back to reading.
 
     One suite covering everything, which is what a single-project repository has and what
-    answers for whatever no scoped suite claimed.
+    answers for whatever no scoped suite claimed — by `deadline`, when a plan has already
+    spent part of the Stop's time.
     """
-    return _verify_one(ctx, globs, changed, suites.Suite("", tuple(command), True))
+    return _verify_one(ctx, globs, changed, suites.Suite("", tuple(command), True), deadline)
 
 
 def _verify_by_declared_command(
@@ -781,7 +882,7 @@ def _verify_by_declared_command(
         # an unrunnable command is a setup problem, not evidence of a bug.
         return None
 
-    missing = _missing_runner(code, tail)
+    missing = _missing_runner(code, tail, command)
     if missing:
         # A DETECTED suite is a guess, and a guess whose runner is not installed must not
         # make a finish harder than it was before anybody guessed — the repository-wide
@@ -822,7 +923,7 @@ def _verify_by_declared_command(
     #
     # A green record now means exactly what the red record's absence means, or it is not
     # written at all.
-    if clear_red(ctx, command, _executed_from_output(tail)) or red(ctx) is None:
+    if clear_red(ctx, command, _executed_from_output(tail), suite) or red(ctx) is None:
         record_green(ctx, command, suite)
     return verdict
 
@@ -831,7 +932,7 @@ def _judge_witnessed(ctx: GitContext, seen: witness.Witnessed, suite=None, tree:
     """A run this gate drove itself. The only path here that reads no project-authored number."""
     command = [seen.runner]
     root = _root_of(ctx, suite)
-    if seen.failed or seen.returncode != 0:
+    if not seen.ran_nothing and (seen.failed or seen.returncode != 0):
         record_red(ctx, command, seen.tail, suite, tree)
         return Verdict(
             False,
@@ -872,7 +973,7 @@ def _judge_witnessed(ctx: GitContext, seen: witness.Witnessed, suite=None, tree:
             unverified=True,
         )
 
-    if clear_red(ctx, command, seen.executed) or red(ctx) is None:
+    if clear_red(ctx, command, seen.executed, suite) or red(ctx) is None:
         record_green(ctx, command, suite)
     return Verdict(True, f"{seen.executed} test(s) run by the gate itself via {seen.runner}")
 
@@ -1062,7 +1163,36 @@ _UNITTEST_BROKE = re.compile(r"(?:failures|errors)=(\d+)")
 def _failures_from_output(text: str) -> int:
     """How many tests the runner itself says broke. Zero when it says nothing."""
     counted = sum(int(n) for n, word in _OUTCOMES.findall(text) if word in _BROKE)
-    return counted + sum(int(n) for n in _UNITTEST_BROKE.findall(text))
+    summary = _summary_counts(text)
+    return counted + sum(int(n) for n in _UNITTEST_BROKE.findall(text)) + summary[1]
+
+
+# Summaries that put the word BEFORE the number, or say it another way, so `_OUTCOMES` never
+# read them. node:test's `# pass 2` (its TAP reporter, which it uses whenever its output is
+# not a terminal, and tape's) and `ℹ pass 2` (the spec reporter newer releases default to);
+# mocha's `2 passing (3ms)`, `1 failing`, `1 pending`. A Node project using either was run
+# by the gate, passed, and finished UNVERIFIED as "reported no test counts" — correct work
+# filed as a failed attempt, and the pull request held on it.
+_NODE_SUMMARY = re.compile(r"(?m)^[#ℹ]\s*(tests|pass|fail|cancelled|skipped|todo)\s+(\d+)\s*$")
+_MOCHA_SUMMARY = re.compile(r"(?m)^\s*(\d+)\s+(passing|failing|pending)\b")
+
+
+def _summary_counts(text: str) -> tuple[int, int]:
+    """(executed, broke) from a node:test or mocha summary, or (-1, 0) when there is none.
+
+    node:test counts a todo and a skipped test in `tests` but in neither `pass` nor `fail`, so
+    what ran is `pass` + `fail`; a cancelled test counts as broken, as node's exit status does.
+    """
+    found = _NODE_SUMMARY.findall(text) or [(w, n) for n, w in _MOCHA_SUMMARY.findall(text)]
+    said: dict[str, int] = {}
+    for word, n in found:
+        said[word] = said.get(word, 0) + int(n)
+    if not said:
+        return -1, 0
+    broke = said.get("fail", 0) + said.get("cancelled", 0) + said.get("failing", 0)
+    return said.get("pass", 0) + said.get("passing", 0) + broke, broke
+
+
 _ZERO_RAN = re.compile(r"(?i)\b(no tests ran|collected 0 items|0 tests? (?:ran|executed))\b")
 
 # stdlib unittest reports differently from pytest — "Ran 3 tests" and "OK (skipped=3)".
@@ -1087,6 +1217,10 @@ def _executed_from_output(text: str) -> int:
     if ran:
         skipped = sum(int(n) for n in _UNITTEST_SKIPPED.findall(text))
         return max(int(ran.group(1)) - skipped, 0)
+
+    summarised, _ = _summary_counts(text)
+    if summarised >= 0:
+        return summarised
 
     outcomes = _OUTCOMES.findall(text)
     if not outcomes:
@@ -1189,7 +1323,8 @@ def _judge_clean_failure(ctx: GitContext, command: list[str], tail: str) -> Verd
     )
 
 
-def clean_rerun(ctx: GitContext, command: list[str], where: str = "") -> Verdict:
+def clean_rerun(ctx: GitContext, command: list[str], where: str = "",
+                deadline: float | None = None) -> Verdict:
     """Tier 2: run the suite against the COMMITTED tree, in a throwaway worktree.
 
     This is what catches the whole class of green-in-my-directory results: an
@@ -1200,6 +1335,14 @@ def clean_rerun(ctx: GitContext, command: list[str], where: str = "") -> Verdict
     `where` is the suite's own directory inside that checkout, for a repository whose
     suites are per subproject: re-running a scoped suite from the repository root would
     re-run the wide one instead, which is the thing the plan exists to avoid (#206).
+
+    `deadline` is the Stop's own, shared with the runs before this one; left out, it starts
+    now. The re-run had a fixed 300 seconds on top of whatever those had used, so a suite
+    between five minutes and the hook's budget passed the gate's own run and was then refused
+    on every Stop — ten minutes each, with a message that named nothing to run — and a long
+    enough pair carried the gate past the hook's budget, where the harness kills it and says
+    nothing. It gets what is left now, and running out is inconclusive, as a checkout with no
+    dependencies installed is: the committed tree simply was not re-checked.
     """
     if not command:
         return Verdict(False, "No test command configured or detected for a clean re-run.")
@@ -1211,37 +1354,17 @@ def clean_rerun(ctx: GitContext, command: list[str], where: str = "") -> Verdict
         # not exist — breaking Stop on every zero-commit repository past prototype.
         return Verdict(True, "unborn branch: nothing committed to re-run")
 
+    until = time.time() + witness.timeout_for() if deadline is None else deadline
     tmp = Path(tempfile.mkdtemp(prefix="claude-bestpractice-verify-"))
     target = tmp / "tree"
     try:
-        add = subprocess.run(
-            ["git", "worktree", "add", "--detach", "--quiet", str(target), ctx.head],
-            cwd=str(ctx.worktree_root),
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=120,
-        )
-        if add.returncode != 0:
-            return Verdict(False, f"could not create verification worktree: {add.stderr.strip()}")
-
-        env = dict(os.environ)
-        env[VERIFYING_ENV] = _issue_nonce(ctx)
-        proc = subprocess.run(
-            command,
-            cwd=str(target / where if where else target),
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=CLEAN_RERUN_TIMEOUT,
-            env=env,
-        )
-        if proc.returncode != 0:
-            tail = hookio.tail_of(proc.stdout + proc.stderr)
-            return _judge_clean_failure(ctx, command, tail)
-        return Verdict(True, "clean-checkout re-run passed")
-    except subprocess.TimeoutExpired:
-        return Verdict(False, f"clean re-run exceeded {CLEAN_RERUN_TIMEOUT}s and was killed")
+        failed = _check_out_committed(ctx, target, until)
+        if failed:
+            return Verdict(False, f"could not create verification worktree: {failed}")
+        missing = _provide_submodules(ctx, target, until)
+        return _rerun_committed(ctx, command, target / where, until, missing)
+    except witness.RanOutOfTime as killed:
+        return _committed_tree_unchecked(command, killed.seconds)
     except OSError as exc:
         # A missing or unexecutable runner used to escape as an exception, straight past
         # the gate's escalation counter and into the fail-closed handler. That wedged the
@@ -1249,21 +1372,149 @@ def clean_rerun(ctx: GitContext, command: list[str], where: str = "") -> Verdict
         # the four-strikes release could never fire. A setup problem must be reportable.
         return Verdict(False, f"could not run the clean re-run ({exc}). Check the test command.")
     finally:
-        subprocess.run(
-            ["git", "worktree", "remove", "--force", str(target)],
+        _remove_verification_tree(ctx, tmp, target)
+
+
+def _check_out_committed(ctx: GitContext, target: Path, until: float) -> str:
+    """Put the committed tree at `target`. What went wrong, or "" when it is there."""
+    try:
+        add = subprocess.run(
+            ["git", "worktree", "add", "--detach", "--quiet", str(target), ctx.head],
             cwd=str(ctx.worktree_root),
             capture_output=True,
             encoding="utf-8",
             errors="replace",
-            timeout=60,
+            timeout=max(1.0, min(120.0, until - time.time())),
         )
-        subprocess.run(
-            ["git", "worktree", "prune"],
-            cwd=str(ctx.worktree_root),
-            capture_output=True,
-            timeout=60,
+    except subprocess.TimeoutExpired as killed:
+        raise witness.RanOutOfTime(killed.timeout) from None
+    return "" if add.returncode == 0 else add.stderr.strip()
+
+
+def _rerun_committed(ctx: GitContext, command: list[str], where: Path, until: float,
+                     missing: list[str]) -> Verdict:
+    """The suite, in the checkout of the committed tree, in the time the Stop has left.
+
+    `missing` is the submodules that checkout could not be given. A failure beside them is no
+    evidence about the committed tree — it is the tree without them — so it is inconclusive.
+    """
+    left = until - time.time()
+    if left <= 0:
+        raise witness.RanOutOfTime(0)
+    env = dict(os.environ)
+    env[VERIFYING_ENV] = _issue_nonce(ctx)
+    try:
+        proc = witness.run_bounded(command, where, env, left)
+    finally:
+        _retire_nonce(ctx, env[VERIFYING_ENV])
+    if proc.returncode == 0:
+        return Verdict(True, "clean-checkout re-run passed")
+    if missing:
+        return Verdict(
+            True,
+            f"clean re-run inconclusive: the committed tree's submodules {', '.join(missing)} "
+            "could not be checked out beside it, so its failure says nothing about the code. "
+            f"`git submodule update --init` and `{' '.join(command)}` in a fresh checkout of "
+            "HEAD answer it.",
+            unverified=True,
         )
-        shutil.rmtree(tmp, ignore_errors=True)
+    return _judge_clean_failure(ctx, command, hookio.tail_of(proc.stdout + proc.stderr))
+
+
+def _provide_submodules(ctx: GitContext, target: Path, until: float) -> list[str]:
+    """Give the committed tree its submodules. The ones it could not be given, by path.
+
+    A detached `worktree add` checks out a submodule as an empty directory, so a suite that
+    reads a committed submodule's file failed there and was reported as "passes in your
+    working tree but FAILS on the committed tree" — on every finish past prototype, in every
+    repository with a submodule its tests use.
+
+    From the checkouts THIS tree already has, never from the network: each submodule's URL
+    is pointed at its checkout here for this one command, so nothing is fetched, a commit
+    not yet pushed is still found, and nothing is written to the repository's own config —
+    the clone lands under the throwaway worktree's git directory and goes with it. A
+    submodule this tree never checked out is one the suite that passed here ran without,
+    and is named rather than fetched.
+    """
+    if not (target / ".gitmodules").is_file():
+        return []
+    wanted = _declared_submodules(target)
+    here = {name: path for name, path in wanted.items()
+            if (ctx.worktree_root / path / ".git").exists()}
+    if here and not _check_out_from_here(ctx, target, here, until):
+        return sorted(wanted.values())
+    # A submodule's OWN submodules are not given. Recursing would fetch them from wherever
+    # their URLs point, which is the network this deliberately stays off.
+    nested = [f"{path}/{inner}" for path in here.values()
+              for inner in _declared_submodules(target / path).values()]
+    return sorted([path for name, path in wanted.items() if name not in here] + nested)
+
+
+def _declared_submodules(root: Path) -> dict[str, str]:
+    """Name to path, for every submodule the `.gitmodules` at `root` declares."""
+    listed = subprocess.run(
+        ["git", "config", "-z", "-f", ".gitmodules", "--get-regexp", r"^submodule\..*\.path$"],
+        cwd=str(root), capture_output=True, encoding="utf-8", errors="surrogateescape",
+        timeout=30,
+    ).stdout
+    pairs = (entry.split("\n", 1) for entry in listed.split("\0") if "\n" in entry)
+    return {key[len("submodule."):-len(".path")]: path for key, path in pairs}
+
+
+def _check_out_from_here(ctx: GitContext, target: Path, here: dict[str, str], until: float) -> bool:
+    """Check these submodules out in `target`, cloned from this tree's own checkouts of them."""
+    urls = [part for name, path in here.items()
+            for part in ("-c", f"submodule.{name}.url={ctx.worktree_root / path}")]
+    try:
+        given = subprocess.run(
+            ["git", "-c", "protocol.file.allow=always", *urls, "submodule", "update", "--init",
+             "--", *here.values()],
+            cwd=str(target), capture_output=True, encoding="utf-8", errors="replace",
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            timeout=max(1.0, until - time.time()),
+        )
+    except subprocess.TimeoutExpired as killed:
+        raise witness.RanOutOfTime(killed.timeout) from None
+    return given.returncode == 0
+
+
+def _committed_tree_unchecked(command: list[str], seconds: float) -> Verdict:
+    """The Stop's time ran out before the committed tree could answer. Inconclusive.
+
+    Said with the command that would answer it, which the refusal this replaces never did:
+    "clean re-run exceeded 300s and was killed" was a block nothing in the session could
+    act on, repeated on every Stop over a suite that had just passed (decision 0020).
+    """
+    ran = f"stopped at {int(seconds)}s" if seconds >= 1 else "not started"
+    return Verdict(
+        True,
+        f"clean re-run {ran}: the Stop hook's time ran out, so the committed tree was not "
+        f"re-checked here. `{' '.join(command)}` in a fresh checkout of HEAD answers it.",
+        unverified=True,
+    )
+
+
+def _remove_verification_tree(ctx: GitContext, tmp: Path, target: Path) -> None:
+    """Take the throwaway checkout back out, its registration with it.
+
+    The directory goes before the prune, so a `worktree remove` that refuses still leaves
+    nothing registered: prune forgets only a worktree whose directory is gone.
+    """
+    subprocess.run(
+        ["git", "worktree", "remove", "--force", str(target)],
+        cwd=str(ctx.worktree_root),
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=60,
+    )
+    shutil.rmtree(tmp, ignore_errors=True)
+    subprocess.run(
+        ["git", "worktree", "prune"],
+        cwd=str(ctx.worktree_root),
+        capture_output=True,
+        timeout=60,
+    )
 
 
 def detect_loop(signatures: list[str], n: int = 3, repeats: int = 3) -> str | None:
@@ -1299,7 +1550,7 @@ _NOT_FOUND = re.compile(
 )
 
 
-def _missing_runner(code: int, tail: str) -> str:
+def _missing_runner(code: int, tail: str, command: list[str] | tuple = ()) -> str:
     """Name the tool that is absent, or "" when the suite genuinely ran.
 
     "The suite FAILS on the code as it stands" is a claim about the CODE, and it was
@@ -1310,6 +1561,9 @@ def _missing_runner(code: int, tail: str) -> str:
 
     The two situations need opposite responses: one is "fix your environment", the other is
     "fix your code". Blocking the turn is right either way; only the diagnosis was wrong.
+
+    `command` is what ran, because one way of not running is only legible against it: an
+    interpreter asked for a module it does not have (`_absent_module`).
     """
     found = _NOT_FOUND.search(tail or "")
     tool = ""
@@ -1320,8 +1574,53 @@ def _missing_runner(code: int, tail: str) -> str:
             tool = ""
     if tool:
         return f"`{tool}` not found on PATH (exit {code})"
+    absent = _absent_module(command, tail)
+    if absent:
+        return f"`{absent}` is not installed for the interpreter that ran it (exit {code})"
     if code == 127:
         return f"the runner is not on PATH (exit {code})"
+    return ""
+
+
+# The interpreters a `-m <module>` belongs to: `python3 -m pytest`, `py -3 -m pytest`, and
+# the same behind `uv run` or `poetry run`.
+_INTERPRETER = re.compile(r"^(?:python[\d.]*|pypy[\d.]*|py)(?:\.exe)?$", re.I)
+
+
+def _absent_module(command: list[str] | tuple, tail: str) -> str:
+    """The module a `python -m <module>` suite could not find, or "" when it ran.
+
+    The same issue #40 one layer in, and the commonest shape of it: `python3 -m pytest -q`
+    is the command this plugin itself detects for a Python project, and pytest installed in
+    the project's virtualenv is not installed for the `python3` the gate finds on PATH. The
+    interpreter exits 1, not the shell's 127, and prints `No module named pytest` — which
+    was filed as a red suite, put on every board as "fix it before new work" and broadcast
+    to every sibling session, over code nothing had run.
+
+    Only the module after `-m` counts. A test importing something the tree does not have
+    says the same words about ITS module, and that is a failure of the code.
+    """
+    module = _dash_m(command)
+    if not module:
+        return ""
+    names = {module, module.split(".")[0]}
+    said = re.search(
+        r"No module named ['\"]?(?:" + "|".join(re.escape(n) for n in names) + r")['\"]?(?![\w.])",
+        tail or "",
+    )
+    return module.split(".")[0] if said else ""
+
+
+def _dash_m(command: list[str] | tuple) -> str:
+    """The module a `python -m <module>` command runs, or "" when it runs none."""
+    parts = [str(part) for part in command]
+    for index, part in enumerate(parts):
+        if not _INTERPRETER.match(PurePosixPath(part.replace("\\", "/")).name):
+            continue
+        rest = parts[index + 1:]
+        if "-m" in rest and rest.index("-m") + 1 < len(rest):
+            return rest[rest.index("-m") + 1]
+        return ""
     return ""
 
 
@@ -1374,30 +1673,47 @@ def committed(ctx: GitContext, changed: list[str]) -> set[str]:
     uncommitted. Committing something to escape it is not a bypass — it is the work
     entering the flow where the next gate reads it.
     """
-    dirty = _uncommitted(ctx)
+    entries = _status_entries(ctx)
+    if entries is None:
+        # Unreadable status is not permission to forgive everything.
+        return set()
+    dirty = {path for _, path in entries}
     return {path for path in changed if path not in dirty}
 
 
-def _uncommitted(ctx: GitContext) -> set[str]:
-    import subprocess
+def _status_entries(ctx: GitContext) -> list[tuple[str, str]] | None:
+    """Every entry `git status` reports, as (XY, path). None when it cannot be read.
 
+    Read the one way that names every file exactly as it is on disk. All untracked FILES,
+    because `normal` reports a new directory as the directory: `payments/stripe.py`, in a
+    directory the tree never had, came back as `payments/`, which is no changed file at
+    all — so the new module read as committed and drift never saw it. `-z` with
+    `core.quotePath=false`, because a name git would quote came back quoted and escaped:
+    `src/café.py` was `"src/caf\\303\\251.py"`, which matches nothing either. And forced
+    rather than left to the repository: `status.showUntrackedFiles=no` makes a bare
+    `--porcelain` answer "clean" over a tree full of untracked files.
+
+    A rename or copy is both of its paths. The destination is what a commit would carry,
+    and the source leaving the tree is a change as well.
+    """
     try:
-        listed = subprocess.run(
-            # Forced, not left to the repository: `status.showUntrackedFiles=no` makes a
-            # bare `--porcelain` answer "clean" over a tree full of untracked files.
-            ["git", "status", "--porcelain", "--untracked-files=normal"],
+        proc = subprocess.run(
+            ["git", "-c", "core.quotePath=false", "status", "--porcelain", "-z",
+             "--untracked-files=all"],
             cwd=str(ctx.worktree_root),
             capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=30,
-        ).stdout
+        )
     except (OSError, subprocess.SubprocessError):
-        # Unreadable status is not permission to forgive everything.
-        return set()
-    out = set()
-    for line in listed.splitlines():
-        path = line[3:].split(" -> ")[-1].strip().strip('"')
-        if path:
-            out.add(path)
-    return out
+        return None
+    if proc.returncode != 0:
+        return None
+    out: list[tuple[str, str]] = []
+    fields = iter(proc.stdout.split("\0"))
+    for field in fields:
+        out.append((field[:2], field[3:]))
+        if set(field[:2]) & {"R", "C"}:
+            out.append((field[:2], next(fields, "")))
+    return [(status, path) for status, path in out if path]
 
 
 def landed(ctx, changed: list[str]) -> list[str]:
@@ -1407,45 +1723,71 @@ def landed(ctx, changed: list[str]) -> list[str]:
     through whatever review the founder runs, and a gate that keeps calling it drift is
     describing the past. Compared by content rather than by name, because a file that
     exists on the trunk with different content is exactly the case drift is FOR.
-    """
-    from .gitctx import blob_sha
 
+    Two git processes for the whole list, not four for every file: this runs on every Stop,
+    and 1,500 changed files — one vendored library — cost twelve seconds of it.
+    """
+    from .gitctx import TRUNK_REFS
+
+    paths = [rel for rel in changed if rel and "\n" not in rel]
+    known = _objects(ctx, [f"{ref}:{rel}" for rel in paths for ref in ("HEAD", *TRUNK_REFS)])
+    # The WORKING TREE's content, not HEAD's. Drift is about what the tree holds now, and a
+    # session that brought a file to the trunk's content — `git checkout origin/main --
+    # <path>`, the one move that greened a suite red only because the tree lagged — had that
+    # write judged against a blob it had not touched. So the content already on the trunk
+    # was called drift, reverting it turned the suite red again, and the two gates asked for
+    # opposite things until a person intervened (#217). HEAD answers for a file that is gone
+    # from the tree.
+    here = _working_blobs(ctx, [rel for rel in paths if (ctx.worktree_root / rel).is_file()])
     settled = []
-    for rel in changed:
-        # The WORKING TREE's content, not HEAD's. Drift is about what the tree holds now,
-        # and a session that brought a file to the trunk's content — `git checkout
-        # origin/main -- <path>`, the one move that greened a suite red only because the
-        # tree lagged — had that write judged against a blob it had not touched. So the
-        # content already on the trunk was called drift, reverting it turned the suite red
-        # again, and the two gates asked for opposite things until a person intervened
-        # (#217). HEAD answers for a file that is gone from the tree.
-        here = blob_sha(ctx, rel) or _blob(ctx, "HEAD", rel)
-        if not here:
-            continue
-        for trunk in ("origin/HEAD", "origin/main", "origin/master"):
-            there = _blob(ctx, trunk, rel)
-            if there:
-                if there == here:
-                    settled.append(rel)
-                break
+    for rel in paths:
+        mine = here.get(rel) or known.get(f"HEAD:{rel}")
+        if mine and _on_the_trunk(known, rel) == mine:
+            settled.append(rel)
     return settled
+
+
+def _on_the_trunk(known: dict[str, str], rel: str) -> str:
+    """The object the first trunk name that HAS this path holds for it, or "" if none does."""
+    from .gitctx import TRUNK_REFS
+
+    return next((known[f"{ref}:{rel}"] for ref in TRUNK_REFS if f"{ref}:{rel}" in known), "")
 
 
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
-def _blob(ctx, rev: str, relpath: str) -> str:
-    """The blob id of one path at one revision, or "" when there is not one.
+def _objects(ctx, names: list[str]) -> dict[str, str]:
+    """`rev:path` to object id, for each of `names` that has one. One git process.
 
-    Checked against the SHA shape rather than against emptiness: `git rev-parse` ECHOES an
-    argument it cannot resolve instead of failing, so an absent `origin/HEAD` came back as
-    the literal string `origin/HEAD:file.py` — which is non-empty, ended the search at the
-    first trunk name, and made every merged file look unmerged.
+    Checked against the SHA shape rather than against emptiness, as `rev-parse` had to be:
+    that ECHOES an argument it cannot resolve instead of failing, so an absent `origin/HEAD`
+    came back as the literal `origin/HEAD:file.py`, ended the search at the first trunk name
+    and made every merged file look unmerged. `cat-file` answers `<name> missing` instead,
+    which the shape check refuses the same way.
     """
-    from .gitctx import _run
+    if not names:
+        return {}
+    proc = subprocess.run(
+        ["git", "cat-file", "--batch-check"], input="".join(f"{name}\n" for name in names),
+        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8",
+        errors="surrogateescape", timeout=60,
+    )
+    found = [line.split(" ", 1)[0] for line in proc.stdout.splitlines()]
+    return {name: sha for name, sha in zip(names, found) if _SHA.match(sha)}
 
-    out = _run(["rev-parse", f"{rev}:{relpath}"], ctx.worktree_root, check=False).strip()
-    return out if _SHA.match(out) else ""
+
+def _working_blobs(ctx, paths: list[str]) -> dict[str, str]:
+    """What each of these files in the working tree would be as a blob. One git process."""
+    if not paths:
+        return {}
+    proc = subprocess.run(
+        ["git", "hash-object", "--stdin-paths"], input="".join(f"{rel}\n" for rel in paths),
+        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8",
+        errors="surrogateescape", timeout=60,
+    )
+    shas = proc.stdout.split()
+    return dict(zip(paths, shas)) if proc.returncode == 0 and len(shas) == len(paths) else {}
 
 
 def scope_drift(changed: list[str], task_paths: list[str], exempt: list[str]) -> list[str]:
@@ -1490,8 +1832,8 @@ def record_red(ctx: GitContext, command: list[str], tail: str, suite=None, tree:
     has committed the state directory on, this is a local file and no more. Saying it
     "travels with the branch" flatly was a promise the code does not keep.
 
-    `first_seen` is preserved across re-observations so the board can say how long it has
-    been broken, which is the number that makes it embarrassing enough to fix.
+    `first_seen` is preserved across re-observations of the same suite so the board can say
+    how long it has been broken, which is the number that makes it embarrassing enough to fix.
 
     `shared_with` is what stops this being broadcast as a repository-wide stop on the
     strength of a run nobody can reproduce. See `_shared_environment`.
@@ -1501,13 +1843,14 @@ def record_red(ctx: GitContext, command: list[str], tail: str, suite=None, tree:
     if not isinstance(previous, dict):
         previous = {}
 
-    # The HIGH-WATER MARK of tests seen executing on this branch, not just this run's.
-    # This is what makes the record hard to clear by shrinking the suite: the agent can
-    # rewrite `command`, rewrite a Makefile recipe behind an unchanged command, or delete
-    # the failing test outright — but it cannot make a narrower run look like it executed
-    # more tests than the wider one did.
+    # The HIGH-WATER MARK of tests seen executing on this branch, in this suite, not just
+    # this run's. This is what makes the record hard to clear by shrinking the suite: the
+    # agent can rewrite `command`, rewrite a Makefile recipe behind an unchanged command, or
+    # delete the failing test outright — but it cannot make a narrower run look like it
+    # executed more tests than the wider one did.
     executed = max(_executed_from_output(tail), 0)
     declared = testcount.count_tree(_root_of(ctx, suite), _skipped(ctx))
+    mine = _this_suites_record(previous, suite)
     store.write_json(
         path,
         {
@@ -1518,12 +1861,12 @@ def record_red(ctx: GitContext, command: list[str], tail: str, suite=None, tree:
             # on an older record, which reads as the whole repository on an unknown tree.
             "path": "" if suite is None else suite.path,
             "tree_hash": tree,
-            "executed": max(executed, int(previous.get("executed") or 0)),
+            "executed": max(executed, int(mine.get("executed") or 0)),
             # What the TREE declared when it went red, counted by this gate rather
             # than reported by the run. Deleting the failing test to go green has to
             # get past this number, and stdout cannot move it.
-            "declared": max(declared, int(previous.get("declared") or 0)),
-            "first_seen": previous.get("first_seen", time.time()),
+            "declared": max(declared, int(mine.get("declared") or 0)),
+            "first_seen": mine.get("first_seen", time.time()),
             "last_seen": time.time(),
             "branch": ctx.branch,
             # WHERE it was seen, and whether that tree's database was its own. Both are
@@ -1532,10 +1875,33 @@ def record_red(ctx: GitContext, command: list[str], tail: str, suite=None, tree:
             # repository is told to stop.
             "tree": str(ctx.worktree_root),
             "shared_with": _shared_environment(ctx, previous),
-            "tail": tail[-1_200:],
+            "tail": _persistable(tail),
         },
         mode=0o644,
     )
+
+
+def _persistable(output: str) -> str:
+    """The end of a failing run's output, as it may be written to a file meant to be committed.
+
+    Scrubbed before it is cut, or half a secret survives the cut. A failing suite prints
+    whatever it had, and a DSN carrying a production password went into `failing-suite.json`
+    whole — a file in the working tree, untracked but not ignored, one `git add -A` from
+    history.
+    """
+    return redact.scrub(output)[-1_200:]
+
+
+def _this_suites_record(previous: dict, suite) -> dict:
+    """The earlier red record when it was about this same suite, and nothing when it was not.
+
+    Its high-water marks and its start date are that suite's own. Carried onto a record about
+    another suite, `web/`'s two tests inherited `backend/`'s six: `web/` then passed both on
+    every turn and could never clear its own record, and the board said how long a suite had
+    been failing by the date a different one broke.
+    """
+    same = str(previous.get("path") or "") == ("" if suite is None else suite.path)
+    return previous if same else {}
 
 
 def _shared_environment(ctx: GitContext, previous: dict) -> str:
@@ -1607,19 +1973,33 @@ def tree_hash(ctx: GitContext) -> str:
     returned "" in almost every real repository, which silently switched off both things
     that read it — the push-time skip, and the re-assertion of a failure already observed
     on this exact tree (#206).
+
+    Those allowances are for what a run LEAVES, which is untracked. A tracked file changed
+    in place is the tree's own content whatever it is called: a fix to a tracked
+    `data/report.xml` — an artifact name, and a file the code reads — was stamped green
+    against a HEAD that still held the break, so the push skipped a suite that failed on
+    exactly what it pushed; and the same file edited the other way had a failure the tree
+    no longer had re-asserted over it. Only `.claude/`, this plugin's own state, is left out
+    for tracked files too.
     """
-    from . import config
     from .gitctx import _run
 
     try:
-        listed = _run(["status", "--porcelain", "--untracked-files=normal"],
-                      ctx.worktree_root, check=False)
-        touched = [_porcelain_path(line) for line in listed.splitlines()]
-        if material_changes([p for p in touched if p], [".claude/"], config.DEFAULT_ARTIFACT_GLOBS):
+        entries = _status_entries(ctx)
+        if entries is None or any(_is_work(status, path) for status, path in entries):
             return ""
         return _run(["rev-parse", "HEAD^{tree}"], ctx.worktree_root, check=False).strip()
     except Exception:  # noqa: BLE001 - no hash means no shortcut, which is the safe answer
         return ""
+
+
+def _is_work(status: str, path: str) -> bool:
+    """Whether one `git status` entry is content the committed tree does not hold."""
+    from . import config
+
+    if status == "??":
+        return bool(material_changes([path], [".claude/"], config.DEFAULT_ARTIFACT_GLOBS))
+    return not (path == ".claude" or path.startswith(".claude/"))
 
 
 # `XY <path>`, and `XY <old> -> <new>` for a rename. Matched rather than sliced at a fixed
@@ -1672,13 +2052,13 @@ def record_green(ctx: GitContext, command: list[str], suite=None) -> bool:
     founder saw a green suite, a gate saying "the test suite is red", and no command that
     changed either (#152).
 
-    Same rules as everywhere else: `clear_red` still requires the SAME command, so a
-    narrower suite passing cannot erase a wider one's failure. Without the run's output
-    there is no executed count to check, and the declared-count guard inside `clear_red`
-    stands in for it — which is why this passes `None` rather than a number it does not
-    have.
+    Same rules as everywhere else: `clear_red` still requires the SAME suite and the same
+    command, so a narrower suite passing cannot erase a wider one's failure. Without the
+    run's output there is no executed count to check, and the declared-count guard inside
+    `clear_red` stands in for it — which is why this passes `None` rather than a number it
+    does not have.
     """
-    cleared = clear_red(ctx, command)
+    cleared = clear_red(ctx, command, None, suite)
     record_run(ctx, command, passed=True)
     store.write_json(
         _green_path(ctx),
@@ -1837,7 +2217,8 @@ def _covers_the_red_run(ctx: GitContext, entry: dict, executed: int | None) -> b
 
 
 def clear_red(
-    ctx: GitContext, command: list[str] | None = None, executed: int | None = None
+    ctx: GitContext, command: list[str] | None = None, executed: int | None = None,
+    suite=None,
 ) -> bool:
     """A green run clears the red record only when it is the SAME run that went red.
 
@@ -1853,11 +2234,18 @@ def clear_red(
 
     That is worse than missing the regression. The plugin manufactures positive evidence
     for it and destroys the record that contradicted it, for a founder who reads no code.
+
+    The same run is the same SUITE before it is the same command: `suite` is the one that
+    passed, None for the repository as a whole. The command alone could not tell them
+    apart, because every run the gate witnesses records itself as the bare runner — one
+    green `pytest` in `backend/` erased the record of `web/`, which was still failing.
     """
     entry = red(ctx)
     if not entry:
         return False
-    if command is not None and list(entry.get("command") or []) != list(command):
+    if str(entry.get("path") or "") != ("" if suite is None else suite.path):
+        return False
+    if command is not None and not _same_command(list(entry.get("command") or []), list(command)):
         return False
 
     # Matching the command's NAME is not enough, and this is where the first fix fell
@@ -1876,6 +2264,38 @@ def clear_red(
 
     store.tier_a(ctx, RED_SUITE_FILE).unlink(missing_ok=True)
     return True
+
+
+# How the witness records a run it drove itself: the bare runner, never a recipe.
+_WITNESSED_RUNNERS = ("pytest", "go")
+
+
+def _same_command(recorded: list, passed: list) -> bool:
+    """Whether a green of `passed` is the command that went red as `recorded`.
+
+    Byte for byte, with one exception, and it runs in one direction only: a run the gate
+    WITNESSED — the runner itself, its configuration neutralised, its count floored against
+    the tree — answers for a recorded command that started that same runner over the same
+    suite. Without it, a suite recorded red as `python3 -m pytest -q`, back when the gate's
+    interpreter could not import pytest, stayed red on every board and in every merge gate
+    after the gate had watched the same suite pass: from then on the gate drove pytest
+    itself, recorded the run as `pytest`, and the declared command never ran again to match.
+
+    Never the other way. A recipe — `make check`, `npm test` — is not the runner it wraps,
+    and neither is a narrower command line: `pytest tests/test_new.py` is not `pytest`.
+    """
+    if recorded == passed:
+        return True
+    runner = passed[0] if len(passed) == 1 and passed[0] in _WITNESSED_RUNNERS else ""
+    return bool(runner) and _invokes(recorded, runner)
+
+
+def _invokes(command: list, runner: str) -> bool:
+    """Whether a command line starts `runner` itself rather than something around it."""
+    names = [PurePosixPath(str(part).replace("\\", "/")).name for part in command]
+    if runner == "go":
+        return names[:2] == ["go", "test"]
+    return names[:1] == [runner] or _dash_m(command) == runner
 
 
 def red_problem(ctx: GitContext, branch: str = "") -> str:
