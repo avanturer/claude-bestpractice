@@ -276,8 +276,18 @@ def closes(ctx: GitContext, tool_name: str, command: str, tool_input: dict[str, 
     `gh pr close` names what it closes by number, by URL, by branch, or not at all — which
     is the current branch, the same way `gh pr merge` reads it. A number only resolves
     through a record that learned it; one that did not is left to `reconcile`, which finds it
-    once the branch is deleted.
+    once the branch is deleted. A call naming another repository closes nothing here: its
+    numbers and branch names are that repository's.
     """
+    branch = _closed_branch(ctx, tool_name, command, tool_input, cwd)
+    if branch and about_this_repository(ctx, tool_name, tool_input, command):
+        return branch
+    return ""
+
+
+def _closed_branch(ctx: GitContext, tool_name: str, command: str, tool_input: dict[str, Any],
+                   cwd: str) -> str:
+    """What `closes` reads out of the call, before asking whose repository it is about."""
     if _CLOSES_TOOL.search(tool_name):
         if str(tool_input.get("state") or "").lower() != "closed":
             return ""
@@ -899,7 +909,7 @@ def _repo_flag(command: str) -> str:
 
 def _repository_named(tool_name: str, tool_input: dict[str, Any], command: str) -> str:
     """The repository this call names outright, or "" when it names none."""
-    if not (_OPENS_TOOL.search(tool_name) or _MERGES_TOOL.search(tool_name)):
+    if not any(tool.search(tool_name) for tool in (_OPENS_TOOL, _MERGES_TOOL, _CLOSES_TOOL)):
         return _repo_flag(command)
     owner = str(tool_input.get("owner") or "").strip()
     repo = str(tool_input.get("repo") or "").strip()

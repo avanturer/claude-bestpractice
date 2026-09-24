@@ -579,7 +579,15 @@ class TestAPullRequestClosedWithoutMergingIsDischarged(PRCase):
         self.tool("Bash", {"command": f"echo 'gh pr close {PRCase.PR_NUMBER}'"})
         self.assertEqual({"feat/x": pullrequest.OPEN}, self.states())
 
+    def test_closing_one_in_another_repository_closes_nothing_here(self):
+        """Its numbers and its branch names are that repository's."""
+        self.start()
+        self.open_a_pr()
+        self.tool("Bash", {"command": f"gh pr close {PRCase.PR_NUMBER} --repo someone/else"})
+        self.assertEqual({"feat/x": pullrequest.OPEN}, self.states())
+
     def test_the_tool_that_closes_one_discharges_it_once_it_has_run(self):
+        git(["remote", "add", "origin", "https://github.com/o/r.git"], self.repo)
         self.start()
         self.open_a_pr()
         self.closing_with_the_tool("open")
