@@ -845,10 +845,10 @@ def keep_the_ledger_out(ctx: GitContext) -> str:
 
     The repair runs once per clone, in the trees that exist that day, and records itself
     done. A tree added later from a trunk that still tracked the cards had them in its index
-    again, and so did one that checked out or pulled a branch carrying them: a transition
-    there staged a rename, the next commit put the ledger back into git, and `git worktree
-    remove` refused the tree over it (#219, #220). One `ls-files` when there is nothing to
-    take out, which is every start after the first.
+    again, and so did one that checked out or pulled a branch carrying them, and the tree's
+    next commit kept them in git (#219). Taken out here, the deletion goes with that commit
+    instead. One `ls-files` when there is nothing to take out, which is every start after
+    the first.
     """
     return _untracked_note(max(0, untrack_ledger(ctx, ctx.worktree_root)))
 

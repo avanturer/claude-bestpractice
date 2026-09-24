@@ -642,7 +642,7 @@ def follow_in_git(source: Path, target: Path) -> bool:
     looking like lost work (#208). The answer to that was `add -f` of the new path, a staged
     rename, and it is what put the ledger BACK into git after decision 0018 took it out: a
     tree cut from a trunk that still tracked its cards staged `R next/0061 -> done/0061` on
-    the first `done`, the next commit carried it, and `git worktree remove` refused the tree.
+    the first `done`, and the tree's next commit carried the card back in.
 
     So nothing is added any more. The path the card left is taken out of the index — the
     one staged deletion 0018 accepts, committed with whatever the tree commits next — and so
