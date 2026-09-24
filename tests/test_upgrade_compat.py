@@ -19,6 +19,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -63,7 +64,11 @@ class TestStateFromEveryReleaseStillLoads(unittest.TestCase):
                 cwd=str(REPO_ROOT), stdout=handle, stderr=subprocess.PIPE, timeout=120,
             )
         self.assertEqual(proc.returncode, 0, proc.stderr[:300])
-        shutil.unpack_archive(str(archive), str(into), format="tar")
+        # 3.14 filters what it extracts by default and 3.12 warns on every archive until
+        # then. This is git's own archive of a release tag, so take that filter now
+        # wherever it exists; a 3.9 without the backport extracts as it always did.
+        safe = {"filter": "data"} if hasattr(tarfile, "data_filter") else {}
+        shutil.unpack_archive(str(archive), str(into), format="tar", **safe)
         return into / "plugin"
 
     def _seed_repo(self, root: Path) -> Path:
