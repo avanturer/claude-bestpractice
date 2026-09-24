@@ -114,6 +114,17 @@ class MovedSession(RepoCase):
             "def parse(text):\n    if not text:\n        raise ValueError('empty')\n"
             "    return text.split(',')\n", encoding="utf-8")
 
+    def a_tree_the_harness_asked_for(self):
+        """`EnterWorktree`, `--worktree`, a subagent's isolation: made by `worktree-create`,
+        which runs before the session has any id in the tree it makes."""
+        from pathlib import Path
+
+        proc = self.hook("worktree-create", self.repo, hook_event_name="WorktreeCreate",
+                         name="side-quest")
+        made = Path(proc.stdout.strip())
+        self.assertTrue(made.is_dir(), f"precondition: the hook made a tree: {proc.stderr}")
+        return made
+
 
 class TestItsCardComesWithIt(MovedSession):
     def test_its_own_card_covers_a_write_in_its_own_tree(self):
@@ -269,17 +280,6 @@ class TestWithNoProcToNameTheProcess(MovedSession):
         self.pin(self.repo, "S", UNRESOLVED, trust=sessions.PID_TRUST_PARENT)
         self.pin(self.tree, "S", UNRESOLVED + 1, trust=sessions.PID_TRUST_PARENT)
 
-    def a_tree_the_harness_asked_for(self):
-        """`EnterWorktree`, `--worktree`, a subagent's isolation: made by `worktree-create`,
-        which runs before the session has any id in the tree it makes."""
-        from pathlib import Path
-
-        proc = self.hook("worktree-create", self.repo, hook_event_name="WorktreeCreate",
-                         name="side-quest")
-        made = Path(proc.stdout.strip())
-        self.assertTrue(made.is_dir(), f"precondition: the hook made a tree: {proc.stderr}")
-        return made
-
     def standing_in(self, tree, raw_id: str, pid: int, prompt: str) -> None:
         self.pin(tree, raw_id, pid, trust=sessions.PID_TRUST_PARENT)
         self.hook("prompt-capture", tree, raw_id, hook_event_name="UserPromptSubmit",
@@ -329,6 +329,42 @@ class TestWithNoProcToNameTheProcess(MovedSession):
                              sessions.identities(self.ctx(), sid(tree, "B")))
             self.assertNotIn(sid(tree, "B"),
                              sessions.identities(self.ctx(), sid(self.repo, "S")))
+
+
+class TestTheBoardDoesNotListItAsASibling(MovedSession):
+    """Started again in its tree — a compaction does it — the session was shown its own id
+    in the main checkout as another live session, on its own task."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        # Unresolved, as on a machine with no /proc: `session-start` resolves the process it
+        # runs under for the tree's id, and whatever it finds, the tree decides the link.
+        self.pin(self.repo, "S", UNRESOLVED, trust=sessions.PID_TRUST_PARENT)
+
+    def board_from(self, tree) -> str:
+        import json
+
+        proc = self.hook("session-start", tree, hook_event_name="SessionStart",
+                         source="compact")
+        return json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
+
+    def test_its_own_id_in_the_main_checkout_is_not_another_session(self):
+        self.assertIn("OTHER LIVE SESSIONS: none", self.board_from(self.tree))
+
+    def test_a_real_sibling_is_still_on_it(self):
+        self.a_sibling(self.repo, "B")
+        body = self.board_from(self.tree)
+        self.assertIn("OTHER LIVE SESSIONS (1)", body)
+        self.assertIn(sid(self.repo, "B")[:8], body)
+
+    def test_the_sweep_still_counts_it_live(self):
+        """The list the board is written from is also the live set the tree sweep reads.
+        Started from another tree of its own, the session's id in the main checkout is what
+        keeps the tree made for that id from being swept as nobody's."""
+        made = self.a_tree_the_harness_asked_for()
+        self.pin(made, "S", UNRESOLVED + 1, trust=sessions.PID_TRUST_PARENT)
+        self.board_from(made)
+        self.assertTrue(self.tree.is_dir(), "the sweep removed the tree made for this session")
 
 
 if __name__ == "__main__":
