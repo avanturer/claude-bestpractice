@@ -4,8 +4,8 @@
 
 **Память, координация и принуждение для разработки продукта в нескольких параллельных сессиях Claude Code.**
 
-[![version](https://img.shields.io/badge/version-1.69.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-2138%20passing-2ea44f)](#проверено)
+[![version](https://img.shields.io/badge/version-1.69.2-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-2155%20passing-2ea44f)](#проверено)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#проверено)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#требования)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#требования)
@@ -205,7 +205,10 @@ Stop-гейт **выбрасывает прозу агента** и сам за�
 дифф: правка только в мобильном приложении больше не отклоняется из-за бэкендного теста,
 которого она не касалась, а прогон jest, который её действительно покрывает, идёт в зачёт.
 Определённый сам сьют обязан объявлять свои тесты, иначе он не сьют, а `detect_suites off`
-выключает угадывание совсем. Падение, уже увиденное ровно на этом дереве, затем
+выключает угадывание совсем. Когда гейт сам запускает pytest, каждый тест идёт под той
+конфигурацией, которую pytest прочитал бы для него сам, — `backend/pyproject.toml` так же,
+как его читает `cd backend && pytest`, — и никогда не под файлом снаружи репозитория.
+Падение, уже увиденное ровно на этом дереве, затем
 переутверждается, а не прогоняется заново: тот же отказ стоит секунду, а не ещё один полный
 прогон сьюта.
 
@@ -395,7 +398,7 @@ claude-bp-ci off        # снять pre-push хук
 ## Проверено
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2138 тестов · 36 проверок доктора · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2155 тестов · 36 проверок доктора · budget
 ```
 
 Доктор доказывает гейты **попыткой сделать плохое**, а не чтением конфигурации обратно —

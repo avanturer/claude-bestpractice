@@ -933,7 +933,7 @@ def _judge_witnessed(ctx: GitContext, seen: witness.Witnessed, suite=None, tree:
     command = [seen.runner]
     root = _root_of(ctx, suite)
     if not seen.ran_nothing and (seen.failed or seen.returncode != 0):
-        record_red(ctx, command, seen.tail, suite, tree)
+        record_red(ctx, command, seen.tail, suite, tree, executed=seen.executed)
         return Verdict(
             False,
             f"The suite FAILS on the code as it stands — {seen.failed} failing of "
@@ -1818,8 +1818,14 @@ def scope_drift(changed: list[str], task_paths: list[str], exempt: list[str]) ->
 RED_SUITE_FILE = "failing-suite.json"
 
 
-def record_red(ctx: GitContext, command: list[str], tail: str, suite=None, tree: str = "") -> None:
+def record_red(ctx: GitContext, command: list[str], tail: str, suite=None, tree: str = "",
+               executed: int | None = None) -> None:
     """Remember that the suite is red, in COMMITTED state, until it is green again.
+
+    `executed` is how many tests the run executed, when the gate counted them from a report
+    of its own; the tail is read for it otherwise. A run the gate witnessed has that report,
+    and its tail is what the tests printed — or, for a suite started in more than one place,
+    several summaries at once.
 
     Blocking the turn is not remembering. The block is spent the moment the agent
     escalates past it or the founder starts a new session, and after that a red suite is
@@ -1848,7 +1854,8 @@ def record_red(ctx: GitContext, command: list[str], tail: str, suite=None, tree:
     # agent can rewrite `command`, rewrite a Makefile recipe behind an unchanged command, or
     # delete the failing test outright — but it cannot make a narrower run look like it
     # executed more tests than the wider one did.
-    executed = max(_executed_from_output(tail), 0)
+    if executed is None:
+        executed = max(_executed_from_output(tail), 0)
     declared = testcount.count_tree(_root_of(ctx, suite), _skipped(ctx))
     mine = _this_suites_record(previous, suite)
     store.write_json(

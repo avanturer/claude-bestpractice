@@ -323,6 +323,170 @@ class TestTheConfigPinnedIsTheOnePytestReads(RepoCase):
         self.assertTrue(seen.passed, seen.tail)
 
 
+class TestEachProjectRunsUnderItsOwnConfiguration(RepoCase):
+    """pytest reads ONE configuration per run, found upward from where it starts, never down.
+
+    The gate started it at the repository root, so a project whose tests live in `backend/`,
+    configured by `backend/pyproject.toml`, ran under no configuration at all. Its
+    `asyncio_mode = "auto"` was never read, every async fixture errored, and the gate reported
+    226 failing over a suite that `make test`, which is `cd backend && pytest`, ran green
+    (#230). `pythonpath` stands in for it here: pytest's own, so no plugin is needed to see it.
+    """
+
+    def project(self, where: str, value: int = 1, config: str = "pyproject.toml",
+                name: str = "sample") -> None:
+        """A project under `where` whose tests import from `src/`, which only its own
+        configuration puts on the path."""
+        self.write(f"{where}{config}", {
+            "pyproject.toml": '[tool.pytest.ini_options]\npythonpath = ["src"]\n',
+            "pytest.ini": "[pytest]\npythonpath = src\n",
+        }[config])
+        self.write(f"{where}src/{name}/__init__.py", f"def f():\n    return {value}\n")
+        self.write(f"{where}tests/test_{name}.py",
+                   f"from {name} import f\n\n\ndef test_f():\n    assert f() == {value}\n")
+
+    def witnessed(self):
+        from claude_bestpractice import witness
+
+        self.commit("tests configured by projects of their own")
+        seen = witness.run(self.ctx())
+        self.assertIsNotNone(seen, "pytest was not driven at all")
+        return seen
+
+    def test_a_project_below_the_root_runs_under_its_own_configuration(self):
+        self.project("backend/")
+        seen = self.witnessed()
+        self.assertTrue(seen.passed, seen.tail)
+        self.assertEqual(1, seen.executed)
+
+    def test_a_test_outside_every_project_still_runs(self):
+        """The projects are run apart, not instead: what no project configures runs at the root."""
+        self.project("backend/")
+        self.write("tests/test_root.py", "def test_root():\n    assert 1 == 2\n")
+        seen = self.witnessed()
+        self.assertEqual((2, 1), (seen.executed, seen.failed), seen.tail)
+        self.assertIn("pytest in the repository", seen.tail)
+
+    def test_a_project_inside_a_project_runs_under_its_own(self):
+        """The nearest configuration is the one pytest reads when it is handed that test."""
+        self.project("services/")
+        self.project("services/api/", value=2, config="pytest.ini", name="api")
+        seen = self.witnessed()
+        self.assertTrue(seen.passed, seen.tail)
+        self.assertEqual(2, seen.executed)
+
+    def test_a_failure_in_a_project_is_red_and_says_where_it_ran(self):
+        """pytest names each file from where it started, so the refusal says where that was."""
+        from claude_bestpractice import evidence
+
+        self.project("backend/", value=1)
+        self.project("worker/", name="jobs")
+        self.commit("two projects")
+        self.write("backend/src/sample/__init__.py", "def f():\n    return 2\n")
+        verdict = evidence._verify_by_running(self.ctx(), [], ["make", "test"],
+                                              ["backend/src/sample/__init__.py"])
+        self.assertFalse(verdict.ok)
+        self.assertIn("1 failing of 2", verdict.reason)
+        self.assertIn("pytest in backend/", verdict.reason)
+        self.assertEqual(2, evidence.red(self.ctx())["executed"])
+
+    def test_a_project_the_founder_excluded_is_not_started(self):
+        self.configure(witness_exclude=["legacy/"])
+        self.project("backend/")
+        self.project("legacy/", name="old")
+        self.write("legacy/tests/test_broken.py", "def test_broken():\n    assert False\n")
+        seen = self.witnessed()
+        self.assertTrue(seen.passed, seen.tail)
+        self.assertEqual(1, seen.executed)
+
+    def test_an_exclusion_inside_a_project_is_honoured_there(self):
+        """`witness_exclude` names paths from the suite's root, and pytest reads a relative
+        `--ignore` from where it starts: inside a project that is somewhere else entirely."""
+        self.configure(witness_exclude=["backend/tests/test_broken.py"])
+        self.project("backend/")
+        self.write("backend/tests/test_broken.py", "def test_broken():\n    assert False\n")
+        seen = self.witnessed()
+        self.assertTrue(seen.passed, seen.tail)
+        self.assertEqual(1, seen.executed)
+
+    def test_a_member_without_a_section_is_run_under_the_one_above_it(self):
+        """The same defect the other way up. A workspace member's `pyproject.toml` holding only
+        `[project]` does not end pytest's search, so `cd packages/api && pytest` reads the
+        workspace root's section; the gate pinned the member's file and read nothing."""
+        from claude_bestpractice import witness
+
+        self.write("pyproject.toml", '[tool.uv.workspace]\nmembers = ["packages/*"]\n\n'
+                                     '[tool.pytest.ini_options]\npythonpath = ["packages/api/src"]\n')
+        self.write("packages/api/pyproject.toml", '[project]\nname = "api"\nversion = "0"\n')
+        self.write("packages/api/src/sample/__init__.py", "def f():\n    return 1\n")
+        self.write("packages/api/tests/test_sample.py",
+                   "from sample import f\n\n\ndef test_f():\n    assert f() == 1\n")
+        self.commit("a workspace configured once, at its root")
+        seen = witness.run(self.ctx(), where=self.ctx().worktree_root / "packages" / "api")
+        self.assertTrue(seen.passed, seen.tail)
+
+    def test_nothing_above_the_repository_is_read(self):
+        """Up to the repository's root and never past it: a `pytest.ini` beside the clone is in
+        no diff anybody reviews, which is why the gate pins a file at all."""
+        from claude_bestpractice import witness
+
+        (self.tmp / "pytest.ini").write_text("[pytest]\npythonpath = repo/src\n", encoding="utf-8")
+        self.write("src/sample/__init__.py", "def f():\n    return 1\n")
+        self.write("tests/test_sample.py", "from sample import f\n\n\ndef test_f():\n"
+                                           "    assert f() == 1\n")
+        self.commit("a suite that only imports with help from outside the repository")
+        seen = witness.run(self.ctx())
+        self.assertFalse(seen.passed, "a configuration outside the repository shaped the run")
+
+    def test_one_configuration_is_one_run(self):
+        """Every repository without a project of its own below the root runs as it always has."""
+        from claude_bestpractice import witness
+
+        self.write("pyproject.toml", '[tool.pytest.ini_options]\npythonpath = ["src"]\n')
+        self.write("docs/pyproject.toml", "[tool.pytest.ini_options]\n")
+        self.write("src/sample/__init__.py", "def f():\n    return 1\n")
+        self.write("tests/unit/test_sample.py", "from sample import f\n\n\ndef test_f():\n"
+                                                "    assert f() == 1\n")
+        self.assertEqual([self.repo], witness.projects(self.repo),
+                         "a configuration with no test under it is not a project to run")
+        seen = self.witnessed()
+        self.assertTrue(seen.passed, seen.tail)
+        self.assertNotIn("pytest in", seen.tail)
+
+    def test_the_projects_share_one_budget(self):
+        """The Stop hook's time is one clock. Each run handed all of it could spend it twice
+        over, past the point where the harness kills the gate and nobody is told."""
+        from claude_bestpractice import witness
+
+        for where in ("api/", "web/"):
+            self.project(where, name=where.strip("/"))
+            self.write(f"{where}tests/test_slow.py",
+                       "import time\n\n\ndef test_slow():\n    time.sleep(2)\n")
+        self.commit("two projects that take their time")
+        with mock.patch.object(witness, "timeout_for", return_value=3.0):
+            with self.assertRaises(witness.RanOutOfTime) as ran_out:
+                witness.run(self.ctx())
+        self.assertEqual(3.0, ran_out.exception.seconds)
+
+
+class TestTheRedRecordCountsFromTheGatesOwnReport(RepoCase):
+    """The mark a green has to reach was read out of the run's output, and the output of a
+    failing run is whatever its tests printed. One `print('9999 passed')` in a failing test
+    set it past anything the suite could ever execute, and the record could never clear."""
+
+    def test_what_a_failing_test_prints_is_not_a_count(self):
+        from claude_bestpractice import evidence
+
+        self.write("tests/test_noisy.py",
+                   "def test_noisy():\n    print('9999 passed')\n    assert False\n")
+        self.commit("a failing test that prints a summary of its own")
+        verdict = evidence._verify_by_running(self.ctx(), [], ["make", "test"],
+                                              ["tests/test_noisy.py"])
+        self.assertFalse(verdict.ok)
+        self.assertIn("9999 passed", verdict.reason, "precondition: the tail carries the print")
+        self.assertEqual(1, evidence.red(self.ctx())["executed"])
+
+
 CALC_GO = """package calc
 
 func Add(a, b int) int { return a + b }

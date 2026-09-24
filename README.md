@@ -4,8 +4,8 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-1.69.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-2138%20passing-2ea44f)](#verified)
+[![version](https://img.shields.io/badge/version-1.69.2-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-2155%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
@@ -224,7 +224,10 @@ environment variable.
 runner of its own is detected without being named, and a turn is judged by the suites its
 diff actually reaches — so a mobile-only change is not refused over a backend test it never
 touched, and the jest run that does cover it counts. A detected suite has to declare tests of
-its own to count at all, and `detect_suites off` switches the guessing off entirely. A failure
+its own to count at all, and `detect_suites off` switches the guessing off entirely. Where the
+gate drives pytest itself, each test runs under the configuration pytest would read for it —
+`backend/pyproject.toml` as `cd backend && pytest` reads it — and never under a file from
+outside the repository. A failure
 already observed on exactly this tree is then re-asserted rather than re-run: the same refusal
 costs a second instead of another full run of the suite.
 
@@ -447,7 +450,7 @@ roughly 0.1 % of a 200k window.
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2138 tests · 36 doctor checks · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2155 tests · 36 doctor checks · budget
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration

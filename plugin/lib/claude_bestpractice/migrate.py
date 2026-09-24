@@ -1441,6 +1441,44 @@ def _git_bytes(tree: Path, args: list[str]) -> bytes | None:
     return done.stdout if done.returncode == 0 else None
 
 
+def _let_a_run_as_configured_clear_a_red_suite(ctx: GitContext) -> str:
+    """Red-suite records counted by a pytest run that never read the suite's configuration.
+
+    Until 1.69.2 the gate started pytest once, in the suite's directory, under a file of that
+    directory or none. A project below it with a configuration of its own was run under none:
+    `backend/pyproject.toml` and its `asyncio_mode = "auto"` were never read, and 226 tests
+    failed that pass as configured (#230). A workspace member lost the workspace root's
+    configuration the same way. The record keeps that run's count as the mark a green has to
+    reach, and the run as configured is a different number of tests — 4384 against 4594 on the
+    repository that reported it — so no run could clear it; its tree hash would have had it
+    re-asserted rather than run again, for the hour after the upgrade.
+
+    Both go, from a record the gate witnessed with pytest over a suite configured apart from
+    its own directory, in every tree of the clone. The record stays red, and only a passing
+    run of the suite clears it — still held to the count of tests the tree declared when it
+    went red.
+    """
+    fixed = sum(_uncount_a_run_from_the_wrong_place(tree) for tree in _trees_of(ctx))
+    return (f"{fixed} red-suite record(s) counted by a pytest run that never read the suite's "
+            "configuration can now be cleared by one that does") if fixed else ""
+
+
+def _uncount_a_run_from_the_wrong_place(tree: Path) -> bool:
+    """Drop what one tree's red record took from a run that was not its suite as configured."""
+    from . import evidence, witness
+
+    path = tree / store.TIER_A_DIRNAME / evidence.RED_SUITE_FILE
+    entry = store.read_json(path, default=None)
+    if not isinstance(entry, dict) or entry.get("command") != ["pytest"]:
+        return False
+    stale = {"executed", "tree_hash"} & set(entry)
+    if not stale or not witness.configured_apart(tree / str(entry.get("path") or ""), tree):
+        return False
+    store.write_json(path, {key: value for key, value in entry.items() if key not in stale},
+                     mode=0o644)
+    return True
+
+
 _REPAIRS = {
     "0001-task-paths": (1, _backfill_task_paths),
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
@@ -1476,6 +1514,7 @@ _REPAIRS = {
     "0030-scrub-captured-secrets": (1, _scrub_what_was_captured_with_a_secret_in_it),
     "0031-quote-the-status-line": (1, _quote_the_status_line),
     "0032-restore-cards-a-pull-took": (1, _restore_cards_a_pull_took),
+    "0033-let-a-run-as-configured-clear-a-red-suite": (1, _let_a_run_as_configured_clear_a_red_suite),
 }
 
 
