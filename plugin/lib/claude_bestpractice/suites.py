@@ -96,18 +96,33 @@ class Suite:
 
 
 def declared(commands: Any) -> list[Suite]:
-    """The suites config.json names, in path order. Malformed entries are skipped."""
+    """The suites config.json names, in path order. Malformed entries are skipped.
+
+    A command string that does not even split is one of them. One unbalanced quote in one
+    entry raised out of `shlex.split` inside the Stop gate, which fails closed: every finish
+    in the repository was refused with "gate failed (ValueError: No closing quotation)",
+    whatever the diff touched and without the escalation counter ever moving — and the file
+    that fixes it is the one file a session is refused.
+    """
     found: list[Suite] = []
     if not isinstance(commands, dict):
         return found
     for where, command in sorted(commands.items()):
-        argv = shlex.split(command) if isinstance(command, str) else [
-            str(part) for part in command if str(part).strip()
-        ]
+        argv = _argv(command)
         path = str(where).strip().strip("/")
         if argv and path and path != ".":
             found.append(Suite(f"{path}/", tuple(argv), True))
     return found
+
+
+def _argv(command: Any) -> list[str]:
+    """One declared command as argv, or [] when it cannot be one."""
+    if not isinstance(command, str):
+        return [str(part) for part in command if str(part).strip()]
+    try:
+        return shlex.split(command)
+    except ValueError:
+        return []
 
 
 def detected(root: Path) -> list[Suite]:

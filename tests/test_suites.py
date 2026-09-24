@@ -128,6 +128,26 @@ class TestWhichSuitesAChangeSelects(SuiteCase):
                        test_commands={"mobile/": "npx jest", "backend/": 7})
         self.assertEqual(["mobile/"], [s.path for s in suites.scoped(self.ctx(), cfg)])
 
+    def test_a_command_that_does_not_split_is_malformed_too(self):
+        """One unbalanced quote raised out of the Stop gate on every finish in the repository."""
+        cfg = self.cfg(test_command=["make", "test"],
+                       test_commands={"web/": "npx jest --testPathIgnorePatterns='e2e",
+                                      "mobile/": "npx jest"})
+        self.assertEqual(["mobile/"], [s.path for s in suites.scoped(self.ctx(), cfg)])
+
+    def test_the_stop_gate_is_not_wedged_by_it(self):
+        self.configure(require_task=False, manage_pull_requests=False,
+                       test_commands={"web/": "npx jest --testPathIgnorePatterns='e2e"})
+        self.write("app.py", "X = 1\n")
+        self.write("tests/test_app.py", "def test_a():\n    assert True\n")
+        self.write("web/index.js", "module.exports = 1\n")
+        self.commit("a founder's config with one typo in it")
+        self.write("app.py", "X = 2\n")
+        proc = self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                               "stop_hook_active": False})
+        self.assertNotIn("gate failed", proc.stderr)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+
     def test_a_repository_with_no_command_at_all_plans_nothing(self):
         """Nothing to run is not something to invent; the artifact path answers instead."""
         self.assertEqual([], suites.for_changes(self.ctx(), self.cfg(test_command=[]), ["a.py"]))
