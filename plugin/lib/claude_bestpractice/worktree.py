@@ -429,7 +429,7 @@ def trust(path: str) -> bool:
 
 
 def record(ctx: GitContext, slug: str, absolute: str, branch: str, trusted: bool,
-           session_id: str = "") -> dict:
+           session_id: str = "", harness_id: str = "") -> dict:
     body = {
         "path": absolute,
         "branch": branch,
@@ -441,6 +441,11 @@ def record(ctx: GitContext, slug: str, absolute: str, branch: str, trusted: bool
         "session_id": session_id,
         "provisioned_by_plugin": True,
     }
+    # The session a tree was made for when it has no id to name yet: `worktree-create`
+    # makes the tree before the session has ever stood in it. Only the harness id, and never
+    # in `session_id`'s place — the reaper reads that one, and those trees stay out of it.
+    if harness_id:
+        body["harness_id"] = harness_id
     store.write_json(store.tier_b(ctx, "worktrees", f"{slug}.json"), body)
     return body
 
@@ -1317,6 +1322,30 @@ def _provisioned(ctx: GitContext) -> list[dict]:
         return []
     bodies = [store.read_json(path, default={}) or {} for path in records]
     return [body for body in bodies if body.get("provisioned_by_plugin")]
+
+
+def made_for(ctx: GitContext, harness: str) -> set[Path]:
+    """Every tree this plugin made for one harness id, whichever way it made it.
+
+    The gate records the id the session was refused under in the main checkout, which
+    carries the harness id; `worktree-create` records the harness id itself. A record from
+    before that field names nobody and links nothing, which is what it did before.
+    """
+    from . import hookio
+
+    if not harness:
+        return set()
+    main = ctx.common_dir.parent.resolve().as_posix()
+    out: set[Path] = set()
+    for body in _provisioned(ctx):
+        made = body.get("harness_id") or hookio.harness_of(str(body.get("session_id") or ""), main)
+        if made != harness or not body.get("path"):
+            continue
+        try:
+            out.add(Path(str(body["path"])).resolve())
+        except (OSError, RuntimeError):
+            continue
+    return out
 
 
 def working_context(ctx: GitContext, session_id: str) -> GitContext:

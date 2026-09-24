@@ -73,7 +73,13 @@ def main() -> None:
 
     # Same provisioning the gate uses when it refuses a write in the main checkout, so the
     # two paths cannot drift into disagreeing about naming, trust or ports.
-    body = worktree.record(ctx, slug, absolute, branch, worktree.trust(absolute))
+    #
+    # With the harness id of the session it is made for, which is what lets that session be
+    # known as itself once it stands in the tree on a machine with no /proc to name its
+    # process (`sessions.identities`). Not as the session id: that is what the reaper keys on,
+    # and a tree this hook made has never been the reaper's to remove.
+    body = worktree.record(ctx, slug, absolute, branch, worktree.trust(absolute),
+                           harness_id=str(event.raw.get("session_id") or ""))
 
     # The port and database name were derived here since v1.14.0 and read by NOTHING —
     # a promise this hook's own docstring made and the code never kept. They reach the

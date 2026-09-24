@@ -501,13 +501,60 @@ def identities(ctx: GitContext, session_id: str) -> set[str]:
     separate processes — the reason the tree is in the identity at all — so the process has
     to match too, start time included, or a recycled pid would be taken for this session.
     Subagents share both halves: they are this session's own hands, and count as it.
+
+    Where the process cannot be named — every pid on a machine with no /proc, macOS and
+    Windows among them — the tree registry answers instead (`_through_a_tree`), and it
+    never overrules two pids that were both resolved.
     """
     me = get(ctx, session_id) if session_id else None
-    process = _process_of(me) if me is not None else None
-    if process is None:
+    harness = hookio.harness_of(me.session_id, me.worktree) if me is not None else ""
+    if not harness:
         return {session_id} if session_id else set()
+    records = load_all(ctx)
+    linked = _through_a_tree(ctx, me, harness, records)
+    process = _process_of(me)
     return {session_id} | {
-        record.session_id for record in load_all(ctx) if _process_of(record) == process
+        record.session_id for record in records
+        if _one_session(process, _process_of(record), record.session_id in linked)
+    }
+
+
+def _one_session(process: tuple | None, other: tuple | None, linked: bool) -> bool:
+    """Are two records of one harness id the same session, as far as the evidence goes?
+
+    Two resolved pids decide, both ways: one process is one session wherever it stands,
+    and two processes are two sessions however their trees were made. Only where either
+    pid is unresolved does the tree registry get the say.
+    """
+    if process is not None and other is not None:
+        return process == other
+    return linked
+
+
+def _through_a_tree(ctx: GitContext, me: SessionRecord, harness: str,
+                    records: list[SessionRecord]) -> set[str]:
+    """Ids of this harness standing where its tree came from, or in the tree made for it.
+
+    The pid is the proof `identities` prefers, and it exists only where /proc does: every
+    other pid is the hook's own shell, so nothing was ever united and every consequence of
+    the split stood — the card lost in the tree, `claim` refused as a sibling's, the
+    database gate refusing the session over itself. The registry of trees this plugin made
+    is the other account of who is who: a tree made for harness id H and the main checkout
+    it was made from hold one session between them. Between two such trees it says nothing —
+    a tree is tied to the checkout it was made from and to no other tree.
+    """
+    from . import worktree
+
+    trees = worktree.made_for(ctx, harness)
+    if not trees:
+        return set()
+    main = ctx.common_dir.parent.resolve()
+    here = Path(me.worktree).resolve()
+    places = trees if here == main else ({main} if here in trees else set())
+    return {
+        record.session_id for record in records
+        if Path(record.worktree).resolve() in places
+        and hookio.harness_of(record.session_id, record.worktree) == harness
     }
 
 

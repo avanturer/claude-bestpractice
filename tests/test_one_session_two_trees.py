@@ -35,6 +35,11 @@ ANOTHER_PROCESS = 1
 
 DSN = "postgres://localhost:5432/app"
 
+# What `resolve_owner` can report on a machine with no /proc — macOS, Windows: the hook's own
+# shell, gone the moment the hook returns, a different number on every call, and marked as
+# proving nothing. No process has these.
+UNRESOLVED = 999_999_990
+
 
 class MovedSession(RepoCase):
     """A session started in the main checkout that claimed its card there, was refused a
@@ -68,12 +73,12 @@ class MovedSession(RepoCase):
         self.assertEqual(1, len(made), f"precondition: one tree provisioned, got {made}")
         return made[0]
 
-    def pin(self, tree, raw_id: str, pid: int) -> None:
+    def pin(self, tree, raw_id: str, pid: int, trust: str = sessions.PID_TRUST_OWNER) -> None:
         """Record which process this identity runs as, keeping whatever else it knows."""
         ctx = resolve(tree)
         identity = sid(tree, raw_id)
         record = sessions.get(ctx, identity) or session_record_for(ctx, identity, pid)
-        record.pid, record.pid_trust = pid, sessions.PID_TRUST_OWNER
+        record.pid, record.pid_trust = pid, trust
         sessions.register(ctx, record)
 
     def a_sibling(self, tree, raw_id: str, paths=()) -> str:
@@ -83,8 +88,8 @@ class MovedSession(RepoCase):
         sessions.touch(resolve(tree), identity, task_paths=list(paths))
         return identity
 
-    def hook(self, name: str, cwd, session: str = "S", **event):
-        return self.run_hook(name, {"session_id": session, **event}, cwd=cwd)
+    def hook(self, gate: str, cwd, session: str = "S", **event):
+        return self.run_hook(gate, {"session_id": session, **event}, cwd=cwd)
 
     def bash(self, command: str, cwd=None, session: str = "S"):
         return self.hook("pre-tool", cwd or self.tree, session, hook_event_name="PreToolUse",
@@ -251,6 +256,79 @@ class TestStagingItsOwnTree(MovedSession):
         self.edit_in_tree()
         proc = self.bash(f"cd {self.tree} && git add -A", cwd=self.repo)
         self.assertNotEqual("deny", self.hook_decision(proc), proc.stdout)
+
+
+class TestWithNoProcToNameTheProcess(MovedSession):
+    """macOS and Windows have no /proc, so every pid is the hook's own shell, unresolved and
+    different on every call: the process never united anything and every consequence of the
+    split stood there. The registry of trees this plugin made says who is who instead — a
+    tree made for harness id H and the main checkout it came from hold one session."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.pin(self.repo, "S", UNRESOLVED, trust=sessions.PID_TRUST_PARENT)
+        self.pin(self.tree, "S", UNRESOLVED + 1, trust=sessions.PID_TRUST_PARENT)
+
+    def a_tree_the_harness_asked_for(self):
+        """`EnterWorktree`, `--worktree`, a subagent's isolation: made by `worktree-create`,
+        which runs before the session has any id in the tree it makes."""
+        from pathlib import Path
+
+        proc = self.hook("worktree-create", self.repo, hook_event_name="WorktreeCreate",
+                         name="side-quest")
+        made = Path(proc.stdout.strip())
+        self.assertTrue(made.is_dir(), f"precondition: the hook made a tree: {proc.stderr}")
+        return made
+
+    def standing_in(self, tree, raw_id: str, pid: int, prompt: str) -> None:
+        self.pin(tree, raw_id, pid, trust=sessions.PID_TRUST_PARENT)
+        self.hook("prompt-capture", tree, raw_id, hook_event_name="UserPromptSubmit",
+                  prompt=prompt)
+
+    def test_its_card_comes_with_it_into_the_tree_the_gate_made(self):
+        proc = self.write_in(self.tree)
+        self.assertNotEqual("deny", self.hook_decision(proc), self.hook_reason(proc))
+        claim = self.cli(self.tree, "claim", "0001")
+        self.assertEqual(0, claim.returncode, claim.stderr)
+        self.assertEqual(sid(self.tree, "S"), plan.find(self.ctx(), "0001").owner)
+
+    def test_removing_that_tree_from_inside_is_still_intercepted(self):
+        proc = self.bash(f"git worktree remove {self.tree}")
+        self.assertEqual("deny", self.hook_decision(proc), proc.stdout + proc.stderr)
+        self.assertIn(f"{self.tree} is removed", self.hook_reason(proc))
+        self.assertFalse(self.tree.is_dir(), "the gate did not remove the tree")
+
+    def test_its_card_comes_with_it_into_a_tree_worktree_create_made(self):
+        made = self.a_tree_the_harness_asked_for()
+        self.standing_in(made, "S", UNRESOLVED + 2, "carry on in the side tree")
+        proc = self.write_in(made)
+        self.assertNotEqual("deny", self.hook_decision(proc), self.hook_reason(proc))
+        self.assertEqual(["0001"], [task.id for task in plan.load_all(self.ctx())],
+                         "the founder's message in that tree filed a second card")
+
+    def test_a_tree_worktree_create_made_is_still_never_the_reapers(self):
+        """The harness id is recorded beside the session id, never in its place: the reaper
+        keys on the session id, and these trees have never been its to remove."""
+        from claude_bestpractice import worktree
+
+        made = self.a_tree_the_harness_asked_for()
+        _path, body = worktree.record_for(self.ctx(), made)
+        self.assertEqual(("S", ""), (body.get("harness_id"), body.get("session_id")))
+        worktree.reap_unused(self.ctx(), set())
+        self.assertTrue(made.is_dir(), "the reaper removed a tree worktree-create made")
+
+    def test_another_harness_id_in_either_tree_is_still_another_session(self):
+        made = self.a_tree_the_harness_asked_for()
+        for tree in (self.tree, made):
+            self.standing_in(tree, "B", UNRESOLVED + 3, "fix the importer in src/app.py")
+            proc = self.write_in(tree, session="B")
+            self.assertEqual("deny", self.hook_decision(proc), f"{tree}: {proc.stdout}")
+            self.assertIn("nothing on the board says this session is working",
+                          self.hook_reason(proc))
+            self.assertNotIn(sid(self.repo, "S"),
+                             sessions.identities(self.ctx(), sid(tree, "B")))
+            self.assertNotIn(sid(tree, "B"),
+                             sessions.identities(self.ctx(), sid(self.repo, "S")))
 
 
 if __name__ == "__main__":
