@@ -1,5 +1,54 @@
 # Changelog
 
+## v1.69.4
+
+A verdict is repeated only by the gate that reached it (#234).
+
+### What happened
+
+After upgrading from 1.69.0 to 1.69.3, the Stop gate on an unchanged tree did not run the
+suite. It repeated the verdict 1.69.0 had reached, the false red of #230, word for word:
+
+```
+24 failed, 4554 passed, 3 skipped, 1 warning, 202 errors in 193.17s (0:03:13)
+This is the failure already observed on exactly this tree, so it was not run again
+```
+
+It was the same witness folder and the same timing as the 1.69.0 run, at every Stop, and only
+an edit to the code stopped it. On the same tree `make test` passed 4442.
+
+The gate remembers a failure it has observed and repeats it on the same tree instead of running
+the suite again (decision 0013). Repair 0033 in 1.69.2 took that memory off records the old
+run had left, and it works on a clone that upgrades in one step. It runs once per clone,
+though, and a session started before the upgrade keeps running the hooks it started with. So a
+session still on 1.69.0 wrote the false red after the repair had run, and the upgraded gate
+repeated it. Replaying that order on this repository reproduces the report on 1.69.3 exactly.
+
+### What changed
+
+- **A red record carries the version of the gate that reached it**, and the gate repeats only
+  its own. The same tree judged by a different gate is not the same run, so a record from
+  another version, or from before records carried one, is run again.
+- **Its count binds only this gate's runs.** The number of tests a failing run executed is the
+  mark a later green has to reach, and 1.69.0 counted 4594 over a suite that runs 4384 as
+  configured. That mark no longer holds a run of another version back, and it is not carried
+  into a record this gate writes. The number of tests the tree declares still guards the record
+  as before. It is counted from the test files rather than taken from a run, and it is what
+  keeps deleting the failing test from clearing a red suite, across an upgrade too.
+- **A green stamp is this gate's own too.** The pre-push hook skips its run for a tree on
+  record as green, and a green that another version reached no longer excuses that.
+
+Decision 0013 now names the fourth bound it had been missing: the record must have been reached
+by this version of the gate.
+
+### How it was checked
+
+The report's order, replayed against the real code of both versions: a 1.69.3 session starts
+and runs the repair, a session still on 1.69.0 hooks writes the false red, and a 1.69.3 Stop
+follows on the same tree. Released 1.69.3 repeats the old verdict and leaves the record
+standing. This version runs the suite, passes, and clears the record. Each rule has a test that
+fails when it is taken out.
+
 ## v1.69.3
 
 The founder's `+merge` no longer has to be sent twice (#232).
