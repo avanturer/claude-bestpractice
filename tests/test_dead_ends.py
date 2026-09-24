@@ -141,6 +141,41 @@ class TestARedSuiteIsJudgedAgainstTheTrunk(RepoCase):
         self.assertEqual("", evidence.not_this_trees_code(self.ctx(), [], ["src/mine.py"]))
 
 
+class TestAFailingRunsOutputIsReadSafely(RepoCase):
+    """The files a failure is about are read out of text the gated project printed."""
+
+    def test_a_name_longer_than_a_file_name_does_not_crash_the_gate(self):
+        """A test about over-long names printed one; `is_file` raised ENAMETOOLONG out of a
+        gate that fails closed, so every Stop said "gate failed (OSError ...)", the counter
+        never moved, and the failure itself was never shown."""
+        from claude_bestpractice import sessions
+
+        self.configure(require_task=False, manage_pull_requests=False)
+        self.write("store.py", "def accepts(name):\n    return len(name) <= 255\n")
+        self.write("tests/test_store.py", (
+            "from store import accepts\n\n\ndef test_rejects_overlong_names():\n"
+            "    name = 'export_' + 'x' * 300 + '.py'\n    assert not accepts(name), name\n"))
+        self.commit("a limit on names")
+        self.write("store.py", "def accepts(name):\n    return True\n")
+
+        proc = self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                               "stop_hook_active": False})
+        self.assertEqual(2, proc.returncode)
+        self.assertNotIn("gate failed", proc.stderr)
+        self.assertIn("FAILS", proc.stderr)
+        record = sessions.get(self.ctx(), sid(self.repo, "s1"))
+        self.assertEqual(1, record.tool_signatures.get("_consecutive_blocks"),
+                         "the escalation counter did not move")
+
+    def test_an_extension_is_the_whole_extension(self):
+        """`app.tsx` was read as `app.ts` and then not found; `.json` was read as `.js`."""
+        self.write("src/app.tsx", "export const x = 1\n")
+        self.write("data/export.json", "{}\n")
+        self.write("data/export.js", "module.exports = {}\n")
+        verdict = evidence.Verdict(False, "FAILED src/app.tsx:3 — reading data/export.json")
+        self.assertEqual(["src/app.tsx"], evidence.failing_files(self.ctx(), verdict))
+
+
 if __name__ == "__main__":
     unittest.main()
 

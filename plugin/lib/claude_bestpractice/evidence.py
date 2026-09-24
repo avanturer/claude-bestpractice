@@ -543,9 +543,10 @@ def _verify_one(ctx: GitContext, globs: list[str], changed: list[str], suite,
 
 # Paths in a failing run's output, by extension. Matched loosely and then checked against
 # the filesystem, because the check is what makes it safe: a sentence that happens to read
-# like a path is not one if no such file exists.
+# like a path is not one if no such file exists. The extension ends at a word boundary, or
+# `export.json` was read as a path ending `.js` and `app.tsx` as one ending `.ts`.
 _SOURCE_PATH = re.compile(
-    r"(?<![\w/.-])((?:[\w.-]+/)*[\w.-]+\.(?:py|js|jsx|mjs|cjs|ts|tsx|go|rb|rs|java|kt|php|cs))"
+    r"(?<![\w/.-])((?:[\w.-]+/)*[\w.-]+\.(?:py|js|jsx|mjs|cjs|ts|tsx|go|rb|rs|java|kt|php|cs)\b)"
 )
 
 
@@ -561,9 +562,23 @@ def failing_files(ctx: GitContext, verdict: "Verdict") -> list[str]:
     out: list[str] = []
     for candidate in dict.fromkeys(found):
         rel = candidate.lstrip("./")
-        if rel not in out and (ctx.worktree_root / rel).is_file():
+        if rel not in out and _is_file(ctx.worktree_root / rel):
             out.append(rel)
     return out[:8]
+
+
+def _is_file(path: Path) -> bool:
+    """`Path.is_file`, for a name read out of somebody's test output.
+
+    Such a name can be longer than a file name may be: a test about over-long names printed
+    one, and `is_file` raised ENAMETOOLONG out of a gate that fails closed — every Stop
+    refused with "gate failed (OSError ...)", the escalation counter never moving, and the
+    failure the session had to fix never shown to it.
+    """
+    try:
+        return path.is_file()
+    except OSError:
+        return False
 
 
 def not_this_trees_code(ctx: GitContext, failing: list[str], changed: list[str]) -> str:
