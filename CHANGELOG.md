@@ -1,5 +1,81 @@
 # Changelog
 
+## v1.69.2
+
+The gate's own run of the suite reads the configuration the suite is run with (#230).
+
+### What happened
+
+A repository kept its tests in `backend/`, configured by `backend/pyproject.toml` with
+`asyncio_mode = "auto"` and `testpaths = ["tests"]`. It had no pytest configuration at its
+root, and declared `"test_command": ["make", "test"]`, which is `cd backend && python -m pytest
+tests/`. Every finish that reached past `backend/` was refused:
+
+```
+The suite FAILS on the code as it stands — 226 failing of 4594 run by the gate itself with pytest.
+```
+
+On the same tree `make test` was green: 4384 passed, 5 skipped. The gate does not run the
+recipe. It starts pytest itself, so the count comes from a report no recipe can write. It
+started it once, at the repository root, and pytest reads one configuration per run, found by
+walking up from where the run starts and never down. `backend/pyproject.toml` was never read.
+Without `asyncio_mode`, the tests that asked for the async `pool` fixture errored, 202 of them,
+and 24 more failed. The run also collected about two hundred tests that `make test` does not.
+
+A change inside `backend/` alone went through, because `backend/` is detected as a suite of its
+own and was run there. A change that also touched a file at the root put the repository's suite
+in the plan as well, and that was the run that failed.
+
+### What changed
+
+pytest is started wherever the tests are configured. A test belongs to the nearest directory
+above it that carries pytest's section, which is the configuration pytest itself reads when it
+is handed that test. Each such directory below the suite's root gets a run of its own, under its
+own configuration. The run at the root leaves those directories alone and takes whatever no
+project configures. The counts add up, every run shares the Stop hook's one budget, and each
+run's output is headed with where it ran, because pytest names files from there. A suite with
+one configuration, or none, is still one run, exactly as before.
+
+The same defect ran the other way up. A workspace member's `pyproject.toml` that holds only
+`[project]` does not end pytest's search, so `cd packages/api && pytest` reads the workspace
+root's section. The gate pinned the member's file instead, and a setting made once for the
+whole workspace was lost to every suite detected inside it. The gate now looks upward as well,
+up to the repository's root and never past it: a `pytest.ini` beside the clone is still never
+read.
+
+`witness_exclude` still names paths from the suite's root. They reach pytest as absolute paths
+now, because a relative `--ignore` is read from where pytest starts, and pytest no longer starts
+in one place. A project the list names is not started at all.
+
+### A failing test's output is not a count
+
+The red record keeps the number of tests the failing run executed, as the mark a later green
+has to reach. It read that number from the end of the run's output, which is whatever the
+failing tests printed. A test that printed `9999 passed` set the mark past anything the suite
+could run, and the record could never be cleared. A run the gate witnessed is counted from the
+gate's own JUnit report now.
+
+### What the upgrade repairs
+
+A red record written by the old run holds that run's count as the mark: 4594, where the run as
+configured executes 4384. No passing run could clear it, and its tree hash would have
+re-asserted the old failure, rather than running the suite, for the hour after the upgrade.
+
+`0033-let-a-run-as-configured-clear-a-red-suite` runs on the next session start. It drops both
+from a record the gate witnessed with pytest over a suite configured apart from its own
+directory, in every tree of the clone. The record stays red. Only a passing run of the suite
+clears it, and that run is still held to the number of tests the tree declared when the suite
+went red.
+
+### How it was checked
+
+The layout from the report, rebuilt with pytest 9.1.1 and pytest-asyncio 1.4.0 and a real
+`asyncio_mode = "auto"`: the gate's run of the repository's suite went from 5 errors in 6 tests
+to 6 passed, the result `make test` gives. The workspace layout went from 1 failing of 1 to
+passing, as `pytest` does from either directory. The tests use pytest's own `pythonpath` in
+place of the plugin, so the suite needs nothing new installed, and each of them fails when the
+rule it covers is taken out.
+
 ## v1.69.1
 
 A pull no longer costs a clone its ledger.
