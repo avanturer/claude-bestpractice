@@ -189,6 +189,15 @@ def declares(root: Path, suffix: str) -> bool:
     return any(_declarations(path) for path in _test_files(root, (), {suffix}))
 
 
+def files(root: Path, suffix: str, skip: list[str] | None = None) -> list[Path]:
+    """The test files under `root` in the language of `suffix`, from the walk the count makes.
+
+    The same pruning and the same bound, so the files a run is planned around are the files
+    its count is judged against.
+    """
+    return list(_test_files(root, _clean(skip), {suffix}))
+
+
 _ALL_SUFFIXES = {suffix for suffixes, _ in _PATTERNS for suffix in suffixes}
 
 

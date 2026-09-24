@@ -1646,3 +1646,85 @@ class TestASecretTheOldRedactionMissedIsTakenOut(RepoCase):
         before = clean.stat().st_mtime_ns
         self.assertFalse([line for line in migrate.repair(self.ctx()) if "0018" in line])
         self.assertEqual(before, clean.stat().st_mtime_ns)
+
+
+class TestARedSuiteCountedUnderTheWrongConfigurationCanClear(RepoCase):
+    """Until 1.69.2 the gate started pytest once, at the suite's root, and a project below it
+    with its own configuration ran under none (#230); a workspace member lost the workspace
+    root's the same way. The record of that run holds its count as the mark a green must reach,
+    and the run as configured is a different number of tests, so nothing could clear it; its
+    tree hash would also have it re-asserted instead of run."""
+
+    def a_project(self, where: str = "backend/") -> None:
+        self.write(f"{where}pyproject.toml", '[tool.pytest.ini_options]\npythonpath = ["src"]\n')
+        self.write(f"{where}src/sample/__init__.py", "def f():\n    return 1\n")
+        self.write(f"{where}tests/test_sample.py",
+                   "from sample import f\n\n\ndef test_f():\n    assert f() == 1\n")
+
+    def recorded_by_the_root_run(self, command: tuple = ("pytest",)) -> dict:
+        from claude_bestpractice import evidence
+
+        ctx = self.ctx()
+        evidence.record_red(ctx, list(command), "226 failed, 4368 passed in 60s", None,
+                            evidence.tree_hash(ctx), executed=4594)
+        return evidence.red(ctx)
+
+    def verify(self):
+        from claude_bestpractice import evidence
+
+        return evidence._verify_by_running(self.ctx(), [], ["make", "test"], ["backend/app.py"])
+
+    def test_the_run_as_configured_clears_it_after_the_upgrade(self):
+        from claude_bestpractice import evidence
+
+        self.a_project()
+        self.commit("a project with a configuration of its own")
+        self.recorded_by_the_root_run()
+        self.assertFalse(self.verify().ok, "precondition: the old failure stands on this tree")
+
+        changed = migrate.repair(self.ctx())
+
+        record = evidence.red(self.ctx())
+        self.assertEqual(["pytest"], record["command"], "the record is still red")
+        self.assertNotIn("executed", record)
+        self.assertNotIn("tree_hash", record)
+        self.assertTrue([line for line in changed if "suite's configuration" in line])
+        verdict = self.verify()
+        self.assertTrue(verdict.ok, verdict.reason)
+        self.assertIsNone(evidence.red(self.ctx()), "a passing run as configured left it red")
+
+    def test_a_suite_with_one_configuration_keeps_its_mark(self):
+        from claude_bestpractice import evidence
+
+        self.write("tests/test_sample.py", "def test_f():\n    assert True\n")
+        self.commit("one configuration")
+        before = self.recorded_by_the_root_run()
+        migrate.repair(self.ctx())
+        self.assertEqual(before, evidence.red(self.ctx()))
+
+    def test_a_record_of_the_projects_own_command_is_left_alone(self):
+        from claude_bestpractice import evidence
+
+        self.a_project()
+        self.commit("a project with a configuration of its own")
+        before = self.recorded_by_the_root_run(("make", "test"))
+        migrate.repair(self.ctx())
+        self.assertEqual(before, evidence.red(self.ctx()))
+
+    def test_a_member_run_without_the_workspace_configuration_is_uncounted_too(self):
+        from claude_bestpractice import evidence, suites
+
+        self.write("pyproject.toml", '[tool.pytest.ini_options]\npythonpath = ["packages/api/src"]\n')
+        self.write("packages/api/pyproject.toml", '[project]\nname = "api"\nversion = "0"\n')
+        self.write("packages/api/tests/test_api.py", "def test_api():\n    assert True\n")
+        self.commit("a workspace configured once, at its root")
+        member = suites.Suite("packages/api/", ("python3", "-m", "pytest", "-q"), False)
+        evidence.record_red(self.ctx(), ["pytest"], "1 failed", member,
+                            evidence.tree_hash(self.ctx()), executed=40)
+
+        migrate.repair(self.ctx())
+
+        record = evidence.red(self.ctx())
+        self.assertEqual("packages/api/", record["path"])
+        self.assertNotIn("executed", record)
+        self.assertNotIn("tree_hash", record)

@@ -13,6 +13,7 @@ re-run.
 from __future__ import annotations
 
 import json
+import subprocess
 import time
 import unittest
 from unittest import mock
@@ -510,6 +511,49 @@ class TestARedRecordKeepsItsOwnSuitesNumbers(SuiteCase):
         proc = self.stop()
         self.assertEqual(0, proc.returncode, proc.stderr)
         self.assertIsNone(evidence.red(self.ctx()), "web/ passed again and stayed red")
+
+
+class TestTheRepositorysSuiteRunsEachProjectAsConfigured(SuiteCase):
+    """Issue #230. The declared command was `cd backend && pytest`, and it was green. The
+    gate's own run of the repository's suite started pytest at the root instead, never read
+    `backend/pyproject.toml`, and refused every finish that reached past `backend/` over 226
+    failures of its own making, while the same finish inside `backend/` went through.
+    """
+
+    DECLARED = ["sh", "-c", "cd backend && python3 -m pytest -q"]
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.write("backend/pyproject.toml",
+                   '[tool.pytest.ini_options]\npythonpath = ["src"]\ntestpaths = ["tests"]\n')
+        self.write("backend/src/app/__init__.py", "def total(items):\n    return sum(items)\n")
+        self.write("backend/tests/test_total.py", "from app import total\n\n\n"
+                   "def test_total():\n    assert total([1, 2]) == 3\n")
+        self.write("docker-compose.yml", "services: {}\n")
+
+    def stop(self, **settings):
+        self.configure(require_task=False, manage_pull_requests=False,
+                       test_command=self.DECLARED, **settings)
+        self.commit("a backend configured in its own directory")
+        declared = subprocess.run(self.DECLARED, cwd=self.repo, capture_output=True, text=True,
+                                  timeout=120)
+        self.assertEqual(0, declared.returncode, f"precondition: {declared.stdout}")
+        self.write("backend/src/app/__init__.py", "def total(items):\n    return sum(items, 0)\n")
+        self.write("docker-compose.yml", "services:\n  db: {}\n")
+        return self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                               "stop_hook_active": False})
+
+    def test_a_change_past_the_project_finishes_as_the_declared_command_does(self):
+        """`backend/` is detected as a suite and passes; the root file puts the repository's
+        suite in the plan too, and that is the run that failed."""
+        proc = self.stop()
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIsNone(evidence.red(self.ctx()))
+
+    def test_with_detection_off_the_repositorys_suite_is_still_its_projects(self):
+        proc = self.stop(detect_suites=False)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIsNone(evidence.red(self.ctx()))
 
 
 if __name__ == "__main__":

@@ -47,6 +47,7 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -213,13 +214,21 @@ def run(ctx: GitContext, env: dict[str, str] | None = None,
     # write the file before we ever run — which is the attack this exists to end.
     with tempfile.TemporaryDirectory(prefix="claude-bestpractice-witness-") as scratch:
         if runner == "pytest":
-            return _run_pytest(ctx, Path(scratch) / "report.xml", env, root, seconds)
+            return _run_pytest(ctx, Path(scratch), env, root, seconds)
         return _run_go(ctx, env, root, seconds)
 
 
+def _budget(seconds: float | None) -> float:
+    """What one witnessed run may take: the Stop hook's whole budget, or what a plan left of it.
+
+    Floored when it is what is left, because a run handed a second is killed before it can
+    report anything; the plan does not start a suite once its deadline has passed.
+    """
+    return timeout_for() if seconds is None else max(FLOOR, seconds)
+
+
 def _spawn(ctx: GitContext, argv: list[str], env: dict[str, str] | None,
-           where: Path | None = None, seconds: float | None = None) -> subprocess.CompletedProcess | None:
-    limit = timeout_for() if seconds is None else max(FLOOR, seconds)
+           where: Path | None, limit: float) -> subprocess.CompletedProcess | None:
     try:
         return run_bounded(argv, where or ctx.worktree_root, {**os.environ, **(env or {})}, limit)
     except OSError:
@@ -274,7 +283,7 @@ def _tail(proc: subprocess.CompletedProcess) -> str:
     return hookio.tail_of(proc.stdout + proc.stderr)
 
 
-def _pytest_config(root: Path, scratch: Path) -> Path:
+def _pytest_config(root: Path, scratch: Path, top: Path | None = None) -> Path:
     """Which ini pytest is allowed to read: this repo's, or an empty one we write.
 
     Without `-c`, pytest walks UPWARD looking for a config file — so a `pytest.ini` in the
@@ -288,9 +297,18 @@ def _pytest_config(root: Path, scratch: Path) -> Path:
     never read, every import failed, and a suite that passes was filed red. A file without
     the section is still pinned when none carries one — pytest reads it as empty, as it
     would itself, and the rootdir stays in the repository rather than moving to ours.
+
+    When no file in `root` carries the section, the directories above it are searched too, up
+    to `top` and never past it, as pytest searches from where it starts. A workspace member's
+    `pyproject.toml` holding only `[project]` does not end pytest's search: `cd packages/api &&
+    pytest` reads the workspace root's section. The gate pinned the member's file instead, so
+    an `asyncio_mode = "auto"` set once for the whole workspace was lost to every suite detected
+    inside it (#230).
     """
+    found = _governing(root, top)
+    if found is not None:
+        return found
     present = [name for name in _PYTEST_SECTIONS if (root / name).is_file()]
-    present.sort(key=lambda name: not _carries_pytest(root, name))
     if present:
         return root / present[0]
     empty = scratch / "pytest.ini"
@@ -298,8 +316,36 @@ def _pytest_config(root: Path, scratch: Path) -> Path:
     return empty
 
 
+def _governing(root: Path, top: Path | None) -> Path | None:
+    """The nearest file carrying pytest's section, from `root` up to `top`. None when none does."""
+    for here in _up_to(root, top):
+        carrying = [name for name in _PYTEST_SECTIONS if _carries_pytest(here, name)]
+        if carrying:
+            return here / carrying[0]
+    return None
+
+
+def configured_apart(root: Path, top: Path) -> bool:
+    """Whether the tests under `root` are configured anywhere but in `root` itself.
+
+    By a project below it with a configuration of its own, or by a configuration above it
+    that pytest would read from there. Until 1.69.2 a run over `root` read neither, so a
+    count taken from such a run was a count of a different run.
+    """
+    found = _governing(root, top)
+    return len(projects(root)) > 1 or (found is not None and found.parent != root)
+
+
+def _up_to(root: Path, top: Path | None) -> list[Path]:
+    """`root`, then each directory above it up to `top`. Only `root` when `top` is not above it."""
+    chain = [root]
+    while top is not None and top in chain[-1].parents:
+        chain.append(chain[-1].parent)
+    return chain
+
+
 def _excluded(ctx: GitContext) -> list[str]:
-    """Paths this repository has told the gate to skip, as `--ignore` arguments.
+    """Paths this repository has told the gate to skip, relative to the suite's directory.
 
     The exclusions the runner's own config declares are neutralised on purpose — one line
     of `addopts` narrowed the run to whatever still passed — and that left a repository
@@ -313,30 +359,104 @@ def _excluded(ctx: GitContext) -> list[str]:
         wanted = list(config.load(ctx).witness_exclude)
     except (AttributeError, TypeError, ValueError):
         return []
-    return [f"--ignore={name}" for name in wanted if isinstance(name, str) and name.strip()]
+    return [name for name in wanted if isinstance(name, str) and name.strip()]
 
 
-def _run_pytest(ctx: GitContext, report: Path, env: dict[str, str] | None,
+def projects(root: Path, skip: list[str] | None = None) -> list[Path]:
+    """Where pytest has to be started to run the tests under `root` as they are configured.
+
+    `root` first, then each directory below it whose own configuration governs a test file
+    there: the nearest directory above the file that carries pytest's section, which is the
+    file pytest itself reads when it is handed that test. A suite with one configuration, or
+    none, is `[root]` and one run, exactly as before. `skip` is `witness_exclude`, so a
+    project the founder excluded is not started either.
+
+    pytest reads ONE configuration per run, found by walking up from where the run starts
+    and never down. Started at the root of a repository whose tests live in `backend/`, it
+    never read `backend/pyproject.toml`, and that project's `asyncio_mode = "auto"` did not
+    exist: every async fixture errored, and the gate reported 226 failing over a suite that
+    `make test`, which is `cd backend && pytest`, ran green (#230). Never above `root`, for
+    the reason `_pytest_config` pins a file at all.
+    """
+    known: dict[Path, Path] = {}
+    found = {_owner(test.parent, root, known) for test in testcount.files(root, ".py", skip)}
+    return [root, *sorted(found - {root})]
+
+
+def _owner(directory: Path, root: Path, known: dict[Path, Path]) -> Path:
+    """The nearest directory from `directory` up that carries pytest's section, or `root`.
+
+    `known` holds every directory already answered, because the files of one project share
+    all of their parents and each would otherwise read the same configuration files again.
+    """
+    walked: list[Path] = []
+    here = directory
+    while here != root and here not in known and here != here.parent:
+        if any(_carries_pytest(here, name) for name in _PYTEST_SECTIONS):
+            known[here] = here
+            break
+        walked.append(here)
+        here = here.parent
+    owner = known.get(here, root)
+    known.update(dict.fromkeys(walked, owner))
+    return owner
+
+
+def _run_pytest(ctx: GitContext, scratch: Path, env: dict[str, str] | None,
                 where: Path | None = None, seconds: float | None = None) -> Witnessed | None:
-    # `-o addopts=` and an empty PYTEST_ADDOPTS neutralise the one-line attack: a single
-    # `addopts = -k "not price"` or `--ignore=tests/test_total.py` in a config file the
-    # gate was otherwise happy to honour narrowed the run to whatever still passed. The
-    # gate had taken the recipe out of the trust path and left the runner's CONFIGURATION
-    # in it — it chose where the report went, and not what was executed.
+    """pytest, started wherever the tests under `where` are configured, counted from its reports.
+
+    Once for a suite whose tests share one configuration, which is nearly every suite, and
+    once per project where they do not (see `projects`), each run leaving the projects inside
+    it to their own. The runs share one budget, and running out in any of them is running out.
+    """
     root = where or ctx.worktree_root
-    proc = _spawn(
-        ctx,
-        [
-            "python3", "-m", "pytest", "-q",
-            "-c", str(_pytest_config(root, report.parent)),
-            "-o", "addopts=",
-            f"--junitxml={report}",
-            *_excluded(ctx),
-        ],
-        {**(env or {}), "PYTEST_ADDOPTS": ""},
-        root,
-        seconds,
-    )
+    skipped = _excluded(ctx)
+    homes = projects(root, skipped)
+    budget = _budget(seconds)
+    until = time.monotonic() + budget
+    runs: list[tuple[Path, Witnessed]] = []
+    for home in homes:
+        report = scratch / f"report-{len(runs)}.xml"
+        ignored = [root / name for name in skipped] + [p for p in homes if home in p.parents]
+        left = until - time.monotonic() if runs else budget
+        if left <= 0:
+            raise RanOutOfTime(budget)
+        argv = _pytest_argv(_pytest_config(home, scratch, ctx.worktree_root), report, ignored)
+        try:
+            proc = _spawn(ctx, argv, {**(env or {}), "PYTEST_ADDOPTS": ""}, home, left)
+        except RanOutOfTime:
+            raise RanOutOfTime(budget) from None
+        seen = _reported(proc, report)
+        if seen is None:
+            return None
+        runs.append((home, seen))
+    return _together(ctx.worktree_root, runs)
+
+
+def _pytest_argv(config: Path, report: Path, ignored: list[Path]) -> list[str]:
+    """One pytest run as this gate drives it, pinned to `config`, leaving `ignored` alone.
+
+    `-o addopts=` and an empty PYTEST_ADDOPTS neutralise the one-line attack: a single
+    `addopts = -k "not price"` or `--ignore=tests/test_total.py` in a config file the gate was
+    otherwise happy to honour narrowed the run to whatever still passed. The gate had taken
+    the recipe out of the trust path and left the runner's CONFIGURATION in it — it chose
+    where the report went, and not what was executed.
+
+    `ignored` is absolute, because a relative `--ignore` is read from wherever pytest starts,
+    and a suite configured per project starts it in more than one place.
+    """
+    return [
+        "python3", "-m", "pytest", "-q",
+        "-c", str(config),
+        "-o", "addopts=",
+        f"--junitxml={report}",
+        *(f"--ignore={path}" for path in ignored),
+    ]
+
+
+def _reported(proc: subprocess.CompletedProcess | None, report: Path) -> Witnessed | None:
+    """What one pytest run's own report says it did. None when there is no report to read."""
     if proc is None or not report.is_file():
         return None
 
@@ -347,6 +467,42 @@ def _run_pytest(ctx: GitContext, report: Path, env: dict[str, str] | None,
         return None
     executed = max(artifact.total - artifact.skipped, 0)
     return Witnessed(proc.returncode, executed, artifact.failed, _tail(proc), "pytest")
+
+
+def _together(base: Path, runs: list[tuple[Path, Witnessed]]) -> Witnessed:
+    """One account of a suite that pytest had to be started in several places to run.
+
+    The counts add up, and the status is that of the first run that broke. A run that found
+    nothing to collect broke nothing: the root of a repository whose tests all live in their
+    projects collects nothing by design. Each run's output is headed with where it ran,
+    because pytest names every file from there, and the runs that failed come last, since the
+    end of the output is the part that is kept.
+    """
+    if len(runs) == 1:
+        return runs[0][1]
+    seen = [one for _, one in runs]
+    spoke = [run for run in runs if not run[1].ran_nothing]
+    shown = sorted(spoke or runs, key=lambda run: not run[1].passed)
+    tail = "\n".join(f"pytest in {_label(base, home)}:\n{one.tail}" for home, one in shown)
+    return Witnessed(_status(seen), sum(one.executed for one in seen),
+                     sum(one.failed for one in seen), hookio.tail_of(tail), "pytest")
+
+
+def _status(seen: list[Witnessed]) -> int:
+    """The exit status of several runs taken as one: the first that broke, if any did."""
+    broke = [one.returncode for one in seen if one.returncode not in (0, PYTEST_NO_TESTS)]
+    if broke:
+        return broke[0]
+    return 0 if any(not one.ran_nothing for one in seen) else PYTEST_NO_TESTS
+
+
+def _label(base: Path, home: Path) -> str:
+    """Where one run was started, the way the rest of the gate names a suite's directory."""
+    if home == base:
+        return "the repository"
+    if base in home.parents:
+        return f"{home.relative_to(base).as_posix()}/"
+    return str(home)
 
 
 # What the gate's own `go test` runs under in place of anything `go env -w` left behind.
@@ -375,7 +531,7 @@ def _run_go(ctx: GitContext, env: dict[str, str] | None,
     # after one `go env -w`, and the red record was cleared on the way. Any value at all
     # replaces the file's; this one is the default, so it replaces it with nothing.
     proc = _spawn(ctx, ["go", "test", "-json", "./..."], {**(env or {}), "GOFLAGS": GOFLAGS},
-                  where, seconds)
+                  where, _budget(seconds))
     if proc is None:
         return None
 
