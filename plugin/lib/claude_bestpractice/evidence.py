@@ -522,8 +522,14 @@ def _verify_one(ctx: GitContext, globs: list[str], changed: list[str], suite,
     # verification since round four has forged one. Cutting the wrapper out of the trust
     # path is the only move that ends that, because the count then comes from a report
     # file at a path the recipe has no name for.
+    #
+    # Under this gate's recursion token like every other run it starts: a suite that fires
+    # the Stop gate on this clone — this plugin's own does — would otherwise have the gate
+    # it started drive the suite again, one level deeper each time, until the hook's budget
+    # ran out. Only the project's own command and the clean re-run carried one.
+    nonce = _issue_nonce(ctx)
     try:
-        seen = witness.run(ctx, None, suite.root(ctx), seconds)
+        seen = witness.run(ctx, {VERIFYING_ENV: nonce}, suite.root(ctx), seconds)
     except witness.RanOutOfTime as killed:
         # FALLS THROUGH, and this is the whole correction. A suite longer than the hook
         # lives cannot be witnessed here by anyone — the harness kills the process, and no
@@ -531,6 +537,8 @@ def _verify_one(ctx: GitContext, globs: list[str], changed: list[str], suite,
         # blocked on every turn; reading the artifact its own run wrote is weaker evidence,
         # says so in the verdict, and is the only thing that can be true (#158).
         return _too_long_to_witness(ctx, globs, changed, killed.seconds)
+    finally:
+        _retire_nonce(ctx, nonce)
     if seen is not None:
         return _judge_witnessed(ctx, seen, suite, tree)
 

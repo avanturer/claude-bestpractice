@@ -557,6 +557,33 @@ class TestTheGateCannotReEnterItself(RepoCase):
         )
         self.assertIn(proc.returncode, (0, 2), "the gate recursed instead of returning")
 
+    def test_a_suite_the_gate_drives_itself_runs_once(self):
+        """The same loop through the gate's OWN pytest run, which carried no recursion token:
+        a test that fires the Stop gate on this clone had that gate drive the suite again,
+        one level deeper each time, until the hook's budget ran out."""
+        counter = self.tmp / "runs.txt"
+        self.write("app.py", "x = 1\n")
+        self.write("test_reenter.py", (
+            "import json\nimport subprocess\nimport sys\n\n\n"
+            "def test_fires_the_gate():\n"
+            f"    with open({str(counter)!r}, 'a') as out:\n"
+            "        out.write('ran\\n')\n"
+            f"    event = json.dumps({{'cwd': {str(self.repo)!r}, 'hook_event_name': 'Stop',\n"
+            "                         'session_id': 'r1', 'stop_hook_active': False})\n"
+            f"    subprocess.run([sys.executable, {str(BIN / 'evidence-gate')!r}], input=event,\n"
+            "                   text=True, capture_output=True, timeout=90)\n"))
+        self.commit()
+        self.run_hook("session-start", {"session_id": "r1", "hook_event_name": "SessionStart"})
+        self.claim_a_task("r1", "app.py")
+        self.write("app.py", "x = 2\n")
+        proc = self.run_hook(
+            "evidence-gate",
+            {"session_id": "r1", "hook_event_name": "Stop", "stop_hook_active": False},
+        )
+        self.assertIn(proc.returncode, (0, 2), proc.stderr)
+        self.assertEqual(1, counter.read_text().count("ran"),
+                         "the gate drove the suite again from inside its own run")
+
     def test_a_run_in_a_sibling_tree_does_not_lift_this_ones_guard(self):
         """The token lived in ONE file for the whole clone. A Stop in a sibling worktree
         overwrote it mid-run, and whichever run finished first deleted the other's."""
