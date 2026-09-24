@@ -14,6 +14,7 @@ exist; shipped plugins that read them enforce nothing.
 
 from __future__ import annotations
 
+import functools
 import os
 import shlex
 import sys
@@ -252,6 +253,7 @@ def _names_production(words: list[str]) -> bool:
     return any(_PRODUCTION.search(word) for word in words)
 
 
+# One judge per program that deploys, handed the arguments after that program's name.
 def _vercel(args: list[str]) -> bool:
     verb = _verb(args, _VERCEL_VERBS)
     if verb == "promote":
@@ -487,13 +489,13 @@ def _landed(ctx, absolute: list[Path]) -> list[tuple[Path, str]]:
     """
     root = ctx.worktree_root.resolve()
     home = worktree.HOME.parts
+    inside = len(home) + 1
     out: list[tuple[Path, str]] = []
     for path in absolute:
         try:
             parts = path.relative_to(root).parts
         except ValueError:
             continue
-        inside = len(home) + 1
         if parts[:len(home)] == home and len(parts) > inside:
             out.append((root.joinpath(*parts[:inside]), "/".join(parts[inside:])))
         else:
@@ -785,11 +787,16 @@ def _segments_with_cwd(scannable: str, cwd: Path, literal: str = ""):
         yield segment, raw[start:end], here, start
 
 
+@functools.lru_cache(maxsize=256)
 def _commands_in(segment: str) -> list[list[str]]:
     """What one segment runs, split the way the shell splits it; empty where it cannot be.
 
     A heredoc body is blanked first, for the reason it is everywhere in this file: it is
     data handed to the command, not words of the command.
+
+    Cached for the one call this process judges, because several rules ask about the same
+    segment and a long quoted argument costs the tokeniser more than linear time. The lists
+    are therefore shared: read them, never change them.
     """
     body = _HEREDOC.sub(lambda m: " " * len(m.group(0)), segment)
     return shellcmd.commands(_EDGE_BRACKETS.sub("", body))
@@ -1145,7 +1152,9 @@ def _named(raw: str, here: Path) -> Path | None:
 # `NAME=value` in front of a command is the environment it runs with, not words it writes
 # anywhere: `JWT_SECRET=testsecret npm test 2>&1 | tee test.log` puts npm's output in the
 # log, and the assignment was what the credential scan refused it for.
-_ENVIRONMENT = re.compile(r"""\s*(?:env\s+)?(?:[A-Za-z_]\w*=(?:"[^"]*"|'[^']*'|[^\s"'|;&<>])*\s+)+""")
+_ENVIRONMENT = re.compile(
+    r"""\s*(?:env\s+)?(?:[A-Za-z_]\w*=(?:"[^"]*"|'[^']*'|[^\s"'|;&<>])*\s+)+"""
+)
 
 
 def _without_environment(literal: str, segment: str) -> str:
