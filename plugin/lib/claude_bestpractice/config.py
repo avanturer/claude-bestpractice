@@ -16,6 +16,7 @@ import json
 import math
 import re
 import shlex
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -530,6 +531,26 @@ def approvals_in(text: str) -> dict[str, str]:
 def approved(ctx: GitContext, key: str) -> bool:
     """Has the founder authorised this, in a message of their own?"""
     return asked_for(ctx, key) is not None
+
+
+# How long a gate lets the founder's word land before refusing without it. Their message can
+# reach the session before `prompt-capture` has recorded it: twice in a row the first merge
+# after `+merge` was refused as unaccepted and the same merge seconds later went through,
+# with nothing said in between, and each time the session asked the founder for the word
+# again (#232). Only a call that would otherwise be refused pays it, and it stays well inside
+# the fifteen seconds the harness gives `pre-tool`, past which the call would go through
+# unjudged.
+ACCEPTANCE_GRACE = 5.0
+
+
+def awaited(ctx: GitContext, key: str) -> bool:
+    """`approved`, allowing the founder's word `ACCEPTANCE_GRACE` seconds to be recorded."""
+    until = time.monotonic() + ACCEPTANCE_GRACE
+    while not approved(ctx, key):
+        if time.monotonic() >= until:
+            return False
+        time.sleep(0.2)
+    return True
 
 
 def record_switches(ctx: GitContext, asked: dict[str, str]) -> None:

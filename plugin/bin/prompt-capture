@@ -372,10 +372,6 @@ def main() -> None:
     event = hookio.read_event()
     ctx = hookio.repo(event.cwd or os.getcwd())
 
-    rec = sessions.get(ctx, event.session_id)
-    if rec is None:
-        rec = sessions.adopt(ctx, event.session_id)
-
     prompt = strip_envelopes(event.prompt or "")
     if prompt:
         # Scrubbed AT CAPTURE, because this string does not stay here. It fans out to the
@@ -408,6 +404,16 @@ def main() -> None:
         # `founders_word` says what is left out and why.
         typed = redact.strip_control(founders_word(event.prompt or ""))
         config.record_switches(ctx, config.approvals_in(typed))
+
+    # The founder's word is recorded above, before this: a session whose record is missing
+    # is registered here, which takes locks and git calls, and a gate that asked for the
+    # word while that ran refused a merge the founder had just allowed (#232). A failure
+    # here ends this hook silently, and it used to take their word down with it.
+    rec = sessions.get(ctx, event.session_id)
+    if rec is None:
+        rec = sessions.adopt(ctx, event.session_id)
+
+    if prompt:
         # An update that landed AFTER this session started. The board says this at session
         # start and could never say it afterwards — which is the one moment it is needed,
         # because the founder updates mid-session and the running hooks stay behind. They
