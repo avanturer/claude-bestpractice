@@ -1142,7 +1142,7 @@ class TestTheCommandARefusalNamesRunsAsWritten(PolicyCase):
             "tool_input": {"file_path": str(mine / "parser notes.md"), "content": "x\n"},
             "cwd": str(mine),
         }, cwd=mine)
-        words = self.named(_verdict(proc)[1], r"(claude-bp-plan add [^\n]+)")
+        words = self.named(_verdict(proc)[1], r"(claude-bp-plan (?:add|update) [^\n]+)")
         self.assertEqual("parser notes.md", words[words.index("--paths") + 1])
 
     def test_the_paths_it_says_to_stage_are_the_paths(self):

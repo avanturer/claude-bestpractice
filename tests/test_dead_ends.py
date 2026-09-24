@@ -285,6 +285,8 @@ class TestTheCardARefusalAsksForIsFiledAsPrinted(RepoCase):
     `claude-bp-plan claim <id>` — and `claim` refuses a card with no `--done-when`, so the
     second command failed on the card the first had just filed. The `git merge` refusal's
     `add` did not even parse: `--paths <the files this touches>` is a redirect to bash.
+    Where the founder's instruction already opened a card for the session, the refusal
+    names that card with `update <id>` instead, and that has to run just the same.
 
     Run here the way a session runs them: each printed line through a shell, with this
     plugin's own commands on PATH, and then the refused call again.
@@ -294,12 +296,15 @@ class TestTheCardARefusalAsksForIsFiledAsPrinted(RepoCase):
         env = dict(os.environ, PATH=f"{BIN}{os.pathsep}{os.environ.get('PATH', '')}",
                    CLAUDE_CODE_SESSION_ID="s1")
         lines = [line.strip() for line in refusal.splitlines()]
-        add = next(line for line in lines if line.startswith("claude-bp-plan add"))
-        filed = subprocess.run(["bash", "-c", add], cwd=self.repo, env=env,
+        card = next(line for line in lines
+                    if line.startswith(("claude-bp-plan add", "claude-bp-plan update")))
+        filed = subprocess.run(["bash", "-c", card], cwd=self.repo, env=env,
                                capture_output=True, text=True, timeout=120)
-        self.assertEqual(0, filed.returncode, f"{add}\n{filed.stderr}")
+        self.assertEqual(0, filed.returncode, f"{card}\n{filed.stderr}")
         then = next(line for line in lines if line.startswith("then: claude-bp-plan claim"))
-        claim = then.split(":", 1)[1].split("(", 1)[0].strip().replace("<id>", filed.stdout.split()[0])
+        claim = then.split(":", 1)[1].split("(", 1)[0].strip()
+        if "<id>" in claim:
+            claim = claim.replace("<id>", filed.stdout.split()[0])
         claimed = subprocess.run(["bash", "-c", claim], cwd=self.repo, env=env,
                                  capture_output=True, text=True, timeout=120)
         self.assertEqual(0, claimed.returncode, f"{claim}\n{claimed.stderr}")
@@ -318,6 +323,7 @@ class TestTheCardARefusalAsksForIsFiledAsPrinted(RepoCase):
         write = {"file_path": str(self.repo / "src" / "csv export.py"), "content": "x = 1\n"}
         refused = self.pre_tool("Write", write)
         self.assertEqual("deny", self.hook_decision(refused), refused.stdout)
+        self.assertIn("claude-bp-plan update", self.hook_reason(refused))
         self.run_as_printed(self.hook_reason(refused))
         self.assertNotEqual("deny", self.hook_decision(self.pre_tool("Write", write)))
 
@@ -327,6 +333,18 @@ class TestTheCardARefusalAsksForIsFiledAsPrinted(RepoCase):
         merge = {"command": "git merge feat/theirs"}
         refused = self.pre_tool("Bash", merge)
         self.assertEqual("deny", self.hook_decision(refused), refused.stdout)
+        self.assertIn("claude-bp-plan update", self.hook_reason(refused))
+        self.run_as_printed(self.hook_reason(refused))
+        self.assertNotEqual("deny", self.hook_decision(self.pre_tool("Bash", merge)))
+
+    def test_the_refusal_of_work_that_writes_no_file_before_any_instruction(self):
+        """No founder's message, so no card to name: `add` is what has to run as printed."""
+        git(["branch", "feat/theirs"], self.repo)
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
+        merge = {"command": "git merge feat/theirs"}
+        refused = self.pre_tool("Bash", merge)
+        self.assertEqual("deny", self.hook_decision(refused), refused.stdout)
+        self.assertIn("claude-bp-plan add", self.hook_reason(refused))
         self.run_as_printed(self.hook_reason(refused))
         self.assertNotEqual("deny", self.hook_decision(self.pre_tool("Bash", merge)))
 

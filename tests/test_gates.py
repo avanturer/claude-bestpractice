@@ -2506,7 +2506,12 @@ class TestACardBeforeTheCode(RepoCase):
         self.start()
         proc = self.gate("pre-tool", self.write_event("backend/new.py"))
         self.assertEqual("deny", self.decision(proc), proc.stdout)
-        self.assertIn("claude-bp-plan add", proc.stdout, "a refusal must name the way through")
+        # The founder's instruction is already a card, so the way through is that card, not
+        # a second one beside it.
+        self.assertIn("claude-bp-plan update 0001", proc.stdout,
+                      "a refusal must name the way through")
+        self.assertIn("claude-bp-plan claim 0001", proc.stdout)
+        self.assertNotIn("claude-bp-plan add", proc.stdout)
 
     def test_the_card_the_refusal_names_clears_it(self):
         self.start()

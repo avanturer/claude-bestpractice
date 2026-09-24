@@ -463,6 +463,28 @@ def _holds_a_card(ctx, session_id: str, touched: list[str] | None = None) -> boo
     )
 
 
+def _card_commands(ctx, event, paths: str) -> str:
+    """The two commands that put this call's work on the board, as a refusal prints them.
+
+    The card a founder's message already opened for this session, when there is one. Sent to
+    `add` instead, a session filed a second card for the same instruction and left the first
+    sitting in NEXT over finished work — the duplicate a real session made, and the one the
+    Stop gate already stopped asking for. `--done-when` in both, because `claim` refuses a
+    card without one (decision 0020: every command a refusal names runs as printed).
+    """
+    from claude_bestpractice import plan
+
+    done_when = '--done-when "<what has to become true>"'
+    opened = plan.opened_for(ctx, str(event.raw.get("session_id") or ""))
+    if opened is not None:
+        return (f"  Your founder's instruction is already on it as {opened.id} — plan it and "
+                "claim it:\n"
+                f"  claude-bp-plan update {opened.id} --paths {paths} {done_when}\n"
+                f"  then: claude-bp-plan claim {opened.id}")
+    return (f'  claude-bp-plan add "<what you are about to do>" --paths {paths} {done_when}\n'
+            "  then: claude-bp-plan claim <id>   (or claim the task you are on)")
+
+
 def _ledger_covers(ctx, session_id: str, touched: list[str]) -> bool:
     """Is a task on the board claimed by this session? The ledger's own files always are.
 
@@ -1886,9 +1908,6 @@ def main() -> None:
         # demand, and is the narrow case left open deliberately.
         if cfg.require_task and rec.task_statement and writing_now:
             unlisted = _unlisted(ctx, event.session_id, absolute)
-            # `--done-when` on the card, because `claim` refuses one without it: the second of
-            # the two commands this names failed on the card the first had just filed. Both
-            # run as printed, which is decision 0020's test of a refusal.
             if unlisted:
                 deny(
                     ctx, rec,
@@ -1897,9 +1916,7 @@ def main() -> None:
                     "  Every sibling session reads the board to decide what is safe to "
                     "touch, and unlisted work is invisible to all of them — so this is "
                     "asked BEFORE the write, while there is still something to protect.\n"
-                    f'  claude-bp-plan add "<what you are about to do>" '
-                    f'--paths {shlex.quote(unlisted)} --done-when "<what has to become true>"\n'
-                    "  then: claude-bp-plan claim <id>   (or claim the task you are on)"
+                    + _card_commands(ctx, event, shlex.quote(unlisted))
                 )
 
         # And the work that never writes a file. The demand above reads the paths a call
@@ -1925,9 +1942,7 @@ def main() -> None:
                     "  It writes no file, so no other rule here sees it — and every "
                     "sibling reads the board to decide what is safe to touch, so this is "
                     "the last moment there is still something to protect.\n"
-                    '  claude-bp-plan add "<what you are about to do>" --paths "<the files '
-                    'this touches>" --done-when "<what has to become true>"\n'
-                    "  then: claude-bp-plan claim <id>   (or claim the task you are on)\n"
+                    + _card_commands(ctx, event, '"<the files this touches>"') + "\n"
                     "  Finishing one already in flight — `--abort`, `--continue`, "
                     "`--skip` — is never refused here."
                 )

@@ -1172,6 +1172,31 @@ class TestTheBoardLearnsTheTaskWhenItArrives(RepoCase):
         self.assertIn(f"claude-bp-plan update {card.id} --paths importer.py", proc.stderr)
         self.assertNotIn("claude-bp-plan add", proc.stderr)
 
+    def test_the_write_refusal_names_the_card_too_and_what_it_prints_runs(self):
+        """The Stop demand learned to name the card; the refusal at the first write did not,
+        and a real session followed its `add` and filed the founder's instruction twice."""
+        import os
+        import re
+
+        self.say("почини импортер", session="s1")
+        card = self.board("next")[0]
+        write = {"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Write",
+                 "tool_input": {"file_path": str(self.repo / "importer.py"), "content": "x = 1\n"}}
+        said = self.hook_reason(self.run_hook("pre-tool", write))
+        self.assertIn(f"claude-bp-plan claim {card.id}", said)
+        self.assertNotIn("claude-bp-plan add", said)
+
+        env = {**os.environ, "CLAUDE_CODE_SESSION_ID": "s1",
+               "PATH": f"{BIN}{os.pathsep}{os.environ.get('PATH', '')}"}
+        for command in re.findall(r"^ +(?:then: )?(claude-bp-plan .+)$", said, re.M):
+            done = subprocess.run(["bash", "-c", command], cwd=str(self.repo), env=env,
+                                  capture_output=True, text=True, timeout=120)
+            self.assertEqual(0, done.returncode, f"{command}\n{done.stderr}")
+        again = self.run_hook("pre-tool", write)
+        self.assertNotEqual("deny", self.hook_decision(again), self.hook_reason(again))
+        self.assertEqual([card.id], [task.id for task in self.board("doing")])
+        self.assertEqual([], self.board("next"), "a second card was filed for the same work")
+
 
 class TestDeliveryClosesTheCard(PlanCase):
     """The ledger had no closing half: `complete` had one caller, the CLI, so a card left
