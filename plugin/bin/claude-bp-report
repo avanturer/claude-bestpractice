@@ -108,8 +108,9 @@ def main() -> int:
         print("defect reporting is off for this repository")
         return 0
     if args.command == "defect":
-        print(defects.observed(ctx, args.what, args.gate))
-        return 0
+        recorded, said = defects.observed(ctx, args.what, args.gate)
+        print(said)
+        return 0 if recorded else 1
     return cmd_send(ctx) if args.command == "send" else cmd_list(ctx)
 
 
