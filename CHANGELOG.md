@@ -1,5 +1,51 @@
 # Changelog
 
+## v1.69.3
+
+The founder's `+merge` no longer has to be sent twice (#232).
+
+### What happened
+
+The founder sent `+merge` on a line of its own, as the gate asks. The first merge after it was
+refused:
+
+```
+this pull request has not been accepted by the founder yet.
+```
+
+The same merge a few seconds later went through, with nothing said in between. It happened
+twice in a row, on two pull requests, and each time the session took the refusal at its word
+and asked for `+merge` again: four times for two merges.
+
+The word is recorded by `prompt-capture`, the hook that reads the founder's messages, and read
+by the gate at the merge. Nothing else writes it, so the only way the second attempt could find
+what the first did not is that the record landed between them: the founder's message had
+reached the session before the hook recording it had finished. And the refusal claimed more
+than the gate knows. It had no `+merge` on record; it had no way to tell whether the founder
+had said one.
+
+### What changed
+
+- A merge that finds no `+merge` on record waits up to five seconds for one to land before it
+  is refused. `+release` and `+migration` wait the same way. Only a call that would otherwise
+  be refused pays for the wait, and it stays well inside the fifteen seconds the harness gives
+  the gate.
+- `prompt-capture` records the founder's word first, before the session's record is looked up.
+  A session whose record was missing was registered there, with locks and git calls, before
+  the word was written, and a failure in that step ended the hook silently with the word lost.
+- The refusal says what is true: no `+merge` is on record, and none arrived while the gate
+  waited. If the founder's last message already says `+merge`, the session is told to run the
+  merge once more instead of asking them for it again.
+
+### How it was checked
+
+The harness's side of this could not be reproduced here. What the tests pin down is the order
+the report shows: the word recorded two seconds after the call that needs it has started. The
+merge from the report, compound command and all, a promotion, and a destructive migration each
+go through that way. A merge with no word is refused once the wait is over, in the new words,
+and a failure in the session lookup no longer loses the word. Each test fails when the rule it
+covers is taken out.
+
 ## v1.69.2
 
 The gate's own run of the suite reads the configuration the suite is run with (#230).
