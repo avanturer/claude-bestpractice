@@ -333,6 +333,12 @@ def _ask_for_the_notes_once(ctx, rec: sessions.SessionRecord, cfg, changed: list
     counted by the escalation above, and four of them end the turn UNVERIFIED and file a
     permanent failed attempt against work that passed its suite. Notes are worth one
     turn; they are not worth a false failure on the record.
+
+    The ask ends this hook, so `_allow` never runs after it — and the turn is verified all
+    the same. Settled here, then, as every verified finish is: the block counter reset with
+    the mark, and the leases handed back. Skipped, a turn refused twice before it was fixed
+    carried those two blocks into the next streak, and the files it had written stayed
+    leased against every sibling for as long as the lease lived.
     """
     if cfg.notes_after_calls <= 0 or rec.tool_calls < cfg.notes_after_calls:
         return
@@ -340,9 +346,9 @@ def _ask_for_the_notes_once(ctx, rec: sessions.SessionRecord, cfg, changed: list
         return
     if not _nothing_written_down(ctx, rec):
         return
-    payload = dict(rec.tool_signatures)
-    payload[NOTES_ASKED] = 1
-    sessions.touch(ctx, rec.session_id, tool_signatures=payload)
+    rec.tool_signatures = {**rec.tool_signatures, NOTES_ASKED: 1}
+    _bump_blocks(ctx, rec, 0)
+    sessions.release_all(ctx, rec.session_id)
     hookio.ask(_notes_demand(ctx, rec, changed))
 
 

@@ -874,10 +874,27 @@ class TestTheNotesAreAskedForOnceAtStop(GateCase):
         self.assertIn(ours.id, said)
         self.assertNotIn(theirs.id, said, "it named a card this session does not hold")
 
+    def test_the_ask_settles_the_turn_like_any_verified_finish(self):
+        """The ask ends the hook, so what `_allow` does was skipped: a turn refused twice and
+        then fixed kept both blocks on the counter, and its lease stayed held against every
+        sibling."""
+        from claude_bestpractice import sessions
+
+        self.a_long_verified_turn()
+        me = sid(self.repo, "s1")
+        self.assertIsNone(sessions.acquire_lease(self.ctx(), me, "feature.py"))
+        payload = {**sessions.get(self.ctx(), me).tool_signatures, "_consecutive_blocks": 2}
+        sessions.touch(self.ctx(), me, tool_signatures=payload)
+
+        self.assertTrue(self.asked(self.stop()), "precondition: this Stop asks for the notes")
+        self.assertFalse(sessions.get(self.ctx(), me).tool_signatures.get("_consecutive_blocks"))
+        self.assertEqual([], sessions.leases_held_by(self.ctx(), me))
+
     def test_the_mark_survives_the_session_s_next_tool_call(self):
-        """`pre-tool` rewrites `tool_signatures` on every allowed call and keeps only the
-        integer-valued keys. A mark stored as anything else is dropped by the next Write,
-        and a once-per-session ask whose mark evaporates is an ask on every turn."""
+        """`pre-tool` rewrites `tool_signatures` on every allowed call and keeps the signature
+        counts and the Stop gate's own `_` keys, nothing else. A mark under any other name is
+        dropped by the next Write, and a once-per-session ask whose mark evaporates is an ask
+        on every turn."""
         self.a_long_verified_turn()
         self.assertTrue(self.asked(self.stop()))
         self.gate("pre-tool", {
