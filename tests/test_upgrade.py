@@ -228,8 +228,12 @@ class _clone:
             capture_output=True, timeout=300, check=True,
         )
         # The clone's origin is this working copy, whose HEAD may be a feature branch, so
-        # anchor the comparison at a commit that definitely predates the change under test.
-        git(["remote", "set-head", "origin", "--auto"], path)
+        # anchor the comparison at a commit that definitely predates the change under test:
+        # the one the clone was made from. `remote set-head --auto` found nothing when that
+        # HEAD was detached, as CI checks a pull request out, and the gate then compared
+        # against this copy's local `main` at whatever version it last stood.
+        git(["update-ref", "refs/remotes/origin/under-test", "HEAD"], path)
+        git(["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/under-test"], path)
 
         # The tool under test, as it is right now rather than as it was last committed —
         # otherwise these tests are green on a version of the gate nobody is running.
