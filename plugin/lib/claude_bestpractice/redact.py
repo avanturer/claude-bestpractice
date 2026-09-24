@@ -57,10 +57,13 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 # a value has no shape of its own to be told from prose by, and one word too many taken
 # out of a note costs nothing where a refused write costs the turn. A value is taken when
 # a scheme names it or it carries a digit, and never when it is a template — `${TOKEN}`.
+# The digit is looked for within a bounded stretch: unbounded, every `cookie:` in a line of
+# them scanned to the end of the line, and the time went with the square of its length.
 _HEADER_CREDENTIAL = re.compile(
     r"(?i)\b(?P<name>(?:proxy-)?authorization|x-api-key|api-key|x-auth-token|set-cookie|cookie)"
     r"(?P<sep>[\"']?[ \t]*[:=][ \t]*[\"']?)"
-    r"(?P<value>(?:(?:basic|bearer|token|digest)[ \t]+[^\s\"'$<{]{6,}|[^\"'$<{\r\n]*\d)[^\r\n\"']*)"
+    r"(?P<value>(?:(?:basic|bearer|token|digest)[ \t]+[^\s\"'$<{]{6,}|[^\"'$<{\r\n]{0,1024}\d)"
+    r"[^\r\n\"']*)"
 )
 
 REDACTED = "[REDACTED]"

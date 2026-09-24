@@ -277,6 +277,14 @@ class TestTheWholeCredentialIsTakenOut(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertNotIn(secret, redact.scrub(text))
 
+    def test_a_line_of_header_names_is_read_in_linear_time(self):
+        """Looked for without a bound, the digit made every `cookie:` in a line of them
+        scan to the end of it: 42 KB of them took 3.1 s."""
+        for text in ("cookie:" * 6_000, "api-key=" * 5_000):
+            started = time.monotonic()
+            redact.scrub(text)
+            self.assertLess(time.monotonic() - started, 1.0, text[:8])
+
     def test_a_header_is_scrubbed_and_never_refused(self):
         """Read by the header's name, a value has no shape of its own to refuse a write on."""
         self.assertEqual([], redact.find("X-Api-Key: 9f8e7d6c5b4a39281706f5e4d3c2b1a0"))
