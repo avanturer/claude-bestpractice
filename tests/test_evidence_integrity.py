@@ -539,6 +539,35 @@ class TestTheCeilingCarriesTheReason(RepoCase):
         self.assertTrue(attempts.load_all(self.ctx()), "the unverified finish filed no attempt")
 
 
+PRODUCTION_DSN = "postgres://billing:Pr0dS3cretPass99@db.prod.example.com/billing"
+
+
+class TestWhatAFailingSuitePrintedIsScrubbedBeforeItIsKept(RepoCase):
+    """A failing suite prints what it had, and the gate kept the end of it in the red-suite
+    record and, through an unverified finish, in `attempts/` — files under `.claude/` that
+    are untracked and not ignored. A DSN with a production password went in whole."""
+
+    def test_no_file_the_gate_writes_holds_the_password(self):
+        from claude_bestpractice import evidence
+
+        self.configure(require_task=False, manage_pull_requests=False)
+        self.write("db.py", "def connect(url):\n    return True\n")
+        self.write("tests/test_db.py", (
+            "import os\n\nfrom db import connect\n\n\ndef test_connects():\n"
+            f"    assert connect(os.environ.get('DATABASE_URL', '{PRODUCTION_DSN}'))\n"))
+        self.commit("a suite that connects")
+        self.write("db.py", "def connect(url):\n    raise ConnectionError(f'no {url}')\n")
+        for attempt in range(evidence.MAX_CONSECUTIVE_BLOCKS + 1):
+            self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                            "stop_hook_active": attempt > 0})
+
+        self.assertIsNotNone(evidence.red(self.ctx()), "precondition: the failure was recorded")
+        kept = [path for root in (self.repo / ".claude", self.repo / ".git" / "claude-bestpractice")
+                for path in root.rglob("*") if path.is_file()
+                and "Pr0dS3cretPass99" in path.read_text(encoding="utf-8", errors="replace")]
+        self.assertEqual([], kept)
+
+
 class TestAMissingRunnerIsNotACodeFailure(RepoCase):
     """"The suite FAILS on the code as it stands" is a claim about the CODE.
 

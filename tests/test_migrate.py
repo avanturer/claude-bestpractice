@@ -1505,3 +1505,37 @@ class TestARedSuiteThatNeverRanIsForgotten(RepoCase):
         self.recorded("E   ModuleNotFoundError: No module named 'calc'\n1 error in 0.12s")
         migrate.repair(self.ctx())
         self.assertIsNotNone(evidence.red(self.ctx()))
+
+
+class TestCredentialsAFailingSuitePrintedAreScrubbed(RepoCase):
+    """Until 1.69.0 the end of a failing run's output was kept unscrubbed: in the red-suite
+    record, and through an unverified finish's reason in its attempt, the unverified marker
+    and the open item. The gate scrubs before it writes now; this is what it wrote before."""
+
+    SAID = "ConnectionError: could not reach postgres://billing:Pr0dS3cretPass99@db.prod.example.com/b"
+
+    def test_every_record_of_it_is_scrubbed_and_nothing_else_moves(self):
+        from claude_bestpractice import attempts, board, evidence
+
+        ctx = self.ctx()
+        store.write_json(store.tier_a(ctx, evidence.RED_SUITE_FILE),
+                         {"command": ["make", "test"], "tail": self.SAID, "executed": 1})
+        attempts.record(ctx, title="unverified finish", why=f"Finished without proof. {self.SAID}",
+                        paths=["db.py"])
+        attempts.record(ctx, title="a session's own note", why="kept as the session wrote it",
+                        paths=["db.py"])
+        store.append_jsonl(store.tier_b(ctx, "unverified.jsonl"),
+                           {"branch": "main", "reason": self.SAID})
+        store.append_jsonl(store.tier_b(ctx, board.OPEN_ITEMS_FILE),
+                           {"id": "x", "text": f"UNVERIFIED finish on main: {self.SAID}"})
+
+        changed = migrate.repair(ctx)
+
+        written = [store.tier_a(ctx, evidence.RED_SUITE_FILE),
+                   store.tier_b(ctx, "unverified.jsonl"), store.tier_b(ctx, board.OPEN_ITEMS_FILE),
+                   *attempts.attempts_dir(ctx).glob("*.md")]
+        self.assertEqual([], [p.name for p in written if "Pr0dS3cretPass99" in p.read_text()])
+        self.assertEqual(["make", "test"], evidence.red(ctx)["command"])
+        self.assertIn("kept as the session wrote it",
+                      "".join(p.read_text() for p in attempts.attempts_dir(ctx).glob("*.md")))
+        self.assertTrue([line for line in changed if "scrubbed" in line])

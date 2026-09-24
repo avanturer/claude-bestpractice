@@ -41,7 +41,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from . import hookio, provenance, store, suites, testcount, witness
+from . import hookio, provenance, redact, store, suites, testcount, witness
 from .gitctx import GitContext, changed_files
 
 # Consecutive Stop blocks before we stop blocking and leave a durable marker instead.
@@ -1793,10 +1793,21 @@ def record_red(ctx: GitContext, command: list[str], tail: str, suite=None, tree:
             # repository is told to stop.
             "tree": str(ctx.worktree_root),
             "shared_with": _shared_environment(ctx, previous),
-            "tail": tail[-1_200:],
+            "tail": _persistable(tail),
         },
         mode=0o644,
     )
+
+
+def _persistable(output: str) -> str:
+    """The end of a failing run's output, as it may be written to a file meant to be committed.
+
+    Scrubbed before it is cut, or half a secret survives the cut. A failing suite prints
+    whatever it had, and a DSN carrying a production password went into `failing-suite.json`
+    whole — a file in the working tree, untracked but not ignored, one `git add -A` from
+    history.
+    """
+    return redact.scrub(output)[-1_200:]
 
 
 def _this_suites_record(previous: dict, suite) -> dict:

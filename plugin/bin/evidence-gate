@@ -23,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import attempts, board, config, discipline, drafts, evidence, hookio, inbox, options, pullrequest, sessions, stage, store, suites, witness, worktree  # noqa: E402
+from claude_bestpractice import attempts, board, config, discipline, drafts, evidence, hookio, inbox, options, pullrequest, redact, sessions, stage, store, suites, witness, worktree  # noqa: E402
 from claude_bestpractice.gitctx import changed_files, resolve  # noqa: E402
 
 BLOCK_COUNTER = "_consecutive_blocks"
@@ -70,10 +70,17 @@ def _bump_blocks(ctx, rec: sessions.SessionRecord, value: int,
     payload[BLOCK_COUNTER] = value
     payload[BLOCK_AT] = time.time()
     if reason:
-        payload[BLOCK_REASON] = reason[:2000]
+        payload[BLOCK_REASON] = _as_remembered(reason)
         payload[BLOCK_PATHS] = list(changed or [])[:64]
         payload[BLOCK_TREE] = tree
     sessions.touch(ctx, rec.session_id, tool_signatures=payload)
+
+
+def _as_remembered(reason: str) -> str:
+    """A refusal as the session record keeps it: scrubbed of anything like a credential, then
+    capped. The next refusal is compared against it word for word (`_asked_and_answered`), so
+    both sides pass through here."""
+    return redact.scrub(reason)[:2000]
 
 
 def _asked_and_answered(ctx, rec: sessions.SessionRecord, reason: str, tree: str) -> bool:
@@ -98,7 +105,7 @@ def _asked_and_answered(ctx, rec: sessions.SessionRecord, reason: str, tree: str
     stored = rec.tool_signatures
     if not tree or stored.get(BLOCK_TREE) != tree:
         return False
-    if stored.get(BLOCK_REASON) != reason[:2000]:
+    if stored.get(BLOCK_REASON) != _as_remembered(reason):
         return False
     return pullrequest.handed_off(ctx, ctx.branch)
 
@@ -179,7 +186,12 @@ def _give_up(ctx, rec: sessions.SessionRecord, reason: str, changed: list) -> No
     Also files it as a failed ATTEMPT. A session that could not prove its work is the
     canonical thing a later session must not blindly redo — and the revert that usually
     follows destroys the only other trace of it.
+
+    The reason is scrubbed before any of it is written. It carries the end of whatever the
+    suite printed, and a failing suite prints what it had: a DSN with a production password
+    went whole into `attempts/`, a directory meant to be committed.
     """
+    reason = redact.scrub(reason)
     if changed:
         attempts.record(
             ctx,

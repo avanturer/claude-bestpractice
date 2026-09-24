@@ -1180,6 +1180,61 @@ def _forget_a_red_suite_that_never_ran(ctx: GitContext) -> str:
             "installed, so that run never reached the code")
 
 
+def _scrub_what_a_failing_suite_printed(ctx: GitContext) -> str:
+    """Credentials a failing suite printed, already written where the gate records failures.
+
+    Until 1.69.0 the end of a failing run's output went unscrubbed into the red-suite record,
+    and through the reason of an unverified finish into its attempt, the unverified-finish
+    marker and the open item — a DSN carrying a production password among them, in files
+    under `.claude/` that are untracked and not ignored. The gate scrubs before it writes
+    now; this scrubs what it wrote before, and changes nothing else in those files.
+    """
+    from . import board
+
+    fixed = _scrub_red_record(ctx) + _scrub_unverified_attempts(ctx)
+    for name, field in (("unverified.jsonl", "reason"), (board.OPEN_ITEMS_FILE, "text")):
+        fixed += _scrub_field(store.tier_b(ctx, name), field)
+    return f"scrubbed what a failing suite had printed out of {fixed} record file(s)" if fixed else ""
+
+
+def _scrub_red_record(ctx: GitContext) -> int:
+    from . import evidence, redact
+
+    path = store.tier_a(ctx, evidence.RED_SUITE_FILE)
+    entry = store.read_json(path, default=None)
+    tail = entry.get("tail") if isinstance(entry, dict) else None
+    if not isinstance(tail, str) or redact.scrub(tail) == tail:
+        return 0
+    store.write_json(path, {**entry, "tail": redact.scrub(tail)}, mode=0o644)
+    return 1
+
+
+def _scrub_unverified_attempts(ctx: GitContext) -> int:
+    """The attempts an unverified finish filed — only those; the rest are the session's words."""
+    from . import attempts, redact
+
+    fixed = 0
+    for path in sorted(attempts.attempts_dir(ctx).glob("*.md")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if "Finished without proof." in text and redact.scrub(text) != text:
+            store.atomic_write(path, redact.scrub(text), mode=0o644)
+            fixed += 1
+    return fixed
+
+
+def _scrub_field(path: Path, field: str) -> int:
+    from . import redact
+
+    rows = store.read_jsonl(path)
+    clean = [{**row, field: redact.scrub(row[field])}
+             if isinstance(row, dict) and isinstance(row.get(field), str) else row
+             for row in rows]
+    if clean == rows:
+        return 0
+    store.rewrite_jsonl(path, clean)
+    return 1
+
+
 _REPAIRS = {
     "0001-task-paths": (1, _backfill_task_paths),
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
@@ -1208,6 +1263,7 @@ _REPAIRS = {
         (1, _forget_numbers_carried_to_the_next_pull_request),
     "0025-carry-checkpoints-out-of-trees": (1, _carry_checkpoints_out_of_trees),
     "0026-forget-a-red-suite-that-never-ran": (1, _forget_a_red_suite_that_never_ran),
+    "0027-scrub-what-a-failing-suite-printed": (1, _scrub_what_a_failing_suite_printed),
 }
 
 
