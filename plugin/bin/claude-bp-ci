@@ -44,6 +44,13 @@ def main() -> int:
         help="print the project's own test command, for the pre-push hook to run",
     )
     args = parser.parse_args()
+    # `--off` belongs to `github`. Anywhere else it was dropped on the floor, and
+    # `claude-bp-ci local --off` — asked, by any reading of it, to take the hook out —
+    # installed it and said so.
+    if args.off and args.command != "github":
+        parser.error(f"--off goes with `github` (claude-bp-ci github --off switches hosted CI "
+                     f"off), not with `{args.command}`. The pre-push hook comes out with: "
+                     "claude-bp-ci off")
     ctx = resolve_for_cli()
 
     if args.command == "record-green":

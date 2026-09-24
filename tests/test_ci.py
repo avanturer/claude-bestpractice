@@ -268,6 +268,16 @@ class TestHostedCICostsNothingUntilAskedFor(CICase):
         self.assertEqual(ci.workflow_state(self.ctx()), "gated")
         self.assertTrue(any("gated" in line for line in ci.status_lines(self.ctx())))
 
+    def test_off_anywhere_but_github_is_refused_rather_than_ignored(self):
+        """`claude-bp-ci local --off` installed the hook: the flag belongs to `github`, and
+        with any other command it was dropped without a word."""
+        from claude_bestpractice import ci
+
+        proc = self.cli("local", "--off")
+        self.assertNotEqual(0, proc.returncode)
+        self.assertFalse(ci.installed(self.ctx()), "asked with --off, it installed the hook")
+        self.assertIn("claude-bp-ci off", proc.stderr)
+
     def test_a_gh_that_never_answers_is_unknown_and_not_a_traceback(self):
         """`claude-bp status` waited a minute on a hung `gh`, then printed a TimeoutExpired
         traceback and nothing else. What it cannot find out, it says it cannot."""
