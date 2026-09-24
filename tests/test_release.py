@@ -306,6 +306,27 @@ class TestTheGatesRunFromAnyInstallPath(unittest.TestCase):
             self.assertEqual(0, proc.returncode, proc.stderr)
 
 
+class TestTheStdlibLintHoldsOnTheFloor(unittest.TestCase):
+    """`sys.stdlib_module_names` is 3.10+, so on 3.9 the lint allows only its own list.
+
+    A module that list lacked, `calendar`, came in with a repair and passed `make lint` on
+    every newer Python, then failed the first step of `make check` on 3.9, the floor this
+    project declares. Checked here with the list alone, on whatever Python runs the suite.
+    """
+
+    def test_every_import_is_on_the_list_the_floor_reads(self) -> None:
+        lint = REPO_ROOT / "tools" / "check_stdlib_only.py"
+        as_the_floor_sees_it = (
+            "import runpy, sys\n"
+            "if hasattr(sys, 'stdlib_module_names'):\n"
+            "    del sys.stdlib_module_names\n"
+            f"runpy.run_path({str(lint)!r}, run_name='__main__')\n"
+        )
+        proc = subprocess.run([sys.executable, "-c", as_the_floor_sees_it],
+                              capture_output=True, text=True, timeout=120)
+        self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
+
+
 class TestTranslationsStayInStep(unittest.TestCase):
     """A translation that silently stops matching is worse than no translation."""
 
