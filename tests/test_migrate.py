@@ -1441,3 +1441,37 @@ class TestCarryingATaskHomeIsAMoveInBothIndexes(RepoCase):
         migrate.repair(resolve(tree))
         self.assertEqual("", git(["diff", "--cached", "--name-only"], tree).strip())
         self.assertEqual("", git(["diff", "--cached", "--name-only"], self.repo).strip())
+
+
+class TestANumberCarriedToTheNextPullRequestIsForgotten(RepoCase):
+    """`opened` filled a new obligation's number from the branch's previous record, so the
+    second pull request on a branch whose first had merged was filed as that first number.
+    The fix stops new ones; the ones already filed stay up to thirty days unless repaired."""
+
+    def filed(self, **row) -> None:
+        from claude_bestpractice import pullrequest
+
+        store.append_jsonl(store.tier_b(self.ctx(), pullrequest.PR_FILE), {
+            "branch": "feat/x", "base": "main", "url": "", "session_id": "s1",
+            "opened_at": 1.0, "handed_off_at": 0.0, **row,
+        })
+
+    def test_the_inherited_number_is_taken_back(self):
+        from claude_bestpractice import pullrequest
+
+        self.filed(number=41, state="open")
+        self.filed(number=41, state="merged")
+        self.filed(number=41, state="open")
+
+        changed = migrate.repair(self.ctx())
+
+        self.assertEqual(0, pullrequest._records(self.ctx())["feat/x"]["number"])
+        self.assertTrue([line for line in changed if "previous one" in line], changed)
+
+    def test_a_number_the_next_one_learned_for_itself_is_kept(self):
+        from claude_bestpractice import pullrequest
+
+        self.filed(number=41, state="merged")
+        self.filed(number=42, state="open")
+        migrate.repair(self.ctx())
+        self.assertEqual(42, pullrequest._records(self.ctx())["feat/x"]["number"])

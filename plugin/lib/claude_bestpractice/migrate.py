@@ -1080,6 +1080,34 @@ def _drop_stray_hook(tree: Path, hook: Path) -> bool:
     return True
 
 
+def _forget_numbers_carried_to_the_next_pull_request(ctx: GitContext) -> str:
+    """Open obligations filed under the number of their branch's previous pull request.
+
+    Until this release `opened` filled a new obligation's number from the branch's last
+    record whenever the call carried none — every `gh pr create` — so the second pull
+    request on a branch whose first had merged went on the board as the first one's number,
+    and a merge of the real one was matched against a number nothing open carries. The fix
+    stops new ones; a record already filed that way stays until it is settled, up to thirty
+    days, so it is told it does not know its number, which is the truth.
+    """
+    from . import pullrequest
+
+    path = store.tier_b(ctx, pullrequest.PR_FILE)
+    rows = [row for row in store.read_jsonl(path) if isinstance(row, dict) and row.get("branch")]
+    # (branch, number) of every pull request that was merged or closed, and each branch's
+    # latest record — the file is append-only, so a later row supersedes.
+    spent = {(str(row["branch"]), str(row.get("number"))) for row in rows
+             if row.get("state") != pullrequest.OPEN}
+    latest = {str(row["branch"]): row for row in rows}
+    carried = [row for branch, row in latest.items()
+               if row.get("state") == pullrequest.OPEN and row.get("number")
+               and (branch, str(row["number"])) in spent]
+    for row in carried:
+        store.append_jsonl(path, {**row, "number": 0})
+    return (f"{len(carried)} open pull request(s) had the number of the branch's previous one; "
+            "forgotten until the real one is learned") if carried else ""
+
+
 _REPAIRS = {
     "0001-task-paths": (1, _backfill_task_paths),
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
@@ -1104,6 +1132,8 @@ _REPAIRS = {
     "0021-drop-the-hook-under-a-literal-tilde": (1, _drop_the_hook_under_a_literal_tilde),
     "0022-unchain-a-hook-that-calls-itself": (1, _unchain_a_hook_that_calls_itself),
     "0023-drop-an-empty-quarantine-block": (1, _drop_an_empty_quarantine_block),
+    "0024-forget-a-number-carried-to-the-next-pull-request":
+        (1, _forget_numbers_carried_to_the_next_pull_request),
 }
 
 
