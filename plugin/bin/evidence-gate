@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import shlex
 import sys
 import time
 from pathlib import Path
@@ -678,7 +679,10 @@ def main() -> None:
             # they accepted the merge (decision 0010).
             problems.append(plan.closure_demand(mine))
         if not mine and not closed and not delivered:
-            named = ",".join(changed[:3])
+            # Quoted, and the card given its `--done-when`: printed any other way the second
+            # command failed on the first one's card, or the first on a path with a space in
+            # it (decision 0020 — every command a refusal names runs as printed).
+            named = shlex.quote(",".join(changed[:3]))
             # The card the founder's message already opened for this session, when there is
             # one. Sent to `add` instead, every session filed a duplicate of it and left the
             # original sitting in NEXT over finished work — a card inviting the next session
@@ -694,7 +698,8 @@ def main() -> None:
                 )
             else:
                 how = (
-                    f'  claude-bp-plan add "<what this turn is doing>" --paths {named}\n'
+                    f'  claude-bp-plan add "<what this turn is doing>" --paths {named} '
+                    '--done-when "<what has to become true>"\n'
                     "  then: claude-bp-plan claim <id>   (or claim the task you are already on)"
                 )
             problems.append(

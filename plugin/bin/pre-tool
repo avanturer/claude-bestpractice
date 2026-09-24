@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
 import json  # noqa: E402
 import re  # noqa: E402
+import shlex  # noqa: E402
 
 from claude_bestpractice import ci, config, evidence, gitpolicy, hookio, inbox, pullrequest, redact, sessions, shellcmd, stage, store, subagents, vouch, worktree  # noqa: E402
 from claude_bestpractice.gitctx import resolve  # noqa: E402
@@ -1885,6 +1886,9 @@ def main() -> None:
         # demand, and is the narrow case left open deliberately.
         if cfg.require_task and rec.task_statement and writing_now:
             unlisted = _unlisted(ctx, event.session_id, absolute)
+            # `--done-when` on the card, because `claim` refuses one without it: the second of
+            # the two commands this names failed on the card the first had just filed. Both
+            # run as printed, which is decision 0020's test of a refusal.
             if unlisted:
                 deny(
                     ctx, rec,
@@ -1893,8 +1897,8 @@ def main() -> None:
                     "  Every sibling session reads the board to decide what is safe to "
                     "touch, and unlisted work is invisible to all of them — so this is "
                     "asked BEFORE the write, while there is still something to protect.\n"
-                    f'  claude-bp-plan add "<what you are about to do>" --paths '
-                    f"{shlex.quote(unlisted)}\n"
+                    f'  claude-bp-plan add "<what you are about to do>" '
+                    f'--paths {shlex.quote(unlisted)} --done-when "<what has to become true>"\n'
                     "  then: claude-bp-plan claim <id>   (or claim the task you are on)"
                 )
 
@@ -1921,8 +1925,8 @@ def main() -> None:
                     "  It writes no file, so no other rule here sees it — and every "
                     "sibling reads the board to decide what is safe to touch, so this is "
                     "the last moment there is still something to protect.\n"
-                    '  claude-bp-plan add "<what you are about to do>" --paths <the files '
-                    "this touches>\n"
+                    '  claude-bp-plan add "<what you are about to do>" --paths "<the files '
+                    'this touches>" --done-when "<what has to become true>"\n'
                     "  then: claude-bp-plan claim <id>   (or claim the task you are on)\n"
                     "  Finishing one already in flight — `--abort`, `--continue`, "
                     "`--skip` — is never refused here."
