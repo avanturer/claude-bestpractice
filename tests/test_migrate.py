@@ -1539,3 +1539,15 @@ class TestCredentialsAFailingSuitePrintedAreScrubbed(RepoCase):
         self.assertIn("kept as the session wrote it",
                       "".join(p.read_text() for p in attempts.attempts_dir(ctx).glob("*.md")))
         self.assertTrue([line for line in changed if "scrubbed" in line])
+
+
+class TestTheSharedVerificationTokenIsTakenAway(RepoCase):
+    """Every worktree's verification run shared one token file, and the clean re-run left its
+    token in it. Each run holds its own now; the old file is read by nothing."""
+
+    def test_it_is_dropped(self):
+        path = store.tier_b(self.ctx(), "verifying.nonce")
+        store.atomic_write(path, "0" * 32)
+        changed = migrate.repair(self.ctx())
+        self.assertFalse(path.exists())
+        self.assertTrue([line for line in changed if "verification token" in line])

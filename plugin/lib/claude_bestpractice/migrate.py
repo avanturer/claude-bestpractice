@@ -1235,6 +1235,19 @@ def _scrub_field(path: Path, field: str) -> int:
     return 1
 
 
+def _drop_the_shared_verification_token(ctx: GitContext) -> str:
+    """The one token file every worktree's verification run used to share.
+
+    Nothing reads it now: each run holds a token of its own under `verifying/`. The file on
+    disk is the last clean re-run's, which never deleted it.
+    """
+    path = store.tier_b(ctx, "verifying.nonce")
+    if not path.exists():
+        return ""
+    path.unlink()
+    return "dropped the verification token every worktree shared; each run now has its own"
+
+
 _REPAIRS = {
     "0001-task-paths": (1, _backfill_task_paths),
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
@@ -1264,6 +1277,7 @@ _REPAIRS = {
     "0025-carry-checkpoints-out-of-trees": (1, _carry_checkpoints_out_of_trees),
     "0026-forget-a-red-suite-that-never-ran": (1, _forget_a_red_suite_that_never_ran),
     "0027-scrub-what-a-failing-suite-printed": (1, _scrub_what_a_failing_suite_printed),
+    "0028-drop-the-shared-verification-token": (1, _drop_the_shared_verification_token),
 }
 
 

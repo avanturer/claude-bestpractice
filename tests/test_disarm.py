@@ -557,6 +557,36 @@ class TestTheGateCannotReEnterItself(RepoCase):
         )
         self.assertIn(proc.returncode, (0, 2), "the gate recursed instead of returning")
 
+    def test_a_run_in_a_sibling_tree_does_not_lift_this_ones_guard(self):
+        """The token lived in ONE file for the whole clone. A Stop in a sibling worktree
+        overwrote it mid-run, and whichever run finished first deleted the other's."""
+        import os
+        from unittest import mock
+
+        from claude_bestpractice import evidence
+        from claude_bestpractice.gitctx import resolve
+
+        here, there = self.ctx(), resolve(self.add_worktree("sibling"))
+        mine = evidence._issue_nonce(here)
+        theirs = evidence._issue_nonce(there)
+        with mock.patch.dict(os.environ, {evidence.VERIFYING_ENV: mine}):
+            self.assertTrue(evidence._inside_our_own_run(here), "a sibling's run took the token")
+            evidence._retire_nonce(there, theirs)
+            self.assertTrue(evidence._inside_our_own_run(here), "a sibling's end ended this run")
+            evidence._retire_nonce(here, mine)
+            self.assertFalse(evidence._inside_our_own_run(here))
+
+    def test_the_clean_rerun_takes_its_token_back(self):
+        """A token left behind is a guard that stays up after the run it guarded."""
+        from claude_bestpractice import evidence, store
+
+        self.write("app.py", "x = 1\n")
+        self.commit("something to re-run")
+        evidence.clean_rerun(self.ctx(), ["python3", "-c", "print('1 passed')"])
+        tokens = store.tier_b(self.ctx(), evidence.NONCE_DIR)
+        self.assertEqual([], list(tokens.iterdir()) if tokens.is_dir() else [])
+        self.assertFalse(store.tier_b(self.ctx(), "verifying.nonce").exists())
+
 
 class TestARenameActuallyFailsValidation(RepoCase):
     """The README's headline memory claim, which a substring test did not deliver."""

@@ -278,7 +278,8 @@ NOT_EXECUTABLE = 127
 # would otherwise switch the whole evidence gate off for every session on the machine,
 # which is a recursion guard doubling as an off switch.
 VERIFYING_ENV = "CLAUDE_BESTPRACTICE_VERIFYING"
-NONCE_FILE = "verifying.nonce"
+NONCE_DIR = "verifying"
+_NONCE = re.compile(r"^[0-9a-f]{32}$")
 
 
 def _issue_nonce(ctx: GitContext) -> str:
@@ -289,25 +290,26 @@ def _issue_nonce(ctx: GitContext) -> str:
     work either: `export CLAUDE_BESTPRACTICE_VERIFYING=1` in a shell profile would switch the
     evidence gate off everywhere. So the token is unguessable AND shared, and it only
     exists on disk while a run this gate started is actually in flight.
+
+    One file per run, named by its token. It was one file for the whole clone — Tier B is
+    the common git directory, shared by every worktree — so a Stop in a sibling tree
+    overwrote a run's token mid-flight, whichever run ended first deleted the other's, and
+    the clean re-run never deleted its own: the guard lapsed exactly while two sessions
+    were verifying at once, which is the ordinary state of this product.
     """
     nonce = hashlib.sha256(os.urandom(32)).hexdigest()[:32]
-    store.atomic_write(store.tier_b(ctx, NONCE_FILE), nonce, mode=0o600)
+    store.atomic_write(store.tier_b(ctx, NONCE_DIR, nonce), "", mode=0o600)
     return nonce
 
 
-def _retire_nonce(ctx: GitContext) -> None:
-    store.tier_b(ctx, NONCE_FILE).unlink(missing_ok=True)
+def _retire_nonce(ctx: GitContext, nonce: str) -> None:
+    store.tier_b(ctx, NONCE_DIR, nonce).unlink(missing_ok=True)
 
 
 def _inside_our_own_run(ctx: GitContext) -> bool:
     """True only for a process this gate spawned, not for anything that set the name."""
     seen = os.environ.get(VERIFYING_ENV, "")
-    if not seen:
-        return False
-    try:
-        return seen == store.tier_b(ctx, NONCE_FILE).read_text(encoding="utf-8").strip()
-    except OSError:
-        return False
+    return bool(_NONCE.match(seen)) and store.tier_b(ctx, NONCE_DIR, seen).is_file()
 
 # What running a test suite leaves behind. The gate runs the suite itself now, so
 # without this the gate creates these files and then reports them to the agent as its
@@ -353,7 +355,7 @@ def run_suite(ctx: GitContext, command: list[str], where: Path | None = None,
     except OSError as exc:
         return -1, f"could not run the test command: {exc}"
     finally:
-        _retire_nonce(ctx)
+        _retire_nonce(ctx, env[VERIFYING_ENV])
 
     tail = hookio.tail_of(proc.stdout + proc.stderr)
     if proc.returncode == NOT_EXECUTABLE:
@@ -1350,7 +1352,10 @@ def _rerun_committed(ctx: GitContext, command: list[str], where: Path, until: fl
         raise witness.RanOutOfTime(0)
     env = dict(os.environ)
     env[VERIFYING_ENV] = _issue_nonce(ctx)
-    proc = witness.run_bounded(command, where, env, left)
+    try:
+        proc = witness.run_bounded(command, where, env, left)
+    finally:
+        _retire_nonce(ctx, env[VERIFYING_ENV])
     if proc.returncode == 0:
         return Verdict(True, "clean-checkout re-run passed")
     if missing:
