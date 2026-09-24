@@ -1300,6 +1300,20 @@ def _scrub_what_was_captured_with_a_secret_in_it(ctx: GitContext) -> str:
             "checkpoint file(s)") if rewritten else ""
 
 
+def _quote_the_status_line(_ctx: GitContext) -> str:
+    """The status line of ours written unquoted from an install path with a space in it.
+
+    A shell split it at the space, so it showed nothing, and installing it again answered
+    that it was already there. The same path, quoted, in `~/.claude/settings.json`; the
+    founder's own status line is never touched. It belongs to no repository, so whichever
+    clone starts first after the upgrade repairs it, and every later run finds nothing.
+    """
+    from . import limits
+
+    quoted = limits.requote()
+    return f"quoted the path of the status line, which a space in it split: {quoted}" if quoted else ""
+
+
 _REPAIRS = {
     "0001-task-paths": (1, _backfill_task_paths),
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
@@ -1333,6 +1347,7 @@ _REPAIRS = {
     "0029-unstamp-greens-a-changed-tracked-file-could-hide":
         (1, _unstamp_greens_a_changed_tracked_file_could_hide),
     "0030-scrub-captured-secrets": (1, _scrub_what_was_captured_with_a_secret_in_it),
+    "0031-quote-the-status-line": (1, _quote_the_status_line),
 }
 
 

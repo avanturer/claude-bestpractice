@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -374,7 +375,9 @@ def cmd_statusline(install: bool) -> int:
     """
     from claude_bestpractice import limits
 
-    command = str(BIN / "claude-bp-statusline")
+    # Run through a shell, as a hook is: unquoted, an install path with a space in it
+    # split the command and the status line showed nothing.
+    command = shlex.quote(str(BIN / "claude-bp-statusline"))
     heading("STATUS LINE")
     current = limits.installed()
     if not install:

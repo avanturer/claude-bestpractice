@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shlex
 import subprocess
 import sys
 import contextlib
@@ -10,7 +12,7 @@ import unittest
 
 from helpers import BIN, RepoCase, git
 
-from claude_bestpractice import migrate, plan, store
+from claude_bestpractice import limits, migrate, plan, store
 
 
 class TestAHandoffIsRefusedUntilItIsOne(RepoCase):
@@ -1571,6 +1573,43 @@ class TestTheSharedVerificationTokenIsTakenAway(RepoCase):
         changed = migrate.repair(self.ctx())
         self.assertFalse(path.exists())
         self.assertTrue([line for line in changed if "verification token" in line])
+
+
+class TestAStatusLineSplitAtASpaceIsQuoted(RepoCase):
+    """Ours was written as a bare path, and a shell split it at the first space in an
+    install path: the bar showed nothing, and installing it again said it was there."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.home = self.tmp / "home"
+        (self.home / ".claude").mkdir(parents=True)
+        self.bar = self.tmp / "Jane Doe" / "bin" / "claude-bp-statusline"
+        self.bar.parent.mkdir(parents=True)
+        self.bar.write_text("#!/bin/sh\necho bar\n", encoding="utf-8")
+        self.bar.chmod(0o755)
+
+    def start_with(self, command: str) -> str:
+        """A session start over a status line of `command`; what is configured after it."""
+        settings = self.home / ".claude" / "settings.json"
+        settings.write_text(json.dumps({"statusLine": {"type": "command", "command": command}}))
+        proc = self.run_hook(
+            "session-start",
+            {"session_id": "s1", "hook_event_name": "SessionStart", "source": "startup"},
+            env={**os.environ, "HOME": str(self.home)},
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        return json.loads(settings.read_text(encoding="utf-8"))["statusLine"]["command"]
+
+    def test_the_next_session_start_quotes_it(self):
+        command = self.start_with(str(self.bar))
+        self.assertEqual(shlex.quote(str(self.bar)), command)
+        shown = subprocess.run(["sh", "-c", command], capture_output=True, text=True, timeout=30)
+        self.assertEqual("bar", shown.stdout.strip(), shown.stderr)
+        self.assertEqual("", limits.requote(self.home), "a second run has nothing left to fix")
+
+    def test_their_own_status_line_is_left_alone(self):
+        theirs = str(self.tmp / "Jane Doe" / "my bar.sh")
+        self.assertEqual(theirs, self.start_with(theirs))
 
 
 class TestASecretTheOldRedactionMissedIsTakenOut(RepoCase):

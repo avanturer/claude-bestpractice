@@ -19,7 +19,9 @@ something long instead of dying in the middle of it.
 
 from __future__ import annotations
 
+import shlex
 import time
+from pathlib import Path
 
 from . import store
 from .gitctx import GitContext
@@ -127,13 +129,17 @@ def install(command: str, home=None) -> tuple:
     the opposite of `policy`: nothing is written when the key is taken. Decision 0008 lets
     this plugin write FACTS about the repository into that file; somebody's status bar is
     neither a fact nor a grant, and taking it over unasked is how a tool gets uninstalled.
+
+    Ours is brought up to date when it differs: written before its path was quoted, it split
+    at the first space in an install path and showed nothing, and calling that installed
+    left the founder no way to repair it.
     """
     from . import policy
 
     current = installed(home)
     if current and "claude-bp-statusline" not in current:
         return False, current
-    if current:
+    if current == command:
         return True, current
 
     settings = policy.for_update(home)
@@ -145,3 +151,21 @@ def install(command: str, home=None) -> tuple:
     settings[SETTING] = {"type": "command", "command": command}
     policy.write(settings, home)
     return True, command
+
+
+def requote(home=None) -> str:
+    """Ours, written before its path was quoted, from a path with whitespace in it: quoted.
+
+    What older versions wrote was the bare path of this file. The shell split it at the
+    space, so nothing was shown, and a second `--install` answered that it was already
+    there. Only that exact shape is rewritten, through `install`, which leaves the
+    founder's own status line and a settings file that does not parse alone. The command
+    now installed, or "" when there was nothing of ours to fix.
+    """
+    current = installed(home)
+    if "claude-bp-statusline" not in current or not any(ch.isspace() for ch in current):
+        return ""
+    if not Path(current).is_file():
+        return ""
+    ok, found = install(shlex.quote(current), home)
+    return found if ok else ""

@@ -9,10 +9,14 @@ bridge, and these tests are about it not lying.
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
+from pathlib import Path
 
 from helpers import BIN, RepoCase
 
@@ -159,6 +163,44 @@ class TestInstallingItNeverTakesOverTheirs(RepoCase):
         ok, found = limits.install("/plugin/bin/claude-bp-statusline", self.home)
         self.assertTrue(ok)
         self.assertEqual("/plugin/bin/claude-bp-statusline", found)
+
+    def test_ours_written_unquoted_is_brought_up_to_date(self):
+        """Written before the path was quoted, ours split at the space and showed nothing,
+        and installing again answered that it was already there."""
+        current = self.read()
+        current["statusLine"] = {"type": "command",
+                                 "command": "/Users/Jane Doe/plugin/bin/claude-bp-statusline"}
+        self.settings.write_text(json.dumps(current))
+
+        quoted = "'/Users/Jane Doe/plugin/bin/claude-bp-statusline'"
+        ok, found = limits.install(quoted, self.home)
+        self.assertTrue(ok)
+        self.assertEqual(quoted, self.read()["statusLine"]["command"])
+        self.assertEqual(["a rule they wrote"], self.read()["autoMode"]["allow"])
+
+
+class TestTheInstalledStatusLineRunsFromAnyPath(unittest.TestCase):
+    """What `claude-bp statusline --install` writes has to run through a shell as written."""
+
+    def test_an_install_path_with_a_space_in_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = Path(tmp) / "Jane Doe" / "plugin"
+            shutil.copytree(BIN.parent, plugin, ignore=shutil.ignore_patterns("__pycache__"))
+            home = Path(tmp) / "home"
+            home.mkdir()
+            env = {**os.environ, "HOME": str(home)}
+            installed = subprocess.run(
+                [sys.executable, str(plugin / "bin" / "claude-bp"), "statusline", "--install"],
+                capture_output=True, text=True, cwd=tmp, env=env, timeout=120,
+            )
+            self.assertEqual(0, installed.returncode, installed.stdout + installed.stderr)
+            settings = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8"))
+            shown = subprocess.run(
+                ["sh", "-c", settings["statusLine"]["command"]], input="{}",
+                capture_output=True, text=True, cwd=tmp, env=env, timeout=60,
+            )
+            self.assertEqual(0, shown.returncode, shown.stderr)
+            self.assertTrue(shown.stdout.strip())
 
 
 if __name__ == "__main__":
