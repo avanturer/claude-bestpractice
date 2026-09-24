@@ -5,8 +5,8 @@
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
 [![version](https://img.shields.io/badge/version-1.69.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-1669%20passing-2ea44f)](#已验证)
-[![doctor](https://img.shields.io/badge/doctor-34%20checks-2ea44f)](#已验证)
+[![tests](https://img.shields.io/badge/tests-2128%20passing-2ea44f)](#已验证)
+[![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#运行要求)
 [![context](https://img.shields.io/badge/常驻上下文-332%20tokens-blue)](#运行要求)
@@ -293,7 +293,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 | `claude-bp doctor` | 通过尝试一个已知的坏动作来证明每个 gate 有效 |
 | `claude-bp-plan` | 工作台账：`add`、`list`、`claim`、`done` |
 | `claude-bp-decide` | 采纳一条由你自己的纠正草拟出的决策 |
-| `claude-bp-ingest` | 把生产环境错误净化成带围栏的任务文件 |
+| `claude-bp-ingest` | 把生产环境错误净化成智能体当作数据读取的文件（`.claude/signals/`） |
 | `claude-bp-knowledge` | 校验已决层，刷新其索引 |
 | `claude-bp-reindex` | 丢弃并重建所有推导内容 |
 | `claude-bp-ci` | 检查在哪里跑：默认本地 pre-push，托管 CI 按需开启 |
@@ -317,7 +317,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 | `subagent-brief` | SubagentStart | 失败放行 | 把非目标、实体和按查询偏置的代码图交给不继承任何规则的子智能体 |
 | `checkpoint` | PreCompact | 失败放行 | 抽取式检查点，零模型调用，密钥已清洗。**从不拒绝压缩** —— 该事件上的拒绝只有创始人看得到，模型看不到（决策 0021） |
 | `evidence-gate` | Stop | **失败拦截** | 范围漂移、测试证据、干净重跑、以未处理的拦截收场的一轮；顺带收割决策草稿；就只有这个上下文窗口知道的东西索要一次记录；收走已完成的 worktree |
-| `pr-opened` | PostToolUse `.*create_pull_request` | 失败放行 | 记下刚打开的 pull request 的编号，让合并门区分自己的和别人的 |
+| `pr-opened` | PostToolUse `.*(create\|update)_pull_request` | 失败放行 | 登记刚打开的 pull request 并记下它的编号，让合并门区分自己的和别人的；通过工具关闭的会被结清 |
 | `permission-denied` | PermissionDenied | 失败放行 | 记录 auto mode 拒绝了什么，让重复出现的询问能追溯到规则；从不推翻拒绝 |
 
 十一个条目（`pre-tool` 与 `review-commit` 共用 PreToolUse 事件），自设上限是十二个。常驻上下文 **约 332 tokens**，上限 400 ——
@@ -328,7 +328,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 ## 已验证
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 1669 个测试 · 35 项 doctor 检查 · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2128 个测试 · 36 项 doctor 检查 · budget
 ```
 
 doctor 通过**真的去做那件坏事**来证明 gate 有效，而不是把配置读回来对一遍——
@@ -380,7 +380,7 @@ Python 3.9+ 和 git。**没有任何其他依赖，这是硬约束**——这些
 全部职责恰恰就是可信。此约束在 CI 中强制执行。
 
 已在 Python 3.9、3.11 和 3.13 上测试。`claude plugin validate --strict` 在
-Claude Code 2.1.280 上通过。
+Claude Code 2.1.281 上通过。
 
 在任何较新的 Claude Code 上都能工作；有两项功能需要版本下限，而且两者都是**静默**失效的，
 所以在此写明：
