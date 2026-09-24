@@ -1541,6 +1541,26 @@ class TestCredentialsAFailingSuitePrintedAreScrubbed(RepoCase):
         self.assertTrue([line for line in changed if "scrubbed" in line])
 
 
+class TestAGreenStampedOverAChangedTrackedFileIsRunAgain(RepoCase):
+    """Until 1.69.0 a green was stamped with HEAD's tree while a tracked file whose name looked
+    like a run's leftovers was changed, and the pre-push hook skips a tree on record as green.
+    Which stamps were written that way cannot be told, so every older stamp goes."""
+
+    def test_the_stamp_goes_and_the_green_stays(self):
+        from claude_bestpractice import evidence
+
+        self.write("src/app.py", "x = 1\n")
+        self.commit("the app")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.assertTrue(evidence.green_covers_tree(self.ctx()), "precondition: stamped")
+
+        changed = migrate.repair(self.ctx())
+
+        self.assertFalse(evidence.green_covers_tree(self.ctx()))
+        self.assertEqual(["pytest"], evidence.last_green(self.ctx())["command"])
+        self.assertTrue([line for line in changed if "green record" in line])
+
+
 class TestTheSharedVerificationTokenIsTakenAway(RepoCase):
     """Every worktree's verification run shared one token file, and the clean re-run left its
     token in it. Each run holds its own now; the old file is read by nothing."""

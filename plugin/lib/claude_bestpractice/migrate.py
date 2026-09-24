@@ -1235,6 +1235,27 @@ def _scrub_field(path: Path, field: str) -> int:
     return 1
 
 
+def _unstamp_greens_a_changed_tracked_file_could_hide(ctx: GitContext) -> str:
+    """Green records stamped by a tree hash that let a changed tracked file through.
+
+    Until 1.69.0 `tree_hash` read a modified TRACKED file as clean when its name matched an
+    artifact glob or it sat under a byproduct directory, so a green observed with such a file
+    changed was stamped with HEAD's tree — and the pre-push hook skips its run for a tree on
+    record as green. Which stamps were written that way cannot be told from the stamp, so
+    every stamp written before goes. The cost is one push-time run per branch, which is the
+    direction the stamp is allowed to be wrong in.
+    """
+    unstamped = 0
+    for path in sorted(store.tier_b(ctx, "green").glob("*.json")):
+        record = store.read_json(path, default=None)
+        if isinstance(record, dict) and record.get("tree"):
+            store.write_json(path, {k: v for k, v in record.items() if k != "tree"}, mode=0o644)
+            unstamped += 1
+    if not unstamped:
+        return ""
+    return f"{unstamped} green record(s) will be run once more before they excuse a push"
+
+
 def _drop_the_shared_verification_token(ctx: GitContext) -> str:
     """The one token file every worktree's verification run used to share.
 
@@ -1278,6 +1299,8 @@ _REPAIRS = {
     "0026-forget-a-red-suite-that-never-ran": (1, _forget_a_red_suite_that_never_ran),
     "0027-scrub-what-a-failing-suite-printed": (1, _scrub_what_a_failing_suite_printed),
     "0028-drop-the-shared-verification-token": (1, _drop_the_shared_verification_token),
+    "0029-unstamp-greens-a-changed-tracked-file-could-hide":
+        (1, _unstamp_greens_a_changed_tracked_file_could_hide),
 }
 
 
