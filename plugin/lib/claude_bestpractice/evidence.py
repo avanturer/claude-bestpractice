@@ -1152,7 +1152,36 @@ _UNITTEST_BROKE = re.compile(r"(?:failures|errors)=(\d+)")
 def _failures_from_output(text: str) -> int:
     """How many tests the runner itself says broke. Zero when it says nothing."""
     counted = sum(int(n) for n, word in _OUTCOMES.findall(text) if word in _BROKE)
-    return counted + sum(int(n) for n in _UNITTEST_BROKE.findall(text))
+    summary = _summary_counts(text)
+    return counted + sum(int(n) for n in _UNITTEST_BROKE.findall(text)) + summary[1]
+
+
+# Summaries that put the word BEFORE the number, or say it another way, so `_OUTCOMES` never
+# read them. node:test's `# pass 2` (its TAP reporter, which it uses whenever its output is
+# not a terminal, and tape's) and `ℹ pass 2` (the spec reporter newer releases default to);
+# mocha's `2 passing (3ms)`, `1 failing`, `1 pending`. A Node project using either was run
+# by the gate, passed, and finished UNVERIFIED as "reported no test counts" — correct work
+# filed as a failed attempt, and the pull request held on it.
+_NODE_SUMMARY = re.compile(r"(?m)^[#ℹ]\s*(tests|pass|fail|cancelled|skipped|todo)\s+(\d+)\s*$")
+_MOCHA_SUMMARY = re.compile(r"(?m)^\s*(\d+)\s+(passing|failing|pending)\b")
+
+
+def _summary_counts(text: str) -> tuple[int, int]:
+    """(executed, broke) from a node:test or mocha summary, or (-1, 0) when there is none.
+
+    node:test counts a todo and a skipped test in `tests` but in neither `pass` nor `fail`, so
+    what ran is `pass` + `fail`; a cancelled test counts as broken, as node's exit status does.
+    """
+    found = _NODE_SUMMARY.findall(text) or [(w, n) for n, w in _MOCHA_SUMMARY.findall(text)]
+    said: dict[str, int] = {}
+    for word, n in found:
+        said[word] = said.get(word, 0) + int(n)
+    if not said:
+        return -1, 0
+    broke = said.get("fail", 0) + said.get("cancelled", 0) + said.get("failing", 0)
+    return said.get("pass", 0) + said.get("passing", 0) + broke, broke
+
+
 _ZERO_RAN = re.compile(r"(?i)\b(no tests ran|collected 0 items|0 tests? (?:ran|executed))\b")
 
 # stdlib unittest reports differently from pytest — "Ran 3 tests" and "OK (skipped=3)".
@@ -1177,6 +1206,10 @@ def _executed_from_output(text: str) -> int:
     if ran:
         skipped = sum(int(n) for n in _UNITTEST_SKIPPED.findall(text))
         return max(int(ran.group(1)) - skipped, 0)
+
+    summarised, _ = _summary_counts(text)
+    if summarised >= 0:
+        return summarised
 
     outcomes = _OUTCOMES.findall(text)
     if not outcomes:

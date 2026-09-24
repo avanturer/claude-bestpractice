@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import time
 import subprocess
 import sys
@@ -400,6 +401,135 @@ class TestCannotTellIsNotGreen(RepoCase):
         from claude_bestpractice import evidence
 
         self.assertIsNone(evidence.last_green(self.ctx()))
+
+
+# The ends of real runs: node 22's `node --test` with its output not a terminal (TAP), the
+# spec reporter newer releases default to, and mocha 10. Two tests pass and one is skipped
+# or pending in each green one; the red ones fail one of the two.
+NODE_TAP_GREEN = """# Subtest: later
+ok 3 - later # SKIP
+  ---
+  duration_ms: 0.120827
+  type: 'test'
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 1
+# todo 0
+# duration_ms 94.231798
+"""
+NODE_TAP_RED = NODE_TAP_GREEN.replace("# pass 2", "# pass 1").replace("# fail 0", "# fail 1")
+NODE_SPEC_GREEN = """✔ adds (1.245084ms)
+✔ subtracts (0.163997ms)
+﹣ later (0.098348ms) # SKIP
+ℹ tests 3
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 96.017251
+"""
+MOCHA_GREEN = """
+
+  calc
+    ✔ adds
+    ✔ subtracts
+    - later
+
+
+  2 passing (3ms)
+  1 pending
+
+"""
+MOCHA_RED = """
+
+  calc
+    ✔ adds
+    1) subtracts
+    - later
+
+
+  1 passing (4ms)
+  1 pending
+  1 failing
+
+  1) calc
+       subtracts:
+
+      AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+1 !== 2
+"""
+
+
+class TestNodeAndMochaSummariesAreRead(RepoCase):
+    """node:test writes `# pass 2` and mocha writes `2 passing` — the word before the number,
+    or another word — so neither was counted, and a Node project whose suite the gate had run
+    and seen pass finished UNVERIFIED as "reported no test counts": a failed attempt filed
+    against correct work, and its pull request held."""
+
+    def two_declared_tests(self) -> None:
+        self.write("test/calc.test.js", "test('adds', () => {});\ntest('subtracts', () => {});\n")
+
+    def test_what_ran_is_counted(self):
+        from claude_bestpractice import evidence
+
+        for said in (NODE_TAP_GREEN, NODE_SPEC_GREEN, MOCHA_GREEN):
+            self.assertEqual(2, evidence._executed_from_output(said), said)
+            self.assertEqual(0, evidence._failures_from_output(said), said)
+        for said in (NODE_TAP_RED, MOCHA_RED):
+            self.assertEqual(1, evidence._failures_from_output(said), said)
+
+    def test_a_green_run_is_a_witnessed_green(self):
+        from claude_bestpractice import evidence
+
+        self.two_declared_tests()
+        for said in (NODE_TAP_GREEN, NODE_SPEC_GREEN, MOCHA_GREEN):
+            verdict = evidence._judge_green_run(self.ctx(), [], ["npm", "test"], said, 0)
+            self.assertTrue(verdict.ok and not verdict.unverified, verdict.reason)
+
+    def test_a_failure_behind_a_swallowed_status_is_still_refused(self):
+        from claude_bestpractice import evidence
+
+        self.two_declared_tests()
+        for said in (NODE_TAP_RED, MOCHA_RED):
+            verdict = evidence._judge_green_run(self.ctx(), [], ["npm", "test"], said, 0)
+            self.assertFalse(verdict.ok, said)
+
+    def test_nothing_run_is_nothing(self):
+        from claude_bestpractice import evidence
+
+        self.assertEqual(0, evidence._executed_from_output("1..0\n# tests 0\n# pass 0\n# fail 0\n"))
+        self.assertEqual(0, evidence._executed_from_output("\n  0 passing (1ms)\n"))
+
+    @unittest.skipUnless(shutil.which("npm") and shutil.which("node"),
+                         "no node on this machine")
+    def test_a_node_project_finishes_verified(self):
+        """End to end: `npm test` running `node --test`, through the real Stop gate."""
+        from claude_bestpractice import store
+
+        self.configure(require_task=False, manage_pull_requests=False)
+        self.write("package.json", json.dumps({"name": "calc", "scripts": {"test": "node --test"}}))
+        self.write("calc.js", "module.exports = { add: (a, b) => a + b };\n")
+        self.write("test/calc.test.js", (
+            "const { test } = require('node:test');\nconst assert = require('node:assert');\n"
+            "const { add } = require('../calc');\n"
+            "test('adds', () => { assert.strictEqual(add(1, 2), 3); });\n"
+            "test('adds zero', () => { assert.strictEqual(add(1, 0), 1); });\n"))
+        self.commit("a node project")
+        self.write("calc.js", "module.exports = { add: (a, b) => b + a };\n")
+
+        proc = self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                               "stop_hook_active": False})
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual([], store.read_jsonl(store.tier_b(self.ctx(), "unverified.jsonl")),
+                         f"a suite the gate ran and saw pass finished unverified: {proc.stderr}")
 
 
 if __name__ == "__main__":
