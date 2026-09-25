@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-1.69.4-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-1.70.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-2168%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -249,7 +249,9 @@ shipping it. So a green pull request you have not accepted is left open, and the
 told it is waiting for you rather than the other way round.
 
 **Merged, by the session that opened it.** Once you say `+merge`, it opens, checks and
-merges on its own without asking again.
+merges on its own without asking again. One `+merge` covers every pull request that chat has
+open when you say it, so ten finished pull requests take one word, not ten. It never covers
+one opened after the word or another session's.
 
 **Handed to you, with the blockers named.** When the final check finds something the merge
 is *refused* — not negotiated, not repaired. That half is what makes the first half safe:
@@ -303,12 +305,11 @@ the steady state, which is the state the removal produces.
 
 Some actions cannot be undone by re-running them, and no amount of green says you wanted
 them. Each waits for a literal in a message **of yours**, read by the hook that reads your
-messages, and each is **spent when it is used** — one word, one action, never a standing
-grant.
+messages, and each is **spent when it is used**, never a standing grant.
 
 | You type | It allows | Once |
 | --- | --- | --- |
-| `+merge` | merging the open pull request | one merge |
+| `+merge` | merging the pull requests this chat has open | each of them once; with none open, the next merge |
 | `+release` | promoting to production | one promotion |
 | `+migration` | destructive DDL in a migration | one migration |
 

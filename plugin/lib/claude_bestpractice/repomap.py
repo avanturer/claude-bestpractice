@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import store
+from .discipline import parse_quietly
 from .gitctx import GitContext
 
 CACHE_FILE = "repomap-cache.json"
@@ -94,7 +95,7 @@ def _read(path: Path) -> str:
 def extract_python(text: str) -> tuple[set[str], set[str]]:
     """Exact extraction via the AST. Falls back to regex on a syntax error."""
     try:
-        tree = ast.parse(text)
+        tree = parse_quietly(text)
     except (SyntaxError, ValueError):
         return extract_generic(text)
 

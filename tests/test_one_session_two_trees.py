@@ -331,6 +331,42 @@ class TestWithNoProcToNameTheProcess(MovedSession):
                              sessions.identities(self.ctx(), sid(self.repo, "S")))
 
 
+class TestTheFoundersLatestWordReachesEveryId(MovedSession):
+    """The second report in #236: three compactions after its first message, and with a card
+    claimed for the current one, the session was told its task was that first message.
+
+    A compaction puts the shell back in the main checkout, so the founder's next message was
+    recorded under the main checkout's id. The session went back into its tree and ended its
+    turn there, and the tree's record still held what had been said when the tree was entered —
+    the statement, and the only paths the drift gate measured against."""
+
+    LATEST = "партия правок с телефона: поправь tools/snapshot.sh, чтобы снимал все экраны"
+
+    def setUp(self) -> None:
+        super().setUp()
+        (self.main / "tools").mkdir()
+        (self.main / "tools" / "snapshot.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+        self.said_in_the_main_checkout(self.LATEST)
+
+    def said_in_the_main_checkout(self, prompt: str) -> None:
+        self.hook("prompt-capture", self.repo, hook_event_name="UserPromptSubmit", prompt=prompt)
+
+    def in_the_tree(self):
+        return sessions.get(self.ctx(), sid(self.tree, "S"))
+
+    def test_its_tree_holds_the_latest_instruction(self):
+        self.assertEqual(self.LATEST, self.in_the_tree().task_statement)
+
+    def test_the_files_it_named_are_in_scope_in_its_tree_with_the_earlier_ones(self):
+        self.assertEqual({"src/app.py", "tools/snapshot.sh"}, set(self.in_the_tree().task_paths))
+
+    def test_another_process_under_the_same_harness_id_is_not_told(self):
+        """`claude -p` children inherit one harness id; one of them in the tree is a sibling."""
+        self.pin(self.tree, "S", ANOTHER_PROCESS)
+        self.said_in_the_main_checkout("а теперь перепиши README.md целиком, по-английски")
+        self.assertEqual(self.LATEST, self.in_the_tree().task_statement)
+
+
 class TestTheInstructionComesWithIt(RepoCase):
     """The founder's instruction is recorded under the id the session had when it was given,
     the main checkout's. A session that entered its tree straight after it was a new record

@@ -1479,6 +1479,36 @@ def _uncount_a_run_from_the_wrong_place(tree: Path) -> bool:
     return True
 
 
+def _take_the_goal_command_off_a_statement(ctx: GitContext) -> str:
+    """Statements and unclaimed cards recorded as `/goal <condition>`, the command and all.
+
+    `prompt-capture` took the message as typed, so a session given a goal carried
+    "/goal довести v4 до готовности…" as its task: on the board, as the title of the card
+    the message opened, and in every refusal quoting it (#236). The fix takes the command
+    off at capture; a statement is only replaced when the founder says something new, and
+    a session working toward a goal is exactly the one they are not talking to.
+
+    A claimed card is left as its session planned it. Only one still waiting in `next`
+    follows the founder's message, and it is renamed the way that message would have.
+    """
+    from . import plan, sessions
+
+    fixed = 0
+    for rec in sessions.load_all(ctx):
+        said = sessions.without_the_goal_command(rec.task_statement)
+        if said != rec.task_statement:
+            sessions.touch(ctx, rec.session_id, task_statement=said)
+            fixed += 1
+    for task in plan.load_all(ctx, plan.NEXT):
+        said = sessions.without_the_goal_command(task.title)
+        if task.source == plan.FROM_THE_FOUNDER and said and said != task.title:
+            plan.amend(ctx, task.id, title=said)
+            fixed += 1
+    if not fixed:
+        return ""
+    return f"{fixed} task statement(s) or card(s) carried the `/goal` command; took it off"
+
+
 _REPAIRS = {
     "0001-task-paths": (1, _backfill_task_paths),
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
@@ -1515,6 +1545,7 @@ _REPAIRS = {
     "0031-quote-the-status-line": (1, _quote_the_status_line),
     "0032-restore-cards-a-pull-took": (1, _restore_cards_a_pull_took),
     "0033-let-a-run-as-configured-clear-a-red-suite": (1, _let_a_run_as_configured_clear_a_red_suite),
+    "0034-take-the-goal-command-off-a-statement": (1, _take_the_goal_command_off_a_statement),
 }
 
 

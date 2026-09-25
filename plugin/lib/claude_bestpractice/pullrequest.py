@@ -33,7 +33,7 @@ import re
 import time
 from typing import Any
 
-from . import store
+from . import config, store
 from .gitctx import GitContext
 
 PR_FILE = "pull-requests.jsonl"
@@ -659,8 +659,8 @@ def merge_refusal(record: dict[str, Any], problems: list[str]) -> str:
 def stop_demand(record: dict[str, Any], problems: list[str], accepted: bool = True) -> str:
     """The one interruption a pull request gets: merge it, or say why it cannot be.
 
-    `accepted` is whether an unspent `+merge` is on record, and without it this does not
-    demand a merge at all. The demand used to read "there is no reviewer and no approval
+    `accepted` is whether a `+merge` on record covers this pull request, and without it
+    this does not demand a merge at all. The demand used to read "there is no reviewer and no approval
     step in this repository", which was true about GitHub and false about the product: the
     reviewer is the founder and the review happens in the chat. So a session that had been
     told "не кати, буду смотреть" was instructed on every turn to merge anyway, and had to
@@ -696,11 +696,11 @@ def stop_demand(record: dict[str, Any], problems: list[str], accepted: bool = Tr
         # evidence, which is the opposite of what this plugin is for.
         return (
             f"claude-bestpractice: pull request {named} is open, every check passes, and this "
-            "turn was about to end without it being merged. An unspent `+merge` is on "
-            "record in this repository.\n"
-            "That record carries no pull request, so it may have been given for other "
-            "work: if it was meant for this one, merge it now — a pull request left open "
-            "is work that is finished everywhere except where it counts.\n"
+            "turn was about to end without it being merged. A `+merge` that covers it is "
+            "on record in this repository.\n"
+            "That record cannot say what the founder had in mind, so it may have been "
+            "given for other work: if it was meant for this one, merge it now — a pull "
+            "request left open is work that is finished everywhere except where it counts.\n"
             "If it was not, or you believe this must not be merged yet, say so to the "
             "founder in one line and leave it open; this will not be raised again."
         )
@@ -944,6 +944,88 @@ def about_current_branch(tool_name: str, command: str) -> bool:
         return False
     found = _gh_subcommand(command, "merge", _MERGES_SHELL)
     return bool(found is not None and not _number(found))
+
+
+# How a merge is covered by the founder's word: as one of the pull requests a `+merge`
+# named, or by the single merge a `+merge` allows when it named none.
+POOLED, ONCE = "pooled", "once"
+
+
+def _entry(record: dict[str, Any]) -> str:
+    """One pull request, as a `+merge` names it: its branch and the moment it was opened.
+
+    The moment as well as the branch, because a branch carries on after its pull request is
+    merged and gets a NEW one — which nobody has looked at, and no earlier word covers.
+    """
+    return f"{record.get('branch')}@{float(record.get('opened_at') or 0):.3f}"
+
+
+def _pool(ctx: GitContext) -> list[str]:
+    return (config.asked_for(ctx, config.MERGE_POOL) or "").split()
+
+
+def accept_merges(ctx: GitContext, approvals: dict[str, str],
+                  session_id: str) -> dict[str, str]:
+    """The founder's word as it is recorded: a `+merge` names the pull requests it accepts.
+
+    One `+merge` allowed one merge, so a session that had finished ten pull requests got
+    the founder to say it ten times, in ten messages, about work they had already looked
+    at together. Now it accepts every pull request the session it was said to has open at
+    that moment, each once.
+
+    That session's, not the clone's. The word is typed into one chat about the work in
+    it; read across every session it would merge a sibling's pull request the founder had
+    told that sibling to leave alone, which is #192 again with ten times the reach. And
+    with none open it is what it always was — the one merge of the work just accepted,
+    which the session opens, checks and merges by itself (decision 0010).
+
+    Pull requests named by an earlier word and still open stay named.
+    """
+    if config.APPROVE_MERGE not in approvals:
+        return approvals
+    from . import sessions
+
+    mine = sessions.identities(ctx, session_id)
+    still_open = {_entry(record): record for record in outstanding(ctx)}
+    named = {entry for entry, record in still_open.items() if record.get("session_id") in mine}
+    if not named:
+        return approvals
+    kept = {entry for entry in _pool(ctx) if entry in still_open}
+    rest = {key: value for key, value in approvals.items() if key != config.APPROVE_MERGE}
+    return {**rest, config.MERGE_POOL: " ".join(sorted(kept | named))}
+
+
+def named_by(ctx: GitContext, number: int, current: bool = False) -> dict[str, Any] | None:
+    """The open pull request a merge names, whichever branch it is on. None when unknown.
+
+    Not `gated_by`: that one answers "is this merge about the branch checked out here?",
+    and a numbered merge of another branch is not. This answers "which pull request is
+    it?", which is what a `+merge` that named several has to be asked.
+    """
+    records = _records(ctx)
+    record = records.get(ctx.branch) if current or not number else records.get(_numbered(ctx, number))
+    return record if record and record.get("state") == OPEN else None
+
+
+def acceptance(ctx: GitContext, record: dict[str, Any] | None) -> str:
+    """How the founder's word covers merging `record`: `POOLED`, `ONCE`, or "" when it does not."""
+    if record is not None and _entry(record) in _pool(ctx):
+        return POOLED
+    return ONCE if config.approved(ctx, config.APPROVE_MERGE) else ""
+
+
+def spend(ctx: GitContext, record: dict[str, Any] | None, cover: str) -> None:
+    """Take this merge off what the founder's word covers. Each pull request merges once."""
+    if cover == ONCE:
+        config.clear_switch(ctx, config.APPROVE_MERGE)
+        return
+    if cover != POOLED or record is None:
+        return
+    left = [entry for entry in _pool(ctx) if entry != _entry(record)]
+    if left:
+        config.record_switches(ctx, {config.MERGE_POOL: " ".join(left)})
+    else:
+        config.clear_switch(ctx, config.MERGE_POOL)
 
 
 def gated_by(ctx: GitContext, number: int, current: bool = False) -> dict[str, Any] | None:

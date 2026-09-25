@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import config, hookio, inbox, redact, sessions  # noqa: E402
+from claude_bestpractice import config, hookio, inbox, pullrequest, redact, sessions  # noqa: E402
 from claude_bestpractice.gitctx import resolve  # noqa: E402
 
 MAX_TASK_CHARS = 600
@@ -372,7 +372,9 @@ def main() -> None:
     event = hookio.read_event()
     ctx = hookio.repo(event.cwd or os.getcwd())
 
-    prompt = strip_envelopes(event.prompt or "")
+    # Claude Code's `/goal` arrives as typed. Its condition is the instruction and the
+    # command is not; `/goal clear` and `/goal` alone instruct nothing and change nothing.
+    prompt = sessions.without_the_goal_command(strip_envelopes(event.prompt or ""))
     if prompt:
         # Scrubbed AT CAPTURE, because this string does not stay here. It fans out to the
         # session record, the sibling sessions' board, `claude-bp status`, every scope-
@@ -403,7 +405,16 @@ def main() -> None:
         # From the message as it ARRIVED, and only the part of it the founder typed:
         # `founders_word` says what is left out and why.
         typed = redact.strip_control(founders_word(event.prompt or ""))
-        config.record_switches(ctx, config.approvals_in(typed))
+        # A `+merge` names the pull requests this session has open as it is said, so that
+        # one word covers all the finished work in the chat rather than one merge of it.
+        # Naming them reads the session registry, and a word that cannot be pooled is still
+        # the word: recorded as the one merge it always was, never lost with the pool.
+        approvals = config.approvals_in(typed)
+        try:
+            approvals = pullrequest.accept_merges(ctx, approvals, event.session_id)
+        except Exception:  # noqa: BLE001 - see above: the word outlives its pool
+            approvals = config.approvals_in(typed)
+        config.record_switches(ctx, approvals)
 
     # The founder's word is recorded above, before this: a session whose record is missing
     # is registered here, which takes locks and git calls, and a gate that asked for the
@@ -434,11 +445,7 @@ def main() -> None:
         # the files the founder first asked for into drift. Bounded, because unbounded
         # growth in a session record is how a fail-closed gate gets slow.
         fresh = extract_paths(prompt, ctx.worktree_root)
-        merged = sorted(set(rec.task_paths) | set(fresh))
-        # And the fan-out budget starts again. The founder asking a second question is
-        # a new piece of work, not a continuation of the delegation the last one needed.
-        updates: dict[str, object] = {"task_paths": merged[:MAX_TASK_PATHS],
-                                      "spawns_this_turn": 0}
+        statement = ""
         # The statement follows the founder rather than freezing at the first thing they
         # said. It used to be written once and never again, so a session that had long
         # since moved on was still being measured against "посмотри заново бд" — and every
@@ -470,7 +477,6 @@ def main() -> None:
             statement = safe[:MAX_TASK_CHARS]
             if len(safe) > MAX_TASK_CHARS:
                 statement += " […truncated; this is not the whole instruction]"
-            updates["task_statement"] = statement
             # And onto the board, now rather than at the first write. Between those two
             # moments every sibling deciding what is safe to touch read an empty board
             # while somebody was already working — and the card, when it came, described
@@ -486,10 +492,12 @@ def main() -> None:
                 plan.open_for(ctx, statement, event.session_id,
                               str(event.raw.get("session_id") or ""))
         # Paths from the ORIGINAL: redaction rewrites credential-shaped tokens, and a
-        # filename is not a credential. Scrubbing first would lose real paths.
-        sessions.touch(ctx, event.session_id, **updates)
-    else:
-        sessions.touch(ctx, event.session_id, spawns_this_turn=0)
+        # filename is not a credential. Scrubbing first would lose real paths. Under every
+        # id this session has, because the Stop gate reads whichever one it ends as.
+        sessions.instruct(ctx, event.session_id, fresh, statement, MAX_TASK_PATHS)
+    # And the fan-out budget starts again. The founder asking a second question is a new
+    # piece of work, not a continuation of the delegation the last one needed.
+    sessions.touch(ctx, event.session_id, spawns_this_turn=0)
 
     hookio.emit_silent()
 

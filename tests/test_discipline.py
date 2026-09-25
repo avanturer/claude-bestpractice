@@ -26,6 +26,19 @@ class TestStubDetection(unittest.TestCase):
     def test_a_pass_only_function_is_a_stub(self):
         self.assertIn("stub", self.kinds("a.py", "def charge(amount):\n    pass\n"))
 
+    def test_a_file_that_warns_is_read_without_printing_the_warning(self):
+        """The Stop hook's stderr is what the founder reads under a refusal, and it carried
+        `<unknown>:352: SyntaxWarning: invalid escape sequence` about a file of theirs that
+        the refusal never named (#236). The stub in that file is still found."""
+        import warnings
+
+        source = 'PATTERN = "' + chr(92) + 's+"\n\ndef charge(amount):\n    pass\n'
+        with warnings.catch_warnings(record=True) as printed:
+            warnings.simplefilter("always")
+            kinds = self.kinds("a.py", source)
+        self.assertEqual([], [str(w.message) for w in printed])
+        self.assertIn("stub", kinds)
+
     def test_not_implemented_is_caught_in_python(self):
         self.assertIn("not-implemented", self.kinds("a.py", "def f():\n    raise NotImplementedError\n"))
 

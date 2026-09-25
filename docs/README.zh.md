@@ -4,7 +4,7 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-1.69.4-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-1.70.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-2168%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
@@ -195,12 +195,12 @@ Stop gate **丢弃智能体的自述文字**，自己去运行你的测试套件
 ### 三件需要你亲口许可的事
 
 有些操作无法通过重跑来撤销，而且再多的绿色也不能说明那正是你想要的。每一件都在等待**你
-自己**消息里的一个字面量——由读取你消息的那个钩子读到——并且**用过即失效**：一句话，一次
-操作，绝不会变成长期授权。
+自己**消息里的一个字面量——由读取你消息的那个钩子读到——并且**用过即失效**，绝不会变成长
+期授权。
 
 | 你输入 | 允许的操作 | 次数 |
 | --- | --- | --- |
-| `+merge` | 合并已打开的 PR | 一次合并 |
+| `+merge` | 合并本对话已打开的 PR | 每个一次；若没有已打开的，则下一次合并 |
 | `+release` | 发布到生产环境 | 一次发布 |
 | `+migration` | 迁移中的破坏性 DDL | 一次迁移 |
 

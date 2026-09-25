@@ -19,7 +19,7 @@ import shlex
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from . import store
 from .gitctx import GitContext
@@ -480,6 +480,9 @@ def _a_switch(key: str) -> bool:
 APPROVE_MERGE = "approve:merge"
 APPROVE_RELEASE = "approve:release"
 APPROVE_MIGRATION = "approve:migration"
+# The pull requests one `+merge` accepted when the session it was said to had some open:
+# each of them, once, rather than whichever merge came next (`pullrequest.accept_merges`).
+MERGE_POOL = "approve:merge:pool"
 
 # A SYMBOL, not the word "ok". The literal was `merge ok`, and the founder of this
 # repository writes Russian — so the most natural thing they could say, «мерджи», opened
@@ -545,12 +548,17 @@ ACCEPTANCE_GRACE = 5.0
 
 def awaited(ctx: GitContext, key: str) -> bool:
     """`approved`, allowing the founder's word `ACCEPTANCE_GRACE` seconds to be recorded."""
+    return bool(within_grace(lambda: approved(ctx, key)))
+
+
+def within_grace(check: Callable[[], Any]) -> Any:
+    """`check()`, asked again for up to `ACCEPTANCE_GRACE` seconds until it answers."""
     until = time.monotonic() + ACCEPTANCE_GRACE
-    while not approved(ctx, key):
-        if time.monotonic() >= until:
-            return False
+    while True:
+        found = check()
+        if found or time.monotonic() >= until:
+            return found
         time.sleep(0.2)
-    return True
 
 
 def record_switches(ctx: GitContext, asked: dict[str, str]) -> None:

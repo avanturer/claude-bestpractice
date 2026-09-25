@@ -1807,7 +1807,8 @@ def _working_blobs(ctx, paths: list[str]) -> dict[str, str]:
     return dict(zip(paths, shas)) if proc.returncode == 0 and len(shas) == len(paths) else {}
 
 
-def scope_drift(changed: list[str], task_paths: list[str], exempt: list[str]) -> list[str]:
+def scope_drift(changed: list[str], task_paths: list[str], exempt: list[str],
+                declared: tuple[str, ...] | list[str] = ()) -> list[str]:
     """Files touched that the task never mentioned.
 
     With the fix already applied and abstention correct, four frontier models still
@@ -1817,14 +1818,19 @@ def scope_drift(changed: list[str], task_paths: list[str], exempt: list[str]) ->
     A task naming a directory covers everything under it; a task naming no path at all
     disables the check rather than blocking everything, because an empty task statement
     is our failure to capture, not the agent's failure to comply.
+
+    `declared` is what this session's cards on the board name. It widens what the task
+    covers and never turns the check on by itself: a file the board already says this
+    session is working on is not quiet, which is all drift is about (#236).
     """
     if not task_paths:
         return []
+    covered = [*task_paths, *declared]
     drift = []
     for rel in changed:
         if any(rel == p or rel.startswith(p.rstrip("/") + "/") for p in exempt):
             continue
-        if any(rel == p or rel.startswith(p.rstrip("/") + "/") or p in rel for p in task_paths):
+        if any(rel == p or rel.startswith(p.rstrip("/") + "/") or p in rel for p in covered):
             continue
         drift.append(rel)
     return drift

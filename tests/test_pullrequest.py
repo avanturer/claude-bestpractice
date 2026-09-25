@@ -1130,13 +1130,17 @@ class TestMergingSomebodyElsesPullRequest(PRCase):
     carries number 0. The guard that was meant to say "not ours" therefore never fired.
     """
 
+    # The founder's word is given BEFORE this branch's pull request opens, in both cases
+    # below. Said while it is open, `+merge` names that pull request and nothing else, so
+    # it would not cover #501 at all — asserted on its own in `TestOneWordCoversTheChatsPool`.
+
     def test_a_numbered_merge_is_not_judged_on_a_branch_it_is_not_about(self):
         self.write("src/app.py", "x = 1\n")
         self.commit("add the app module")
         self.start()
+        self.accept()
         self.open_a_pr()
         evidence.record_red(self.ctx(), ["pytest"], "1 failed")
-        self.accept()
 
         proc = self.tool("Bash", {"command": "gh pr merge 501 --squash"})
         self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
@@ -1154,8 +1158,8 @@ class TestMergingSomebodyElsesPullRequest(PRCase):
         evidence.record_green(self.ctx(), ["pytest"])
         git(["remote", "add", "origin", "https://github.com/o/r.git"], self.repo)
         self.start()
-        self.open_a_pr()
         self.accept()
+        self.open_a_pr()
 
         proc = self.tool("Bash", {"command": "gh pr merge 501 --squash"})
         self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
@@ -1195,6 +1199,93 @@ class TestMergingSomebodyElsesPullRequest(PRCase):
         evidence.record_red(self.ctx(), ["pytest"], "1 failed")
 
         self.assertEqual("deny", self.decision(self.tool("Bash", {"command": "gh pr merge --squash"})))
+
+
+class TestOneWordCoversTheChatsPool(PRCase):
+    """One `+merge` for every pull request the chat has finished, not one per message.
+
+    A session that had finished ten pull requests got the founder to write `+merge` ten
+    times, in ten messages, about work they had already looked at together. The word now
+    names every pull request that session has open as it is said, each once — and only
+    those: never one opened after it, never a sibling's (#192), never one nobody showed
+    them.
+    """
+
+    POOL = ((61, "feat/a"), (62, "feat/b"), (63, "feat/c"))
+
+    def open_pr(self, number: int, head: str, session_id: str = "s1") -> None:
+        """The request and the response, as `open_a_pr` does, for a branch of its own."""
+        tool_input = {"owner": "o", "repo": "r", "title": "t", "head": head, "base": "main"}
+        self.tool("mcp__github__create_pull_request", tool_input, session_id)
+        self.gate("pr-opened", {
+            "session_id": session_id, "hook_event_name": "PostToolUse",
+            "tool_name": "mcp__github__create_pull_request", "tool_input": tool_input,
+            "tool_response": {"url": f"https://github.com/o/r/pull/{number}"},
+        })
+
+    def merge(self, number: int, session_id: str = "s1"):
+        return self.tool("mcp__github__merge_pull_request",
+                         {"owner": "o", "repo": "r", "pullNumber": number}, session_id)
+
+    def with_the_pool_open(self) -> None:
+        self.start()
+        for number, head in self.POOL:
+            self.open_pr(number, head)
+        self.accept()
+
+    def test_one_word_merges_every_pull_request_the_chat_has_open(self):
+        self.with_the_pool_open()
+        for number, _head in self.POOL:
+            with self.subTest(number=number):
+                proc = self.merge(number)
+                self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
+
+    def test_each_of_them_merges_once(self):
+        self.with_the_pool_open()
+        self.merge(61)
+        self.assertEqual("deny", self.decision(self.merge(61)))
+        self.assertNotEqual("deny", self.decision(self.merge(62)))
+
+    def test_a_pull_request_opened_after_the_word_is_not_covered(self):
+        """Nobody showed it to them. With the chat's pool named, the word is not also one
+        more merge of whatever comes next — that is how work the founder never saw lands."""
+        self.with_the_pool_open()
+        self.open_pr(64, "feat/d")
+        self.assertEqual("deny", self.decision(self.merge(64)))
+
+    def test_a_pull_request_nobody_opened_here_is_not_covered(self):
+        self.with_the_pool_open()
+        self.assertEqual("deny", self.decision(self.tool("Bash", {"command": "gh pr merge 501"})))
+
+    def test_a_siblings_pull_request_is_not_covered(self):
+        """The word is typed into one chat. Read across the clone it would merge a pull
+        request the founder had told another session to leave alone (#192)."""
+        self.start("s2")
+        self.open_pr(71, "feat/s2", session_id="s2")
+        self.with_the_pool_open()
+        self.assertEqual("deny", self.decision(self.merge(71, session_id="s2")))
+
+    def test_with_nothing_open_it_is_still_the_one_merge_of_the_work_accepted(self):
+        """Decision 0010's flow, unchanged: accepted in the chat, then opened and merged."""
+        self.start()
+        self.accept()
+        self.open_pr(61, "feat/a")
+        self.assertNotEqual("deny", self.decision(self.merge(61)))
+        self.open_pr(62, "feat/b")
+        self.assertEqual("deny", self.decision(self.merge(62)))
+
+    def test_a_merge_asked_for_before_the_word_was_recorded_goes_through(self):
+        """#232 for the pool: the wait asks the pool again, not only the one-merge flag."""
+        self.start()
+        self.open_pr(61, "feat/a")
+        merging = a_gate_underway("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse",
+            "tool_name": "mcp__github__merge_pull_request",
+            "tool_input": {"owner": "o", "repo": "r", "pullNumber": 61}}, self.repo)
+        time.sleep(2)
+        self.accept()
+        proc = answer_of(merging)
+        self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
 
 
 class TestASecondPullRequestIsNotTheFirst(PRCase):

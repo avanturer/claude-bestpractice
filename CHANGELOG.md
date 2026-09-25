@@ -1,5 +1,74 @@
 # Changelog
 
+## v1.70.0
+
+`+merge` accepts every pull request the chat has open, and the scope-drift gate measures
+against the card on the board instead of the founder's last message (#236).
+
+### One `+merge` for the chat's finished work
+
+A session that finished ten pull requests got the founder to write `+merge` ten times, in ten
+messages, about work they had already looked at in that chat. Each word allowed one merge.
+
+`+merge` now names the pull requests the session it was said to has open at that moment, and
+allows each of them once, in any order, from any of that session's trees. With none open it
+is what it was: one merge, of the work just accepted, which the session opens and merges
+itself (decision 0010).
+
+It never covers a pull request opened after the word, a sibling session's, or one this plugin
+never saw opened. Read across the clone, the word said in one chat would merge a pull request
+the founder told another session to leave alone (#192). The pool plus one more merge was
+rejected too: that is how a pull request nobody showed them lands. If the pool cannot be
+worked out, for example because the session registry is unreadable, the word is still recorded
+as the one merge it always was. Decision 0023 records the rule and what was rejected.
+
+### The card is the task (#236)
+
+Two long sessions on 1.69.4, both with a card claimed. In the first a `/goal` was running.
+The founder asked a question in passing, «а ты же всё по v2 системе скоринга делаешь…», and
+the session rebuilt a training config the goal needed. At the next Stop the gate called the
+config drift, quoted the question as the task, and asked for a revert. It also printed
+`<unknown>:352: SyntaxWarning: invalid escape sequence '\s'` about a file nobody had named. In
+the second, after several compactions, the gate quoted the session's first message as the
+task.
+
+- **The gate never read the card.** `claim` requires a card's paths and its refusal says they
+  are what the drift gate measures against. The gate read only paths found in the founder's
+  messages, and quoted their last message that read as an instruction. A question counts.
+  Now the refusal quotes the card this session holds (`Task: 0042 <title>`). The paths on the
+  cards it holds or has closed widen the task. They never turn the check on by themselves,
+  so a session whose messages named no file is still not measured.
+- **The way out is the session's own** (decision 0014). "Ask the founder to name those paths"
+  is gone. The refusal prints `claude-bp-plan update <id> --paths …` with what the card
+  already names plus what drifted. Run as printed, it clears the drift and puts the file on
+  the board.
+- **The founder's word reached one of the session's ids.** A compaction puts the shell back
+  in the main checkout, so the next message was recorded there. The turn then ended in the
+  tree, whose record held the first message. The statement and paths now reach every id of
+  the session, and never another process that shares its harness id.
+- **`/goal` arrives as typed**, measured on 2.1.282. The command became part of the task.
+  `/goal <condition>` now records the condition. `/goal` and `/goal clear` record nothing.
+  Repair 0034 takes `/goal` off statements and unclaimed cards already recorded.
+- **The warning came from parsing the founder's own Python.** From 3.12 CPython prints it
+  by default, onto the Stop hook's stderr. Parsing now prints nothing.
+
+A question still replaces the statement when no card is held. The gate no longer reads the
+statement when one is held. Freezing it on a question mark would pin it for founders who ask
+for work as a question, which is the stale-statement symptom this fixes.
+
+### How it was checked
+
+Both reports replayed end to end through the real hooks. The printed command is run as
+printed, and the next Stop passes. For `+merge`: a pool of three merges on one word, each once;
+a pull request opened after the word, a sibling's, and one nobody opened here are refused; a
+word arriving late still covers the pool (#232). Each fix has a test that fails against 1.69.4.
+The rest guard what must not change.
+
+The first full `make check` caught one regression the module tests had not run into. A test
+modelled two `claude -p` children under one harness id. Run inside a Claude Code session, both
+hooks resolved that session's CLI as their owner, so the fixture was one session. It now names
+each child's process, and a mutation that sends the instruction to every record turns it red.
+
 ## v1.69.4
 
 A verdict is repeated only by the gate that reached it (#234).

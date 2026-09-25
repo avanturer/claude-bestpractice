@@ -368,15 +368,25 @@ class TestOneHarnessIdIsNotOneSession(RepoCase):
         """The bug as the founder met it: another session's task read back as your own."""
         from claude_bestpractice import sessions
 
+        from claude_bestpractice.gitctx import resolve
+
         other = self.add_worktree("second")
-        for cwd, task in ((self.repo, "change billing.py"), (other, "change export.py")):
+        # Two children are two processes. Under test both hooks walk up to the same one —
+        # the runner, or the Claude Code session running the suite — and one process under
+        # one harness id IS one session, whose instruction reaches every id it has. So each
+        # child's process is named here, the way `resolve_owner` finds its own CLI.
+        children = ((self.repo, "change billing.py", os.getpid()), (other, "change export.py", 1))
+        for cwd, _task, _pid in children:
             self.run_hook("session-start", {"session_id": "shared",
                                             "hook_event_name": "SessionStart"}, cwd=cwd)
+        for cwd, _task, pid in children:
+            record = sessions.get(resolve(cwd), self.event(cwd).session_id)
+            record.pid, record.pid_trust = pid, sessions.PID_TRUST_OWNER
+            sessions.register(resolve(cwd), record)
+        for cwd, task, _pid in children:
             self.run_hook("prompt-capture", {"session_id": "shared",
                                              "hook_event_name": "UserPromptSubmit",
                                              "prompt": task}, cwd=cwd)
-
-        from claude_bestpractice.gitctx import resolve
 
         mine = sessions.get(resolve(self.repo), self.event(self.repo).session_id)
         theirs = sessions.get(resolve(other), self.event(other).session_id)
