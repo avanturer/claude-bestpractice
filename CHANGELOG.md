@@ -25,6 +25,10 @@ times over, one of them for 61 seconds. `claude-bp doctor` paid it too.
 - The doctor runs its gates with no wait. Every word it gives is recorded before the call it
   allows, so the wait only delayed the refusals it provokes.
 
+`make check` on four cores: 900s before, 615s after, over the same suite. `RELEASING.md` now
+also records the order that avoids paying for it twice: the module of every changed file,
+then `check-fast`, then one `make check`.
+
 ## v1.70.0
 
 `+merge` accepts every pull request the chat has open, and the scope-drift gate measures
