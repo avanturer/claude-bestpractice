@@ -1,5 +1,72 @@
 # Changelog
 
+## v1.69.5
+
+The scope-drift gate measures against the card on the board, not the founder's last message
+(#236).
+
+### What happened
+
+Two long sessions on 1.69.4, both with a card claimed on the board.
+
+In the first a `/goal` was running. The founder asked a question in passing, «а ты же всё по
+v2 системе скоринга делаешь…», and the session rebuilt a training config the goal needed. At
+the next Stop the gate said the config had drifted, quoted the question as the task, and asked
+for the change to be reverted. It also printed `<unknown>:352: SyntaxWarning: invalid escape
+sequence '\s'` about a file nobody had named.
+
+In the second, after several compactions, the gate quoted the session's first message as
+the task. The current request had a card with `--paths`.
+
+### Why
+
+- **The gate never read the card.** `claim` requires a card's paths, and its refusal says
+  they are what the drift gate measures against. The gate measured only the paths found in
+  the founder's messages, and quoted whatever they had last said that read as an instruction.
+  A question counts as one.
+- **The founder's word was recorded under one of the session's ids.** A session has one id
+  in the main checkout and another in its tree. A compaction puts the shell back in the main
+  checkout, so the next message was recorded there. The session then went back into its tree
+  and ended its turn as the tree's id, whose record still held what was said when it entered
+  the tree.
+- **`/goal` arrives as typed**, measured on 2.1.282: `/goal <condition>`, command included.
+  So the command became part of the task, and `/goal clear` could become the task of a new
+  session.
+- **The warning came from reading the founder's own Python.** The unfinished-work check parses
+  changed files, and from 3.12 CPython prints a warning for a regex written in a plain string.
+  That warning landed on the Stop hook's stderr.
+
+### What changed
+
+- **The card is the task.** The drift refusal quotes the card this session holds
+  (`Task: 0042 <title>`). The paths on the cards it holds or has closed widen what the task
+  covers. They never turn the check on by themselves: a session whose messages named no file
+  is still not measured, as before.
+- **The way out is the session's own** (decision 0014). "Ask the founder to name those
+  paths" is gone. The refusal prints `claude-bp-plan update <id> --paths …` with what the card
+  already names plus the files that drifted. Running it as printed clears the drift, and the
+  file is now on the board where every sibling can see it.
+- **The founder's word reaches every id the session has.** The statement and the paths are
+  written to all of them, and never to another process that shares the harness id.
+- **`/goal <condition>` records the condition.** `/goal`, `/goal clear` and its aliases
+  record nothing.
+- **Parsing a founder's file prints nothing.**
+
+A question still replaces the statement when no card is held. The gate no longer reads the
+statement when one is, and freezing it on a question mark would pin it for founders who ask
+for work as a question, the stale-statement symptom this release fixes.
+
+Repair 0034 takes `/goal` off statements and off unclaimed cards opened from one.
+
+### How it was checked
+
+The first report replayed end to end through the real hooks. A goal is set, a card is claimed
+naming the config, the question is asked, the config changes: 1.69.4 refuses and quotes the
+question, this version passes. The second is replayed across two trees, with the message
+arriving in the main checkout and the Stop in the tree. The printed command is run as printed,
+and the next Stop passes. Each fix has a test that fails against 1.69.4. The rest guard what
+must not change: a sibling's card covers nothing here, and no path named still means no check.
+
 ## v1.69.4
 
 A verdict is repeated only by the gate that reached it (#234).
