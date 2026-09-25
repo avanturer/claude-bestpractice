@@ -37,6 +37,13 @@ BIN = REPO_ROOT / "plugin" / "bin"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
+from claude_bestpractice import config as _config  # noqa: E402
+
+# No wait for the founder's word in the hooks the suite runs: each refusal it provokes paid
+# five seconds for a word nobody was going to send, about four minutes of `make check`. The
+# tests about the wait itself restore it with `real_acceptance_grace` (#232).
+_os.environ[_config.GRACE_ENV] = "0"
+
 
 def harness_matches(matcher: str, value: str) -> bool:
     """Whether Claude Code fires a hook with this `matcher` for `value` (a tool's name).
@@ -243,6 +250,18 @@ def hooks_at_once(name: str, events: list[dict], cwd, env: dict | None = None) -
             said.append(gate.stdout.read())
         gate.wait()
     return said
+
+
+def real_acceptance_grace(case: unittest.TestCase) -> None:
+    """The gates `case` runs wait for the founder's word as long as they do for real.
+
+    For the tests about that wait (#232). Every other test runs its gates with none.
+    """
+    from unittest import mock
+
+    patched = mock.patch.dict(_os.environ, {_config.GRACE_ENV: str(_config.ACCEPTANCE_GRACE)})
+    patched.start()
+    case.addCleanup(patched.stop)
 
 
 def a_gate_underway(name: str, event: dict, cwd) -> subprocess.Popen:

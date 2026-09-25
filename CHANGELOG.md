@@ -1,5 +1,34 @@
 # Changelog
 
+## v1.70.1
+
+The suite and `claude-bp doctor` no longer wait five seconds for a founder's word nobody is
+going to send.
+
+### What was slow
+
+v1.69.3 made the gates wait up to five seconds for `+merge`, `+release` or `+migration`
+before refusing, because the founder's message can reach the session before it is recorded
+(#232). That is right for a session. It was also paid by every refusal the suite provokes on
+purpose, where no word ever comes. Profiled across the whole suite, about 235 of 892 seconds
+of test time were that wait: 21 tests at 5 to 7 seconds each, and some that refuse several
+times over, one of them for 61 seconds. `claude-bp doctor` paid it too.
+
+### What changed
+
+- `CLAUDE_BESTPRACTICE_ACCEPTANCE_GRACE` shortens the wait. It can never lengthen it: a
+  longer wait would run `pre-tool` past the harness's timeout, where the call goes through
+  unjudged. A shorter one only refuses sooner. A value that does not parse is the real wait.
+- The suite sets it to 0 for the gates it runs. The tests about the wait itself, the merge,
+  promotion and migration races of #232 and the `+merge` pool, set the real five seconds
+  back. All five still fail if the wait is taken out of the gate.
+- The doctor runs its gates with no wait. Every word it gives is recorded before the call it
+  allows, so the wait only delayed the refusals it provokes.
+
+`make check` on four cores: 900s before, 615s after, over the same suite. `RELEASING.md` now
+also records the order that avoids paying for it twice: the module of every changed file,
+then `check-fast`, then one `make check`.
+
 ## v1.70.0
 
 `+merge` accepts every pull request the chat has open, and the scope-drift gate measures

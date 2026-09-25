@@ -1399,7 +1399,7 @@ def main() -> None:
                 deny_for_founder(
                     ctx, rec,
                     "claude-bestpractice: no `+merge` from the founder is on record for this "
-                    f"merge, and none arrived in the {config.ACCEPTANCE_GRACE:.0f} seconds this "
+                    f"merge, and none arrived in the {config.acceptance_grace():.0f} seconds this "
                     "gate waited for one. Passing checks mean the code works, not that the "
                     "work is wanted — and main deploys, so merging is a step towards "
                     "shipping it.\n"

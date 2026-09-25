@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import shlex
 import time
@@ -545,15 +546,31 @@ def approved(ctx: GitContext, key: str) -> bool:
 # unjudged.
 ACCEPTANCE_GRACE = 5.0
 
+# Shortens that wait, and cannot lengthen it. A refusal the suite provokes paid the full
+# five seconds for a word nobody was going to send: about four of the fourteen minutes of
+# `make check`, and five seconds of every `claude-bp doctor`. Shorter only ever refuses
+# sooner, so a session that set it would gain nothing; longer would run `pre-tool` past the
+# harness's timeout, where the call goes through unjudged, so it is not accepted.
+GRACE_ENV = "CLAUDE_BESTPRACTICE_ACCEPTANCE_GRACE"
+
+
+def acceptance_grace() -> float:
+    """`ACCEPTANCE_GRACE`, or less where `GRACE_ENV` asks for less. Never more."""
+    try:
+        asked = float(os.environ.get(GRACE_ENV, ACCEPTANCE_GRACE))
+    except ValueError:
+        return ACCEPTANCE_GRACE
+    return min(ACCEPTANCE_GRACE, max(0.0, asked))
+
 
 def awaited(ctx: GitContext, key: str) -> bool:
-    """`approved`, allowing the founder's word `ACCEPTANCE_GRACE` seconds to be recorded."""
+    """`approved`, allowing the founder's word `acceptance_grace()` seconds to be recorded."""
     return bool(within_grace(lambda: approved(ctx, key)))
 
 
 def within_grace(check: Callable[[], Any]) -> Any:
-    """`check()`, asked again for up to `ACCEPTANCE_GRACE` seconds until it answers."""
-    until = time.monotonic() + ACCEPTANCE_GRACE
+    """`check()`, asked again for up to `acceptance_grace()` seconds until it answers."""
+    until = time.monotonic() + acceptance_grace()
     while True:
         found = check()
         if found or time.monotonic() >= until:
