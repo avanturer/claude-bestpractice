@@ -29,6 +29,7 @@ it was obtained, and one that was never resolved to the CLI is not evidence of a
 from __future__ import annotations
 
 import os
+import re
 import time
 from dataclasses import dataclass, asdict, field
 from pathlib import Path, PurePosixPath
@@ -409,6 +410,56 @@ def _with_its_instruction(ctx: GitContext, rec: SessionRecord) -> SessionRecord:
     source = max(given, key=lambda other: other.heartbeat_at)
     return touch(ctx, rec.session_id, task_statement=source.task_statement,
                  task_paths=list(source.task_paths)) or rec
+
+
+def instruct(ctx: GitContext, session_id: str, paths: list[str], statement: str = "",
+             limit: int = 64) -> None:
+    """Record what the founder said under every id this one session has, not the one it spoke to.
+
+    `_with_its_instruction` hands a new id the instruction ONCE, when the id is made. Every
+    later message was recorded under whichever id the hook happened to run as, and that
+    moves: a compaction puts the shell back in the main checkout, so the next message lands
+    there, and the session `cd`s into its tree again and ends its turn as the tree's id.
+    The Stop gate read the tree's record, which still held what was said when the tree was
+    entered — "в другом чате делали редизайн…", the session's first message, quoted as the
+    task over a request three compactions later (#236).
+
+    Paths accumulate across all of them, because they are one session's; the statement,
+    when one is given, replaces on all of them.
+    """
+    mine = [rec for rec in (get(ctx, sid) for sid in identities(ctx, session_id))
+            if rec is not None]
+    known = {path for rec in mine for path in rec.task_paths} | set(paths)
+    updates: dict[str, Any] = {"task_paths": sorted(known)[:limit]}
+    if statement:
+        updates["task_statement"] = statement
+    for rec in mine:
+        touch(ctx, rec.session_id, **updates)
+
+
+# Claude Code's `/goal` reaches `UserPromptSubmit` exactly as typed, the command included —
+# measured on 2.1.282. Its words for taking a goal down are the harness's own, from its
+# documentation of the command.
+GOAL_COMMAND = re.compile(r"/goal(?:\s+|$)")
+GOAL_CLEARED = frozenset({"clear", "stop", "off", "reset", "none", "cancel"})
+
+
+def without_the_goal_command(text: str) -> str:
+    """What a founder's message instructs, with Claude Code's `/goal` taken off the front.
+
+    `/goal <condition>` instructs the condition: the harness starts the goal's first turn
+    with it as the directive, and holds it from then on where no hook sees it. The command
+    is not part of the instruction, and recorded as typed it was the task — "/goal довести
+    v4 до готовности…" on the board, on the card and in every refusal quoting it. `/goal`
+    alone asks for the status and `/goal clear` takes the goal down; neither says what to
+    do, so both come back empty. Anything else comes back as it came.
+    """
+    stripped = text.strip()
+    command = GOAL_COMMAND.match(stripped)
+    if command is None:
+        return text
+    condition = stripped[command.end():].strip()
+    return "" if condition.lower() in GOAL_CLEARED else condition
 
 
 def get(ctx: GitContext, session_id: str) -> SessionRecord | None:

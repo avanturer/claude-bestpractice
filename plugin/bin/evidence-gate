@@ -378,6 +378,84 @@ def _work_the_siblings_cannot_see(ctx) -> bool:
     return bool(delivery.commits_since(ctx, base)) or delivery.dirty(ctx)
 
 
+def _card_commands(ctx, event, paths: list[str]) -> str:
+    """The commands that put `paths` on this session's card, as a refusal prints them.
+
+    Quoted, and the card given its `--done-when`: printed any other way the second command
+    failed on the first one's card, or the first on a path with a space in it (decision
+    0020 — every command a refusal names runs as printed).
+
+    The card the founder's message already opened for this session, when there is one.
+    Sent to `add` instead, every session filed a duplicate of it and left the original
+    sitting in NEXT over finished work — a card inviting the next session to do the same
+    job again.
+    """
+    from claude_bestpractice import plan
+
+    named = shlex.quote(",".join(paths))
+    opened = plan.opened_for(ctx, str(event.raw.get("session_id") or ""))
+    if opened is not None:
+        return (
+            f"  Your founder's instruction is already on it as {opened.id} — plan it "
+            "and claim it:\n"
+            f'  claude-bp-plan update {opened.id} --paths {named} '
+            '--done-when "<what has to become true>"\n'
+            f"  then: claude-bp-plan claim {opened.id}"
+        )
+    return (
+        f'  claude-bp-plan add "<what this turn is doing>" --paths {named} '
+        '--done-when "<what has to become true>"\n'
+        "  then: claude-bp-plan claim <id>   (or claim the task you are already on)"
+    )
+
+
+# How many drifted files a refusal lists, and writes into the command that declares them.
+# Past this the work is a subsystem, and a card names that as its directory.
+DRIFT_SHOWN = 8
+
+
+def _drift_refusal(ctx, event, rec: sessions.SessionRecord, drift: list[str],
+                   held: list) -> str:
+    """What drifted, what the task was, and the command that settles it.
+
+    The task is the card this session holds, when it holds one. It used to be whatever the
+    founder said last that read as an instruction, and in a long session that is as often
+    a question asked in passing — «а ты же всё по v2 системе скоринга делаешь?» — as the
+    work: a build config the work needed was measured against the question, and the
+    session was told to revert it (#236).
+
+    The way out is the session's own (decision 0014). "Ask the founder to name those
+    paths" handed them a question about a hook; the card's paths are what this gate reads,
+    and they are also what every sibling reads to decide what is safe to touch, so
+    declaring a file there is the opposite of the quiet rewrite drift exists to catch.
+    "State why it was necessary" is not offered either: nothing here reads prose, by
+    decision 0002.
+    """
+    shown = ", ".join(drift[:DRIFT_SHOWN])
+    if len(drift) > DRIFT_SHOWN:
+        shown += f" (+{len(drift) - DRIFT_SHOWN} more)"
+    if held:
+        card = held[0]
+        # `--paths` REPLACES the card's list, so the command carries what it already names.
+        declared = (",".join(dict.fromkeys([*card.paths, *drift]))
+                    if len(drift) <= DRIFT_SHOWN else "<its files and directories>")
+        task = f"Task: {card.id} {card.title}"
+        way_out = (
+            "If it IS in scope, put it on the card — its paths are what this gate reads:\n"
+            f"  claude-bp-plan update {card.id} --paths {shlex.quote(declared)}\n"
+        )
+    else:
+        task = f"Task was: {rec.task_statement[:200]}"
+        way_out = ("If it IS in scope, put it on a card — its paths are what this gate "
+                   "reads:\n" + _card_commands(ctx, event, drift[:DRIFT_SHOWN]) + "\n")
+    return (
+        f"Scope drift: {shown} were modified but the task did not mention them.\n"
+        f"{task}\n"
+        "Revert what is out of scope. " + way_out
+        + config.switch_advice("scope_drift_block", False)
+    )
+
+
 def _take_refusal(ctx, rec) -> dict:
     """The block this session was last given, cleared from the record as it is read.
 
@@ -604,23 +682,19 @@ def main() -> None:
         # enforces, and re-raising it at every Stop of a long session is a demand nobody
         # present can satisfy.
         forgiven.update(evidence.committed(ctx, changed))
-        drift = [p for p in evidence.scope_drift(changed, rec.task_paths, exempt)
+        # And what the board says this session is working on. `claim` demands a card's
+        # paths and its refusal says they are what this gate measures against — and this
+        # gate never read them, so a session that declared a file on its card was still
+        # told to revert it, measured against whatever the founder had said last (#236).
+        from claude_bestpractice import plan
+
+        held = plan.held_by(ctx, rec.session_id)
+        declared = [path for card in held + plan.closed_by(ctx, rec.session_id)
+                    for path in card.paths]
+        drift = [p for p in evidence.scope_drift(changed, rec.task_paths, exempt, declared)
                  if p not in forgiven]
         if drift:
-            shown = ", ".join(drift[:8]) + (f" (+{len(drift) - 8} more)" if len(drift) > 8 else "")
-            # "or state why it was necessary" was a false promise, and it was this gate
-            # making it two lines above "your description was not read". Nothing reads
-            # prose here, by decision 0002 — so an agent whose work is correct and whose
-            # scope reading is wrong had exactly one available move: revert correct work.
-            # Reported from a real session that hit it eight times running. The remedies
-            # named now are the ones that exist.
-            problems.append(
-                f"Scope drift: {shown} were modified but the task did not mention them.\n"
-                f"Task was: {rec.task_statement[:200]}\n"
-                "Revert what is out of scope. If it IS in scope, this gate cannot be told "
-                "so in prose — ask the founder to name those paths in their next message.\n"
-                + config.switch_advice("scope_drift_block", False)
-            )
+            problems.append(_drift_refusal(ctx, event, rec, drift, held))
 
     # A question a sibling put to this session, unanswered. The same shape as an open pull
     # request and an unlisted change: something somebody is waiting on that the session
@@ -682,31 +756,12 @@ def main() -> None:
             # Quoted, and the card given its `--done-when`: printed any other way the second
             # command failed on the first one's card, or the first on a path with a space in
             # it (decision 0020 — every command a refusal names runs as printed).
-            named = shlex.quote(",".join(changed[:3]))
-            # The card the founder's message already opened for this session, when there is
-            # one. Sent to `add` instead, every session filed a duplicate of it and left the
-            # original sitting in NEXT over finished work — a card inviting the next session
-            # to do the same job again.
-            opened = plan.opened_for(ctx, str(event.raw.get("session_id") or ""))
-            if opened is not None:
-                how = (
-                    f"  Your founder's instruction is already on it as {opened.id} — plan it "
-                    "and claim it:\n"
-                    f'  claude-bp-plan update {opened.id} --paths {named} '
-                    '--done-when "<what has to become true>"\n'
-                    f"  then: claude-bp-plan claim {opened.id}"
-                )
-            else:
-                how = (
-                    f'  claude-bp-plan add "<what this turn is doing>" --paths {named} '
-                    '--done-when "<what has to become true>"\n'
-                    "  then: claude-bp-plan claim <id>   (or claim the task you are already on)"
-                )
             problems.append(
                 f"Nothing on the board says this session is working: {len(changed)} file(s) "
                 "changed and no task in the ledger is claimed by it.\n"
                 "  Every sibling session reads the board to decide what is safe to touch, "
-                "and an unlisted change is invisible to all of them.\n" + how
+                "and an unlisted change is invisible to all of them.\n"
+                + _card_commands(ctx, event, changed[:3])
             )
 
     if cfg.compare_dependencies:

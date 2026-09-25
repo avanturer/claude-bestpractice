@@ -17,6 +17,16 @@ class TestExtraction(unittest.TestCase):
         self.assertEqual(defines, {"handler", "Runner"})
         self.assertIn("join", references)
 
+    def test_python_that_warns_is_read_without_printing_the_warning(self):
+        """Read inside the hooks, whose stderr the founder sees (#236)."""
+        import warnings
+
+        with warnings.catch_warnings(record=True) as printed:
+            warnings.simplefilter("always")
+            defines, _ = repomap.extract_python('P = "' + chr(92) + 's"\ndef handler():\n    return P\n')
+        self.assertEqual([], [str(w.message) for w in printed])
+        self.assertEqual({"handler"}, defines)
+
     def test_python_falls_back_on_a_syntax_error(self):
         defines, _ = repomap.extract_python("def broken(:\nfunction other() {}\n")
         self.assertIn("other", defines)

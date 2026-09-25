@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import ast
 import re
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -74,6 +75,20 @@ def _read(path: Path) -> str:
         return ""
 
 
+def parse_quietly(source: str) -> ast.Module:
+    """`ast.parse`, without the warnings CPython prints about the file it is parsing.
+
+    A regex written in a plain string rather than a raw one makes CPython warn about an
+    invalid escape sequence, and from 3.12 that warning is printed by default. This runs
+    inside the Stop hook, so the founder read `<unknown>:352: SyntaxWarning: invalid
+    escape sequence` under a refusal about something else: line 352 of a file the refusal
+    never named (#236). The file is theirs, and whether it warns is their linter's call.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return ast.parse(source)
+
+
 def python_stubs(source: str, relpath: str) -> list[Finding]:
     """Functions whose entire body is a placeholder, via AST rather than pattern.
 
@@ -81,7 +96,7 @@ def python_stubs(source: str, relpath: str) -> list[Finding]:
     same thing cannot tell a stub from a deliberately empty protocol method.
     """
     try:
-        tree = ast.parse(source)
+        tree = parse_quietly(source)
     except (SyntaxError, ValueError):
         # ValueError, not SyntaxError, is what a NUL byte raises before 3.11 — and 3.9
         # is the declared floor. Uncaught it escaped into the fail-closed Stop handler,

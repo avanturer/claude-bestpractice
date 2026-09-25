@@ -1097,6 +1097,46 @@ class TestAStatementThatWasOnlyASwitchIsForgotten(RepoCase):
         self.assertEqual(real, self.statement_now())
 
 
+class TestTheGoalCommandIsTakenOffWhatItWasRecordedIn(RepoCase):
+    """`/goal <condition>` was captured as typed, so a session working toward a goal carried
+    "/goal довести v4 до готовности…" as its task, and the card its message opened was titled
+    the same (#236). A session running a goal is the one the founder is not talking to, so
+    nothing else would ever replace either."""
+
+    GOAL = "/goal довести v4 до готовности, все тесты зелёные"
+
+    def test_the_statement_keeps_the_condition(self):
+        from claude_bestpractice import sessions
+
+        sessions.adopt(self.ctx(), "s1")
+        sessions.touch(self.ctx(), "s1", task_statement=self.GOAL)
+        changed = migrate.repair(self.ctx())
+
+        self.assertEqual("довести v4 до готовности, все тесты зелёные",
+                         sessions.get(self.ctx(), "s1").task_statement)
+        self.assertTrue([line for line in changed if "/goal" in line], changed)
+
+    def test_an_unclaimed_card_it_opened_is_renamed_and_a_claimed_one_is_not(self):
+        opened = plan.add(self.ctx(), self.GOAL, source=plan.FROM_THE_FOUNDER, opened_by="s1")
+        planned = plan.add(self.ctx(), self.GOAL, source=plan.FROM_THE_FOUNDER, opened_by="s2",
+                           paths=["src/app.py"], done_when="stated")
+        plan.claim(self.ctx(), planned.id, "s2", "main")
+        migrate.repair(self.ctx())
+
+        self.assertEqual("довести v4 до готовности, все тесты зелёные",
+                         plan.find(self.ctx(), opened.id).title)
+        self.assertEqual(self.GOAL, plan.find(self.ctx(), planned.id).title)
+
+    def test_a_statement_that_only_mentions_it_is_left_alone(self):
+        from claude_bestpractice import sessions
+
+        said = "почини парсер /goal в tools/cli.py"
+        sessions.adopt(self.ctx(), "s1")
+        sessions.touch(self.ctx(), "s1", task_statement=said)
+        migrate.repair(self.ctx())
+        self.assertEqual(said, sessions.get(self.ctx(), "s1").task_statement)
+
+
 class TestTwoStoresThatFilledWithRepeats(RepoCase):
     """Both were append-only logs nobody could act on: the decision inbox had sixty rows
     carrying four sentences while `claude-bp status` pointed at it as the next action, and
