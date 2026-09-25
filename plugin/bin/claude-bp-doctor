@@ -32,7 +32,7 @@ from pathlib import Path
 BIN = Path(__file__).resolve().parent
 sys.path.insert(0, str(BIN.parent / "lib"))
 
-from claude_bestpractice import __version__, hookio  # noqa: E402
+from claude_bestpractice import __version__, config, hookio  # noqa: E402
 
 GREEN = "\033[32m" if sys.stdout.isatty() else ""
 RED = "\033[31m" if sys.stdout.isatty() else ""
@@ -70,8 +70,11 @@ def isolate(home: Path) -> None:
 
 
 def gate_env(home: Path | None = None) -> dict:
+    # No wait for a founder's word: every one the doctor gives is recorded before the call
+    # it allows, so the wait only delayed the refusals it provokes, five seconds each. What
+    # the wait is for is proven in the suite, against the real one.
     return {"HOME": str(home or os.environ["HOME"]), "PATH": os.environ.get("PATH", ""),
-            **_ISOLATED_GIT}
+            config.GRACE_ENV: "0", **_ISOLATED_GIT}
 
 
 def run_gate(

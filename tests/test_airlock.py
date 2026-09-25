@@ -8,7 +8,7 @@ import sys
 import time
 import unittest
 
-from helpers import BIN, RepoCase, a_gate_underway, answer_of
+from helpers import BIN, RepoCase, a_gate_underway, answer_of, real_acceptance_grace
 
 
 class TestIngest(RepoCase):
@@ -250,6 +250,7 @@ class TestMigrationGate(GateCase):
 
     def test_the_word_recorded_while_the_write_waits_lets_it_through(self):
         """The founder's message can reach the session before it is recorded (#232)."""
+        real_acceptance_grace(self)
         self.reach_traction()
         self.start()
         self.claim_a_task("s1", "migrations/0002_change.sql")

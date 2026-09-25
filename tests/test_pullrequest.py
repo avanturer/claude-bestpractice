@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
 import unittest
 
-from helpers import BIN, RepoCase, a_gate_underway, answer_of, git, harness_matches, sid
+from helpers import (BIN, RepoCase, a_gate_underway, answer_of, git, harness_matches,
+                     real_acceptance_grace, sid)
 
 from claude_bestpractice import board, evidence, pullrequest, store
 
@@ -996,6 +998,10 @@ class TestTheFoundersWordIsWaitedFor(PRCase):
     between. Their message had reached the session before the hook that records it had run,
     and twice in a row the session asked them for the word again."""
 
+    def setUp(self) -> None:
+        super().setUp()
+        real_acceptance_grace(self)
+
     def underway(self, command: str):
         return a_gate_underway("pre-tool", {"session_id": "s1", "hook_event_name": "PreToolUse",
                                             "tool_name": "Bash", "tool_input": {"command": command}},
@@ -1054,6 +1060,51 @@ class TestTheFoundersWordIsWaitedFor(PRCase):
         blocked.write_text("a file where the session records belong\n", encoding="utf-8")
         self.accept()
         self.assertTrue(config.approved(self.ctx(), config.APPROVE_MERGE))
+
+
+class TestTheWaitCanOnlyBeShortened(PRCase):
+    """`CLAUDE_BESTPRACTICE_ACCEPTANCE_GRACE` shortens the wait for the founder's word, which
+    only ever refuses sooner. Longer would run `pre-tool` past the harness's timeout, where
+    the call goes through unjudged — so longer is not accepted from anyone."""
+
+    def grace_with(self, value: str | None) -> float:
+        from unittest import mock
+
+        from claude_bestpractice import config
+
+        with mock.patch.dict(os.environ, {config.GRACE_ENV: value} if value is not None else {}):
+            if value is None:
+                os.environ.pop(config.GRACE_ENV, None)
+            return config.acceptance_grace()
+
+    def test_it_shortens(self):
+        self.assertEqual(0.0, self.grace_with("0"))
+        self.assertEqual(2.5, self.grace_with("2.5"))
+
+    def test_it_never_lengthens_and_never_goes_below_nothing(self):
+        from claude_bestpractice import config
+
+        for value in ("60", "inf", "1e9"):
+            with self.subTest(value=value):
+                self.assertEqual(config.ACCEPTANCE_GRACE, self.grace_with(value))
+        for value in ("-3", "nan"):
+            with self.subTest(value=value):
+                self.assertEqual(0.0, self.grace_with(value))
+
+    def test_what_it_cannot_read_is_the_real_wait(self):
+        from claude_bestpractice import config
+
+        for value in (None, "", "five", "5s"):
+            with self.subTest(value=value):
+                self.assertEqual(config.ACCEPTANCE_GRACE, self.grace_with(value))
+
+    def test_it_reaches_the_gate(self):
+        """The suite's own speed depends on it: a refusal it provokes answers at once."""
+        self.start()
+        began = time.monotonic()
+        proc = self.tool("Bash", {"command": "gh pr merge 501 --squash"})
+        self.assertEqual("deny", self.decision(proc))
+        self.assertLess(time.monotonic() - began, 3.0)
 
 
 class TestTheHarnessSendsTheToolsMergeToTheGate(unittest.TestCase):
@@ -1276,6 +1327,7 @@ class TestOneWordCoversTheChatsPool(PRCase):
 
     def test_a_merge_asked_for_before_the_word_was_recorded_goes_through(self):
         """#232 for the pool: the wait asks the pool again, not only the one-merge flag."""
+        real_acceptance_grace(self)
         self.start()
         self.open_pr(61, "feat/a")
         merging = a_gate_underway("pre-tool", {
