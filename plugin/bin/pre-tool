@@ -1389,7 +1389,13 @@ def main() -> None:
             # Waited for rather than read once: the founder's `+merge` can reach the session
             # before the hook that records it has run, and the merge it prompted was refused
             # as unaccepted while the word was on its way (#232).
-            if not config.awaited(ctx, config.APPROVE_MERGE):
+            #
+            # One word covers every pull request this session had open when it was said,
+            # each once; with none open, the one merge it always allowed.
+            current = pullrequest.about_current_branch(event.tool_name, command)
+            named = pullrequest.named_by(ctx, number, current)
+            cover = config.within_grace(lambda: pullrequest.acceptance(ctx, named))
+            if not cover:
                 deny_for_founder(
                     ctx, rec,
                     "claude-bestpractice: no `+merge` from the founder is on record for this "
@@ -1401,17 +1407,17 @@ def main() -> None:
                     "again: it can reach you before it is recorded, so run the merge once "
                     "more first.\n"
                     "  Otherwise show them what changed and ask. When they are happy they "
-                    "say `+merge` — copy it exactly — and this allows the merge once.\n"
+                    "say `+merge` — copy it exactly — and this allows every pull request "
+                    "you have open when they say it, each once; with none open, the next "
+                    "merge.\n"
                     "  Their word is read from their own message; nothing you write "
                     "can stand in for it."
                 )
-            gated = pullrequest.gated_by(
-                ctx, number, pullrequest.about_current_branch(event.tool_name, command)
-            )
+            gated = pullrequest.gated_by(ctx, number, current)
             if gated is None:
                 # Somebody else's pull request: nothing checked here is about it (#135).
-                # Still one word, one merge.
-                config.clear_switch(ctx, config.APPROVE_MERGE)
+                # Still taken off what the word covers.
+                pullrequest.spend(ctx, named, cover)
             else:
                 base = str(gated.get("base") or "") or gitpolicy.default_branch(ctx) or "main"
                 # The pull request's own head, not the tree this session is standing in.
@@ -1424,7 +1430,7 @@ def main() -> None:
                 # Still before the call rather than after it, because a PreToolUse hook
                 # never sees the result: a merge that then fails is re-authorised by the
                 # founder rather than by its own retry.
-                config.clear_switch(ctx, config.APPROVE_MERGE)
+                pullrequest.spend(ctx, named, cover)
                 # Judged, and nothing found. Carried to the vouch at the end of this file
                 # rather than allowed here, because `allow_tool` ends the permission
                 # pipeline and every gate below this line still has its say.

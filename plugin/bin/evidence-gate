@@ -599,7 +599,7 @@ def main() -> None:
                 subject_paths=[],
             )
             hookio.block(pullrequest.stop_demand(
-                waiting, blocking, accepted=config.approved(ctx, config.APPROVE_MERGE)
+                waiting, blocking, accepted=bool(pullrequest.acceptance(ctx, waiting))
             ))
         elif not pullrequest.known(ctx, ctx.branch) and not pullrequest.demanded(ctx, ctx.branch):
             # Finished work that never became a pull request. Same budget as the demand

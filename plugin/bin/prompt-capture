@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import config, hookio, inbox, redact, sessions  # noqa: E402
+from claude_bestpractice import config, hookio, inbox, pullrequest, redact, sessions  # noqa: E402
 from claude_bestpractice.gitctx import resolve  # noqa: E402
 
 MAX_TASK_CHARS = 600
@@ -405,7 +405,16 @@ def main() -> None:
         # From the message as it ARRIVED, and only the part of it the founder typed:
         # `founders_word` says what is left out and why.
         typed = redact.strip_control(founders_word(event.prompt or ""))
-        config.record_switches(ctx, config.approvals_in(typed))
+        # A `+merge` names the pull requests this session has open as it is said, so that
+        # one word covers all the finished work in the chat rather than one merge of it.
+        # Naming them reads the session registry, and a word that cannot be pooled is still
+        # the word: recorded as the one merge it always was, never lost with the pool.
+        approvals = config.approvals_in(typed)
+        try:
+            approvals = pullrequest.accept_merges(ctx, approvals, event.session_id)
+        except Exception:  # noqa: BLE001 - see above: the word outlives its pool
+            approvals = config.approvals_in(typed)
+        config.record_switches(ctx, approvals)
 
     # The founder's word is recorded above, before this: a session whose record is missing
     # is registered here, which takes locks and git calls, and a gate that asked for the
