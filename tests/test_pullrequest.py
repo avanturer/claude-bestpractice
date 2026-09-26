@@ -2335,3 +2335,82 @@ class TestTheWordReachesWhatTheChatOpenedBeforeARestart(PRCase):
         self.accept()
         self.assertEqual("deny", self.decision(self.merge(806)))
 
+
+class TestTheFoundersWordDecidesAnUnverifiedFinish(PRCase):
+    """Issue #243. An UNVERIFIED finish is a record that a turn once ended without proof, and
+    nothing removes it. The merge refusal promised the merge "as soon as the list above is
+    empty" and told the session to take it to the founder, who said `+merge` — and the next
+    merge was refused with the same item, since no act of theirs could empty that list. It
+    surfaced on 1.71.1, the first version to judge a merge by the number `gh pr create`
+    printed; before it, such a merge went through unjudged."""
+
+    MERGE = "gh pr merge 48 --admin --squash"
+
+    def stop(self):
+        return self.gate("evidence-gate", {
+            "session_id": "s1", "hook_event_name": "Stop", "stop_hook_active": False,
+        })
+
+    def finish_unverified(self, at: float = 0.0) -> None:
+        store.append_jsonl(store.tier_b(self.ctx(), "unverified.jsonl"), {
+            "session_id": "s1", "branch": "feat/x", "reason": "no suite covers mobile/",
+            "recorded_at": at or time.time(),
+        })
+
+    def an_open_pull_request_with_one(self) -> None:
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+        self.open_a_pr()
+        self.finish_unverified()
+
+    def merge(self):
+        return self.tool("Bash", {"command": self.MERGE})
+
+    def test_their_word_after_the_hand_off_is_their_decision(self):
+        """The report's order: the Stop gate hands it to the founder, who says `+merge`."""
+        self.an_open_pull_request_with_one()
+        told = self.stop()
+        self.assertIn("UNVERIFIED finish", told.stderr, "precondition: put to the founder")
+        self.assertIn("a `+merge` they send after seeing this", told.stderr)
+        self.accept()
+        proc = self.merge()
+        self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
+
+    def test_a_word_given_before_they_were_shown_it_is_not(self):
+        """Said about the pool before anybody told them this one finished unproven."""
+        self.an_open_pull_request_with_one()
+        self.accept()
+        proc = self.merge()
+        self.assertEqual("deny", self.decision(proc))
+        self.assertIn("carries an UNVERIFIED finish", self.reason(proc))
+
+    def test_the_refusal_puts_it_to_them_and_their_next_word_decides(self):
+        self.an_open_pull_request_with_one()
+        self.accept()
+        refused = self.merge()
+        self.assertIn("`+merge`", self.reason(refused), "the refusal must say what decides it")
+        self.accept()
+        proc = self.merge()
+        self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
+
+    def test_a_finish_after_their_word_is_put_to_them_again(self):
+        self.an_open_pull_request_with_one()
+        self.stop()
+        self.accept()
+        self.finish_unverified(at=time.time() + 1)
+        proc = self.merge()
+        self.assertEqual("deny", self.decision(proc))
+        self.assertIn("carries an UNVERIFIED finish", self.reason(proc))
+
+    def test_it_decides_that_item_and_no_other(self):
+        """A red suite is still theirs to decide HOW to fix, and the session's to fix."""
+        self.an_open_pull_request_with_one()
+        self.stop()
+        self.accept()
+        self.write("src/app.py", "x = 2\n")
+        proc = self.merge()
+        self.assertEqual("deny", self.decision(proc))
+        self.assertIn("uncommitted changes", self.reason(proc))
+        self.assertNotIn("UNVERIFIED", self.reason(proc))

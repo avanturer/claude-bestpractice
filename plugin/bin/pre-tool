@@ -1428,6 +1428,9 @@ def main() -> None:
                 # The pull request's own head, not the tree this session is standing in.
                 problems = pullrequest.blockers(ctx, base, str(gated.get("branch") or ""))
                 if problems:
+                    # Put to the founder by this refusal, so that their next word is a word
+                    # about what it lists (#243).
+                    pullrequest.note_refusal(ctx, str(gated.get("branch") or ""))
                     deny_for_founder(ctx, rec, pullrequest.merge_refusal(gated, problems))
                 # Spent once the merge goes ahead, and never before its blockers are judged:
                 # the refusal above promises the merge "as soon as the list is empty", and

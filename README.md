@@ -259,7 +259,9 @@ is *refused* — not negotiated, not repaired. That half is what makes the first
 a model asked to make a branch mergeable will make it mergeable, and the moves available
 at merge time are weakening an assertion, widening a tolerance, or reverting the change
 that surfaced the problem. All three satisfy the letter. Which is acceptable is your call,
-so the gate stops there and says so.
+so the gate stops there and says so. An unverified finish is the one item no fix removes, so
+there your call is the word itself: a `+merge` you send after it was shown to you merges the
+work as it stands.
 
 The check is the same one that runs before a PR is opened — unfinished merge, no commits,
 red suite, never-verified branch, unverified finish, uncommitted work — plus the review
