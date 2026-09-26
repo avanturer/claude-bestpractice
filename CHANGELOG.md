@@ -1,5 +1,53 @@
 # Changelog
 
+## v1.71.3
+
+The founder's `+merge` on an UNVERIFIED finish outlives the next Stop, and the gate's own run
+imports the code of the tree it judges (#246).
+
+### What happened
+
+On 1.71.2 the founder sent `+merge` for PR #810, and the merge was refused over "this branch
+carries an UNVERIFIED finish". So was the next merge, after a second `+merge`.
+
+- The session ran its suite with `PYTHONPATH=<tree>/backend/src`, as the project's recipe does,
+  and 5373 passed. The Stop gate ran bare `pytest` in the same tree. There, a shared
+  virtualenv's editable install put another worktree's copy of the package first. The gate
+  saw the foreign import and filed the branch UNVERIFIED over its own run.
+- It filed the finish again on every Stop that ended the same way: three rows in one evening,
+  for the same reason and on the same commit.
+- The founder's word was read against the newest row. The Stop that ended the turn after the
+  refusal had filed a newer row. So the word counted as said before they were shown the
+  finish, and every new round ended the same way.
+
+### What changed
+
+- **The gate's own run imports this tree's packages.** If a package here imports from
+  somewhere else, the tree's own `src/` (or root) goes first on `PYTHONPATH` for the run. The
+  import is then checked again under that same environment. A tree that already imports itself
+  runs exactly as before.
+- **A finish is filed once per commit and reason.** Rows now carry the commit the branch was at.
+  The same finish on the same commit, for the same reason, is not filed again, and neither are
+  its attempt and board item.
+- **The founder's decision is bound to the commit, not the clock.** It holds while the branch
+  stays on the commit the finish was filed on, whatever the next Stop records there. A finish
+  on a later commit is put to them again. Rows written before this version carry no commit,
+  and they are read as one finish, which is what they were.
+- **The refusal says what the word did.** When a finish on a later commit blocks after an
+  accepted `+merge`, the line names the commit the word accepted, the commit of the new finish,
+  and the reason it was filed.
+
+### How it was checked
+
+Each part of the report is a test that fails on 1.71.2:
+- a copy of the package installed elsewhere, then Stop: no UNVERIFIED;
+- a regression in this tree while the copy elsewhere passes: refused as the failure it is;
+- three Stops on one commit: one row;
+- the same finish filed again after the word, and again between the refusal and the word: the
+  merge goes through;
+- the three rows 1.71.2 left behind: one finish;
+- a later commit: put to the founder again, and the refusal names both commits.
+
 ## v1.71.2
 
 `+merge` reaches what the chat opened before a restart (#241), it decides an UNVERIFIED finish
