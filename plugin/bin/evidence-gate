@@ -24,7 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import attempts, board, config, discipline, drafts, evidence, hookio, inbox, options, pullrequest, redact, sessions, stage, store, suites, witness, worktree  # noqa: E402
+from claude_bestpractice import attempts, board, config, delivery, discipline, drafts, evidence, hookio, inbox, options, pullrequest, redact, sessions, stage, store, suites, witness, worktree  # noqa: E402
 from claude_bestpractice.gitctx import changed_files, resolve  # noqa: E402
 
 BLOCK_COUNTER = "_consecutive_blocks"
@@ -191,8 +191,22 @@ def _give_up(ctx, rec: sessions.SessionRecord, reason: str, changed: list) -> No
     The reason is scrubbed before any of it is written. It carries the end of whatever the
     suite printed, and a failing suite prints what it had: a DSN with a production password
     went whole into `attempts/`, a directory meant to be committed.
+
+    Once per commit and reason. The same finish was filed again on every Stop that ended the
+    same way — three rows in one evening, each newer than the founder's word about it, so the
+    word never reached the merge it was given for (#246). Nothing is lost: the finish on this
+    commit, for this reason, is already on record, attempt and board item included.
     """
     reason = redact.scrub(reason)
+    # `ctx.branch`, not `rec.branch`. The record's branch is where the session STARTED,
+    # and an agent that branches mid-session — which is exactly what the worktree rule
+    # pushes it to do — files the failure against a branch that no longer holds the work.
+    # This marker is read back by `delivery.ready()` to refuse a pull request, so the
+    # wrong name there blocks an innocent branch and lets the guilty one through.
+    branch = ctx.branch or rec.branch
+    filed = delivery.unverified_finishes(ctx, branch)
+    if filed and filed[-1].get("head") == ctx.head and filed[-1].get("reason") == reason[:2000]:
+        return
     if changed:
         attempts.record(
             ctx,
@@ -200,28 +214,21 @@ def _give_up(ctx, rec: sessions.SessionRecord, reason: str, changed: list) -> No
             why=f"Finished without proof. {reason[:600]}",
             paths=changed,
             outcome=attempts.FAILED,
-            # `ctx.branch`, not `rec.branch` — the same fix the delivery marker below
-            # already carries. The record's branch is where the session STARTED, and the
-            # worktree rule pushes the agent to branch mid-session, so a dead end filed
-            # against `main` is filed against a branch that never held the work. It is
-            # then surfaced to sessions that cannot act on it and hidden from the one
-            # that can.
-            branch=ctx.branch or rec.branch,
+            # The branch named above, for the same reason: a dead end filed against the
+            # branch the session started on is surfaced to sessions that cannot act on it
+            # and hidden from the one that can.
+            branch=branch,
             session_id=rec.session_id,
         )
-
-    # `ctx.branch`, not `rec.branch`. The record's branch is where the session STARTED,
-    # and an agent that branches mid-session — which is exactly what the worktree rule
-    # pushes it to do — files the failure against a branch that no longer holds the work.
-    # This marker is read back by `delivery.ready()` to refuse a pull request, so the
-    # wrong name there blocks an innocent branch and lets the guilty one through.
-    branch = ctx.branch or rec.branch
 
     store.append_jsonl(
         store.tier_b(ctx, FAILURE_MARKER),
         {
             "session_id": rec.session_id,
             "branch": branch,
+            # The commit it finished on. The founder's `+merge` accepts a finish on a commit,
+            # and this is what says which one (#246).
+            "head": ctx.head,
             "baseline_commit": rec.baseline_commit,
             # Capped like `_bump_blocks` caps its own copy, and for a harder reason: this
             # file is APPEND-ONLY and clone-wide, and every `ready()` check parses all of

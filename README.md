@@ -4,8 +4,8 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-1.71.2-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-2255%20passing-2ea44f)](#verified)
+[![version](https://img.shields.io/badge/version-1.71.3-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-2264%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
@@ -261,7 +261,8 @@ at merge time are weakening an assertion, widening a tolerance, or reverting the
 that surfaced the problem. All three satisfy the letter. Which is acceptable is your call,
 so the gate stops there and says so. An unverified finish is the one item no fix removes, so
 there your call is the word itself: a `+merge` you send after it was shown to you merges the
-work as it stands.
+work as it stands, at the commit it was shown on. A later commit that finishes unverified is
+shown to you again.
 
 The check is the same one that runs before a PR is opened — unfinished merge, no commits,
 red suite, never-verified branch, unverified finish, uncommitted work — plus the review
@@ -460,7 +461,7 @@ roughly 0.1 % of a 200k window.
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2255 tests · 36 doctor checks · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2264 tests · 36 doctor checks · budget
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration

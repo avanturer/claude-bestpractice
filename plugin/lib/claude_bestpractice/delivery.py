@@ -244,23 +244,23 @@ UNVERIFIED = "carries an UNVERIFIED finish"
 
 def unverified_on(ctx: GitContext, branch: str) -> bool:
     """Unverified finishes recorded on a named branch. See `_unverified_here`."""
-    return last_unverified(ctx, branch) is not None
+    return bool(unverified_finishes(ctx, branch))
 
 
-def last_unverified(ctx: GitContext, branch: str) -> float | None:
-    """When the latest unverified finish on `branch` was filed. None when it has none.
+def unverified_finishes(ctx: GitContext, branch: str) -> list[dict]:
+    """The unverified finishes filed on `branch`, in the order they were filed.
 
-    0.0 for a row that carries no time, which reads as earlier than anything since.
+    Each carries the commit the branch was at (`head`) from 1.71.3. A row written before
+    that has none, and the readers fall back to its time.
     """
-    stamps = [
-        _stamp(r.get("recorded_at"))
-        for r in store.read_jsonl(store.tier_b(ctx, "unverified.jsonl"))
+    return [
+        r for r in store.read_jsonl(store.tier_b(ctx, "unverified.jsonl"))
         if isinstance(r, dict) and r.get("branch") == branch
     ]
-    return max(stamps) if stamps else None
 
 
-def _stamp(value: object) -> float:
+def stamp(value: object) -> float:
+    """A row's recorded time as a number; 0.0 for one that carries none or garbage."""
     try:
         return float(value or 0)
     except (TypeError, ValueError):

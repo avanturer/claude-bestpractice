@@ -2351,9 +2351,10 @@ class TestTheFoundersWordDecidesAnUnverifiedFinish(PRCase):
             "session_id": "s1", "hook_event_name": "Stop", "stop_hook_active": False,
         })
 
-    def finish_unverified(self, at: float = 0.0) -> None:
+    def finish_unverified(self, at: float = 0.0, reason: str = "no suite covers mobile/") -> None:
+        """A finish filed the way the Stop gate files one: on the commit the branch is at."""
         store.append_jsonl(store.tier_b(self.ctx(), "unverified.jsonl"), {
-            "session_id": "s1", "branch": "feat/x", "reason": "no suite covers mobile/",
+            "session_id": "s1", "branch": "feat/x", "head": self.ctx().head, "reason": reason,
             "recorded_at": at or time.time(),
         })
 
@@ -2395,14 +2396,62 @@ class TestTheFoundersWordDecidesAnUnverifiedFinish(PRCase):
         proc = self.merge()
         self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
 
-    def test_a_finish_after_their_word_is_put_to_them_again(self):
+    def test_the_same_finish_filed_again_after_their_word_stays_decided(self):
+        """#246: the Stop gate filed the finish again on every turn, each one newer than the
+        word, so the word never outlived the next Stop. It was about the branch as it stood."""
         self.an_open_pull_request_with_one()
         self.stop()
         self.accept()
-        self.finish_unverified(at=time.time() + 1)
+        self.finish_unverified(at=time.time() + 1, reason="filed again by the next Stop")
         proc = self.merge()
+        self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
+
+    def test_a_finish_filed_again_before_their_word_was_still_shown_to_them(self):
+        """#246, the loop: the refusal put it to them, the Stop that ended that turn filed it
+        again, and their word then counted as said before they had seen it."""
+        self.an_open_pull_request_with_one()
+        self.accept()
+        self.assertEqual("deny", self.decision(self.merge()), "precondition: put to them")
+        self.finish_unverified(at=time.time() + 1)
+        self.accept()
+        proc = self.merge()
+        self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
+
+    def test_the_rows_an_earlier_version_filed_are_one_finish(self):
+        """What #246's branch was left holding: three rows with no commit, the refusal between
+        the first and the last. They are the same finish filed three times, and the founder
+        was shown it."""
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+        self.open_a_pr()
+        legacy = {"session_id": "s1", "branch": "feat/x", "reason": "import resolves elsewhere"}
+        ledger = store.tier_b(self.ctx(), "unverified.jsonl")
+        store.append_jsonl(ledger, {**legacy, "recorded_at": time.time() - 30})
+        self.accept()
+        self.assertEqual("deny", self.decision(self.merge()), "precondition: put to them")
+        store.append_jsonl(ledger, {**legacy, "recorded_at": time.time()})
+        self.accept()
+        proc = self.merge()
+        self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
+
+    def test_a_finish_on_a_later_commit_is_put_to_them_again(self):
+        """Their word accepted the branch at one commit, and says so when a later one is refused."""
+        self.an_open_pull_request_with_one()
+        accepted = self.ctx().head
+        self.stop()
+        self.accept()
+        self.write("src/app.py", "x = 2\n")
+        self.commit("more work after the word")
+        self.finish_unverified(at=time.time() + 1, reason="the suite printed no counts")
+        proc = self.merge()
+        said = self.reason(proc)
         self.assertEqual("deny", self.decision(proc))
-        self.assertIn("carries an UNVERIFIED finish", self.reason(proc))
+        self.assertIn("carries an UNVERIFIED finish", said)
+        self.assertIn(accepted[:8], said, "what their word accepted went unnamed")
+        self.assertIn(self.ctx().head[:8], said, "the commit the new finish is on went unnamed")
+        self.assertIn("the suite printed no counts", said, "why it was filed went unnamed")
 
     def test_it_decides_that_item_and_no_other(self):
         """A red suite is still theirs to decide HOW to fix, and the session's to fix."""
