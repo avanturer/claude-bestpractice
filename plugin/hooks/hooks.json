@@ -101,10 +101,6 @@
           "obligation and never sees the response, so every record used to say 0 and the",
           "merge gate could not tell its own pull request from somebody else's (#135).",
           "",
-          "Matched on the structured tools only. Adding `Bash` here would spawn a process",
-          "on every shell call to catch `gh pr create`, and an unlearned number now means",
-          "'do not judge', which is the safe direction.",
-          "",
           "`update_pull_request` because closing one without merging is `state: closed` on",
           "it, and nothing else sees that call: `gh pr close` is read by pre-tool instead."
         ],
@@ -112,6 +108,28 @@
         "hooks": [
           {
             "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/pr-opened\"",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "$comment": [
+          "`gh pr create` prints the number, and only this event sees it. Left out while",
+          "catching it meant a process on every shell call, because an unlearned number",
+          "only meant 'do not judge'. A `+merge` that names the chat's open pull requests",
+          "made it a refusal instead: `gh pr merge 48` could not be matched to the pull",
+          "request the word covered, and was refused four times over (#241).",
+          "",
+          "`if` (Claude Code 2.1.85, compound commands from 2.1.89) spawns the process only",
+          "for a shell line that runs `gh pr create`. Where it is not honoured the hook runs",
+          "on every shell call, and it exits before touching git."
+        ],
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(gh pr create *)",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/pr-opened\"",
             "timeout": 15
           }

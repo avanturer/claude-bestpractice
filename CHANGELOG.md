@@ -1,5 +1,53 @@
 # Changelog
 
+## v1.71.1
+
+A pull request opened with `gh pr create` merges by its number on the founder's first `+merge`
+(#241).
+
+### What happened
+
+On 1.70.1 the founder sent `+merge` on a line of its own, and `gh pr merge <n> --admin
+--squash --delete-branch` was refused as "no `+merge` from the founder is on record". So was
+the retry, the same after a second `+merge`, and the retry after that. On 1.69.4 the same session
+had merged two pull requests on the word.
+
+A pull request is matched to the founder's word by its record, and a merge that gives a number
+by the number the record learned. That number is read off the response, which only
+`pr-opened` sees, and `pr-opened` was left off shell calls: catching `gh pr create` meant a
+process on every one, and an unlearned number only meant the merge was not judged. Since 1.70.0
+a `+merge` names the pull requests the chat has open, and a merge by a number that no record
+carries matches none of them. The word was spent on a pool that `gh pr merge <n>` could not
+reach, so every retry and every repeated `+merge` was refused the same way.
+
+A message reading `merge+merge` is not the word, by design (#192): `+merge` has to be the whole
+line, so that «я не говорил +merge» cannot authorise a merge.
+
+### What changed
+
+- **`pr-opened` reads the number `gh pr create` printed.** It gets the shell calls through the
+  hook's `if` field, `Bash(gh pr create *)`, so the process starts only for a line that opens a
+  pull request, `cd tree && gh pr create` and `git push && gh pr create` included. `if` is
+  Claude Code 2.1.85, with compound commands from 2.1.89. Where it is not honoured, the hook
+  starts on every shell call and leaves before asking git anything. This spends the twelfth and
+  last hook entry the budget allows.
+- **A merge by a number the clone never learned is refused for what it is.** When the `+merge`
+  on record names this chat's pull request and that record has no number, the refusal says so
+  and names the merge that matches by branch: `gh pr merge --squash` from the tree that has the
+  branch checked out. It tells the session not to ask the founder for the word again, and the
+  refusal is the session's to resolve, not the founder's. That covers the pull requests opened
+  before this version, which never learned their numbers.
+- A numbered merge of a pull request opened in a shell is now judged like any other, because
+  the gate can tell it is this branch's. Before, an unknown number meant it was waved through
+  unjudged.
+
+### How it was checked
+
+The report's order: a pull request opened with `gh pr create`, `+merge`, then `gh pr merge 48
+--admin --squash --delete-branch`. On 1.71.0 it is refused, and a second `+merge` changes
+nothing. Here it goes through on the first word. Each rule has a test that fails when it is
+taken out, the hook's wiring included.
+
 ## v1.71.0
 
 A draft pull request is paused work, and the Stop gate asks GitHub before it says a branch has

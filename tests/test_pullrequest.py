@@ -2097,3 +2097,151 @@ class TestTheBoardStopsSayingThereIsNone(PRCase):
         self.start()
         self.open_a_pr()
         self.assertTrue(self.said_none("feat/y"))
+
+
+class TestAPullRequestOpenedInAShellIsMergedByItsNumber(PRCase):
+    """Issue #241. A pull request opened with `gh pr create` in a shell never learned its
+    number: only the structured tool reached the hook that reads it. Once a `+merge` named the
+    chat's open pull requests, `gh pr merge 48` matched none of them and was refused as
+    unaccepted four times over, with the founder's word given twice."""
+
+    MERGE = "gh pr merge 48 --admin --squash --delete-branch"
+    PRINTED = f"https://github.com/o/r/pull/{PRCase.PR_NUMBER}\n"
+
+    def green(self) -> None:
+        git(["remote", "add", "origin", "https://github.com/o/r.git"], self.repo)
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+
+    def after_the_shell(self, command: str, printed: str):
+        """The hook after a shell call, with what the shell printed."""
+        return self.gate("pr-opened", {
+            "session_id": "s1", "hook_event_name": "PostToolUse", "tool_name": "Bash",
+            "tool_input": {"command": command},
+            "tool_response": {"stdout": printed, "stderr": "", "interrupted": False,
+                              "isImage": False},
+        })
+
+    def open_in_a_shell(self, command: str = "gh pr create --fill --base main",
+                        printed: str = PRINTED, learned: bool = True) -> None:
+        self.tool("Bash", {"command": command})
+        if learned:
+            self.after_the_shell(command, printed)
+
+    def number(self) -> int:
+        [record] = pullrequest.outstanding(self.ctx())
+        return record["number"]
+
+    def test_the_number_gh_printed_is_learned(self):
+        self.start()
+        self.open_in_a_shell()
+        self.assertEqual(PRCase.PR_NUMBER, self.number())
+
+    def test_it_is_learned_from_a_line_that_pushes_first(self):
+        """`git push` prints a link of its own, and it has no number in it."""
+        self.start()
+        self.open_in_a_shell(
+            command="git push -u origin feat/x && gh pr create --fill",
+            printed=("remote: Create a pull request for 'feat/x' on GitHub by visiting:\n"
+                     "remote:      https://github.com/o/r/pull/new/feat/x\n" + self.PRINTED),
+        )
+        self.assertEqual(PRCase.PR_NUMBER, self.number())
+
+    def test_the_report_merges_on_the_first_word(self):
+        """In the report's order: opened in a shell, the word, then a merge by number."""
+        self.green()
+        self.start()
+        self.open_in_a_shell()
+        self.accept()
+        proc = self.tool("Bash", {"command": self.MERGE})
+        self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
+
+    def test_the_hook_is_sent_the_shell_line_that_opens_one(self):
+        """By `if`, so every other shell call is spared the process."""
+        hooks = json.loads((BIN.parent / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+        sent = [handler.get("if") for entry in hooks["hooks"]["PostToolUse"]
+                if harness_matches(entry.get("matcher", ""), "Bash")
+                for handler in entry["hooks"] if handler["command"].endswith('/pr-opened"')]
+        self.assertEqual(["Bash(gh pr create *)"], sent)
+
+    def test_any_other_shell_line_is_left_before_git_is_asked(self):
+        """Where `if` is not honoured every shell call starts this hook, and it may cost the
+        start and nothing more."""
+        import shutil
+
+        stubs = self.tmp / "git-stub"
+        stubs.mkdir()
+        asked = self.tmp / "git-asked"
+        (stubs / "git").write_text(
+            f'#!/bin/sh\necho "$*" >> "{asked}"\nexec "{shutil.which("git")}" "$@"\n')
+        (stubs / "git").chmod(0o755)
+        with mock.patch.dict(os.environ, {"PATH": f"{stubs}{os.pathsep}{os.environ['PATH']}"}):
+            self.after_the_shell("ls -la && git status", "nothing\n")
+            self.assertFalse(asked.exists(), "git was asked about a line that opens nothing")
+            self.after_the_shell("gh pr create --fill", self.PRINTED)
+            self.assertTrue(asked.exists(), "precondition: the line that opens one is read")
+
+    def test_one_whose_number_was_never_learned_is_refused_for_what_it_is(self):
+        """Opened before the number was read off `gh pr create`. The word IS on record, so the
+        refusal must not say it is not, and it names the merge that matches by branch."""
+        self.green()
+        self.start()
+        self.open_in_a_shell(learned=False)
+        self.accept()
+        proc = self.tool("Bash", {"command": self.MERGE})
+        said = self.reason(proc)
+        self.assertEqual("deny", self.decision(proc))
+        self.assertIn(f"#{PRCase.PR_NUMBER} is not a pull request this clone knows by number",
+                      said)
+        self.assertIn("on feat/x", said)
+        self.assertIn("gh pr merge --squash", said)
+        self.assertNotIn("no `+merge` from the founder is on record", said)
+        self.assertIn("A GATE refused this, not the founder", said,
+                      "a refusal the session can resolve is the session's (decision 0014)")
+
+    def test_and_the_merge_it_names_goes_through(self):
+        self.green()
+        self.start()
+        self.open_in_a_shell(learned=False)
+        self.accept()
+        self.tool("Bash", {"command": self.MERGE})
+        proc = self.tool("Bash", {"command": "gh pr merge --squash"})
+        self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
+
+    def test_without_the_word_it_is_still_the_founders_to_give(self):
+        self.green()
+        self.start()
+        self.open_in_a_shell(learned=False)
+        proc = self.tool("Bash", {"command": self.MERGE})
+        self.assertIn("no `+merge` from the founder is on record", self.reason(proc))
+
+    def test_a_number_the_word_does_not_cover_is_not_explained_away(self):
+        """The word covers #48, learned; #99 is not it, and the refusal must not say it might be."""
+        self.green()
+        self.start()
+        self.open_in_a_shell()
+        self.accept()
+        proc = self.tool("Bash", {"command": "gh pr merge 99 --squash"})
+        said = self.reason(proc)
+        self.assertIn("no `+merge` from the founder is on record", said)
+        self.assertNotIn("is not a pull request this clone knows by number", said)
+
+    def test_a_number_another_session_learned_is_not_explained_away(self):
+        """#48 is known here, as a sibling's, and this chat's word covers only its own
+        pull request, whose number was never learned: #48 is not that one."""
+        self.green()
+        self.start()
+        self.open_in_a_shell(learned=False)
+        self.start("s2")
+        tool_input = {"owner": "o", "repo": "r", "title": "t", "head": "feat/s2", "base": "main"}
+        self.tool("mcp__github__create_pull_request", tool_input, "s2")
+        self.gate("pr-opened", {
+            "session_id": "s2", "hook_event_name": "PostToolUse",
+            "tool_name": "mcp__github__create_pull_request", "tool_input": tool_input,
+            "tool_response": {"url": "https://github.com/o/r/pull/77"},
+        })
+        self.accept()
+        said = self.reason(self.tool("Bash", {"command": "gh pr merge 77 --squash"}))
+        self.assertIn("no `+merge` from the founder is on record", said)
+        self.assertNotIn("is not a pull request this clone knows by number", said)

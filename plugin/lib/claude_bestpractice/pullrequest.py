@@ -1213,6 +1213,39 @@ def named_by(ctx: GitContext, number: int, current: bool = False) -> dict[str, A
     return record if record and record.get("state") == OPEN else None
 
 
+def unplaced(ctx: GitContext, number: int, session_id: str) -> str:
+    """The refusal for a merge by a number no record carries, when the word may cover it.
+    "" when it does not apply.
+
+    A `+merge` names the chat's open pull requests by their records, and a merge that gives
+    a number is matched to a record by the number it learned. One opened with `gh pr create`
+    before that number was read off its output never learned it, so `gh pr merge 48`
+    matched nothing and was told no `+merge` was on record, while one was, for that very
+    pull request. The session asked the founder for the word four times (#241). This says
+    what is true, and names the merge that matches by branch instead.
+    """
+    if number <= 0 or _numbered(ctx, number):
+        return ""
+    from . import sessions
+
+    mine = sessions.identities(ctx, session_id)
+    pooled = set(_pool(ctx))
+    blind = sorted({str(record.get("branch")) for record in outstanding(ctx)
+                    if record.get("session_id") in mine and _entry(record) in pooled
+                    and not _as_number(record.get("number"))})
+    if not blind:
+        return ""
+    return (
+        f"claude-bestpractice: #{number} is not a pull request this clone knows by number. The "
+        f"founder's `+merge` is on record for this chat's pull request on {', '.join(blind[:3])}, "
+        "and that one's number was never learned here.\n"
+        f"If #{number} is it, merge it without the number, from the tree that has its branch "
+        "checked out, where it is matched by the branch:\n"
+        "  gh pr merge --squash\n"
+        "Do not ask the founder for `+merge` again: their word is already on record."
+    )
+
+
 def acceptance(ctx: GitContext, record: dict[str, Any] | None) -> str:
     """How the founder's word covers merging `record`: `POOLED`, `ONCE`, or "" when it does not."""
     if record is not None and _entry(record) in _pool(ctx):
