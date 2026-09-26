@@ -250,8 +250,9 @@ told it is waiting for you rather than the other way round.
 
 **Merged, by the session that opened it.** Once you say `+merge`, it opens, checks and
 merges on its own without asking again. One `+merge` covers every pull request that chat has
-open when you say it, so ten finished pull requests take one word, not ten. It never covers
-one opened after the word or another session's.
+open when you say it, so ten finished pull requests take one word, not ten — including the
+ones it opened before a `--resume`, which is the same chat. It never covers one opened after
+the word or another chat's.
 
 **Handed to you, with the blockers named.** When the final check finds something the merge
 is *refused* — not negotiated, not repaired. That half is what makes the first half safe:

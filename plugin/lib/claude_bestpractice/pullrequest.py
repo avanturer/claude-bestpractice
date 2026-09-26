@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Any
+from typing import Any, Callable
 
 from . import config, store
 from .gitctx import GitContext
@@ -1168,17 +1168,35 @@ def _pool(ctx: GitContext) -> list[str]:
     return (config.asked_for(ctx, config.MERGE_POOL) or "").split()
 
 
+def _the_chats(ctx: GitContext, session_id: str) -> Callable[[Any], bool]:
+    """Whether a record's session is the chat this session is: the one the founder spoke in.
+
+    The chat, not the process. A pull request records the identity that opened it, and
+    `sessions.identities` unites identities only while they are one running process. A chat
+    restarted with `--resume` is a new process with the same harness id, so everything it
+    opened before the restart stopped being its own: `+merge` named only what it had opened
+    since, took the one-merge word with it, and a merge of #804 was refused as unaccepted
+    after every `+merge` the founder sent (#241). A `claude -p` it started carries that
+    harness id too, and the founder speaks to one only through the chat that started it.
+    """
+    from . import hookio, sessions
+
+    mine = sessions.identities(ctx, session_id)
+    harness = hookio.harness_of(session_id, str(ctx.worktree_root))
+    return lambda owner: owner in mine or hookio.composed_from(str(owner or ""), harness)
+
+
 def accept_merges(ctx: GitContext, approvals: dict[str, str],
                   session_id: str) -> dict[str, str]:
     """The founder's word as it is recorded: a `+merge` names the pull requests it accepts.
 
     One `+merge` allowed one merge, so a session that had finished ten pull requests got
     the founder to say it ten times, in ten messages, about work they had already looked
-    at together. Now it accepts every pull request the session it was said to has open at
+    at together. Now it accepts every pull request the chat it was said to has open at
     that moment, each once.
 
-    That session's, not the clone's. The word is typed into one chat about the work in
-    it; read across every session it would merge a sibling's pull request the founder had
+    That chat's, not the clone's. The word is typed into one chat about the work in it;
+    read across every session it would merge a sibling's pull request the founder had
     told that sibling to leave alone, which is #192 again with ten times the reach. And
     with none open it is what it always was — the one merge of the work just accepted,
     which the session opens, checks and merges by itself (decision 0010).
@@ -1188,12 +1206,10 @@ def accept_merges(ctx: GitContext, approvals: dict[str, str],
     """
     if config.APPROVE_MERGE not in approvals:
         return approvals
-    from . import sessions
-
-    mine = sessions.identities(ctx, session_id)
+    ours = _the_chats(ctx, session_id)
     still_open = {_entry(record): record for record in outstanding(ctx)}
     named = {entry for entry, record in still_open.items()
-             if record.get("session_id") in mine and not record.get("draft")}
+             if ours(record.get("session_id")) and not record.get("draft")}
     if not named:
         return approvals
     kept = {entry for entry in _pool(ctx) if entry in still_open}
@@ -1226,12 +1242,10 @@ def unplaced(ctx: GitContext, number: int, session_id: str) -> str:
     """
     if number <= 0 or _numbered(ctx, number):
         return ""
-    from . import sessions
-
-    mine = sessions.identities(ctx, session_id)
+    ours = _the_chats(ctx, session_id)
     pooled = set(_pool(ctx))
     blind = sorted({str(record.get("branch")) for record in outstanding(ctx)
-                    if record.get("session_id") in mine and _entry(record) in pooled
+                    if ours(record.get("session_id")) and _entry(record) in pooled
                     and not _as_number(record.get("number"))})
     if not blind:
         return ""

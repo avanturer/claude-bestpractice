@@ -11,7 +11,7 @@ import unittest
 from unittest import mock
 
 from helpers import (BIN, RepoCase, a_gate_underway, answer_of, git, harness_matches,
-                     real_acceptance_grace, sid)
+                     real_acceptance_grace, session_record_for, sid)
 
 from claude_bestpractice import board, evidence, pullrequest, store
 
@@ -2245,3 +2245,93 @@ class TestAPullRequestOpenedInAShellIsMergedByItsNumber(PRCase):
         said = self.reason(self.tool("Bash", {"command": "gh pr merge 77 --squash"}))
         self.assertIn("no `+merge` from the founder is on record", said)
         self.assertNotIn("is not a pull request this clone knows by number", said)
+
+
+class TestTheWordReachesWhatTheChatOpenedBeforeARestart(PRCase):
+    """Issue #241, reopened on 1.71.1. The chat opened #804 from its tree, was restarted with
+    `--resume`, came back in the main checkout as a new process, and opened another pull
+    request from there. `+merge` named the pull requests of the PROCESS it was said to, so
+    it named the new one alone and the one-merge word went with the pool: `gh pr merge 804`
+    was refused as unaccepted, and so was every retry after every `+merge` the founder sent.
+    """
+
+    # A CLI that has exited. No process has this pid.
+    EXITED = 999_999_990
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.tree = self.tmp / "tree"
+        git(["worktree", "add", "-q", "-b", "feat/w", str(self.tree)], self.repo)
+
+    def runs_as(self, tree, pid: int, raw_id: str = "s1") -> None:
+        """Which process this chat runs as in `tree`, as SessionStart would stamp it."""
+        from claude_bestpractice import sessions
+        from claude_bestpractice.gitctx import resolve
+
+        ctx = resolve(tree)
+        identity = sid(tree, raw_id)
+        record = sessions.get(ctx, identity) or session_record_for(ctx, identity, pid)
+        record.pid, record.pid_trust = pid, sessions.PID_TRUST_OWNER
+        sessions.register(ctx, record)
+
+    def open_pr(self, number: int, head: str, cwd, raw_id: str = "s1") -> None:
+        tool_input = {"owner": "o", "repo": "r", "title": "t", "head": head, "base": "main"}
+        event = {"session_id": raw_id, "tool_name": "mcp__github__create_pull_request",
+                 "tool_input": tool_input}
+        self.run_hook("pre-tool", {**event, "hook_event_name": "PreToolUse"}, cwd=cwd)
+        self.run_hook("pr-opened", {
+            **event, "hook_event_name": "PostToolUse",
+            "tool_response": {"url": f"https://github.com/o/r/pull/{number}"},
+        }, cwd=cwd)
+
+    def restarted(self) -> None:
+        """#804 opened from the tree; the CLI exits and the chat is resumed in main."""
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart",
+                                        "source": "startup"}, cwd=self.tree)
+        self.open_pr(804, "feat/w", self.tree)
+        self.runs_as(self.tree, self.EXITED)
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart",
+                                        "source": "resume"}, cwd=self.repo)
+        self.runs_as(self.repo, os.getpid())
+
+    def merge(self, number: int):
+        return self.tool("Bash", {"command": f"gh pr merge {number} --admin --squash "
+                                             "--delete-branch"})
+
+    def test_the_report_merges_on_the_word(self):
+        """In the report's order: a pull request opened since the restart is in the pool too."""
+        self.restarted()
+        self.open_pr(805, "feat/next", self.repo)
+        self.gate("prompt-capture", {"session_id": "s1", "hook_event_name": "UserPromptSubmit",
+                                     "prompt": "+merge\nкати ота и апк"})
+        for number in (804, 805):
+            with self.subTest(number=number):
+                proc = self.merge(number)
+                self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
+
+    def test_what_the_chat_opened_as_another_process_is_its_own(self):
+        """A `claude -p` the chat started carries its harness id, and the founder speaks to it
+        only through this chat: what it opened is this chat's work, shown here."""
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"},
+                      cwd=self.tree)
+        self.open_pr(804, "feat/w", self.tree)
+        self.runs_as(self.tree, 1)
+        self.start()
+        self.runs_as(self.repo, os.getpid())
+        self.open_pr(805, "feat/next", self.repo)
+        self.accept()
+        for number in (804, 805):
+            with self.subTest(number=number):
+                proc = self.merge(number)
+                self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
+
+    def test_another_chats_pull_request_is_still_not_covered(self):
+        """#192 is about another CHAT, and a restart does not make one."""
+        self.restarted()
+        self.run_hook("session-start", {"session_id": "s2", "hook_event_name": "SessionStart"},
+                      cwd=self.tree)
+        self.open_pr(806, "feat/theirs", self.tree, raw_id="s2")
+        self.open_pr(805, "feat/next", self.repo)
+        self.accept()
+        self.assertEqual("deny", self.decision(self.merge(806)))
+
