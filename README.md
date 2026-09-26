@@ -4,8 +4,8 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-1.71.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-2230%20passing-2ea44f)](#verified)
+[![version](https://img.shields.io/badge/version-1.71.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-2240%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
@@ -445,7 +445,7 @@ In a session: `/claude-bestpractice:status` · `/claude-bestpractice:plan` · `/
 | `subagent-brief` | SubagentStart | fails open | Non-goals, entities and a query-biased map to agents that inherit no rules |
 | `checkpoint` | PreCompact | fails open | Extractive checkpoint, zero model calls, secrets scrubbed. **Never refuses a compaction** — a refusal there reaches the founder, never the model (decision 0021) |
 | `evidence-gate` | Stop | **fails closed** | Scope drift, test evidence, clean re-run, a turn ending on an unanswered block; harvests decision drafts; asks once for what only this window knows; puts a finished worktree away |
-| `pr-opened` | PostToolUse `.*(create\|update)_pull_request` | fails open | Files the pull request just opened and learns its number, so the merge gate can tell its own from somebody else's; settles one closed through the tool |
+| `pr-opened` | PostToolUse `.*(create\|update)_pull_request`, and `Bash` if it runs `gh pr create` | fails open | Files the pull request just opened and learns its number, so the merge gate can tell its own from somebody else's; settles one closed through the tool |
 | `permission-denied` | PermissionDenied | fails open | Records what auto mode refused, so a repeated prompt can be traced to its rule; never overturns one |
 
 Eleven entries — `pre-tool` and `review-commit` share the PreToolUse event — against a
@@ -457,7 +457,7 @@ roughly 0.1 % of a 200k window.
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2230 tests · 36 doctor checks · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2240 tests · 36 doctor checks · budget
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration
