@@ -1,5 +1,62 @@
 # Changelog
 
+## v1.71.0
+
+A draft pull request is paused work, and the Stop gate asks GitHub before it says a branch has
+no pull request (#239).
+
+### What happened
+
+At the end of a turn the Stop gate printed:
+
+> feat/foodyllm-v4-5090 carries committed work that passes every check, and this turn was
+> about to end with no pull request against main. Open it now … Then merge it yourself once
+> the checks pass.
+
+The branch already had an open draft pull request against `main`, #785. The founder had asked
+to pause the work, and every merge here waits for their `+merge` (decision 0010).
+
+The gate knows a pull request only from its own record, written when a hook in this clone sees
+one opened. One opened from a terminal, on the website or from another clone never reached it.
+So it claimed there was none, ordered a second one, and pushed toward a merge the founder had
+not accepted. It had no idea of a draft at all: a draft the session had opened itself got "merge
+it now" once a `+merge` was on record for other work.
+
+### What changed
+
+- **The Stop gate asks GitHub before it demands a pull request.** Once per branch, only when it
+  is about to raise the demand, with `gh pr list --head <branch>` and a ten-second deadline.
+  What GitHub has is recorded like a pull request a hook saw opened: on the board, and treated
+  as any other. When `gh` cannot answer, the demand says so and names the command that would.
+  Nothing on the tool-call path talks to the network, as before.
+- **A draft is paused work.** It is recorded as a draft whether it is opened with `--draft` or
+  `-d`, with the tool's `draft: true`, or found on GitHub. It is on the board as `(draft)`. No
+  demand asks for it, and a `+merge` said over the chat's finished pull requests does not reach
+  it. `gh pr ready`, or the tool's `draft: false`, makes it an ordinary pull request again, with
+  the one demand it is owed; `gh pr ready --undo` pauses it again.
+- **The demand to open one leaves the merge to the founder.** It no longer says "merge it
+  yourself once the checks pass". Without a `+merge` on record it says to show them what changed
+  and leave it open. With one, it says to merge if the word was meant for this work. It says to
+  open paused work as a draft, and it names a command that runs here (decision 0020):
+  `gh pr create --base main --fill`, and `claude-bp-ship --pr` where there is no `gh`.
+- **`claude-bp-ship --pr` opens a pull request ready for review.** It opened drafts. Its
+  finished work would have been held out of every demand as paused, and GitHub merges no draft,
+  so a merge on the founder's word needed a `gh pr ready` that nothing mentioned.
+- **The board stops saying there is none.** The demand files "NO PULL REQUEST for finished work
+  on X", and nothing closed it once the pull request was opened, so it stood beside "OPEN PULL
+  REQUESTS: #N on X" for fourteen days. Recording the pull request closes it now, and repair
+  0035 closes the ones already on the board.
+
+Decision 0024 records the rule and what was rejected.
+
+### How it was checked
+
+The report's order, against a `gh` that answers the way the founder's did: finished work, an
+open draft on GitHub that no hook here saw, then a Stop. The gate records #785 as a draft and
+the turn ends. Asked again, it does not call GitHub twice. Each rule has a test that fails when
+it is taken out. The suite never reaches GitHub: it runs with `gh` logged out, and the tests
+about asking put a `gh` of their own first on `PATH`.
+
 ## v1.70.1
 
 The suite and `claude-bp doctor` no longer wait five seconds for a founder's word nobody is

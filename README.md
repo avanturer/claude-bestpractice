@@ -4,8 +4,8 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-1.70.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-2168%20passing-2ea44f)](#verified)
+[![version](https://img.shields.io/badge/version-1.71.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-2230%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
@@ -270,6 +270,12 @@ It interrupts **once** per pull request and then carries it on the board, so ign
 crashing, or hitting the escalation ceiling cannot turn a reminder into a wedge. Off with
 `{"manage_pull_requests": false}`.
 
+**A draft is paused work**, and none of the three applies to it until it is marked ready: it
+is on the board, it is not asked for, and a `+merge` said about the finished ones does not
+reach it. Nor is a pull request opened where no hook here saw it — from a terminal, the
+website or another clone — taken for none: before the Stop gate says a branch has no pull
+request, it asks GitHub once through `gh`, and records the one it finds.
+
 ### Closing the work, not just doing it
 
 Isolation is the half that works: one tree per session, and in sixty days of three to eight
@@ -309,7 +315,7 @@ messages, and each is **spent when it is used**, never a standing grant.
 
 | You type | It allows | Once |
 | --- | --- | --- |
-| `+merge` | merging the pull requests this chat has open | each of them once; with none open, the next merge |
+| `+merge` | merging the pull requests this chat has open, drafts aside | each of them once; with none open, the next merge |
 | `+release` | promoting to production | one promotion |
 | `+migration` | destructive DDL in a migration | one migration |
 
@@ -451,7 +457,7 @@ roughly 0.1 % of a 200k window.
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2168 tests · 36 doctor checks · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2230 tests · 36 doctor checks · budget
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration

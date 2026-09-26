@@ -4,8 +4,8 @@
 
 **Память, координация и принуждение для разработки продукта в нескольких параллельных сессиях Claude Code.**
 
-[![version](https://img.shields.io/badge/version-1.70.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-2168%20passing-2ea44f)](#проверено)
+[![version](https://img.shields.io/badge/version-1.71.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-2230%20passing-2ea44f)](#проверено)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#проверено)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#требования)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#требования)
@@ -256,7 +256,7 @@ HEAD. Вторая половина — убрать за собой, и за н
 
 | Вы пишете | Что разрешает | Сколько раз |
 | --- | --- | --- |
-| `+merge` | смержить PR, открытые в этом чате | каждый по разу; если открытых нет — следующий мерж |
+| `+merge` | смержить PR, открытые в этом чате, кроме draft | каждый по разу; если открытых нет — следующий мерж |
 | `+release` | выкатить в прод | один выкат |
 | `+migration` | разрушающий DDL в миграции | одну миграцию |
 
@@ -398,7 +398,7 @@ claude-bp-ci off        # снять pre-push хук
 ## Проверено
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2168 тестов · 36 проверок доктора · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2230 тестов · 36 проверок доктора · budget
 ```
 
 Доктор доказывает гейты **попыткой сделать плохое**, а не чтением конфигурации обратно —
