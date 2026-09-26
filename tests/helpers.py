@@ -44,6 +44,15 @@ from claude_bestpractice import config as _config  # noqa: E402
 # tests about the wait itself restore it with `real_acceptance_grace` (#232).
 _os.environ[_config.GRACE_ENV] = "0"
 
+# And no word with GitHub. The Stop gate asks `gh` whether a branch already has a pull
+# request before it demands one (#239), and a `gh` logged in where the suite runs would
+# answer about whatever repository a fixture's remote names. With no token and an empty
+# config it is logged out, and refuses before it reaches the network. The tests about the
+# asking put a `gh` of their own first on PATH.
+for _token in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"):
+    _os.environ.pop(_token, None)
+_os.environ["GH_CONFIG_DIR"] = _os.path.join(_os.environ["CLAUDE_BP_TEST_HOME"], "gh")
+
 
 def harness_matches(matcher: str, value: str) -> bool:
     """Whether Claude Code fires a hook with this `matcher` for `value` (a tool's name).

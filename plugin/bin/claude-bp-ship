@@ -36,10 +36,14 @@ def open_pr(ctx, base: str) -> int:
         return 1
 
     subprocess.run(["git", "push", "-u", "origin", ctx.branch], cwd=str(ctx.worktree_root), timeout=300)
+    # Ready for review, not a draft. `delivery.ready` has just passed, and a draft is how
+    # work is paused: opened as one, the finished work this command exists for was held out
+    # of the demand that shows it to the founder, and could not be merged on their word
+    # without a `gh pr ready` nothing here ever mentioned (#239).
     proc = subprocess.run(
         ["gh", "pr", "create", "--base", base, "--head", ctx.branch,
          "--title", ctx.branch.split("/")[-1].replace("-", " "),
-         "--body", delivery.pr_body(ctx, base), "--draft"],
+         "--body", delivery.pr_body(ctx, base)],
         cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=300,
     )
     print(proc.stdout.strip() or proc.stderr.strip())
@@ -60,7 +64,7 @@ def main() -> int:
     # `claude-bp-plan --version` printed nothing and exited 2, so a bug report
     # against this plugin could not state which version it was against (#210).
     parser.add_argument("--version", action="version", version=__version__)
-    parser.add_argument("--pr", action="store_true", help="open a draft pull request")
+    parser.add_argument("--pr", action="store_true", help="open a pull request")
     args = parser.parse_args()
 
     ctx = resolve_for_cli()

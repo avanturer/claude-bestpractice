@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 import unittest
+from unittest import mock
 
 from helpers import (BIN, RepoCase, a_gate_underway, answer_of, git, harness_matches,
                      real_acceptance_grace, sid)
@@ -1739,3 +1740,360 @@ class TestAMergedPullRequestIsNotAnOpenOne(PRCase):
 
         pullrequest.reconcile(self.ctx(), "feat/x")
         self.assertEqual(1, len(pullrequest.outstanding(self.ctx())))
+
+
+class TestADraftIsPausedWork(PRCase):
+    """Issue #239. A draft is how the founder, or a session they asked, pauses work, and the
+    Stop gate treated it as finished: with a `+merge` on record it said to merge it now, and
+    without one it asked the founder for their word on work they had asked to hold."""
+
+    def stop(self, session_id: str = "s1"):
+        return self.gate("evidence-gate", {
+            "session_id": session_id, "hook_event_name": "Stop", "stop_hook_active": False,
+        })
+
+    def finished_and_drafted(self) -> None:
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+        self.tool("Bash", {"command": "gh pr create --fill --draft --base main"})
+
+    def open_with_the_tool(self, number: int, head: str, draft: bool) -> None:
+        """The request and the response, as `open_a_pr` does, for a branch of its own."""
+        tool_input = {"owner": "o", "repo": "r", "title": "t", "head": head, "base": "main",
+                      "draft": draft}
+        self.tool("mcp__github__create_pull_request", tool_input)
+        self.gate("pr-opened", {
+            "session_id": "s1", "hook_event_name": "PostToolUse",
+            "tool_name": "mcp__github__create_pull_request", "tool_input": tool_input,
+            "tool_response": {"url": f"https://github.com/o/r/pull/{number}"},
+        })
+
+    def record(self, branch: str = "feat/x") -> dict:
+        return {row["branch"]: row for row in pullrequest.outstanding(self.ctx())}[branch]
+
+    def test_every_spelling_of_a_draft_is_read_as_one(self):
+        for command, draft in (
+            ("gh pr create --fill --draft", True),
+            ("gh pr create -d --fill", True),
+            ("gh pr create -fd", True),
+            ("gh pr create --draft=true --fill", True),
+            ("gh pr create --draft=false --fill", False),
+            ("gh pr create --fill -B main", False),
+            # `-B` takes the rest of its token as the base, which is how `gh` reads it.
+            ("gh pr create -Bd --fill", False),
+            ("echo gh pr create --draft", False),
+        ):
+            with self.subTest(command=command):
+                self.assertIs(draft, pullrequest.drafted("Bash", command, {}))
+        tool = "mcp__github__create_pull_request"
+        self.assertTrue(pullrequest.drafted(tool, "", {"draft": True}))
+        self.assertFalse(pullrequest.drafted(tool, "", {"draft": False}))
+        self.assertFalse(pullrequest.drafted(tool, "", {}))
+
+    def test_a_finished_draft_is_not_pushed_toward_a_merge(self):
+        """The report: the founder asked to pause the work, and the gate said to merge it."""
+        self.finished_and_drafted()
+        self.accept()
+        proc = self.stop()
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertNotIn("merge it now", proc.stderr)
+        self.assertTrue(self.record()["draft"])
+
+    def test_nor_put_to_the_founder_for_their_word(self):
+        """Without a `+merge` the demand asks the session to show the work for one, which is
+        the same push toward a merge, one step removed."""
+        self.finished_and_drafted()
+        proc = self.stop()
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertNotIn("waiting for the founder", proc.stderr)
+
+    def test_marked_ready_it_is_an_obligation_again(self):
+        """With the one demand it is owed, which pausing it did not spend."""
+        self.finished_and_drafted()
+        self.assertEqual(0, self.stop().returncode)
+        self.tool("Bash", {"command": "gh pr ready"})
+        self.assertFalse(self.record()["draft"])
+        proc = self.stop()
+        self.assertEqual(2, proc.returncode, proc.stdout)
+        self.assertIn("waiting for the founder", proc.stderr)
+
+    def test_undo_pauses_it_again(self):
+        self.finished_and_drafted()
+        self.tool("Bash", {"command": "gh pr ready"})
+        self.tool("Bash", {"command": "gh pr ready --undo"})
+        self.assertTrue(self.record()["draft"])
+
+    def test_ready_names_its_pull_request_the_way_close_does(self):
+        """By number through the record that learned it, by URL, by branch, or by none."""
+        self.start()
+        self.open_with_the_tool(PRCase.PR_NUMBER, "feat/x", draft=True)
+        for command in (f"gh pr ready {PRCase.PR_NUMBER}", "gh pr ready feat/x",
+                        f"gh pr ready https://github.com/o/r/pull/{PRCase.PR_NUMBER}",
+                        "gh pr ready"):
+            with self.subTest(command=command):
+                self.tool("Bash", {"command": "gh pr ready --undo"})
+                self.assertTrue(self.record()["draft"])
+                self.tool("Bash", {"command": command})
+                self.assertFalse(self.record()["draft"])
+
+    def test_the_structured_tool_resumes_and_pauses_it_too(self):
+        """`update_pull_request` with `draft`, seen by the hook after the call and the one
+        before it. In this repository: the tool names `o/r`, and so does the remote."""
+        git(["remote", "add", "origin", "https://github.com/o/r.git"], self.repo)
+        self.start()
+        self.open_with_the_tool(PRCase.PR_NUMBER, "feat/x", draft=True)
+        self.assertTrue(self.record()["draft"])
+        update = {"owner": "o", "repo": "r", "pullNumber": PRCase.PR_NUMBER, "draft": False}
+        self.gate("pr-opened", {
+            "session_id": "s1", "hook_event_name": "PostToolUse",
+            "tool_name": "mcp__github__update_pull_request", "tool_input": update,
+            "tool_response": {},
+        })
+        self.assertFalse(self.record()["draft"])
+        self.tool("mcp__github__update_pull_request", {**update, "draft": True})
+        self.assertTrue(self.record()["draft"])
+
+    def test_the_hook_after_the_call_files_a_draft_as_one(self):
+        """Where it is the one hook that sees the tool open it."""
+        self.start()
+        self.gate("pr-opened", {
+            "session_id": "s1", "hook_event_name": "PostToolUse",
+            "tool_name": "mcp__github__create_pull_request",
+            "tool_input": {"owner": "o", "repo": "r", "title": "t", "head": "feat/x",
+                           "base": "main", "draft": True},
+            "tool_response": {"url": f"https://github.com/o/r/pull/{PRCase.PR_NUMBER}"},
+        })
+        self.assertTrue(self.record()["draft"])
+
+    def test_ready_in_another_repository_changes_nothing_here(self):
+        self.start()
+        self.open_with_the_tool(PRCase.PR_NUMBER, "feat/x", draft=True)
+        self.tool("Bash", {"command": f"gh pr ready {PRCase.PR_NUMBER} -R someone/else"})
+        self.assertTrue(self.record()["draft"])
+
+    def test_the_board_says_it_is_a_draft(self):
+        self.finished_and_drafted()
+        self.assertIn("feat/x (draft)", pullrequest.line(self.ctx()))
+
+    def test_a_word_about_the_finished_ones_does_not_reach_a_draft(self):
+        """Decision 0023's pool is what the chat has open, and a paused pull request is not
+        among it: a `+merge` said over the finished ones would merge it with them."""
+        self.start()
+        self.open_with_the_tool(61, "feat/a", draft=False)
+        self.open_with_the_tool(62, "feat/b", draft=True)
+        self.accept()
+
+        def merge(number):
+            return self.decision(self.tool("mcp__github__merge_pull_request",
+                                           {"owner": "o", "repo": "r", "pullNumber": number}))
+
+        self.assertEqual("deny", merge(62))
+        self.assertNotEqual("deny", merge(61))
+
+
+class TestAPullRequestOpenedElsewhereIsAskedOfGitHub(PRCase):
+    """Issue #239. The record knows only the pull requests a hook in this clone saw opened. An
+    open draft opened from a terminal was answered with "no pull request against main" and an
+    order to open one. The Stop gate asks GitHub once, before it says there is none."""
+
+    DRAFT = {"number": 785, "isDraft": True, "baseRefName": "main",
+             "url": "https://github.com/o/r/pull/785"}
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.stubs = self.tmp / "gh-stub"
+        self.stubs.mkdir()
+        self.asked_log = self.tmp / "gh-asked.log"
+        (self.stubs / "gh").write_text(
+            "#!/bin/sh\n"
+            'echo "$*" >> "$GH_ASKED_LOG"\n'
+            "printf '%s' \"$FAKE_GH_LIST\"\n"
+            'exit "${FAKE_GH_EXIT:-0}"\n'
+        )
+        (self.stubs / "gh").chmod(0o755)
+
+    def github_has(self, listed, exit_code: int = 0) -> None:
+        """A `gh` first on PATH, answering `pr list` with `listed` and exiting `exit_code`."""
+        printed = listed if isinstance(listed, str) else json.dumps(listed)
+        patched = mock.patch.dict(os.environ, {
+            "PATH": f"{self.stubs}{os.pathsep}{os.environ.get('PATH', '')}",
+            "GH_ASKED_LOG": str(self.asked_log),
+            "FAKE_GH_LIST": printed,
+            "FAKE_GH_EXIT": str(exit_code),
+        })
+        patched.start()
+        self.addCleanup(patched.stop)
+
+    def asked(self) -> list[str]:
+        return self.asked_log.read_text().splitlines() if self.asked_log.exists() else []
+
+    def finished(self) -> None:
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+
+    def stop(self, session_id: str = "s1"):
+        return self.gate("evidence-gate", {
+            "session_id": session_id, "hook_event_name": "Stop", "stop_hook_active": False,
+        })
+
+    def test_an_open_draft_opened_elsewhere_is_the_pull_request(self):
+        """The report, as it happened."""
+        self.finished()
+        self.github_has([self.DRAFT])
+        proc = self.stop()
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertNotIn("Open it now", proc.stderr)
+        [record] = pullrequest.outstanding(self.ctx())
+        self.assertEqual((785, True, "main"), (record["number"], record["draft"], record["base"]))
+        self.assertIn("#785 on feat/x (draft)", pullrequest.line(self.ctx()))
+
+    def test_it_asks_about_this_branch_and_its_open_pull_requests(self):
+        self.finished()
+        self.github_has([])
+        self.stop()
+        [asked] = self.asked()
+        self.assertIn("pr list --head feat/x --state open", asked)
+
+    def test_a_ready_one_gets_the_one_demand_any_pull_request_gets(self):
+        self.finished()
+        self.github_has([{**self.DRAFT, "isDraft": False}])
+        proc = self.stop()
+        self.assertEqual(2, proc.returncode, proc.stdout)
+        self.assertIn("pull request #785 is open", proc.stderr)
+        self.assertIn("waiting for the founder", proc.stderr)
+        self.assertNotIn("Open it now", proc.stderr)
+
+    def test_the_one_against_the_trunk_is_the_one_recorded(self):
+        self.finished()
+        self.github_has([{**self.DRAFT, "number": 790, "baseRefName": "feat/base"}, self.DRAFT])
+        self.stop()
+        [record] = pullrequest.outstanding(self.ctx())
+        self.assertEqual((785, "main"), (record["number"], record["base"]))
+
+    def test_one_found_is_not_asked_about_again(self):
+        self.finished()
+        self.github_has([self.DRAFT])
+        self.stop()
+        self.stop()
+        self.assertEqual(1, len(self.asked()))
+
+    def test_none_on_github_is_demanded_once_and_asked_once(self):
+        self.finished()
+        self.github_has([])
+        first, second = self.stop(), self.stop()
+        self.assertIn("Open it now", first.stderr)
+        self.assertIn("is on record here or on GitHub", first.stderr)
+        self.assertNotIn("Open it now", second.stderr)
+        self.assertEqual(1, len(self.asked()))
+
+    def test_when_github_cannot_be_asked_the_demand_says_so(self):
+        self.finished()
+        self.github_has([], exit_code=4)
+        proc = self.stop()
+        self.assertEqual(2, proc.returncode, proc.stdout)
+        self.assertIn("GitHub could not be asked", proc.stderr)
+        self.assertIn("`gh pr list --head feat/x`", proc.stderr)
+
+    def test_an_answer_that_is_not_a_list_is_no_answer(self):
+        for printed in ("not json", json.dumps(self.DRAFT)):
+            with self.subTest(printed=printed):
+                self.github_has(printed)
+                self.assertIsNone(pullrequest.on_github(self.ctx(), "feat/x"))
+
+    def test_a_gh_that_never_answers_is_no_answer(self):
+        hung = self.tmp / "hung-gh"
+        hung.mkdir()
+        (hung / "gh").write_text("#!/bin/sh\nexec sleep 600\n")
+        (hung / "gh").chmod(0o755)
+        path = {"PATH": f"{hung}{os.pathsep}{os.environ.get('PATH', '')}"}
+        with mock.patch.dict(os.environ, path), \
+                mock.patch.object(pullrequest, "_GH_LOOK_SECONDS", 1):
+            started = time.monotonic()
+            self.assertIsNone(pullrequest.on_github(self.ctx(), "feat/x"))
+        self.assertLess(time.monotonic() - started, 30)
+
+    def test_nothing_is_asked_while_nothing_would_be_demanded(self):
+        """Uncommitted work is no branch to open a pull request for, and neither is one
+        already on record: a round trip for either would be spent on nothing."""
+        self.write("src/app.py", "x = 1\n")
+        self.start()
+        self.github_has([self.DRAFT])
+        self.stop()
+        self.commit("add the app module")
+        self.open_a_pr()
+        self.stop()
+        self.assertEqual([], self.asked())
+
+
+class TestTheDemandToOpenOneLeavesTheMergeToTheFounder(PRCase):
+    """Issue #239 as well: the demand to open a pull request ended "Then merge it yourself once
+    the checks pass", past the founder's word every other merge here waits for (decision
+    0010), and it said so over work the founder had asked to pause."""
+
+    def demand(self, accepted: bool) -> str:
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+        if accepted:
+            self.accept()
+        proc = self.gate("evidence-gate", {
+            "session_id": "s1", "hook_event_name": "Stop", "stop_hook_active": False,
+        })
+        self.assertEqual(2, proc.returncode, proc.stdout)
+        return proc.stderr
+
+    def test_without_the_word_it_is_shown_to_the_founder_and_left_open(self):
+        said = self.demand(accepted=False)
+        self.assertIn("merged on their `+merge`, not on green checks", said)
+        self.assertNotIn("merge it once the checks pass", said)
+        self.assertNotIn("merge it yourself", said)
+
+    def test_with_the_word_on_record_it_is_merged_if_the_word_was_for_it(self):
+        said = self.demand(accepted=True)
+        self.assertIn("if it was meant for this work, merge it once the checks pass", said)
+
+    def test_it_names_a_way_to_open_one_that_runs_here(self):
+        """Decision 0020. `claude-bp-ship` is this plugin's own, so it runs wherever the gate
+        does, `gh` or no `gh`."""
+        said = self.demand(accepted=False)
+        self.assertIn("gh pr create --base main --fill", said)
+        self.assertIn("`claude-bp-ship --pr`", said)
+        self.assertTrue((BIN / "claude-bp-ship").exists())
+
+    def test_it_says_how_to_open_paused_work(self):
+        self.assertIn("add `--draft`: a draft is left alone", self.demand(accepted=False))
+
+
+class TestTheBoardStopsSayingThereIsNone(PRCase):
+    """The demand files "NO PULL REQUEST for finished work on X" on the board, and nothing
+    closed it once the pull request was opened: the board said it beside "OPEN PULL
+    REQUESTS: #N on X" for the fourteen days an item is kept (#239)."""
+
+    def said_none(self, branch: str = "feat/x") -> bool:
+        return any("NO PULL REQUEST" in str(item.get("text", ""))
+                   for item in board.open_items(self.ctx(), branch=branch, limit=None))
+
+    def test_opening_one_closes_it(self):
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+        self.gate("evidence-gate", {
+            "session_id": "s1", "hook_event_name": "Stop", "stop_hook_active": False,
+        })
+        self.assertTrue(self.said_none(), "precondition: the demand filed it")
+        self.open_a_pr()
+        self.assertFalse(self.said_none())
+
+    def test_another_branchs_is_left_standing(self):
+        board.add_open_item(self.ctx(), item_id=f"{pullrequest.MISSING_ITEM}feat/y-1",
+                            text="NO PULL REQUEST for finished work on feat/y", branch="feat/y",
+                            session_id="s1", subject_paths=[])
+        self.start()
+        self.open_a_pr()
+        self.assertTrue(self.said_none("feat/y"))

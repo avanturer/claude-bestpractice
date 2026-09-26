@@ -1509,6 +1509,22 @@ def _take_the_goal_command_off_a_statement(ctx: GitContext) -> str:
     return f"{fixed} task statement(s) or card(s) carried the `/goal` command; took it off"
 
 
+def _close_no_pull_request_items_a_pull_request_answered(ctx: GitContext) -> str:
+    """"NO PULL REQUEST" items on the board for a branch whose pull request is on record.
+
+    The Stop gate files one with its demand to open a pull request, and nothing closed it
+    once the session did: the board went on saying "NO PULL REQUEST for finished work on X"
+    beside "OPEN PULL REQUESTS: #N on X" for the fourteen days an item is kept (#239). Now
+    recording the pull request closes it; this closes the ones already on the board.
+    """
+    from . import pullrequest
+
+    closed = pullrequest.close_answered(ctx)
+    if not closed:
+        return ""
+    return f"{closed} \"NO PULL REQUEST\" item(s) named a branch whose pull request is on record; closed"
+
+
 _REPAIRS = {
     "0001-task-paths": (1, _backfill_task_paths),
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
@@ -1546,6 +1562,8 @@ _REPAIRS = {
     "0032-restore-cards-a-pull-took": (1, _restore_cards_a_pull_took),
     "0033-let-a-run-as-configured-clear-a-red-suite": (1, _let_a_run_as_configured_clear_a_red_suite),
     "0034-take-the-goal-command-off-a-statement": (1, _take_the_goal_command_off_a_statement),
+    "0035-close-no-pull-request-items-a-pull-request-answered":
+        (1, _close_no_pull_request_items_a_pull_request_answered),
 }
 
 

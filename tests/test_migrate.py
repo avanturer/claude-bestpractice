@@ -1768,3 +1768,41 @@ class TestARedSuiteCountedUnderTheWrongConfigurationCanClear(RepoCase):
         self.assertEqual("packages/api/", record["path"])
         self.assertNotIn("executed", record)
         self.assertNotIn("tree_hash", record)
+
+
+class TestANoPullRequestItemAPullRequestAnsweredIsClosed(RepoCase):
+    """The Stop gate filed "NO PULL REQUEST for finished work on X" with its demand to open one,
+    and nothing closed it once one was opened: the board said so beside "OPEN PULL REQUESTS:
+    #N on X" for the fourteen days an item is kept (#239)."""
+
+    def filed(self, branch: str) -> None:
+        from claude_bestpractice import board, pullrequest
+
+        board.add_open_item(self.ctx(), item_id=f"{pullrequest.MISSING_ITEM}{branch}-1",
+                            text=f"NO PULL REQUEST for finished work on {branch}",
+                            branch=branch, session_id="s1", subject_paths=[])
+
+    def still_said(self) -> list[str]:
+        from claude_bestpractice import board
+
+        return sorted(str(item["branch"]) for item in
+                      board.open_items(self.ctx(), with_provenance=False, limit=None)
+                      if "NO PULL REQUEST" in str(item.get("text", "")))
+
+    def test_the_one_for_a_branch_whose_pull_request_is_on_record_is_closed(self):
+        import time
+
+        from claude_bestpractice import pullrequest
+
+        self.filed("feat/opened")
+        self.filed("feat/never")
+        # The record as the old code wrote it: after the item, and leaving it standing.
+        store.append_jsonl(store.tier_b(self.ctx(), pullrequest.PR_FILE), {
+            "branch": "feat/opened", "base": "main", "number": 41, "url": "",
+            "session_id": "s1", "opened_at": time.time(), "state": pullrequest.OPEN,
+            "handed_off_at": 0.0,
+        })
+        changed = migrate.repair(self.ctx())
+
+        self.assertEqual(["feat/never"], self.still_said())
+        self.assertTrue([line for line in changed if "NO PULL REQUEST" in line], changed)

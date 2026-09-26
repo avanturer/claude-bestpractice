@@ -1,6 +1,5 @@
 # Decisions
 
-- [0013] A failure may be remembered; a pass may never be — `decisions/0013-a-failure-may-be-remembered.md`
 - [0014] A gate's refusal is the session's to resolve, never the founder's to hear first — `decisions/0014-a-refusal-is-the-sessions-to-resolve.md`
 - [0015] A spawn names the tier it runs as, and the count is the founder's number — `decisions/0015-a-spawn-names-its-tier.md`
 - [0016] Off means off, on the next tool call, and only the founder says it — `decisions/0016-off-means-off.md`
@@ -11,4 +10,5 @@
 - [0021] A gate refuses only where the refusal reaches the model — `decisions/0021-a-gate-refuses-where-the-refusal-reaches-the-model.md`
 - [0022] A removal carries its own cleanup, and happens where the session survives it — `decisions/0022-a-removal-carries-its-own-cleanup.md`
 - [0023] One `+merge` accepts every pull request its chat has open — `decisions/0023-one-merge-accepts-the-chats-pool.md`
-- ... 10 older, see `decisions/`
+- [0024] A draft is paused work, and a missing pull request is asked of GitHub before it is claimed — `decisions/0024-a-draft-is-paused-work.md`
+- ... 11 older, see `decisions/`

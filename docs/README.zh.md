@@ -4,8 +4,8 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-1.70.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-2168%20passing-2ea44f)](#已验证)
+[![version](https://img.shields.io/badge/version-1.71.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-2230%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#运行要求)
@@ -200,7 +200,7 @@ Stop gate **丢弃智能体的自述文字**，自己去运行你的测试套件
 
 | 你输入 | 允许的操作 | 次数 |
 | --- | --- | --- |
-| `+merge` | 合并本对话已打开的 PR | 每个一次；若没有已打开的，则下一次合并 |
+| `+merge` | 合并本对话已打开的 PR（草稿除外）| 每个一次；若没有已打开的，则下一次合并 |
 | `+release` | 发布到生产环境 | 一次发布 |
 | `+migration` | 迁移中的破坏性 DDL | 一次迁移 |
 
@@ -330,7 +330,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 ## 已验证
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2168 个测试 · 36 项 doctor 检查 · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2230 个测试 · 36 项 doctor 检查 · budget
 ```
 
 doctor 通过**真的去做那件坏事**来证明 gate 有效，而不是把配置读回来对一遍——
