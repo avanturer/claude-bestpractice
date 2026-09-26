@@ -1,5 +1,54 @@
 # Changelog
 
+## v1.71.2
+
+`+merge` reaches what the chat opened before a restart (#241), it decides an UNVERIFIED finish
+that was put to the founder (#243), and a path in a shell variable is where the variable points
+(#244).
+
+### What happened
+
+- **#241, again on 1.71.1.** The chat opened #804 from its tree and was restarted with
+  `--resume`. It came back in the main checkout as a new process and opened another pull
+  request from there. `+merge` named the pull requests of the process it reached, so it named
+  only the new one, and the one-merge word was dropped with the pool. `gh pr merge 804` was
+  refused as "no `+merge` from the founder is on record", and so was every retry after every
+  `+merge`.
+- **#243.** The Stop gate put "this branch carries an UNVERIFIED finish" to the founder, the
+  founder answered `+merge`, and the merge was refused with the same item. The refusal
+  promised the merge "as soon as the list above is empty", but nothing removes an unverified
+  finish, so no word of theirs could empty that list. It surfaced on 1.71.1, the first version
+  that judges a merge by the number `gh pr create` printed. Before it, that merge went through
+  unjudged.
+- **#244.** `SP=/tmp/…/scratchpad; …; sed -i … $SP/shot_tiles.py`, run from `backend/`, was
+  refused by the board gate as a write to `backend/$SP/shot_tiles.py`. The variable was joined
+  to the working directory unexpanded, and the whole command did not run.
+
+### What changed
+
+- **The chat is its harness id, not the process.** A `+merge` names every pull request the
+  chat has open, from any tree and any process it ran as: a `--resume` included, and a
+  `claude -p` it started. Another chat's pull request is still not named (#192).
+- **The founder's `+merge` decides an UNVERIFIED finish once it has been put to them**, by the
+  Stop gate's hand-off or by a refused merge. The merge then goes through with that item off
+  the list, and only that item: a red suite or uncommitted work still blocks. A word said
+  before they were shown it decides nothing, and a finish filed after the word is put to them
+  again. Both refusals now say what the word does.
+- **A path is expanded with the variables the line itself set.** `NAME=value` and `export`
+  count; a `NAME=value` in front of a command does not, because the shell expands the line
+  first. A variable the line did not set is the shell's, and a path carrying one is not
+  judged as a file of the repository. `$PWD` is where the line stands, and `cd $SP` moves the
+  line when `SP` is known. `cp a $SP/b` no longer reads `a` as what the copy writes.
+
+### How it was checked
+
+Each report in its own order, as a test that fails on 1.71.1. For #241: #804 opened from the
+tree, the CLI gone, the chat resumed in main, a second pull request opened, and
+`+merge\nкати ота и апк`. For #243: the hand-off, `+merge`, then `gh pr merge 48 --admin
+--squash`. For #244: the reported line, run from `backend/`. Another chat's pull request, a
+word given before the hand-off, a later finish, uncommitted work, a prefix assignment and an
+unknown variable are each tested in the direction they must still go.
+
 ## v1.71.1
 
 A pull request opened with `gh pr create` merges by its number on the founder's first `+merge`
