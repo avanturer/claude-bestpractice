@@ -62,9 +62,10 @@ def main() -> None:
     number = pullrequest.number_in(event.raw.get("tool_response"))
     # The same branch the obligation was filed under, derived the same way, or the
     # record this is meant to complete is not the one that gets stamped.
-    head = pullrequest.head_of(
-        event.tool_name, command, event.tool_input, event.cwd or os.getcwd()
-    ) or ctx.branch
+    head = pullrequest.opened_from(ctx, event.tool_name, command, event.tool_input,
+                                   event.cwd or os.getcwd())
+    if not head:
+        hookio.emit_silent()
     if not pullrequest.learn_number(ctx, head, number):
         # Nothing filed it. PreToolUse is matched on the built-in tools by exact name, so a
         # pull request the structured tool opened reached this hook and no other: there was

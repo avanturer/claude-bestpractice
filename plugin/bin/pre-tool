@@ -1471,9 +1471,18 @@ def main() -> None:
             #
             # One word covers every pull request this session had open when it was said,
             # each once; with none open, the one merge it always allowed.
+            #
+            # Judged in the tree the line runs `gh` in. `cd <tree> && gh pr merge` merges
+            # that tree's pull request, and it was judged, spent and settled as the one the
+            # session stood on (#248). Where the line goes cannot be told, neither can which
+            # pull request a merge naming none is, and the session is asked to name it.
+            here = pullrequest.merged_in(ctx, command, str(session_cwd))
+            if here is None and not number:
+                deny(ctx, rec, pullrequest.unplaceable(command))
+            here = here or ctx
             current = pullrequest.about_current_branch(event.tool_name, command)
-            named = pullrequest.named_by(ctx, number, current)
-            cover = config.within_grace(lambda: pullrequest.acceptance(ctx, named))
+            named = pullrequest.named_by(here, number, current)
+            cover = config.within_grace(lambda: pullrequest.acceptance(here, named))
             if not cover:
                 # The word on record may cover it, under a number this clone never learned.
                 # That is not a word missing, and it is the session's to resolve (#241).
@@ -1497,15 +1506,15 @@ def main() -> None:
                     "  Their word is read from their own message; nothing you write "
                     "can stand in for it."
                 )
-            gated = pullrequest.gated_by(ctx, number, current)
+            gated = pullrequest.gated_by(here, number, current)
             if gated is None:
                 # Somebody else's pull request: nothing checked here is about it (#135).
                 # Still taken off what the word covers.
                 pullrequest.spend(ctx, named, cover)
             else:
-                base = str(gated.get("base") or "") or gitpolicy.default_branch(ctx) or "main"
+                base = str(gated.get("base") or "") or gitpolicy.default_branch(here) or "main"
                 # The pull request's own head, not the tree this session is standing in.
-                problems = pullrequest.blockers(ctx, base, str(gated.get("branch") or ""))
+                problems = pullrequest.blockers(here, base, str(gated.get("branch") or ""))
                 if problems:
                     # Put to the founder by this refusal, so that their next word is a word
                     # about what it lists (#243).
@@ -1527,11 +1536,12 @@ def main() -> None:
                 # and an obligation the founder has already watched be merged is worse
                 # than useless on the board.
                 #
-                # `ctx.branch` is right here and not an oversight: `gated_by` resolves the
-                # obligation by the CURRENT branch, so a merge that reaches this line is
-                # always this branch's. A merge of somebody else's is not gated at all and
-                # never arrives (#135) — which is what makes settling here safe.
-                pullrequest.settle(ctx, ctx.branch, pullrequest.MERGED)
+                # `here.branch` is right here and not an oversight: `gated_by` resolves the
+                # obligation by the branch checked out where the merge runs, so a merge that
+                # reaches this line is always that branch's. A merge of somebody else's is
+                # not gated at all and never arrives (#135) — which is what makes settling
+                # here safe.
+                pullrequest.settle(here, here.branch, pullrequest.MERGED)
                 # And the cards that claimed this work are closed by the delivery of it,
                 # here, without anybody being asked. The founder's account of the failure
                 # is the specification: having given the word to merge, they were then
@@ -1548,10 +1558,10 @@ def main() -> None:
                 if cfg.require_task:
                     from claude_bestpractice import plan
 
-                    head = str(gated.get("branch") or "") or ctx.branch
+                    head = str(gated.get("branch") or "") or here.branch
                     plan.settle_delivered(
                         ctx, event.session_id,
-                        pullrequest.delivered_paths(ctx, base, head),
+                        pullrequest.delivered_paths(here, base, head),
                         f"the merge of {head}",
                     )
                 # Every other session's baseline just went stale. They measure their diff
@@ -1559,7 +1569,7 @@ def main() -> None:
                 # scope both read wrong until they take the merge in.
                 inbox.broadcast(
                     ctx, event.session_id,
-                    f"{ctx.branch} was merged. Your baseline is behind — take the base "
+                    f"{here.branch} was merged. Your baseline is behind — take the base "
                     "branch in before you finish, or your diff is measured from the "
                     "wrong commit.",
                 )
@@ -1570,9 +1580,10 @@ def main() -> None:
             base = gitpolicy.default_branch(ctx) or "main"
             # The branch the pull request is opened FROM, which is not the session's own
             # when the session coordinates from the main checkout (#79).
-            head = pullrequest.head_of(event.tool_name, command, ti, session_cwd) or ctx.branch
-            pullrequest.opened(ctx, head, base, event.session_id,
-                               draft=pullrequest.drafted(event.tool_name, command, ti))
+            head = pullrequest.opened_from(ctx, event.tool_name, command, ti, str(session_cwd))
+            if head:
+                pullrequest.opened(ctx, head, base, event.session_id,
+                                   draft=pullrequest.drafted(event.tool_name, command, ti))
             if pullrequest.about_this_repository(ctx, event.tool_name, ti, command):
                 pr_vouch = vouch.PULL_REQUEST
         else:
