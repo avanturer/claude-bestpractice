@@ -622,7 +622,7 @@ _QUOTED = re.compile(r"""'[^']*'|"[^"]*\"""", re.S)
 # The cost, stated: `--flag>out.txt` and `path/>out.txt` stop being read as writes. Both
 # are forms nobody writes, against a false target that blocked a real command.
 BASH_WRITE_TARGETS = re.compile(
-    r"(?:(?<![@<>=!~^|+:*%/-])>>?\s*|\btee\s+(?:-a\s+)?)(?P<path>[\"']?[\w./@+~-]+[\"']?)"
+    r"(?:(?<![@<>=!~^|+:*%/-])>>?\s*|\btee\s+(?:-a\s+)?)(?P<path>[\"']?[\w./@+~${}-]+[\"']?)"
 )
 
 # `sed -i` writes its LAST argument; everything before it is the script, which looks
@@ -667,7 +667,7 @@ _RUNS = (
 #
 # Every path-shaped argument of these verbs counts, because `rm -rf a b c` names three.
 BASH_REMOVES = re.compile(
-    _RUNS + r"(?:rm|unlink|shred|truncate)\b(?P<args>(?:\s+(?:-\S+|[\w./@+~-]+))+)"
+    _RUNS + r"(?:rm|unlink|shred|truncate)\b(?P<args>(?:\s+(?:-\S+|[\w./@+~${}-]+))+)"
 )
 
 # `cp`, `mv`, `install` and `ln` write their LAST argument and READ the rest. Taking every
@@ -676,7 +676,7 @@ BASH_REMOVES = re.compile(
 # bytes came FROM and the destination was inside our own tree. Reading a sibling checkout —
 # an `.env`, a shared key, a diff — is routine. Reported as issue #42.
 BASH_COPIES = re.compile(
-    _RUNS + r"(?:mv|cp|install|ln)\b(?P<args>(?:\s+(?:-\S+|[\w./@+~-]+))+)"
+    _RUNS + r"(?:mv|cp|install|ln)\b(?P<args>(?:\s+(?:-\S+|[\w./@+~${}-]+))+)"
 )
 
 # A heredoc body is DATA. `select … where n_live_tup > 0` inside one looks exactly like a
@@ -685,6 +685,9 @@ BASH_COPIES = re.compile(
 # problem. Blanked like quoted spans, and for the same reason.
 _HEREDOC = re.compile(r"<<-?\s*(['\"]?)(?P<tag>\w+)\1.*?^\s*(?P=tag)\s*$", re.S | re.M)
 _ARG = re.compile(r"[\w./@+~-]+")
+# An operand of those verbs, which may carry a variable. Stopping at `$` read `cp a $SP/b`
+# as a copy onto `a`, the one file it only reads.
+_OPERAND = re.compile(r"[\w./@+~${}-]+")
 
 
 def _blanked(command: str) -> str:
@@ -719,6 +722,63 @@ _SEGMENTS = re.compile(r"&&|\|\||;|\n")
 # bracket is the one piece of shell `shellcmd` declines outright. Trimmed at the edges only:
 # one anywhere else still makes it decline, which every caller here falls back from.
 _EDGE_BRACKETS = re.compile(r"^[\s({]+|[\s)}]+$")
+
+# A path can be a variable the line itself set: `SP=/tmp/…/scratchpad; sed -i … $SP/x.py`.
+# Joined to the working directory unexpanded, that was refused as a write to
+# `backend/$SP/x.py`, a file of the repository nobody had named (#244). A variable the line
+# did not set is the shell's to fill in — the environment, a `$(…)`, `${X:-default}` — and a
+# path carrying one is not a place this gate can name. `$PWD` is where the line stands.
+#
+# Set, it is set for the rest of the line; `NAME=value` in front of a command is only that
+# command's environment, because the shell has expanded the line before it takes effect.
+_VARIABLE = re.compile(r"\$(?:\{(?P<braced>[A-Za-z_]\w*)\}|(?P<bare>[A-Za-z_]\w*))")
+_ASSIGNMENT = re.compile(r"(?P<name>[A-Za-z_]\w*)=(?P<value>.*)", re.S)
+_DECLARES = frozenset({"export", "readonly", "declare", "typeset", "local"})
+# What a segment the tokeniser declines may still be assigning — `SP=$(mktemp -d)` — which
+# has to put the name out of reach rather than leave an earlier value standing for it.
+_ASSIGNS_AT_START = re.compile(
+    r"^[\s({]*(?:(?:export|readonly|declare|typeset|local)\s+(?:-\w+\s+)*)?"
+    r"(?P<name>[A-Za-z_]\w*)="
+)
+
+
+def _expanded(word: str, here: Path, known: dict[str, str | None]) -> str | None:
+    """`word` with the variables this line set put in. None where only the shell knows one."""
+    unknown = False
+
+    def value(found: re.Match) -> str:
+        nonlocal unknown
+        name = found.group("braced") or found.group("bare")
+        got = str(here) if name == "PWD" and name not in known else known.get(name)
+        if got is None:
+            unknown = True
+            return ""
+        return got
+
+    out = _VARIABLE.sub(value, word)
+    return None if unknown or "$" in out or "`" in out else out
+
+
+def _assigned(piece: str, here: Path, known: dict[str, str | None]) -> dict[str, str | None]:
+    """The variables a segment sets for the rest of the line, and to what; None if unknowable."""
+    if "=" not in piece:
+        return {}
+    body = _HEREDOC.sub(lambda m: " " * len(m.group(0)), piece)
+    commands = shellcmd.segments(_EDGE_BRACKETS.sub("", body))
+    if not commands:
+        found = _ASSIGNS_AT_START.match(piece)
+        return {found.group("name"): None} if found else {}
+    out: dict[str, str | None] = {}
+    for argv in commands:
+        declared = argv[0] in _DECLARES
+        words = [word for word in argv[1:] if not word.startswith("-")] if declared else argv
+        pairs = [_ASSIGNMENT.fullmatch(word) for word in words]
+        # A command runs here, and what stands in front of it is only its environment.
+        if not declared and not all(pairs):
+            continue
+        for pair in filter(None, pairs):
+            out[pair.group("name")] = _expanded(pair.group("value"), here, {**known, **out})
+    return out
 
 # Git destroys a working tree without ever naming a file in it, so every rule here keyed
 # on "which paths does this write" saw nothing at all. `git -C ../main reset --hard HEAD~1`
@@ -779,7 +839,8 @@ _INTERPRETER = re.compile(r"^(?:python[\d.]*|pypy[\d.]*|node|nodejs|deno|bun|rub
 _INLINE_CODE = {"-c", "-e", "-E", "-p", "-r", "--eval", "--print", "-", "eval"}
 
 
-def _segments_with_cwd(scannable: str, cwd: Path, literal: str = ""):
+def _segments_with_cwd(scannable: str, cwd: Path, literal: str = "",
+                       variables: dict[str, str | None] | None = None):
     """Each shell segment paired with the directory it would actually run in.
 
     Both copies of the segment come back: the blanked one, which is the only copy a path
@@ -787,16 +848,20 @@ def _segments_with_cwd(scannable: str, cwd: Path, literal: str = ""):
     quoted path survives at all. Blanking preserves LENGTH, so one set of offsets cuts
     both, and the raw half is no longer scanned whole against a cwd the `cd`s have moved.
     The offset comes back too, for a caller cutting the same span out of a third copy.
+
+    `variables`, when given, is kept up to date with what the line has set by the time each
+    segment is handed back, for a caller that expands the paths in it.
     """
     here = cwd
     raw = literal or scannable
+    known = {} if variables is None else variables
     edges = [0]
     for match in _SEGMENTS.finditer(scannable):
         edges += [match.start(), match.end()]
     edges.append(len(scannable))
     for start, end in zip(edges[0::2], edges[1::2]):
         segment = scannable[start:end]
-        moved = _moves_to(raw[start:end])
+        moved = _moves_to(raw[start:end], here, known)
         if moved is not None:
             # Tracked, never executed. `cd` into a path that does not exist still changes
             # what the rest of the line means to this scanner, and guessing wrong here
@@ -807,6 +872,7 @@ def _segments_with_cwd(scannable: str, cwd: Path, literal: str = ""):
             moved_to = _resolve(here, moved)
             here = moved_to if moved_to is not None else here
             continue
+        known.update(_assigned(raw[start:end], here, known))
         yield segment, raw[start:end], here, start
 
 
@@ -825,7 +891,7 @@ def _commands_in(segment: str) -> list[list[str]]:
     return shellcmd.commands(_EDGE_BRACKETS.sub("", body))
 
 
-def _moves_to(segment: str) -> str | None:
+def _moves_to(segment: str, here: Path, known: dict[str, str | None]) -> str | None:
     """The directory a segment that is nothing but a `cd` names, or None for any other."""
     if not _CD.match(segment):
         return None
@@ -833,11 +899,11 @@ def _moves_to(segment: str) -> str | None:
     if len(commands) != 1 or commands[0][0] != "cd":
         return None
     named = [word for word in commands[0][1:] if not word.startswith("-")]
-    # One directory, and a literal one. `cd` alone and `cd -` go where only the shell
-    # knows, and `$DIR` is whatever it expands to: none of them is a place to resolve.
-    if len(named) != 1 or "$" in named[0] or "`" in named[0]:
+    # One directory, and one this line can name. `cd` alone and `cd -` go where only the
+    # shell knows, and so does a `$DIR` the line did not set: none of them is a place.
+    if len(named) != 1 or "`" in named[0]:
         return None
-    return named[0]
+    return _expanded(named[0], here, known) if "$" in named[0] else named[0]
 
 
 def _resolve(base: Path, raw: str) -> Path | None:
@@ -1114,9 +1180,10 @@ def bash_writes(command: str, cwd: Path) -> tuple[list[Path], str]:
     out: list[Path] = []
     written = [char if char == "\n" else " " for char in command]
 
-    for segment, literal, here, start in _segments_with_cwd(scannable, cwd, command):
-        carried = _writes_its_words(segment, literal, here)
-        for path in carried + _writes_by_moving(segment, here):
+    known: dict[str, str | None] = {}
+    for segment, literal, here, start in _segments_with_cwd(scannable, cwd, command, known):
+        carried = _writes_its_words(segment, literal, here, known)
+        for path in carried + _writes_by_moving(segment, here, known):
             if path not in out:
                 out.append(path)
         if carried:
@@ -1124,7 +1191,8 @@ def bash_writes(command: str, cwd: Path) -> tuple[list[Path], str]:
     return out, "".join(written)
 
 
-def _writes_its_words(segment: str, literal: str, here: Path) -> list[Path]:
+def _writes_its_words(segment: str, literal: str, here: Path,
+                      known: dict[str, str | None]) -> list[Path]:
     """The files this segment writes its own text into."""
     # On the RAW segment, because `_QUOTED` blanks quoted spans and an interpreter's
     # path is always quoted — scanning the blanked copy would find nothing, every time.
@@ -1133,31 +1201,32 @@ def _writes_its_words(segment: str, literal: str, here: Path) -> list[Path]:
     # the repository root and refused as a write into the main checkout, for a file in
     # /tmp the command never went near (#203).
     run = _INTERPRETER_WRITE.finditer(literal) if _runs_inline_code(literal) else ()
-    coded = [_resolve(here, match.group("a") or match.group("b") or "") for match in run]
+    coded = [_placed(here, match.group("a") or match.group("b") or "", known) for match in run]
     raws = [m.group("path") for m in BASH_WRITE_TARGETS.finditer(segment)]
     raws += _edited_in_place(segment, literal)
-    return [path for path in coded + [_named(raw, here) for raw in raws] if path is not None]
+    return [path for path in coded + [_named(raw, here, known) for raw in raws]
+            if path is not None]
 
 
-def _writes_by_moving(segment: str, here: Path) -> list[Path]:
+def _writes_by_moving(segment: str, here: Path, known: dict[str, str | None]) -> list[Path]:
     """The files this segment removes, or copies and moves others onto."""
     raws: list[str] = []
     # ...and every path a destructive verb names. `rm` is not a redirect, so none of
     # these commands produced a target at all, and every rule keyed on "what does this
     # write" was one `rm` away from irrelevant.
     for match in BASH_REMOVES.finditer(segment):
-        raws += [a for a in _ARG.findall(match.group("args")) if not a.startswith("-")]
+        raws += [a for a in _OPERAND.findall(match.group("args")) if not a.startswith("-")]
 
     # Destination only. The sources are reads, and refusing a read is how a guard
     # stops being about safety and starts being about obedience.
     for match in BASH_COPIES.finditer(segment):
-        operands = [a for a in _ARG.findall(match.group("args")) if not a.startswith("-")]
+        operands = [a for a in _OPERAND.findall(match.group("args")) if not a.startswith("-")]
         if operands:
             raws.append(operands[-1])
-    return [path for path in (_named(raw, here) for raw in raws) if path is not None]
+    return [path for path in (_named(raw, here, known) for raw in raws) if path is not None]
 
 
-def _named(raw: str, here: Path) -> Path | None:
+def _named(raw: str, here: Path, known: dict[str, str | None]) -> Path | None:
     """The file a scanned token names, or None for a token that names no file."""
     token = raw.strip("\"'")
     # `2>&1`, `> 0`, `>1`: file descriptors and comparisons, never filenames.
@@ -1169,7 +1238,17 @@ def _named(raw: str, here: Path) -> Path | None:
     # named `@` as the file this session was working on came out here (#205).
     if not token.strip("@+~-."):
         return None
-    return _resolve(here, raw)
+    return _placed(here, raw, known)
+
+
+def _placed(here: Path, raw: str, known: dict[str, str | None]) -> Path | None:
+    """`_resolve`, once the variables this line set are put in; None where one is not."""
+    word = raw.strip("\"'")
+    if "$" in word or "`" in word:
+        word = _expanded(word, here, known)
+        if word is None:
+            return None
+    return _resolve(here, word)
 
 
 # `NAME=value` in front of a command is the environment it runs with, not words it writes
@@ -1428,6 +1507,9 @@ def main() -> None:
                 # The pull request's own head, not the tree this session is standing in.
                 problems = pullrequest.blockers(ctx, base, str(gated.get("branch") or ""))
                 if problems:
+                    # Put to the founder by this refusal, so that their next word is a word
+                    # about what it lists (#243).
+                    pullrequest.note_refusal(ctx, str(gated.get("branch") or ""))
                     deny_for_founder(ctx, rec, pullrequest.merge_refusal(gated, problems))
                 # Spent once the merge goes ahead, and never before its blockers are judged:
                 # the refusal above promises the merge "as soon as the list is empty", and

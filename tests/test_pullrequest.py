@@ -11,7 +11,7 @@ import unittest
 from unittest import mock
 
 from helpers import (BIN, RepoCase, a_gate_underway, answer_of, git, harness_matches,
-                     real_acceptance_grace, sid)
+                     real_acceptance_grace, session_record_for, sid)
 
 from claude_bestpractice import board, evidence, pullrequest, store
 
@@ -2245,3 +2245,172 @@ class TestAPullRequestOpenedInAShellIsMergedByItsNumber(PRCase):
         said = self.reason(self.tool("Bash", {"command": "gh pr merge 77 --squash"}))
         self.assertIn("no `+merge` from the founder is on record", said)
         self.assertNotIn("is not a pull request this clone knows by number", said)
+
+
+class TestTheWordReachesWhatTheChatOpenedBeforeARestart(PRCase):
+    """Issue #241, reopened on 1.71.1. The chat opened #804 from its tree, was restarted with
+    `--resume`, came back in the main checkout as a new process, and opened another pull
+    request from there. `+merge` named the pull requests of the PROCESS it was said to, so
+    it named the new one alone and the one-merge word went with the pool: `gh pr merge 804`
+    was refused as unaccepted, and so was every retry after every `+merge` the founder sent.
+    """
+
+    # A CLI that has exited. No process has this pid.
+    EXITED = 999_999_990
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.tree = self.tmp / "tree"
+        git(["worktree", "add", "-q", "-b", "feat/w", str(self.tree)], self.repo)
+
+    def runs_as(self, tree, pid: int, raw_id: str = "s1") -> None:
+        """Which process this chat runs as in `tree`, as SessionStart would stamp it."""
+        from claude_bestpractice import sessions
+        from claude_bestpractice.gitctx import resolve
+
+        ctx = resolve(tree)
+        identity = sid(tree, raw_id)
+        record = sessions.get(ctx, identity) or session_record_for(ctx, identity, pid)
+        record.pid, record.pid_trust = pid, sessions.PID_TRUST_OWNER
+        sessions.register(ctx, record)
+
+    def open_pr(self, number: int, head: str, cwd, raw_id: str = "s1") -> None:
+        tool_input = {"owner": "o", "repo": "r", "title": "t", "head": head, "base": "main"}
+        event = {"session_id": raw_id, "tool_name": "mcp__github__create_pull_request",
+                 "tool_input": tool_input}
+        self.run_hook("pre-tool", {**event, "hook_event_name": "PreToolUse"}, cwd=cwd)
+        self.run_hook("pr-opened", {
+            **event, "hook_event_name": "PostToolUse",
+            "tool_response": {"url": f"https://github.com/o/r/pull/{number}"},
+        }, cwd=cwd)
+
+    def restarted(self) -> None:
+        """#804 opened from the tree; the CLI exits and the chat is resumed in main."""
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart",
+                                        "source": "startup"}, cwd=self.tree)
+        self.open_pr(804, "feat/w", self.tree)
+        self.runs_as(self.tree, self.EXITED)
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart",
+                                        "source": "resume"}, cwd=self.repo)
+        self.runs_as(self.repo, os.getpid())
+
+    def merge(self, number: int):
+        return self.tool("Bash", {"command": f"gh pr merge {number} --admin --squash "
+                                             "--delete-branch"})
+
+    def test_the_report_merges_on_the_word(self):
+        """In the report's order: a pull request opened since the restart is in the pool too."""
+        self.restarted()
+        self.open_pr(805, "feat/next", self.repo)
+        self.gate("prompt-capture", {"session_id": "s1", "hook_event_name": "UserPromptSubmit",
+                                     "prompt": "+merge\nкати ота и апк"})
+        for number in (804, 805):
+            with self.subTest(number=number):
+                proc = self.merge(number)
+                self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
+
+    def test_what_the_chat_opened_as_another_process_is_its_own(self):
+        """A `claude -p` the chat started carries its harness id, and the founder speaks to it
+        only through this chat: what it opened is this chat's work, shown here."""
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"},
+                      cwd=self.tree)
+        self.open_pr(804, "feat/w", self.tree)
+        self.runs_as(self.tree, 1)
+        self.start()
+        self.runs_as(self.repo, os.getpid())
+        self.open_pr(805, "feat/next", self.repo)
+        self.accept()
+        for number in (804, 805):
+            with self.subTest(number=number):
+                proc = self.merge(number)
+                self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
+
+    def test_another_chats_pull_request_is_still_not_covered(self):
+        """#192 is about another CHAT, and a restart does not make one."""
+        self.restarted()
+        self.run_hook("session-start", {"session_id": "s2", "hook_event_name": "SessionStart"},
+                      cwd=self.tree)
+        self.open_pr(806, "feat/theirs", self.tree, raw_id="s2")
+        self.open_pr(805, "feat/next", self.repo)
+        self.accept()
+        self.assertEqual("deny", self.decision(self.merge(806)))
+
+
+class TestTheFoundersWordDecidesAnUnverifiedFinish(PRCase):
+    """Issue #243. An UNVERIFIED finish is a record that a turn once ended without proof, and
+    nothing removes it. The merge refusal promised the merge "as soon as the list above is
+    empty" and told the session to take it to the founder, who said `+merge` — and the next
+    merge was refused with the same item, since no act of theirs could empty that list. It
+    surfaced on 1.71.1, the first version to judge a merge by the number `gh pr create`
+    printed; before it, such a merge went through unjudged."""
+
+    MERGE = "gh pr merge 48 --admin --squash"
+
+    def stop(self):
+        return self.gate("evidence-gate", {
+            "session_id": "s1", "hook_event_name": "Stop", "stop_hook_active": False,
+        })
+
+    def finish_unverified(self, at: float = 0.0) -> None:
+        store.append_jsonl(store.tier_b(self.ctx(), "unverified.jsonl"), {
+            "session_id": "s1", "branch": "feat/x", "reason": "no suite covers mobile/",
+            "recorded_at": at or time.time(),
+        })
+
+    def an_open_pull_request_with_one(self) -> None:
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+        self.open_a_pr()
+        self.finish_unverified()
+
+    def merge(self):
+        return self.tool("Bash", {"command": self.MERGE})
+
+    def test_their_word_after_the_hand_off_is_their_decision(self):
+        """The report's order: the Stop gate hands it to the founder, who says `+merge`."""
+        self.an_open_pull_request_with_one()
+        told = self.stop()
+        self.assertIn("UNVERIFIED finish", told.stderr, "precondition: put to the founder")
+        self.assertIn("a `+merge` they send after seeing this", told.stderr)
+        self.accept()
+        proc = self.merge()
+        self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
+
+    def test_a_word_given_before_they_were_shown_it_is_not(self):
+        """Said about the pool before anybody told them this one finished unproven."""
+        self.an_open_pull_request_with_one()
+        self.accept()
+        proc = self.merge()
+        self.assertEqual("deny", self.decision(proc))
+        self.assertIn("carries an UNVERIFIED finish", self.reason(proc))
+
+    def test_the_refusal_puts_it_to_them_and_their_next_word_decides(self):
+        self.an_open_pull_request_with_one()
+        self.accept()
+        refused = self.merge()
+        self.assertIn("`+merge`", self.reason(refused), "the refusal must say what decides it")
+        self.accept()
+        proc = self.merge()
+        self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
+
+    def test_a_finish_after_their_word_is_put_to_them_again(self):
+        self.an_open_pull_request_with_one()
+        self.stop()
+        self.accept()
+        self.finish_unverified(at=time.time() + 1)
+        proc = self.merge()
+        self.assertEqual("deny", self.decision(proc))
+        self.assertIn("carries an UNVERIFIED finish", self.reason(proc))
+
+    def test_it_decides_that_item_and_no_other(self):
+        """A red suite is still theirs to decide HOW to fix, and the session's to fix."""
+        self.an_open_pull_request_with_one()
+        self.stop()
+        self.accept()
+        self.write("src/app.py", "x = 2\n")
+        proc = self.merge()
+        self.assertEqual("deny", self.decision(proc))
+        self.assertIn("uncommitted changes", self.reason(proc))
+        self.assertNotIn("UNVERIFIED", self.reason(proc))

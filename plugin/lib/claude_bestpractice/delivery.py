@@ -237,12 +237,34 @@ def pr_body(ctx: GitContext, base: str) -> str:
 
 
 
+# How a blocker says a branch finished unproven. Its subject is the branch or "this branch";
+# this is the part `pullrequest.blockers` knows it by.
+UNVERIFIED = "carries an UNVERIFIED finish"
+
+
 def unverified_on(ctx: GitContext, branch: str) -> bool:
     """Unverified finishes recorded on a named branch. See `_unverified_here`."""
-    return any(
-        isinstance(r, dict) and r.get("branch") == branch
+    return last_unverified(ctx, branch) is not None
+
+
+def last_unverified(ctx: GitContext, branch: str) -> float | None:
+    """When the latest unverified finish on `branch` was filed. None when it has none.
+
+    0.0 for a row that carries no time, which reads as earlier than anything since.
+    """
+    stamps = [
+        _stamp(r.get("recorded_at"))
         for r in store.read_jsonl(store.tier_b(ctx, "unverified.jsonl"))
-    )
+        if isinstance(r, dict) and r.get("branch") == branch
+    ]
+    return max(stamps) if stamps else None
+
+
+def _stamp(value: object) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _unverified_here(ctx: GitContext) -> bool:
@@ -277,7 +299,7 @@ def ready(ctx: GitContext, base: str) -> list[str]:
     if unproven:
         problems.append(unproven)
     if _unverified_here(ctx):
-        problems.append("this branch carries an UNVERIFIED finish")
+        problems.append(f"this branch {UNVERIFIED}")
 
     if dirty(ctx):
         problems.append("there are uncommitted changes")

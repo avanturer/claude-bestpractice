@@ -150,6 +150,18 @@ def harness_of(session_id: str, worktree: str) -> str:
     return harness if found == tag and harness not in ("", "anon") else ""
 
 
+def composed_from(session_id: str, harness_id: str) -> bool:
+    """Was this identity composed from `harness_id`, in whichever tree?
+
+    `harness_of` needs the tree to answer, and a record that outlived the process that wrote
+    it may have none left to offer. Asked about a KNOWN harness id the answer is exact without
+    one: `compose_session_id` appends a dash and eight hex digits to it, and nothing else.
+    """
+    harness, dash, tag = session_id.rpartition("-")
+    return (bool(dash) and harness == harness_id and harness_id not in ("", "anon")
+            and len(tag) == 8 and all(char in "0123456789abcdef" for char in tag))
+
+
 def current_session_id(cwd: str) -> str:
     """This process's session identity, for a CLI running inside a session. "" outside."""
     harness = os.environ.get("CLAUDE_CODE_SESSION_ID", "")

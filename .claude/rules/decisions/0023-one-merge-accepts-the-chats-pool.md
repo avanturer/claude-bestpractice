@@ -5,10 +5,11 @@ date: 2026-09-25
 ---
 
 ## Decision
-**`+merge` names the pull requests the session it was said to has open at that moment, and
-allows each of them once.** Merged in any order, from any tree of that session. A pull request
-opened after the word is not among them, and neither is a sibling session's or one this plugin
-never saw opened.
+**`+merge` names the pull requests the chat it was said to has open at that moment, and
+allows each of them once.** Merged in any order, from any tree of that chat. A pull request
+opened after the word is not among them, and neither is another chat's or one this plugin
+never saw opened. The chat is its harness id, not its process: a `--resume` keeps what it
+opened before, and so does a `claude -p` it starts (#241).
 
 **With none open, it is what decision 0010 made it:** one merge, of the work just accepted,
 which the session then opens, checks and merges by itself.
@@ -29,6 +30,8 @@ the word still lands on a known set and nothing past it.
 - **Every open pull request in the clone.** The word is typed into one chat. A sibling told
   "не мержи" would have its pull request merged by a word said to someone else: #192, with
   the reach of the whole clone.
+- **The process the word reached.** A `--resume` is a new process in the same chat; what it
+  opened before fell out of the pool, and its merge was refused after every `+merge` (#241).
 - **The pool and one merge more.** It keeps every merge the old word allowed. It also lets a
   pull request opened after the word, which nobody showed the founder, merge on it.
 - **A time window.** "Everything merged in the next hour" is a standing grant with a timer,
