@@ -19,6 +19,11 @@ implied by `+merge` and never by each other.
 written by the session being gated — they are read out of the founder's own turn by
 `prompt-capture` and stored where no session can write.
 
+**An UNVERIFIED finish is theirs to accept.** It records that a turn ended without proof, and
+nothing a session can do removes it, so it is the one blocker of a merge that the founder
+decides rather than a fix: their `+merge`, said after it was put to them, is that decision.
+Said before, it is not — nobody had told them (#243).
+
 ## Why
 > сделай следующим и если я правильно понял то я хочу что бы пр не мерджился и тем более ота не катился без вообще моего ведома. Тоесть если мы обсудили идею он ее сделал и я посмотрел и сказал мне все нравится и тд то он сам делает пр сам его проверяет и сам мерджит если нет проблем, вот как я хочу что бы выглядело, а такие вещи как ота или тем более новый билд в релиз всегда должны быть одобрены мной
 

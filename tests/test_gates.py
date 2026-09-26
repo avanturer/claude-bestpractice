@@ -1772,6 +1772,19 @@ class TestTheBoardIsDemandedBeforeAShellWrite(RepoCase):
         self.assertEqual("deny", self.decision(self.writing("rm -rf src")),
                          "a path git would carry lost its card")
 
+    def test_a_scratch_file_a_variable_names_is_owed_no_card(self):
+        """Issue #244, from a subdirectory as reported: `$SP` was joined to `backend/`."""
+        (self.repo / "backend").mkdir()
+        self.working_on()
+        proc = self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+            "tool_input": {"command": f"SP={self.tmp / 'scratchpad'}; ls; "
+                                      "sed -i 's/a/b/' $SP/shot_tiles.py; echo done"},
+        }, cwd=self.repo / "backend")
+        self.assertNotEqual("deny", self.decision(proc), proc.stdout)
+        self.assertEqual("deny", self.decision(self.writing("D=src; sed -i 's/a/b/' $D/billing.js")),
+                         "a variable naming a file of the repository hid it from the board")
+
 
 if __name__ == "__main__":
     unittest.main()

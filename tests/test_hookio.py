@@ -6,7 +6,7 @@ import io
 import json
 import unittest
 
-from helpers import RepoCase  # noqa: F401  (sys.path setup)
+from helpers import RepoCase, git
 
 from claude_bestpractice import hookio
 
@@ -185,3 +185,31 @@ class TestTheTailAGateHandsBack(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAnIdentityIsAChatsWhateverItsTree(RepoCase):
+    """`composed_from` answers without the tree, so it has to be exact about the rest."""
+
+    CHAT = "0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b"
+
+    def test_an_identity_composed_in_any_tree_is_the_chats(self):
+        tree = self.tmp / "tree"
+        git(["worktree", "add", "-q", "-b", "feat/tree", str(tree)], self.repo)
+        for where in (self.repo, tree, tree / "src"):
+            where.mkdir(exist_ok=True)
+            composed = hookio.compose_session_id(self.CHAT, str(where))
+            self.assertNotEqual(self.CHAT, composed, "precondition: composed in a tree")
+            self.assertTrue(hookio.composed_from(composed, self.CHAT), composed)
+
+    def test_nothing_else_is(self):
+        for session_id, harness in (
+            (self.CHAT, self.CHAT),
+            (self.CHAT, self.CHAT.rpartition("-")[0]),
+            (f"{self.CHAT}-0123abcd", "another-chat"),
+            (f"{self.CHAT}-0123abcg", self.CHAT),
+            (f"{self.CHAT}-0123abcde", self.CHAT),
+            ("anon-0123abcd", "anon"),
+            ("-0123abcd", ""),
+        ):
+            with self.subTest(session_id=session_id, harness=harness):
+                self.assertFalse(hookio.composed_from(session_id, harness))

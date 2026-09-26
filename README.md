@@ -4,8 +4,8 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-1.71.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-2240%20passing-2ea44f)](#verified)
+[![version](https://img.shields.io/badge/version-1.71.2-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-2255%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
@@ -250,15 +250,18 @@ told it is waiting for you rather than the other way round.
 
 **Merged, by the session that opened it.** Once you say `+merge`, it opens, checks and
 merges on its own without asking again. One `+merge` covers every pull request that chat has
-open when you say it, so ten finished pull requests take one word, not ten. It never covers
-one opened after the word or another session's.
+open when you say it, so ten finished pull requests take one word, not ten — including the
+ones it opened before a `--resume`, which is the same chat. It never covers one opened after
+the word or another chat's.
 
 **Handed to you, with the blockers named.** When the final check finds something the merge
 is *refused* — not negotiated, not repaired. That half is what makes the first half safe:
 a model asked to make a branch mergeable will make it mergeable, and the moves available
 at merge time are weakening an assertion, widening a tolerance, or reverting the change
 that surfaced the problem. All three satisfy the letter. Which is acceptable is your call,
-so the gate stops there and says so.
+so the gate stops there and says so. An unverified finish is the one item no fix removes, so
+there your call is the word itself: a `+merge` you send after it was shown to you merges the
+work as it stands.
 
 The check is the same one that runs before a PR is opened — unfinished merge, no commits,
 red suite, never-verified branch, unverified finish, uncommitted work — plus the review
@@ -457,7 +460,7 @@ roughly 0.1 % of a 200k window.
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2240 tests · 36 doctor checks · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2255 tests · 36 doctor checks · budget
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration
