@@ -261,7 +261,8 @@ at merge time are weakening an assertion, widening a tolerance, or reverting the
 that surfaced the problem. All three satisfy the letter. Which is acceptable is your call,
 so the gate stops there and says so. An unverified finish is the one item no fix removes, so
 there your call is the word itself: a `+merge` you send after it was shown to you merges the
-work as it stands.
+work as it stands, at the commit it was shown on. A later commit that finishes unverified is
+shown to you again.
 
 The check is the same one that runs before a PR is opened — unfinished merge, no commits,
 red suite, never-verified branch, unverified finish, uncommitted work — plus the review

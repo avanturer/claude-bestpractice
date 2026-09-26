@@ -577,34 +577,62 @@ def blockers(ctx: GitContext, base: str, head: str = "") -> list[str]:
         list(delivery.ready(ctx, base)) if branch == ctx.branch
         else _about_the_pull_request(ctx, base, branch)
     )
-    # Nothing removes an unverified finish, so the list the merge refusal promised to empty
-    # could not empty, and the founder's `+merge` after it was put to them changed nothing
-    # (#243). Whether to merge work that finished unproven is theirs, and that word is it.
-    unverified = [problem for problem in problems if problem.endswith(delivery.UNVERIFIED)]
-    if unverified and _finish_accepted(ctx, branch):
-        problems = [problem for problem in problems if problem not in unverified]
+    problems = _with_the_founders_word(ctx, branch, problems)
     problems.extend(_findings(ctx, base, branch))
     return problems
 
 
+def _with_the_founders_word(ctx: GitContext, branch: str, problems: list[str]) -> list[str]:
+    """`problems` without the UNVERIFIED finish the founder accepted, or with the one they did
+    not accept set against the one they did.
+
+    Nothing removes an unverified finish, so the list the merge refusal promised to empty
+    could not empty, and the founder's `+merge` after it was put to them changed nothing
+    (#243). Whether to merge work that finished unproven is theirs, and that word is it.
+    """
+    from . import delivery
+
+    unverified = [problem for problem in problems if delivery.UNVERIFIED in problem]
+    if not unverified:
+        return problems
+    record = _records(ctx).get(branch) or {}
+    if _finish_accepted(ctx, branch, record):
+        return [problem for problem in problems if problem not in unverified]
+    past = _past_the_word(ctx, branch, record)
+    return [problem + past if problem in unverified else problem for problem in problems]
+
+
 # When the founder's `+merge` named a pull request whose unverified finish had been put to
-# them: the Stop gate's hand-off listed it, or a refused merge did.
+# them — the Stop gate's hand-off listed it, or a refused merge did — and the commit that
+# finish was filed on.
 FINISH_ACCEPTED = "unverified_accepted_at"
+FINISH_ACCEPTED_ON = "unverified_accepted_head"
 
 # When a merge of this pull request was last refused over its blockers, which that refusal
 # told the session to take to the founder.
 REFUSED = "refused_at"
 
 
-def _finish_accepted(ctx: GitContext, branch: str) -> bool:
-    """Has the founder accepted this branch's latest unverified finish, having been shown it?"""
+def _finish_accepted(ctx: GitContext, branch: str, record: dict[str, Any]) -> bool:
+    """Has the founder accepted this branch's unverified finish, as the branch stands now?
+
+    By the commit, not the clock. The Stop gate files a finish again on every turn that ends
+    the same way, each one newer than the word, so a word read against the time never outlived
+    the next Stop (#246). A finish on the commit they accepted is the finish they accepted; one
+    on a later commit is new work, and is put to them again. A finish filed before rows
+    carried a commit is read by its time, as it was.
+    """
     from . import delivery
 
-    latest = delivery.last_unverified(ctx, branch)
-    record = _records(ctx).get(branch) or {}
-    accepted = float(record.get(FINISH_ACCEPTED) or 0)
-    return (latest is not None and record.get("state") == OPEN
-            and accepted > 0 and accepted >= latest)
+    finishes = delivery.unverified_finishes(ctx, branch)
+    if not finishes or record.get("state") != OPEN:
+        return False
+    latest = finishes[-1]
+    accepted_on = str(record.get(FINISH_ACCEPTED_ON) or "")
+    if accepted_on and latest.get("head"):
+        return latest.get("head") == accepted_on
+    accepted = delivery.stamp(record.get(FINISH_ACCEPTED))
+    return accepted > 0 and accepted >= delivery.stamp(latest.get("recorded_at"))
 
 
 def _accept_its_finish(ctx: GitContext, record: dict[str, Any]) -> None:
@@ -612,14 +640,43 @@ def _accept_its_finish(ctx: GitContext, record: dict[str, Any]) -> None:
 
     Shown, not merely filed: a `+merge` said about the pool before anybody told them one of
     its pull requests finished unproven is not a decision about that. The refusal that lists
-    it is what shows it to them, and their next word is.
+    it is what shows it to them, and their next word is. Shown on its commit: the Stop that
+    ended the turn after the refusal filed the same finish again, and read by its newest row
+    the word always came before the showing (#246).
     """
     from . import delivery
 
-    latest = delivery.last_unverified(ctx, str(record.get("branch") or ""))
-    shown = max(float(record.get("handed_off_at") or 0), float(record.get(REFUSED) or 0))
-    if latest is not None and shown > 0 and shown >= latest:
-        _write(ctx, {**record, FINISH_ACCEPTED: time.time()})
+    finishes = delivery.unverified_finishes(ctx, str(record.get("branch") or ""))
+    if not finishes:
+        return
+    head = str(finishes[-1].get("head") or "")
+    # Every row of the finish they are deciding: each one filed on this commit, or each one
+    # filed before rows carried a commit — which is how the same finish came to be on record
+    # three times over by the evening it was reported.
+    same = [row for row in finishes if str(row.get("head") or "") == head]
+    first = min(delivery.stamp(row.get("recorded_at")) for row in same)
+    shown = max(delivery.stamp(record.get("handed_off_at")), delivery.stamp(record.get(REFUSED)))
+    if shown > 0 and shown >= first:
+        _write(ctx, {**record, FINISH_ACCEPTED: time.time(), FINISH_ACCEPTED_ON: head})
+
+
+def _past_the_word(ctx: GitContext, branch: str, record: dict[str, Any]) -> str:
+    """What the founder's word accepted, and the finish filed past it. "" with no word."""
+    from . import delivery
+
+    finishes = delivery.unverified_finishes(ctx, branch)
+    if not finishes or not delivery.stamp(record.get(FINISH_ACCEPTED)):
+        return ""
+    accepted_on = str(record.get(FINISH_ACCEPTED_ON) or "")
+    latest = finishes[-1]
+    head = str(latest.get("head") or "")
+    why = str(latest.get("reason") or "").strip().splitlines()
+    return (
+        " — the founder's `+merge` accepted "
+        + (f"the finish on {accepted_on[:8]}" if accepted_on else "an earlier finish")
+        + ("; this one was filed on " + head[:8] if head else "; this one was filed after it")
+        + (f": {why[0][:160]}" if why else "")
+    )
 
 
 def note_refusal(ctx: GitContext, branch: str) -> None:
@@ -804,10 +861,11 @@ def _how_a_finish_is_decided(problems: list[str]) -> str:
     """The one item on a merge's list that no change empties, and the word that does."""
     from . import delivery
 
-    if not any(problem.endswith(delivery.UNVERIFIED) for problem in problems):
+    if not any(delivery.UNVERIFIED in problem for problem in problems):
         return ""
     return ("\nAn UNVERIFIED finish is theirs to accept as it stands: a `+merge` they send "
-            "after seeing this is that decision, and takes it off the list.")
+            "after seeing this is that decision, for the branch at this commit, and takes it "
+            "off the list. A later commit that finishes unverified is put to them again.")
 
 
 def stop_demand(record: dict[str, Any], problems: list[str], accepted: bool = True) -> str:
@@ -1263,7 +1321,8 @@ def accept_merges(ctx: GitContext, approvals: dict[str, str],
     it is work the founder paused, and a word about the finished ones is not a word about it.
 
     A pull request whose UNVERIFIED finish was put to the founder before this word is
-    recorded as accepted with it, so that `blockers` stops listing what they have decided.
+    recorded as accepted with it, on the commit it was filed on, so that `blockers` stops
+    listing what they have decided.
     """
     if config.APPROVE_MERGE not in approvals:
         return approvals

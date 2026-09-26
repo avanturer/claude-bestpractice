@@ -619,6 +619,52 @@ class TestTheGatesOwnRunImportsThisTree(RepoCase):
         self.assertEqual({}, _own_code_first(self.repo))
 
 
+class TestAnUnverifiedFinishIsFiledOncePerCommit(RepoCase):
+    """Issue #246. The same finish, for the same reason, on the same commit, was filed again on
+    every Stop — three rows in one evening, each newer than the founder's word about it."""
+
+    def a_suite_that_reports_no_counts(self) -> None:
+        self.configure(require_task=False, manage_pull_requests=False,
+                       test_command=["sh", "-c", "echo ok"])
+        self.write("app.py", "x = 1\n")
+        self.commit("the app")
+        self.write("app.py", "x = 2\n")
+
+    def stop(self):
+        return self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                               "stop_hook_active": False})
+
+    def filed(self) -> list:
+        from claude_bestpractice import store
+
+        return store.read_jsonl(store.tier_b(self.ctx(), "unverified.jsonl"))
+
+    def test_three_stops_on_one_commit_file_it_once(self):
+        self.a_suite_that_reports_no_counts()
+        for _ in range(3):
+            proc = self.stop()
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            self.assertIn("UNVERIFIED", proc.stderr, "precondition: it finishes unverified")
+        filed = self.filed()
+        self.assertEqual(1, len(filed), filed)
+        self.assertEqual(self.ctx().head, filed[0].get("head"))
+
+    def test_a_new_commit_is_filed_again(self):
+        self.a_suite_that_reports_no_counts()
+        self.stop()
+        self.commit("the change")
+        self.write("app.py", "x = 3\n")
+        self.stop()
+        self.assertEqual(2, len(self.filed()))
+
+    def test_another_reason_on_the_same_commit_is_filed_too(self):
+        self.a_suite_that_reports_no_counts()
+        self.stop()
+        self.configure(test_command=["sh", "-c", "echo fine"])
+        self.stop()
+        self.assertEqual(2, len(self.filed()))
+
+
 def _shadowed_package_with_path(root, extra):
     """`_shadowed_package` under a PYTHONPATH that shadows the tree."""
     import os
