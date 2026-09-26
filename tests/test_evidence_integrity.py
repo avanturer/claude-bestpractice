@@ -574,6 +574,51 @@ class TestTheSuiteMustHaveRunThisTree(RepoCase):
         self.assertIsNone(_shadowed_package(self.repo))
 
 
+class TestTheGatesOwnRunImportsThisTree(RepoCase):
+    """Issue #246. The session ran its suite with its own `src/` first and 5373 passed; the
+    Stop gate ran bare `pytest` in the same tree, where a shared virtualenv's editable install
+    put another tree's copy of the package first. It saw the foreign import, filed the branch
+    UNVERIFIED, and did it again on every Stop after. The copy elsewhere is put first here by
+    PYTHONPATH, which is where an editable install's `.pth` would put it."""
+
+    def a_package_also_installed_elsewhere(self, here: int, there: int) -> dict:
+        self.configure(require_task=False, manage_pull_requests=False)
+        self.write("src/mypkg/__init__.py", "def value():\n    return 1\n")
+        self.write("tests/test_value.py",
+                   "import mypkg\n\n\ndef test_value():\n    assert mypkg.value() == 1\n")
+        self.commit("a package under src/")
+        elsewhere = self.tmp / "elsewhere"
+        (elsewhere / "mypkg").mkdir(parents=True)
+        (elsewhere / "mypkg" / "__init__.py").write_text(f"def value():\n    return {there}\n")
+        self.write("src/mypkg/__init__.py", f"def value():\n    return {here}  # changed\n")
+        return {**os.environ, "PYTHONPATH": str(elsewhere)}
+
+    def stop(self, env: dict):
+        return self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                               "stop_hook_active": False}, env=env)
+
+    def test_a_copy_installed_elsewhere_does_not_make_the_finish_unverified(self):
+        from claude_bestpractice import store
+
+        proc = self.stop(self.a_package_also_installed_elsewhere(here=1, there=1))
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual([], store.read_jsonl(store.tier_b(self.ctx(), "unverified.jsonl")),
+                         f"the gate filed its own import of another tree: {proc.stderr}")
+
+    def test_its_run_judges_the_code_of_this_tree(self):
+        """The regression is here and the copy elsewhere passes: a run of that copy is the
+        green the shadow check was written to distrust, and now it is not the run at all."""
+        proc = self.stop(self.a_package_also_installed_elsewhere(here=2, there=1))
+        self.assertEqual(2, proc.returncode, proc.stderr)
+        self.assertIn("FAILS", proc.stderr)
+
+    def test_a_tree_nothing_shadows_is_run_as_it_always_was(self):
+        from claude_bestpractice.evidence import _own_code_first
+
+        self.write("src/mypkg/__init__.py", "VALUE = 1\n")
+        self.assertEqual({}, _own_code_first(self.repo))
+
+
 def _shadowed_package_with_path(root, extra):
     """`_shadowed_package` under a PYTHONPATH that shadows the tree."""
     import os

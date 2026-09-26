@@ -519,6 +519,7 @@ def _verify_one(ctx: GitContext, globs: list[str], changed: list[str], suite,
     if standing is not None:
         return standing
 
+    own = _own_code_first(suite.root(ctx))
     seconds = None if deadline is None else deadline - time.time()
     # THE RUNNER ITSELF, when one is drivable — not the command the project declares.
     # `make test` and `npm run test` are recipes the agent writes, and every round of
@@ -532,7 +533,7 @@ def _verify_one(ctx: GitContext, globs: list[str], changed: list[str], suite,
     # ran out. Only the project's own command and the clean re-run carried one.
     nonce = _issue_nonce(ctx)
     try:
-        seen = witness.run(ctx, {VERIFYING_ENV: nonce}, suite.root(ctx), seconds)
+        seen = witness.run(ctx, {VERIFYING_ENV: nonce, **own}, suite.root(ctx), seconds)
     except witness.RanOutOfTime as killed:
         # FALLS THROUGH, and this is the whole correction. A suite longer than the hook
         # lives cannot be witnessed here by anyone — the harness kills the process, and no
@@ -543,7 +544,7 @@ def _verify_one(ctx: GitContext, globs: list[str], changed: list[str], suite,
     finally:
         _retire_nonce(ctx, nonce)
     if seen is not None:
-        return _judge_witnessed(ctx, seen, suite, tree)
+        return _judge_witnessed(ctx, seen, suite, tree, own)
 
     try:
         return _verify_by_declared_command(ctx, globs, suite, tree, seconds)
@@ -945,8 +946,13 @@ def _verify_by_declared_command(
     return verdict
 
 
-def _judge_witnessed(ctx: GitContext, seen: witness.Witnessed, suite=None, tree: str = "") -> Verdict:
-    """A run this gate drove itself. The only path here that reads no project-authored number."""
+def _judge_witnessed(ctx: GitContext, seen: witness.Witnessed, suite=None, tree: str = "",
+                     env: dict[str, str] | None = None) -> Verdict:
+    """A run this gate drove itself. The only path here that reads no project-authored number.
+
+    `env` is what the run was started with, so that where a package imports from is asked
+    of the same environment that imported it.
+    """
     command = [seen.runner]
     root = _root_of(ctx, suite)
     if not seen.ran_nothing and (seen.failed or seen.returncode != 0):
@@ -978,7 +984,7 @@ def _judge_witnessed(ctx: GitContext, seen: witness.Witnessed, suite=None, tree:
             unverified=True,
         )
 
-    shadow = _shadowed_package(root)
+    shadow = _shadowed_package(root, env)
     if shadow:
         name, elsewhere = shadow
         return Verdict(
@@ -1000,7 +1006,38 @@ def _root_of(ctx: GitContext, suite=None) -> Path:
     return ctx.worktree_root if suite is None else suite.root(ctx)
 
 
-def _shadowed_package(root: Path) -> tuple[str, str] | None:
+def _own_code_first(root: Path) -> dict[str, str]:
+    """The environment that makes a run import this tree's packages. {} when it already does.
+
+    A virtualenv shared by several worktrees carries one editable install, and it points at
+    one of them. The session ran its suite with `PYTHONPATH=<tree>/src`, as the project's own
+    recipe does, and 5373 passed; the gate ran bare `pytest` in the same tree, imported the
+    other tree's copy, and filed the branch UNVERIFIED over its own run, on every Stop (#246).
+    Only where a package here does import from elsewhere: a tree that already imports itself
+    is run exactly as before, installed package data and built extensions included.
+    """
+    if _shadowed_package(root) is None:
+        return {}
+    first = [str(home) for home in _package_homes(root)]
+    already = os.environ.get("PYTHONPATH", "")
+    return {"PYTHONPATH": os.pathsep.join(first + ([already] if already else []))}
+
+
+def _package_homes(root: Path) -> list[Path]:
+    """The directories here that hold importable packages: `root`, `root/src`, or both."""
+    return [parent for parent in (root, root / "src") if _packages_in(parent)]
+
+
+def _packages_in(parent: Path) -> list[str]:
+    try:
+        entries = sorted(parent.iterdir())
+    except OSError:
+        return []
+    return [entry.name for entry in entries
+            if (entry / "__init__.py").is_file() and not entry.name.startswith((".", "_", "test"))]
+
+
+def _shadowed_package(root: Path, env: dict[str, str] | None = None) -> tuple[str, str] | None:
     """A package that exists here but imports from somewhere else. Name and where.
 
     Found on a real repository: a clone of Flask with a genuine regression in `src/`
@@ -1011,23 +1048,15 @@ def _shadowed_package(root: Path) -> tuple[str, str] | None:
     This is the failure the clean-checkout re-run exists for, but that is gated on stage
     and every library is `prototype`, so on exactly the repositories most likely to be
     pip-installed the defence was off. This costs one interpreter start per top-level
-    package, on the green path only.
+    package before the gate's own run, and again on its green path.
     """
-    candidates = []
-    for parent in (root, root / "src"):
-        try:
-            entries = sorted(parent.iterdir())
-        except OSError:
-            continue
-        for entry in entries:
-            if (entry / "__init__.py").is_file() and not entry.name.startswith((".", "_", "test")):
-                candidates.append(entry.name)
+    candidates = [name for parent in (root, root / "src") for name in _packages_in(parent)]
 
     for name in candidates[:3]:
         proc = subprocess.run(
             [sys.executable, "-c", f"import {name},os;print(os.path.dirname({name}.__file__))"],
             capture_output=True, encoding="utf-8", errors="surrogateescape",
-            cwd=str(root.parent), timeout=60,
+            cwd=str(root.parent), timeout=60, env={**os.environ, **(env or {})},
         )
         where = proc.stdout.strip()
         if proc.returncode != 0 or not where:
