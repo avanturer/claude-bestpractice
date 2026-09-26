@@ -612,6 +612,56 @@ class TestTheScannerFollowsTheShellIntoEverySegment(PolicyCase):
         )
 
 
+class TestAPathAVariableHoldsIsWhereItPoints(PolicyCase):
+    """Issue #244. `SP=/tmp/…/scratchpad; …; sed -i … $SP/shot_tiles.py`, run from `backend/`,
+    was refused by the board gate as a write to `backend/$SP/shot_tiles.py`: the variable was
+    joined to the working directory unexpanded, and a scratch file in /tmp became a file of
+    the repository that nobody had named."""
+
+    SCRATCH = "/tmp/scratchpad"
+
+    def test_a_variable_the_line_set_is_expanded(self):
+        for command, written in (
+            (f"SP={self.SCRATCH}; sed -i 's/a/b/' $SP/shot_tiles.py", "shot_tiles.py"),
+            (f"export SP={self.SCRATCH} && sed -i 's/a/b/' ${{SP}}/x.py", "x.py"),
+            (f"SP={self.SCRATCH}\nsed -i 's/a/b/' \"$SP/x.py\"", "x.py"),
+            (f"SP={self.SCRATCH}; cp src/app.py $SP/copy.py", "copy.py"),
+            (f"SP={self.SCRATCH}; echo x > $SP/out.log", "out.log"),
+            (f"SP={self.SCRATCH}; cd $SP && sed -i 's/a/b/' x.py", "x.py"),
+            (f"SP={self.SCRATCH}; python3 -c \"open('$SP/o.txt','w')\"", "o.txt"),
+        ):
+            with self.subTest(command=command):
+                self.assertEqual([f"{self.SCRATCH}/{written}"],
+                                 write_targets(command, self.repo / "backend"))
+
+    def test_one_it_did_not_set_is_no_path_of_this_repository(self):
+        """Its value is whatever the shell has, and joining it to the working directory is
+        the one reading that is certainly wrong."""
+        for command in (
+            "sed -i 's/a/b/' $UNSET/x.py",
+            # Set in front of the command, it is that command's environment: the shell
+            # expands `$SP` on this line before the assignment takes effect.
+            f"SP={self.SCRATCH} sed -i 's/a/b/' $SP/x.py",
+            "SP=$(mktemp -d); sed -i 's/a/b/' $SP/x.py",
+            f"SP={self.SCRATCH}; SP=`mktemp -d`; sed -i 's/a/b/' $SP/x.py",
+            "sed -i 's/a/b/' ${SP:-/tmp}/x.py",
+            "rm -rf $UNSET/build",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual([], write_targets(command, self.repo / "backend"))
+
+    def test_a_variable_that_points_into_the_repository_still_does(self):
+        for command in ("D=src; sed -i 's/a/b/' $D/app.py", "sed -i 's/a/b/' $PWD/src/app.py",
+                        "D=src; cp /tmp/app.py $D/app.py"):
+            with self.subTest(command=command):
+                self.assertEqual([str(self.repo / "src" / "app.py")],
+                                 write_targets(command, self.repo))
+
+    def test_the_source_of_a_copy_is_not_its_destination(self):
+        """`cp a $SP/b` stopped reading at `$`, and the source was taken for the target."""
+        self.assertEqual([], write_targets("cp src/app.py $UNSET/b.py", self.repo))
+
+
 class TestGitItselfReachesIntoOtherTrees(PolicyCase):
     """`reset --hard` names no file, so every rule keyed on paths saw nothing at all.
 
