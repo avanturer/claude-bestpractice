@@ -10,6 +10,7 @@ happened to be standing in, and refused with that branch's problems (#135).
 This event is the only one that carries the answer. It writes the number onto the record
 pre-tool filed, blocks nothing, and is silent — and files the record itself when nothing did,
 which is every pull request the structured tool opens: PreToolUse never sees that tool.
+`gh pr create` in a shell prints its URL, and the number is read off that (#241).
 
 It is also the only event that sees the structured tool close one. PreToolUse is matched on
 the built-in tools, so `update_pull_request` with `state: closed` reaches this hook and no
@@ -17,8 +18,10 @@ other — and a pull request closed without merging used to stay OPEN on every b
 thirty days. Here the close has already succeeded, so it is settled rather than guessed.
 The same call with `draft` marks one ready or pauses it again, and that is recorded here too.
 
-Fails open. A number that did not get learned costs a numbered merge its judgement, which
-is the conservative direction; a hook that raised would cost the founder a tool call.
+Fails open. A number that did not get learned costs a numbered merge its judgement and, once
+a `+merge` names the chat's pull requests, the word as well: the merge gate then says which
+pull request it could not place and names the merge that works. A hook that raised would
+cost the founder a tool call.
 """
 
 from __future__ import annotations
@@ -35,6 +38,11 @@ from claude_bestpractice import config, gitpolicy, hookio, pullrequest  # noqa: 
 def main() -> None:
     event = hookio.read_event()
     command = str(event.tool_input.get("command", "")) if event.tool_name == "Bash" else ""
+    # A shell line is here for the number `gh pr create` printed and for nothing else:
+    # pre-tool reads `gh pr close` and `gh pr ready`. Its `if` spares every other line the
+    # process, and where that is not honoured this spares it everything after the start.
+    if event.tool_name == "Bash" and not pullrequest.opens_a_pull_request("Bash", command):
+        hookio.emit_silent()
     ctx = hookio.repo(event.cwd or os.getcwd())
     # It files and settles obligations now, so it stands down where pre-tool does: with the
     # pull-request flow switched off, and with the plugin switched off (decision 0016).

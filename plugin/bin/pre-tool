@@ -1396,6 +1396,11 @@ def main() -> None:
             named = pullrequest.named_by(ctx, number, current)
             cover = config.within_grace(lambda: pullrequest.acceptance(ctx, named))
             if not cover:
+                # The word on record may cover it, under a number this clone never learned.
+                # That is not a word missing, and it is the session's to resolve (#241).
+                unplaced = pullrequest.unplaced(ctx, number, event.session_id)
+                if unplaced:
+                    deny(ctx, rec, unplaced)
                 deny_for_founder(
                     ctx, rec,
                     "claude-bestpractice: no `+merge` from the founder is on record for this "
