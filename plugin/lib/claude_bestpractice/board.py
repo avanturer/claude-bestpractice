@@ -49,13 +49,17 @@ def _age(seconds: float) -> str:
 
 
 def open_items(
-    ctx: GitContext, branch: str | None = None, with_provenance: bool = True
+    ctx: GitContext, branch: str | None = None, with_provenance: bool = True,
+    limit: int | None = MAX_OPEN_ITEMS,
 ) -> list[dict[str, Any]]:
     """Recent, un-closed, age-gated items for this branch, tagged with provenance.
 
     Append-only log: a later record with the same id supersedes an earlier one, and a
     record marked closed removes it. Nothing is ever edited in place, so parallel
     sessions never contend.
+
+    `limit` is how many the board shows, newest first; None is every one of them, for a
+    caller that has to close items rather than show them.
 
     Age gating matters more than it looks. A widely-used memory plugin re-injects the
     previous session's "next steps" with no age check at all, so a session is handed a
@@ -74,7 +78,8 @@ def open_items(
         out.append(rec)
 
     out.sort(key=_last_seen, reverse=True)
-    out = out[:MAX_OPEN_ITEMS]
+    if limit is not None:
+        out = out[:limit]
     return provenance.annotate(ctx, out) if with_provenance else out
 
 

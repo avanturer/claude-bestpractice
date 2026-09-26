@@ -1484,7 +1484,8 @@ def main() -> None:
             # The branch the pull request is opened FROM, which is not the session's own
             # when the session coordinates from the main checkout (#79).
             head = pullrequest.head_of(event.tool_name, command, ti, session_cwd) or ctx.branch
-            pullrequest.opened(ctx, head, base, event.session_id)
+            pullrequest.opened(ctx, head, base, event.session_id,
+                               draft=pullrequest.drafted(event.tool_name, command, ti))
             if pullrequest.about_this_repository(ctx, event.tool_name, ti, command):
                 pr_vouch = vouch.PULL_REQUEST
         else:
@@ -1494,6 +1495,11 @@ def main() -> None:
             closed = pullrequest.closes(ctx, event.tool_name, command, ti, session_cwd)
             if closed:
                 pullrequest.settle(ctx, closed, pullrequest.CLOSED)
+            # Paused, or taken up again. A draft is left out of every demand, and marked
+            # ready it is an ordinary obligation once more (#239).
+            readied = pullrequest.readiness(ctx, event.tool_name, command, ti, session_cwd)
+            if readied:
+                pullrequest.redraft(ctx, *readied)
 
     # Entering a worktree is the move this gate ORDERS. Making the founder authorise it
     # through a permission prompt is the plugin interrupting them with its own

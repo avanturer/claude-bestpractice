@@ -210,8 +210,9 @@ class TestWhatShipped(DeliveryCase):
 class TestShipOpensAnObligation(DeliveryCase):
     """`claude-bp-ship --pr` runs `gh` in its own process, where no hook sees it."""
 
-    def test_the_pull_request_it_opens_is_on_the_board(self):
-        from claude_bestpractice import evidence, pullrequest
+    def ship_a_finished_branch(self, gh: str) -> subprocess.CompletedProcess:
+        """`claude-bp-ship --pr` on a pushed branch with green work, `gh` being the script `gh`."""
+        from claude_bestpractice import evidence
 
         bare = self.tmp / "origin.git"
         git(["init", "-q", "--bare", str(bare)], self.tmp)
@@ -224,16 +225,40 @@ class TestShipOpensAnObligation(DeliveryCase):
 
         stubs = self.tmp / "bin"
         stubs.mkdir()
-        (stubs / "gh").write_text("#!/bin/sh\necho https://github.com/o/r/pull/77\n")
+        (stubs / "gh").write_text(gh)
         (stubs / "gh").chmod(0o755)
         env = {**os.environ, "PATH": f"{stubs}{os.pathsep}{os.environ.get('PATH', '')}"}
-        proc = subprocess.run([sys.executable, str(BIN / "claude-bp-ship"), "--pr"],
+        return subprocess.run([sys.executable, str(BIN / "claude-bp-ship"), "--pr"],
                               capture_output=True, text=True, cwd=str(self.repo), timeout=180, env=env)
+
+    def test_the_pull_request_it_opens_is_on_the_board(self):
+        from claude_bestpractice import pullrequest
+
+        proc = self.ship_a_finished_branch("#!/bin/sh\necho https://github.com/o/r/pull/77\n")
         self.assertEqual(0, proc.returncode, proc.stderr)
 
         records = {row["branch"]: row for row in pullrequest.outstanding(self.ctx())}
         self.assertIn("feat/export", records, "the pull request never reached the board")
         self.assertEqual(77, records["feat/export"]["number"])
+
+    def test_it_opens_one_ready_for_review(self):
+        """Not a draft. A draft is paused work, which the gates leave alone, and GitHub
+        merges no draft: the finished work this command is for was opened as one, and so
+        skipped the demand that shows it to the founder (#239)."""
+        from claude_bestpractice import pullrequest
+
+        asked = self.tmp / "gh-argv"
+        proc = self.ship_a_finished_branch(
+            f"#!/bin/sh\nprintf '%s\\n' \"$@\" > '{asked}'\n"
+            "echo https://github.com/o/r/pull/77\n"
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+
+        argv = asked.read_text().splitlines()
+        self.assertEqual(["pr", "create"], argv[:2])
+        self.assertFalse({"--draft", "-d"} & set(argv), argv)
+        [record] = pullrequest.outstanding(self.ctx())
+        self.assertFalse(record["draft"])
 
 
 class TestPullRequestReadiness(DeliveryCase):

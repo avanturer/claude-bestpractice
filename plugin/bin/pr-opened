@@ -15,6 +15,7 @@ It is also the only event that sees the structured tool close one. PreToolUse is
 the built-in tools, so `update_pull_request` with `state: closed` reaches this hook and no
 other — and a pull request closed without merging used to stay OPEN on every board for
 thirty days. Here the close has already succeeded, so it is settled rather than guessed.
+The same call with `draft` marks one ready or pauses it again, and that is recorded here too.
 
 Fails open. A number that did not get learned costs a numbered merge its judgement, which
 is the conservative direction; a hook that raised would cost the founder a tool call.
@@ -44,6 +45,10 @@ def main() -> None:
                                     event.cwd or os.getcwd())
         if closed:
             pullrequest.settle(ctx, closed, pullrequest.CLOSED)
+        readied = pullrequest.readiness(ctx, event.tool_name, command, event.tool_input,
+                                        event.cwd or os.getcwd())
+        if readied:
+            pullrequest.redraft(ctx, *readied)
         hookio.emit_silent()
 
     number = pullrequest.number_in(event.raw.get("tool_response"))
@@ -58,7 +63,8 @@ def main() -> None:
         # no record to stamp, and it never reached the board. `opened` leaves an open
         # record alone, so a call pre-tool did see is filed once.
         base = str(event.tool_input.get("base") or "") or gitpolicy.default_branch(ctx) or "main"
-        pullrequest.opened(ctx, head, base, event.session_id, number=number)
+        pullrequest.opened(ctx, head, base, event.session_id, number=number,
+                           draft=pullrequest.drafted(event.tool_name, command, event.tool_input))
     hookio.emit_silent()
 
 

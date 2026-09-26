@@ -23,8 +23,13 @@ the gate refuses the merge and stops there. Whether to fix, and how, goes back t
 human who has to live with the answer.
 
 Every check here is local and free — git state, the evidence ledger, the review findings
-already on the board. Nothing calls the network: this runs inside a PreToolUse hook, and
-a gate that costs a round trip on every tool call is a gate that gets switched off.
+already on the board. Nothing on the tool-call path calls the network: that runs inside a
+PreToolUse hook, and a gate that costs a round trip on every tool call is a gate that gets
+switched off. The one question put to GitHub is the Stop gate's, once per branch, before it
+says a pull request is missing (`missing`).
+
+A draft is paused work. It is on the board, and nothing here asks for it, pushes it toward
+a merge, or lets a `+merge` said about other work reach it until it is marked ready.
 """
 
 from __future__ import annotations
@@ -71,8 +76,16 @@ _MERGES_SHELL = re.compile(r"\bgh\s+pr\s+merge\b(?:\s+(?P<number>\d+))?")
 _CLOSES_TOOL = re.compile(r"(?:^|__)update_pull_request$")
 _CLOSES_SHELL = re.compile(r"\bgh\s+pr\s+close\b(?:\s+(?P<number>\d+))?")
 
-# The flags of `gh pr close` that take a value, so the value is not read as what to close.
-_CLOSE_FLAGS_WITH_VALUES = ("-c", "--comment", "-R", "--repo")
+# Marked ready for review, or turned back into a draft with `--undo`. The structured tool
+# does both through the same `update_pull_request`, with `draft: false` or `draft: true`.
+_READIES_SHELL = re.compile(r"\bgh\s+pr\s+ready\b(?:\s+(?P<number>\d+))?")
+
+# The flags of `gh pr close` and `gh pr ready` that take a value, so the value is not read
+# as the pull request they name.
+_FLAGS_WITH_VALUES = ("-c", "--comment", "-R", "--repo")
+
+# The short flags of `gh pr create` that take no value, and so can share one dash with `-d`.
+_CREATE_SWITCHES = frozenset("defw")
 
 
 def _gh_subcommand(command: str, verb: str, pattern: "re.Pattern[str]"):
@@ -105,7 +118,7 @@ def _write(ctx: GitContext, record: dict[str, Any]) -> None:
 
 
 def opened(ctx: GitContext, branch: str, base: str, session_id: str,
-           number: int = 0, url: str = "") -> None:
+           number: int = 0, url: str = "", draft: bool = False) -> None:
     """Record that this branch now has a pull request waiting on it.
 
     Recorded when the call is ALLOWED to proceed rather than after it returns, because a
@@ -117,6 +130,10 @@ def opened(ctx: GitContext, branch: str, base: str, session_id: str,
     request that was merged or closed, and a branch that carries on gets a NEW one: carried
     over, it put "#41" on the board for #42, and a merge of #42 was judged against a number
     that no longer named anything open.
+
+    `draft` is whether it was opened as one, which is what keeps paused work out of every
+    demand until `redraft` hears it was marked ready (#239). And the board stops saying
+    this branch has no pull request.
     """
     existing = _records(ctx).get(branch, {})
     if existing.get("state") == OPEN:
@@ -129,8 +146,39 @@ def opened(ctx: GitContext, branch: str, base: str, session_id: str,
         "session_id": session_id,
         "opened_at": time.time(),
         "state": OPEN,
+        "draft": draft,
         "handed_off_at": 0.0,
     })
+    close_answered(ctx, branch)
+
+
+def drafted(tool_name: str, command: str, tool_input: dict[str, Any]) -> bool:
+    """Does this call open its pull request as a draft?
+
+    `draft: true` on the structured tool; `-d` or `--draft` on `gh pr create`, including a
+    `-d` sharing its dash with the other switches, which is how `gh` reads `-fd`.
+    """
+    if _OPENS_TOOL.search(tool_name):
+        return tool_input.get("draft") is True
+    from . import shellcmd
+
+    return any(
+        _is_draft_flag(token)
+        for argv in shellcmd.runs(command, "gh", "pr", "create") for token in argv[3:]
+    )
+
+
+def _is_draft_flag(token: str) -> bool:
+    if token in ("--draft", "--draft=true"):
+        return True
+    if not token.startswith("-") or token.startswith("--"):
+        return False
+    for letter in token[1:]:
+        if letter == "d":
+            return True
+        if letter not in _CREATE_SWITCHES:
+            return False
+    return False
 
 
 def number_in(payload: Any) -> int:
@@ -295,20 +343,62 @@ def _closed_branch(ctx: GitContext, tool_name: str, command: str, tool_input: di
     found = _gh_subcommand(command, "close", _CLOSES_SHELL)
     if found is None:
         return ""
-    selector = _closing_selector(found)
+    return _branch_named(ctx, found, command, cwd)
+
+
+def readiness(ctx: GitContext, tool_name: str, command: str, tool_input: dict[str, Any],
+              cwd: str = "") -> tuple[str, bool] | None:
+    """The branch whose open pull request this call marks ready or turns back into a draft,
+    and whether it is a draft after it. None when the call does neither.
+
+    `gh pr ready` names its pull request the way `gh pr close` does, and `--undo` is the
+    way back. The structured tool says it with `draft` on `update_pull_request`. Read so a
+    draft that is marked ready becomes an ordinary obligation again, with the one demand it
+    is owed, instead of staying paused on the board after the work went on (#239).
+    """
+    if _CLOSES_TOOL.search(tool_name):
+        draft = tool_input.get("draft")
+        if not isinstance(draft, bool):
+            return None
+        branch = _numbered(ctx, _as_number(tool_input.get("pullNumber")))
+    else:
+        found = _gh_subcommand(command, "ready", _READIES_SHELL)
+        if found is None:
+            return None
+        draft = "--undo" in (found[3:] if isinstance(found, list) else command.split())
+        branch = _branch_named(ctx, found, command, cwd)
+    if not branch or not about_this_repository(ctx, tool_name, tool_input, command):
+        return None
+    return branch, draft
+
+
+def redraft(ctx: GitContext, branch: str, draft: bool) -> None:
+    """Record that this branch's open pull request is now a draft, or now ready for review."""
+    record = _records(ctx).get(branch)
+    if record and record.get("state") == OPEN and bool(record.get("draft")) != draft:
+        _write(ctx, {**record, "draft": draft})
+
+
+def _branch_named(ctx: GitContext, found, command: str, cwd: str) -> str:
+    """The branch of the pull request a `gh pr close` or `gh pr ready` names.
+
+    By number or URL through the record that learned it, by branch as written, or by
+    naming none, which is the branch checked out where the command runs.
+    """
+    selector = _selector(found)
     if not selector:
         return _branch_of(_directory_of(command) or cwd) or ctx.branch
     number = int(selector) if selector.isdigit() else number_in(selector)
     return _numbered(ctx, number) if number else selector
 
 
-def _closing_selector(found) -> str:
-    """What `gh pr close` was told to close: a number, a URL, a branch, or "" for this one."""
+def _selector(found) -> str:
+    """What `gh pr close` or `gh pr ready` was pointed at: a number, a URL, a branch, or ""."""
     if not isinstance(found, list):
         return found.group("number") or ""
     tokens = iter(found[3:])
     for token in tokens:
-        if token in _CLOSE_FLAGS_WITH_VALUES:
+        if token in _FLAGS_WITH_VALUES:
             next(tokens, None)
         elif not token.startswith("-"):
             return token
@@ -426,11 +516,17 @@ def idle(ctx: GitContext, days: float) -> list[tuple[int, str, float]]:
 
 
 def unhanded(ctx: GitContext, branch: str) -> dict[str, Any] | None:
-    """This branch's open pull request, if the founder has not been told about it yet."""
+    """This branch's open pull request, if it is ready and the founder has not been told.
+
+    Not a draft. A draft is how work is paused, and the demand this feeds says "merge it" or
+    "show it to the founder for their `+merge`" — both of them a push toward a merge the
+    founder asked to hold (#239). Left unhanded rather than handed off, so the demand is
+    still there, once, when the draft is marked ready.
+    """
     record = _records(ctx).get(branch)
-    if record and record.get("state") == OPEN and not record.get("handed_off_at"):
-        return record
-    return None
+    if not record or record.get("state") != OPEN or record.get("draft"):
+        return None
+    return None if record.get("handed_off_at") else record
 
 
 def handed_off(ctx: GitContext, branch: str) -> bool:
@@ -746,7 +842,94 @@ def note_demand(ctx: GitContext, branch: str) -> None:
     store.write_json(path, record)
 
 
-def open_demand(branch: str, base: str) -> str:
+# The id every "NO PULL REQUEST" item on the board is filed under, by the demand above.
+MISSING_ITEM = "pr-missing-"
+
+
+def close_answered(ctx: GitContext, branch: str = "") -> int:
+    """Close the board's "NO PULL REQUEST" items that a pull request on record answers.
+    How many; `branch` limits it to that one.
+
+    Filed with the demand to open one and never closed once it was: the board said "NO PULL
+    REQUEST for finished work on X" beside "OPEN PULL REQUESTS: #N on X" for the fourteen
+    days an item is kept (#239).
+    """
+    from . import board
+
+    records = _records(ctx)
+    closed = 0
+    for item in board.open_items(ctx, branch=branch or None, with_provenance=False, limit=None):
+        if str(item.get("id", "")).startswith(MISSING_ITEM) and item.get("branch") in records:
+            board.close_open_item(ctx, str(item["id"]))
+            closed += 1
+    return closed
+
+
+# How long the Stop gate waits for GitHub to say whether a branch already has a pull request.
+_GH_LOOK_SECONDS = 10
+
+
+def missing(ctx: GitContext) -> tuple[str, bool] | None:
+    """What the checked-out branch's finished work lacks a pull request against: (base,
+    whether GitHub was asked). None when nothing is missing.
+
+    Nothing is when one is on record, when it was already demanded, when the branch is not
+    ready to open one — or when GitHub has one open, which is then recorded here so the
+    board carries it and the Stop gate treats it as any other. The record only knows the
+    pull requests a hook in this clone saw opened, and one opened in a terminal, on the
+    website or from another clone was answered with "no pull request against main" and an
+    order to open a second one (#239). Asked once per branch, and only here, where the
+    alternative is a demand.
+    """
+    branch = ctx.branch
+    if known(ctx, branch) or demanded(ctx, branch):
+        return None
+    from . import delivery, gitpolicy
+
+    base = gitpolicy.default_branch(ctx) or "main"
+    if delivery.ready(ctx, base):
+        return None
+    listed = on_github(ctx, branch)
+    if not listed:
+        return base, listed is not None
+    found = next((row for row in listed if row.get("baseRefName") == base), listed[0])
+    # Opened by no session here, so no chat's `+merge` names it (decision 0023).
+    opened(ctx, branch, str(found.get("baseRefName") or base), "",
+           number=_as_number(found.get("number")), url=str(found.get("url") or ""),
+           draft=found.get("isDraft") is True)
+    return None
+
+
+def on_github(ctx: GitContext, branch: str) -> list[dict[str, Any]] | None:
+    """The open pull requests GitHub has from `branch`. None when it could not be asked.
+
+    Through `gh`, where the founder's own credentials already are, with a deadline: a `gh`
+    that hung once held `claude-bp status` for a minute. Unknown is an answer, and the
+    caller says so rather than guessing either way.
+    """
+    import json
+    import shutil
+    import subprocess
+
+    gh = shutil.which("gh")
+    if not gh:
+        return None
+    try:
+        proc = subprocess.run(
+            [gh, "pr", "list", "--head", branch, "--state", "open",
+             "--json", "number,url,isDraft,baseRefName"],
+            cwd=str(ctx.worktree_root), stdin=subprocess.DEVNULL, capture_output=True,
+            encoding="utf-8", errors="surrogateescape", timeout=_GH_LOOK_SECONDS,
+        )
+        listed = json.loads(proc.stdout or "[]") if proc.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    if not isinstance(listed, list):
+        return None
+    return [row for row in listed if isinstance(row, dict)]
+
+
+def open_demand(branch: str, base: str, asked: bool = True, accepted: bool = False) -> str:
     """The turn ended with finished work that never became a pull request.
 
     The measured shape is not an agent that forgets. It is an agent that asks — the idea,
@@ -755,16 +938,35 @@ def open_demand(branch: str, base: str) -> str:
     this plugin's own convention, so asking about it is the plugin making the founder
     confirm its own rule, and the vouch in `pre-tool` means there is not even a permission
     prompt left to hide behind.
+
+    It says what it knows and nothing past it. `asked` is whether GitHub answered, and the
+    text claims no more than that. Opening is the session's, the merge is the founder's
+    word (decision 0010), and `accepted` is whether a `+merge` is on record. It used to end
+    with "merge it yourself once the checks pass", and it said so over a draft the founder
+    had asked to pause (#239).
     """
+    where = (" or on GitHub" if asked else
+             f"; GitHub could not be asked, so if one was opened elsewhere, "
+             f"`gh pr list --head {branch}` shows it and there is nothing to open")
+    merge = (
+        "A `+merge` is on record in this repository, and the record cannot say what the "
+        "founder had in mind: if it was meant for this work, merge it once the checks pass; "
+        "if not, show them what changed and leave it open."
+        if accepted else
+        "Then show the founder what changed and leave it open: it is merged on their "
+        "`+merge`, not on green checks."
+    )
     return (
-        f"claude-bestpractice: {branch} carries committed work that passes every check, and this "
-        f"turn was about to end with no pull request against {base}.\n"
+        f"claude-bestpractice: {branch} carries committed work that passes every check, and no "
+        f"pull request for it against {base} is on record here{where}.\n"
         "Open it now, and do not ask whether to: this repository's convention is "
-        "commit -> pull request -> merge, this gate approves the call without a prompt, and "
-        "a question the founder has already answered by asking for the work is not a "
-        "decision they own.\n"
-        "Then merge it yourself once the checks pass. Bring them a conflict you cannot "
-        "resolve without their judgement — nothing else.\n"
+        "commit -> pull request -> merge, this gate approves opening one without a prompt, "
+        "and a question the founder has already answered by asking for the work is not a "
+        "decision they own:\n"
+        f"  gh pr create --base {base} --fill\n"
+        "If the founder has paused this work, add `--draft`: a draft is left alone until it "
+        "is marked ready. `claude-bp-ship --pr` opens one with a body written for them.\n"
+        f"{merge}\n"
         "This will not be raised again for this branch."
     )
 
@@ -778,6 +980,8 @@ def line(ctx: GitContext) -> str:
     for row in live[:3]:
         named = f"#{row['number']}" if row.get("number") else str(row.get("branch", ""))
         state = "blocked" if row.get("blockers") else "ready to merge"
+        if row.get("draft"):
+            state = "draft"
         shown.append(f"{named} on {row.get('branch', '')} ({state})")
     more = f" (+{len(live) - 3} more)" if len(live) > 3 else ""
     return "OPEN PULL REQUESTS: " + "; ".join(shown) + more
@@ -979,7 +1183,8 @@ def accept_merges(ctx: GitContext, approvals: dict[str, str],
     with none open it is what it always was — the one merge of the work just accepted,
     which the session opens, checks and merges by itself (decision 0010).
 
-    Pull requests named by an earlier word and still open stay named.
+    Pull requests named by an earlier word and still open stay named. A draft is not named:
+    it is work the founder paused, and a word about the finished ones is not a word about it.
     """
     if config.APPROVE_MERGE not in approvals:
         return approvals
@@ -987,7 +1192,8 @@ def accept_merges(ctx: GitContext, approvals: dict[str, str],
 
     mine = sessions.identities(ctx, session_id)
     still_open = {_entry(record): record for record in outstanding(ctx)}
-    named = {entry for entry, record in still_open.items() if record.get("session_id") in mine}
+    named = {entry for entry, record in still_open.items()
+             if record.get("session_id") in mine and not record.get("draft")}
     if not named:
         return approvals
     kept = {entry for entry in _pool(ctx) if entry in still_open}
