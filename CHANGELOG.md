@@ -1,5 +1,55 @@
 # Changelog
 
+## v1.72.0
+
+The founder's word is heard however it was sent: a `+merge` sent while the session was working,
+from the terminal or the phone, is read back from the transcript (#251).
+
+### What happened
+
+On 1.71.4 the founder sent `+merge` from the phone, three times in a row, and every merge
+after it was refused with "no `+merge` from the founder is on record". The word was in the
+transcript each time, and `claude-bp status` showed no prompt since hours before.
+
+A message sent while the session is working is not a new turn. Claude Code folds it into the
+running turn at the next tool result, as a queued message, and `UserPromptSubmit` does not fire
+for it. `prompt-capture` was the only thing that recorded the founder's word, so a word sent
+that way never existed for the gates. A word sent while the session sat idle was heard, which
+is why other messages from the phone did show up.
+
+### What changed
+
+- **A gate that is about to refuse for want of the founder's word reads the transcript first.**
+  The merge gate, the release and migration gates, and the Stop gate's demand each look for a
+  `+merge`, `+release` or `+migration` the founder sent in this chat that no hook recorded, and
+  record it as `prompt-capture` would have, as of the moment it was sent. So it names only the
+  pull requests open then, and decides an UNVERIFIED finish only if it was put to them before.
+- **Only the founder's own message counts.** A turn or a queued message the harness marks as a
+  person's, never a task notification, another agent's report, a sidechain or a meta entry,
+  and of that only what they typed: a fenced block, a diff or a sentence about the word is not
+  the word, exactly as in a message the hook hears.
+- **One word is recorded once.** A word the hook heard carries the harness's prompt id, so the
+  same word read back from the transcript is not recorded again. Words said before this
+  version are not read back: whatever they allowed is on record already, or was spent.
+- **A session may not write the transcript.** It is where the word is read from, so a write
+  to any transcript of the project is refused like a write to the plugin's own state. The
+  notes the harness keeps beside it are not.
+
+### How it was checked
+
+Each part of the report is a test that fails on 1.71.4:
+- three pull requests open and `+merge` sent while the session worked: each merges;
+- a turn no hook heard: read back;
+- the Stop gate after such a word: it says the word is on record instead of waiting for it;
+- `+release` sent while the session worked: one release, not two;
+- a write to the transcript, from the shell or the Write tool: refused.
+
+#249, filed against 1.71.2, was the finish marked UNVERIFIED because a plain `import` found
+another tree's editable install while the project's `conftest.py` put this tree's `backend/src`
+first. 1.71.3 already runs the gate's suite with the tree's own packages first and asks where
+they import from under that same environment; the reported layout is now a test, which fails on
+1.71.2 with the reported message.
+
 ## v1.71.4
 
 `+merge` reaches every pull request the chat opened, a merge is judged as the pull request it
