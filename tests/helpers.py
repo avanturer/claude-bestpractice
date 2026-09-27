@@ -360,3 +360,29 @@ def sid(cwd, session_id: str) -> str:
     from claude_bestpractice.hookio import HookEvent
 
     return HookEvent({"session_id": session_id, "cwd": str(cwd)}).session_id
+
+
+# A transcript entry the way the harness writes one, for the gates that read the founder's word
+# back from it (#251). The format is internal to Claude Code; these are the shapes it has.
+def stamped(at: float) -> str:
+    """A moment the way the harness writes one."""
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(at, timezone.utc).isoformat(timespec="milliseconds").replace(
+        "+00:00", "Z")
+
+
+def turn(text: str, at: float, **extra) -> dict:
+    """A turn the founder started."""
+    return {"type": "user", "message": {"role": "user", "content": text},
+            "origin": {"kind": "human"}, "promptSource": "typed", "promptId": "p-1",
+            "uuid": "u-1", "timestamp": stamped(at), "isSidechain": False, **extra}
+
+
+def queued(text: str, at: float, **extra) -> dict:
+    """A message the founder sent while the session worked, folded into the running turn."""
+    attachment = {"type": "queued_command", "prompt": text, "commandMode": "prompt",
+                  "origin": {"kind": "human"}, "source_uuid": "q-1", "timestamp": stamped(at),
+                  **extra}
+    return {"type": "attachment", "uuid": "a-1", "timestamp": stamped(at), "isSidechain": False,
+            "attachment": attachment}

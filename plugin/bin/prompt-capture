@@ -17,11 +17,12 @@ from __future__ import annotations
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import config, hookio, inbox, pullrequest, redact, sessions  # noqa: E402
+from claude_bestpractice import config, founder, hookio, inbox, redact, sessions  # noqa: E402
 from claude_bestpractice.founder import ENVELOPES as _ENVELOPES  # noqa: E402
 from claude_bestpractice.founder import founders_word, outside_markup  # noqa: E402
 from claude_bestpractice.gitctx import resolve  # noqa: E402
@@ -271,16 +272,11 @@ def main() -> None:
         # From the message as it ARRIVED, and only the part of it the founder typed:
         # `founders_word` says what is left out and why.
         typed = redact.strip_control(founders_word(event.prompt or ""))
-        # A `+merge` names the pull requests this session has open as it is said, so that
-        # one word covers all the finished work in the chat rather than one merge of it.
-        # Naming them reads the session registry, and a word that cannot be pooled is still
-        # the word: recorded as the one merge it always was, never lost with the pool.
-        approvals = config.approvals_in(typed)
-        try:
-            approvals = pullrequest.accept_merges(ctx, approvals, event.session_id)
-        except Exception:  # noqa: BLE001 - see above: the word outlives its pool
-            approvals = config.approvals_in(typed)
-        config.record_switches(ctx, approvals)
+        # Recorded the way a word read back from the transcript is, under the id the harness
+        # gives this prompt, so that a gate reading the transcript later knows this one was
+        # heard already (`founder.catch_up`).
+        founder.heard(ctx, config.approvals_in(typed), event.session_id, at=time.time(),
+                      ident=str(event.raw.get("prompt_id") or ""))
 
     # The founder's word is recorded above, before this: a session whose record is missing
     # is registered here, which takes locks and git calls, and a gate that asked for the

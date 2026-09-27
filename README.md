@@ -254,6 +254,9 @@ open when you say it, so ten finished pull requests take one word, not ten — i
 ones it opened before a `--resume`, which is the same chat. It never covers one opened after
 the word or another chat's. Each is judged as itself, from whichever tree the merge is run:
 `cd <tree> && gh pr merge` is that tree's pull request, not the one the session stands on.
+Say it from the terminal or the phone, between turns or in the middle of one: a message sent
+while the session works reaches no hook, so the gate reads it back from the conversation's
+transcript before it refuses — and a session may not write that transcript.
 
 **Handed to you, with the blockers named.** When the final check finds something the merge
 is *refused* — not negotiated, not repaired. That half is what makes the first half safe:
