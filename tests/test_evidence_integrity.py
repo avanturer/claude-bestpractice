@@ -619,6 +619,39 @@ class TestTheGatesOwnRunImportsThisTree(RepoCase):
         self.assertEqual({}, _own_code_first(self.repo))
 
 
+class TestTheProjectsOwnPathSetupIsHonoured(RepoCase):
+    """Issue #249. The package lives in `backend/src`, and the project's `conftest.py` puts that
+    first on `sys.path`, so its suite tests this tree's code; the machine's Python carries an
+    editable install of another tree's copy. The gate asked where the package imports from
+    outside the run, saw the other copy, and filed the finish UNVERIFIED over a run that had
+    tested this one. The copy elsewhere is put first by PYTHONPATH, as the install's `.pth`
+    would put it."""
+
+    def test_a_run_of_this_trees_code_is_not_unverified(self):
+        from claude_bestpractice import store
+
+        self.configure(require_task=False, manage_pull_requests=False)
+        self.write("backend/pyproject.toml", "[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\n")
+        self.write("backend/src/fuddy/__init__.py", "def value():\n    return 1\n")
+        self.write("backend/tests/conftest.py", (
+            "import pathlib\nimport sys\n\n"
+            "sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / \"src\"))\n"))
+        self.write("backend/tests/test_value.py",
+                   "import fuddy\n\n\ndef test_value():\n    assert fuddy.value() == 1\n")
+        self.commit("a package under backend/src, put first by its conftest")
+        elsewhere = self.tmp / "elsewhere"
+        (elsewhere / "fuddy").mkdir(parents=True)
+        (elsewhere / "fuddy" / "__init__.py").write_text("def value():\n    return 2\n")
+        self.write("backend/src/fuddy/__init__.py", "def value():\n    return 1  # changed\n")
+
+        proc = self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                               "stop_hook_active": False},
+                             env={**os.environ, "PYTHONPATH": str(elsewhere)})
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual([], store.read_jsonl(store.tier_b(self.ctx(), "unverified.jsonl")),
+                         f"a run of this tree's code finished unverified: {proc.stderr}")
+
+
 class TestAnUnverifiedFinishIsFiledOncePerCommit(RepoCase):
     """Issue #246. The same finish, for the same reason, on the same commit, was filed again on
     every Stop — three rows in one evening, each newer than the founder's word about it."""
