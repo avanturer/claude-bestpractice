@@ -1,6 +1,6 @@
 ---
 title: The founder accepts the work, the session does the rest
-paths: plugin/lib/claude_bestpractice/config.py, plugin/lib/claude_bestpractice/pullrequest.py, plugin/bin/pre-tool
+paths: plugin/lib/claude_bestpractice/config.py, plugin/lib/claude_bestpractice/pullrequest.py, plugin/lib/claude_bestpractice/founder.py, plugin/bin/pre-tool
 date: 2026-08-23
 supersedes: 
 ---
@@ -16,8 +16,9 @@ promotion needs `+release`; a destructive migration needs `+migration`. These ar
 implied by `+merge` and never by each other.
 
 **Every literal is spent on use**, so none can become a standing grant, and none can be
-written by the session being gated — they are read out of the founder's own turn by
-`prompt-capture` and stored where no session can write.
+written by the session being gated — they are read out of the founder's own message, by
+`prompt-capture` or, for one sent while the session worked, which no hook hears, from the
+transcript the harness wrote it into (#251), and stored where no session can write.
 
 **An UNVERIFIED finish is theirs to accept.** It records that a turn ended without proof, and
 nothing a session can do removes it, so it is the one blocker of a merge that the founder

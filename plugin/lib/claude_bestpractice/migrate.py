@@ -1571,6 +1571,20 @@ def _numbers_stamped_while_open(rows: list[dict]) -> dict[tuple[str, str], set[s
     return stamped
 
 
+
+def _begin_the_log_of_the_founders_words(ctx: GitContext) -> str:
+    """Begin the log the founder's words are read back against, at this upgrade (#251).
+
+    A word the founder sent while a session worked reached no hook, and is read back from the
+    transcript from this version on. Never one said before it: that was the previous version's
+    to hear, and read back again it could allow a merge nobody asked for.
+    """
+    from . import founder
+
+    founder.begin(ctx)
+    return ""
+
+
 _REPAIRS = {
     "0001-task-paths": (1, _backfill_task_paths),
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
@@ -1611,6 +1625,7 @@ _REPAIRS = {
     "0035-close-no-pull-request-items-a-pull-request-answered":
         (1, _close_no_pull_request_items_a_pull_request_answered),
     "0036-forget-a-number-another-tree-opened": (1, _forget_a_number_another_tree_opened),
+    "0037-begin-the-log-of-the-founders-words": (1, _begin_the_log_of_the_founders_words),
 }
 
 

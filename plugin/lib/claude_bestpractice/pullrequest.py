@@ -637,14 +637,16 @@ def _finish_accepted(ctx: GitContext, branch: str, record: dict[str, Any]) -> bo
     return accepted > 0 and accepted >= delivery.stamp(latest.get("recorded_at"))
 
 
-def _accept_its_finish(ctx: GitContext, record: dict[str, Any]) -> None:
-    """Record the founder's word as their decision on the finish they were shown, if any.
+def _accept_its_finish(ctx: GitContext, record: dict[str, Any], said: float) -> None:
+    """Record the founder's word, said at `said`, as their decision on the finish they were
+    shown, if any.
 
     Shown, not merely filed: a `+merge` said about the pool before anybody told them one of
     its pull requests finished unproven is not a decision about that. The refusal that lists
     it is what shows it to them, and their next word is. Shown on its commit: the Stop that
     ended the turn after the refusal filed the same finish again, and read by its newest row
-    the word always came before the showing (#246).
+    the word always came before the showing (#246). Shown before the word: one read back from
+    the transcript after the fact is still a word about what they had seen when they said it.
     """
     from . import delivery
 
@@ -658,8 +660,8 @@ def _accept_its_finish(ctx: GitContext, record: dict[str, Any]) -> None:
     same = [row for row in finishes if str(row.get("head") or "") == head]
     first = min(delivery.stamp(row.get("recorded_at")) for row in same)
     shown = max(delivery.stamp(record.get("handed_off_at")), delivery.stamp(record.get(REFUSED)))
-    if shown > 0 and shown >= first:
-        _write(ctx, {**record, FINISH_ACCEPTED: time.time(), FINISH_ACCEPTED_ON: head})
+    if shown > 0 and first <= shown <= said:
+        _write(ctx, {**record, FINISH_ACCEPTED: said, FINISH_ACCEPTED_ON: head})
 
 
 def _past_the_word(ctx: GitContext, branch: str, record: dict[str, Any]) -> str:
@@ -1379,7 +1381,7 @@ def _the_chats(ctx: GitContext, session_id: str) -> Callable[[Any], bool]:
 
 
 def accept_merges(ctx: GitContext, approvals: dict[str, str],
-                  session_id: str) -> dict[str, str]:
+                  session_id: str, at: float | None = None) -> dict[str, str]:
     """The founder's word as it is recorded: a `+merge` names the pull requests it accepts.
 
     One `+merge` allowed one merge, so a session that had finished ten pull requests got
@@ -1399,20 +1401,32 @@ def accept_merges(ctx: GitContext, approvals: dict[str, str],
     A pull request whose UNVERIFIED finish was put to the founder before this word is
     recorded as accepted with it, on the commit it was filed on, so that `blockers` stops
     listing what they have decided.
+
+    `at` is when the word was said, for one read back from the transcript after the fact
+    (`founder.catch_up`): it names what was open then, never a pull request opened since,
+    and decides only a finish that had been put to them by then. Now, when it is not given.
     """
     if config.APPROVE_MERGE not in approvals:
         return approvals
-    ours = _the_chats(ctx, session_id)
+    said = time.time() if at is None else at
     still_open = {_entry(record): record for record in outstanding(ctx)}
-    named = {entry for entry, record in still_open.items()
-             if ours(record.get("session_id")) and not record.get("draft")}
+    named = _open_when_said(ctx, session_id, still_open, said)
     if not named:
         return approvals
     for entry in sorted(named):
-        _accept_its_finish(ctx, still_open[entry])
+        _accept_its_finish(ctx, still_open[entry], said)
     kept = {entry for entry in _pool(ctx) if entry in still_open}
     rest = {key: value for key, value in approvals.items() if key != config.APPROVE_MERGE}
     return {**rest, config.MERGE_POOL: " ".join(sorted(kept | named))}
+
+
+def _open_when_said(ctx: GitContext, session_id: str, still_open: dict[str, dict[str, Any]],
+                    said: float) -> set[str]:
+    """The chat's finished pull requests, of those still open, that were open at `said`."""
+    ours = _the_chats(ctx, session_id)
+    return {entry for entry, record in still_open.items()
+            if ours(record.get("session_id")) and not record.get("draft")
+            and float(record.get("opened_at") or 0) <= said}
 
 
 def named_by(ctx: GitContext, number: int, current: bool = False) -> dict[str, Any] | None:

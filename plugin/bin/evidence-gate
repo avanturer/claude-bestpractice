@@ -24,7 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import attempts, board, config, delivery, discipline, drafts, evidence, hookio, inbox, options, pullrequest, redact, sessions, stage, store, suites, witness, worktree  # noqa: E402
+from claude_bestpractice import attempts, board, config, delivery, discipline, drafts, evidence, founder, hookio, inbox, options, pullrequest, redact, sessions, stage, store, suites, witness, worktree  # noqa: E402
 from claude_bestpractice.gitctx import changed_files, resolve  # noqa: E402
 
 BLOCK_COUNTER = "_consecutive_blocks"
@@ -597,6 +597,10 @@ def main() -> None:
         # how an open draft opened elsewhere stopped being "no pull request" (#239).
         lacking = pullrequest.missing(ctx)
         waiting = pullrequest.unhanded(ctx, ctx.branch)
+        if waiting is not None or lacking is not None:
+            # Whether the founder's word covers it decides what the demand says, and a word
+            # they sent while the session worked reached no hook: read it back first (#251).
+            founder.catch_up(ctx, event.session_id, event.transcript_path)
         if waiting is not None:
             blocking = pullrequest.blockers(ctx, str(waiting.get("base") or "main"))
             pullrequest.hand_off(ctx, waiting, blocking)

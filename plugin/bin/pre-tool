@@ -27,7 +27,7 @@ import json  # noqa: E402
 import re  # noqa: E402
 import shlex  # noqa: E402
 
-from claude_bestpractice import ci, config, evidence, gitpolicy, hookio, inbox, pullrequest, redact, sessions, shellcmd, stage, store, subagents, vouch, worktree  # noqa: E402
+from claude_bestpractice import ci, config, evidence, founder, gitpolicy, hookio, inbox, pullrequest, redact, sessions, shellcmd, stage, store, subagents, vouch, worktree  # noqa: E402
 from claude_bestpractice.gitctx import resolve  # noqa: E402
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
@@ -1482,7 +1482,18 @@ def main() -> None:
             here = here or ctx
             current = pullrequest.about_current_branch(event.tool_name, command)
             named = pullrequest.named_by(here, number, current)
-            cover = config.within_grace(lambda: pullrequest.acceptance(here, named))
+
+            # Their word as the hook heard it, or else as the harness wrote it down: one sent
+            # while the session was working reached it with no hook at all, and every merge
+            # after it was refused as if they had said nothing (#251).
+            def covered() -> str:
+                found = pullrequest.acceptance(here, named)
+                if not found:
+                    founder.catch_up(ctx, event.session_id, event.transcript_path)
+                    found = pullrequest.acceptance(here, named)
+                return found
+
+            cover = config.within_grace(covered)
             if not cover:
                 # The word on record may cover it, under a number this clone never learned.
                 # That is not a word missing, and it is the session's to resolve (#241).
@@ -1682,7 +1693,8 @@ def main() -> None:
             # gate over; so is the same flag handed to an installer, a search or a commit.
             # And spent only on a real promotion, since the founder's word allows one.
             deploying = promotes_to_production(str(ti.get("command", "")), session_cwd)
-            if deploying and not config.awaited(ctx, config.APPROVE_RELEASE):
+            if deploying and not founder.awaited(ctx, config.APPROVE_RELEASE, event.session_id,
+                                                 event.transcript_path):
                 # The literal used to be a token IN THE COMMAND, which the session writes
                 # — so the gate on the one irreversible action was openable by the party
                 # it gates. Decision 0006 closed exactly that hole for config switches and
@@ -1715,7 +1727,8 @@ def main() -> None:
                     # so the gate on irreversible data loss was openable by the party it
                     # gates — the same hole decision 0006 closed for config switches and
                     # v1.28.0 closed for merges and promotions. This was the last one.
-                    if not config.awaited(ctx, config.APPROVE_MIGRATION):
+                    if not founder.awaited(ctx, config.APPROVE_MIGRATION, event.session_id,
+                                           event.transcript_path):
                         deny_for_founder(
                             ctx, rec,
                             "claude-bestpractice: destructive DDL in a migration. This is irreversible "
@@ -1959,6 +1972,17 @@ def main() -> None:
                         "  If a gate is wrong, say so to the founder — do not rewrite what "
                         "it reads."
                     )
+        # The founder's word is read back from the transcript when no hook heard it (#251),
+        # so the transcript is the harness's to write and never the session's.
+        for path in absolute:
+            if founder.writes_the_record(path, event.transcript_path):
+                deny_for_founder(
+                    ctx, rec,
+                    f"claude-bestpractice: {path} is the harness's record of this "
+                    "conversation. The founder's own words are read back from it, so no "
+                    "session writes it.\n"
+                    "  If a gate is wrong, say so to the founder — do not rewrite what it reads."
+                )
 
         protected = [rel for rel in writing_now if _protected_state(rel)]
         protected += _founders_state(ctx, absolute)

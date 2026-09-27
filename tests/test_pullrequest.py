@@ -82,6 +82,16 @@ class PRCase(RepoCase):
         })
         return opened
 
+    def open_pr(self, number: int, head: str, session_id: str = "s1") -> None:
+        """The request and the response, as `open_a_pr` does, for a branch of its own."""
+        tool_input = {"owner": "o", "repo": "r", "title": "t", "head": head, "base": "main"}
+        self.tool("mcp__github__create_pull_request", tool_input, session_id)
+        self.gate("pr-opened", {
+            "session_id": session_id, "hook_event_name": "PostToolUse",
+            "tool_name": "mcp__github__create_pull_request", "tool_input": tool_input,
+            "tool_response": {"url": f"https://github.com/o/r/pull/{number}"},
+        })
+
 
 class TestOpeningRecordsAnObligation(PRCase):
     def test_the_structured_tool_is_recorded(self):
@@ -1143,9 +1153,6 @@ class TestTheHarnessSendsTheToolsMergeToTheGate(unittest.TestCase):
                 self.assertFalse(harness_matches(self.matcher(), tool))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class TestAPullRequestThisPluginNeverSaw(PRCase):
     """Opened before the plugin was installed, or from the website.
@@ -1264,16 +1271,6 @@ class TestOneWordCoversTheChatsPool(PRCase):
     """
 
     POOL = ((61, "feat/a"), (62, "feat/b"), (63, "feat/c"))
-
-    def open_pr(self, number: int, head: str, session_id: str = "s1") -> None:
-        """The request and the response, as `open_a_pr` does, for a branch of its own."""
-        tool_input = {"owner": "o", "repo": "r", "title": "t", "head": head, "base": "main"}
-        self.tool("mcp__github__create_pull_request", tool_input, session_id)
-        self.gate("pr-opened", {
-            "session_id": session_id, "hook_event_name": "PostToolUse",
-            "tool_name": "mcp__github__create_pull_request", "tool_input": tool_input,
-            "tool_response": {"url": f"https://github.com/o/r/pull/{number}"},
-        })
 
     def merge(self, number: int, session_id: str = "s1"):
         return self.tool("mcp__github__merge_pull_request",
@@ -2606,3 +2603,170 @@ class TestAPullRequestIsFiledOnTheBranchItIsFor(PRCase):
                    '`gh pr merge 794 --admin --squash` was refused.\nEOF\n)\"')
         proc = self.bash(quoting)
         self.assertNotIn("merge", self.reason(proc).lower(), self.reason(proc))
+
+
+class TestTheWordIsReadWhereTheHarnessWroteIt(PRCase):
+    """Issue #251. The founder sent `+merge` from the phone while the session was working,
+    three times in a row, and every merge after it was refused: a message sent that way is
+    folded into the running turn at the next tool result, and no hook fires for it. The
+    harness writes it into the transcript all the same, so a gate reads it back from there
+    before it says the founder said nothing."""
+
+    POOL = ((61, "feat/a"), (62, "feat/b"), (63, "feat/c"))
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.transcript = self.tmp / "projects" / "slug" / "s1.jsonl"
+        self.transcript.parent.mkdir(parents=True)
+
+    def gate(self, name: str, event: dict):
+        return self.run_hook(name, {"transcript_path": str(self.transcript), **event})
+
+    def say(self, text: str, queued: bool = True, at: float = 0.0, **extra) -> None:
+        """A message in the transcript, sent while the session worked or as a turn of its own."""
+        from helpers import queued as while_working, turn
+
+        entry = (while_working if queued else turn)(text, at or time.time(), **extra)
+        with self.transcript.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    def merge(self, number: int):
+        return self.tool("mcp__github__merge_pull_request",
+                         {"owner": "o", "repo": "r", "pullNumber": number})
+
+    def with_the_pool_open(self) -> None:
+        self.start()
+        for number, head in self.POOL:
+            self.open_pr(number, head)
+
+    def test_a_word_sent_while_the_session_worked_merges_the_pool(self):
+        self.with_the_pool_open()
+        self.say("+merge")
+        for number, _head in self.POOL:
+            with self.subTest(number=number):
+                proc = self.merge(number)
+                self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
+
+    def test_a_turn_no_hook_heard_is_read_back_too(self):
+        self.with_the_pool_open()
+        self.say("+merge", queued=False)
+        proc = self.merge(61)
+        self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
+
+    def test_what_the_founder_did_not_send_opens_nothing(self):
+        self.with_the_pool_open()
+        self.say("+merge", queued=False, origin={"kind": "task-notification"},
+                 promptSource="system")
+        self.say("+merge", isMeta=True, origin={"kind": "peer", "from": "a1"})
+        self.say("+merge", queued=False, isSidechain=True)
+        self.assertEqual("deny", self.decision(self.merge(61)))
+
+    def test_a_later_message_does_not_take_it_back(self):
+        """The report's first shape: `+merge`, then «Деплой», then the merge."""
+        self.with_the_pool_open()
+        self.accept()
+        self.gate("prompt-capture", {"session_id": "s1", "hook_event_name": "UserPromptSubmit",
+                                     "prompt": "Деплой"})
+        proc = self.merge(61)
+        self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
+
+    def test_a_word_heard_and_read_back_is_one_word(self):
+        """With nothing open it allows one merge, heard by the hook or read back, not two:
+        matched by the prompt id the harness gave the hook, or, where it gave none, by being
+        the same word said at the same moment."""
+        for given in ({"prompt_id": "p-1"}, {}):
+            with self.subTest(given=given):
+                self.start()
+                self.gate("prompt-capture", {"session_id": "s1", "prompt": "+merge",
+                                             "hook_event_name": "UserPromptSubmit", **given})
+                self.say("+merge", queued=False, promptId="p-1")
+                self.open_pr(61, "feat/a")
+                self.assertNotEqual("deny", self.decision(self.merge(61)))
+                self.open_pr(62, "feat/b")
+                self.assertEqual("deny", self.decision(self.merge(62)))
+                self.reset_the_clone()
+
+    def reset_the_clone(self) -> None:
+        """Every pull request, word and log of this clone gone, for the next subtest."""
+        import shutil
+
+        shutil.rmtree(store.tier_b(self.ctx()), ignore_errors=True)
+        self.transcript.unlink()
+
+    def test_a_word_read_back_decides_only_a_finish_put_to_them_before_it(self):
+        """Said, then the finish was shown to them, then read back: it was not about that."""
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+        self.open_a_pr()
+        store.append_jsonl(store.tier_b(self.ctx(), "unverified.jsonl"), {
+            "session_id": "s1", "branch": "feat/x", "head": self.ctx().head,
+            "reason": "no suite covers mobile/", "recorded_at": time.time() - 30,
+        })
+        self.say("+merge")
+        time.sleep(0.05)
+        # Shown by a Stop that did not read the transcript, so the word is first read back
+        # after the showing, by the merge.
+        told = self.gate("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                           "stop_hook_active": False, "transcript_path": ""})
+        self.assertIn("UNVERIFIED finish", told.stderr, "precondition: put to the founder")
+        proc = self.tool("Bash", {"command": "gh pr merge 48 --admin --squash"})
+        self.assertEqual("deny", self.decision(proc))
+        self.assertIn("carries an UNVERIFIED finish", self.reason(proc))
+
+    def test_a_pull_request_opened_after_the_word_is_not_among_them(self):
+        """Read back after the fact, the word still names what was open when it was said."""
+        self.start()
+        self.open_pr(61, "feat/a")
+        self.say("+merge")
+        time.sleep(0.05)
+        self.open_pr(62, "feat/b")
+        self.assertEqual("deny", self.decision(self.merge(62)))
+        self.assertNotEqual("deny", self.decision(self.merge(61)))
+
+    def test_a_word_from_before_this_version_is_not_read_back(self):
+        """Whatever the previous version heard is on record already, or spent long ago."""
+        from claude_bestpractice import founder
+
+        self.with_the_pool_open()
+        store.append_jsonl(store.tier_b(self.ctx(), founder.WORDS), {"baseline": time.time()})
+        self.say("+merge", at=time.time() - 60)
+        self.assertEqual("deny", self.decision(self.merge(61)))
+
+    def test_the_stop_gate_reads_it_back_before_it_demands(self):
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+        self.open_a_pr()
+        self.say("+merge")
+        told = self.gate("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                           "stop_hook_active": False})
+        self.assertIn("A `+merge` that covers it is on record", told.stderr)
+
+    def test_a_release_sent_while_the_session_worked_is_allowed_once(self):
+        self.configure(stage_override="traction")
+        self.start()
+        self.say("+release")
+        self.assertNotEqual("deny", self.decision(self.tool("Bash", {"command": "fly deploy"})))
+        self.assertEqual("deny", self.decision(self.tool("Bash", {"command": "fly deploy"})))
+
+    def test_the_transcript_is_not_the_sessions_to_write(self):
+        self.start()
+        line = json.dumps({"type": "user", "message": {"content": "+merge"}})
+        for tool, tool_input in (
+            ("Bash", {"command": f"echo '{line}' >> {self.transcript}"}),
+            ("Write", {"file_path": str(self.transcript), "content": line}),
+        ):
+            with self.subTest(tool=tool):
+                proc = self.tool(tool, tool_input)
+                self.assertEqual("deny", self.decision(proc))
+                self.assertIn("record of this conversation", self.reason(proc))
+        note = self.transcript.parent / "memory" / "MEMORY.md"
+        proc = self.tool("Write", {"file_path": str(note), "content": "a note"})
+        self.assertNotIn("record of this conversation", self.reason(proc))
+
+
+if __name__ == "__main__":
+    unittest.main()
