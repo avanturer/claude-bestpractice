@@ -1525,6 +1525,52 @@ def _close_no_pull_request_items_a_pull_request_answered(ctx: GitContext) -> str
     return f"{closed} \"NO PULL REQUEST\" item(s) named a branch whose pull request is on record; closed"
 
 
+def _forget_a_number_another_tree_opened(ctx: GitContext) -> str:
+    """Open obligations stamped with the number of a pull request opened from another tree.
+
+    Until this release a `gh pr create` whose body quoted anything was not read, and neither
+    was the `cd <tree>` or `--head` in front of it, so the pull request went on record for the
+    branch the session stood on. That branch's record was open already, and the number it
+    learned was written over its own: #794's record said #813 (#248). The fix stops new ones.
+    Which of the two is the branch's cannot be told here without asking GitHub, so the record
+    is told it does not know its number, which is the truth, and a merge from its tree finds
+    it by the branch.
+    """
+    from . import pullrequest
+
+    path = store.tier_b(ctx, pullrequest.PR_FILE)
+    rows = [row for row in store.read_jsonl(path) if isinstance(row, dict) and row.get("branch")]
+    stamped = _numbers_stamped_while_open(rows)
+    latest = {str(row["branch"]): row for row in rows}
+    overwritten = [row for branch, row in latest.items()
+                   if row.get("state") == pullrequest.OPEN and row.get("number")
+                   and len(stamped.get((branch, str(row.get("opened_at"))), ())) > 1]
+    for row in overwritten:
+        store.append_jsonl(path, {**row, "number": 0})
+    return (f"{len(overwritten)} open pull request(s) carried the number of one opened from "
+            "another tree; forgotten until the real one is learned") if overwritten else ""
+
+
+def _numbers_stamped_while_open(rows: list[dict]) -> dict[tuple[str, str], set[str]]:
+    """Each number one opening of a branch learned while it stayed open.
+
+    An opening is its branch and the time it was opened, which every later row of it carries.
+    A number the branch settled a pull request with is left out, which is also every number a
+    row that is not open carries: one the branch's previous pull request settled with is the
+    number `opened` used to carry over, which repair 0024 takes back, not a second one.
+    """
+    from . import pullrequest
+
+    spent = {(str(row["branch"]), str(row.get("number"))) for row in rows
+             if row.get("state") != pullrequest.OPEN}
+    stamped: dict[tuple[str, str], set[str]] = {}
+    for row in rows:
+        mark = (str(row["branch"]), str(row.get("number")))
+        if row.get("number") and mark not in spent:
+            stamped.setdefault((mark[0], str(row.get("opened_at"))), set()).add(mark[1])
+    return stamped
+
+
 _REPAIRS = {
     "0001-task-paths": (1, _backfill_task_paths),
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
@@ -1564,6 +1610,7 @@ _REPAIRS = {
     "0034-take-the-goal-command-off-a-statement": (1, _take_the_goal_command_off_a_statement),
     "0035-close-no-pull-request-items-a-pull-request-answered":
         (1, _close_no_pull_request_items_a_pull_request_answered),
+    "0036-forget-a-number-another-tree-opened": (1, _forget_a_number_another_tree_opened),
 }
 
 

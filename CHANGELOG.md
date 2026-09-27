@@ -1,5 +1,53 @@
 # Changelog
 
+## v1.71.4
+
+`+merge` reaches every pull request the chat opened, a merge is judged as the pull request it
+merges, and an issue that quotes a merge is not one (#248).
+
+### What happened
+
+On 1.71.2 one chat had seven pull requests open, and the founder's `+merge` reached three.
+
+- Their bodies were written as `--body "$(cat <<'EOF' … EOF)"`. A quote inside the document
+  ended the quoted word around it, so the gate could not read the line and fell back to
+  guessing. The `cd <tree>` or `--head` on it was never seen, and the pull request went on
+  record for the branch the session stood on: #813's number was written over #794's, and four
+  of the seven had no record for the word to name.
+- `gh pr merge 794` was then "not a pull request this clone knows by number", and a merge
+  from #794's tree was refused as #813.
+- The issue about it quoted `gh pr merge 794`, and `gh issue create` was refused as that merge.
+- A relative `cd` was read from where the hook process started, not from where the session
+  stood.
+
+### What changed
+
+- **The document `$(cat <<'EOF' … EOF)` prints is set aside.** Its delimiter is quoted, so bash
+  expands nothing in it: it is text the command reads, and the line around it is read as
+  written. One fed to `sh`, or piped on to one, is a script and is still read. It ends where
+  bash ends it, and one a shell may end sooner, as bash 5.2 does at `EOF)`, is left whole and
+  read the old way, which errs towards seeing a command rather than missing one.
+- **A pull request is recorded on the branch it is for.** A relative `cd` is read from where
+  the session stands, and only a `cd` before `gh pr create` moves it. A line that moves where
+  only the shell can name, such as `cd $TREE`, records nothing rather than the session's own
+  branch, which is the one answer certain to be wrong there.
+- **A merge is judged in the tree it runs in.** `cd <tree> && gh pr merge` merges that tree's
+  pull request, and it was judged, spent from the word and settled as the session's own. It is
+  now that tree's on every count. A merge that names no pull request, on a line that moves
+  where this cannot place, is refused with the two ways to name it.
+- **Repair 0036** takes back the number of a record that learned a second one while it stayed
+  open, which is how #794's record came to say #813. Which of the two is the branch's is
+  GitHub's to say, so the record forgets both, and a merge from its tree finds it by the branch.
+
+### How it was checked
+
+Each part of the report is a test that fails on 1.71.3:
+- two pull requests opened from two trees, with quoting bodies: each on its own branch;
+- `+merge`, then a merge of each by number from one tree: both go through;
+- an issue whose body quotes `gh pr merge 794`: not a merge;
+- `cd ../b && gh pr merge`: judged, spent and settled as #813, refused over tree b's problems,
+  and #794 still merges after it.
+
 ## v1.71.3
 
 The founder's `+merge` on an UNVERIFIED finish outlives the next Stop, and the gate's own run

@@ -1519,6 +1519,51 @@ class TestANumberCarriedToTheNextPullRequestIsForgotten(RepoCase):
         self.assertEqual(42, pullrequest._records(self.ctx())["feat/x"]["number"])
 
 
+class TestANumberAnotherTreeOpenedIsForgotten(RepoCase):
+    """Issue #248. `cd <tree> && gh pr create` with a quoting body was filed on the branch the
+    session stood on, whose open record then learned the other pull request's number over its
+    own. Which one is the branch's is GitHub's to say, so the record forgets both."""
+
+    def filed(self, **row) -> None:
+        from claude_bestpractice import pullrequest
+
+        store.append_jsonl(store.tier_b(self.ctx(), pullrequest.PR_FILE), {
+            "branch": "feat/x", "base": "main", "url": "", "session_id": "s1",
+            "opened_at": 1.0, "handed_off_at": 0.0, "state": "open", **row,
+        })
+
+    def number(self) -> int:
+        from claude_bestpractice import pullrequest
+
+        return pullrequest._records(self.ctx())["feat/x"]["number"]
+
+    def test_a_number_written_over_another_is_taken_back(self):
+        self.filed(number=0)
+        self.filed(number=794)
+        self.filed(number=813)
+
+        changed = migrate.repair(self.ctx())
+
+        self.assertEqual(0, self.number())
+        self.assertTrue([line for line in changed if "another tree" in line], changed)
+
+    def test_a_number_learned_once_is_kept(self):
+        self.filed(number=0)
+        self.filed(number=794)
+        migrate.repair(self.ctx())
+        self.assertEqual(794, self.number())
+
+    def test_the_next_pull_request_on_the_branch_keeps_its_own(self):
+        """Its previous pull request's number, carried over and then learned past, is not a
+        second number: that is repair 0024's case, and the one learned last is right."""
+        self.filed(number=41)
+        self.filed(number=41, state="merged")
+        self.filed(number=41, opened_at=2.0)
+        self.filed(number=42, opened_at=2.0)
+        migrate.repair(self.ctx())
+        self.assertEqual(42, self.number())
+
+
 class TestARedSuiteThatNeverRanIsForgotten(RepoCase):
     """`No module named pytest` was filed as a red suite until 1.69.0 — on every board as
     "fix it before new work", and against every merge — for a run that reached no code.

@@ -137,7 +137,7 @@ def _parsed(line: str) -> tuple[tuple[str, ...], ...]:
 
 
 def _tokens(line: str) -> list[str]:
-    text = _one_line(line)
+    text = _one_line(_without_substituted_documents(line))
     try:
         return _lexed(_Lexer, text)
     except (TypeError, AttributeError):
@@ -173,6 +173,41 @@ _PIECE = re.compile(
 
 # A newline after one of these continues the command instead of ending it.
 _CONTINUED = ("&&", "||", "|", "|&")
+
+# A document read inside `$(…)`: `--body "$(cat <<'EOF' … EOF)"`, the shape nearly every pull
+# request and issue body is written in. The quoted word around it ended at the first `"` in
+# the document, so a body that quoted anything declined the whole line and every reader of it
+# fell back to guessing: an issue quoting `gh pr merge 794` was refused as that merge, and
+# `cd <tree> && gh pr create` was filed on the branch the session stood on (#248). Only the
+# document `cat` prints and nothing else touches: its delimiter is quoted, so bash expands
+# nothing in it, and it is text the command reads, set aside here as `_one_line` sets aside
+# every document it can see. Fed to `sh`, or piped on to one, it is a script that runs, and
+# it stays. It ends where bash ends it: on a line of the delimiter alone, after the tabs `<<-`
+# strips.
+_SUBSTITUTED_DOCUMENT = re.compile(
+    r"(?P<opened>\$\([ \t]*cat[ \t]+<<(?P<dash>-)?[ \t]*(?P<quote>['\"])(?P<tag>\w+)(?P=quote)"
+    r"[ \t]*\n)(?P<document>.*?)(?P<closed>^(?(dash)\t*)(?P=tag)$)",
+    re.S | re.M,
+)
+
+
+def _without_substituted_documents(line: str) -> str:
+    """`line` with the document of each quoted heredoc read inside `$(…)` taken out."""
+    if "<<" not in line:
+        return line
+    return _SUBSTITUTED_DOCUMENT.sub(_set_aside, line)
+
+
+def _set_aside(found: re.Match) -> str:
+    """The heredoc without its document, or as it was when a shell may end it sooner.
+
+    Bash 5.2 ends one at `EOF)`, which is not a line of the delimiter alone, so the match runs
+    on to the next `EOF` and would hide whatever the line runs in between. Left whole, the
+    line is read the old way, which errs towards seeing a command rather than missing one.
+    """
+    if re.search(rf"^[ \t]*{found['tag']}\b", found["document"], re.M):
+        return found[0]
+    return found["opened"] + found["closed"]
 
 
 def _one_line(line: str) -> str:

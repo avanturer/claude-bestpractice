@@ -2463,3 +2463,146 @@ class TestTheFoundersWordDecidesAnUnverifiedFinish(PRCase):
         self.assertEqual("deny", self.decision(proc))
         self.assertIn("uncommitted changes", self.reason(proc))
         self.assertNotIn("UNVERIFIED", self.reason(proc))
+
+
+class TestAPullRequestIsFiledOnTheBranchItIsFor(PRCase):
+    """Issue #248. One chat had seven pull requests open and `+merge` reached three of them.
+    Each was opened as `cd <its tree> && gh pr create --body "$(cat <<'EOF' … EOF)"` from the
+    tree the session stood in, with bodies that quoted things. That line was not read, so the
+    pull request went on record for the session's own branch: #813's number landed on #794's
+    record, a merge of #794 was "not a pull request this clone knows", a merge from #794's tree
+    was refused as #813, and the other branches had no record for the word to name."""
+
+    BODY = 'Fixes the queue: the gate said "no `+merge` on record", and it\'s done.'
+
+    def setUp(self) -> None:
+        super().setUp()
+        from claude_bestpractice.gitctx import resolve
+
+        trees = self.tmp / "trees"
+        self.here = trees / "a"
+        self.there = trees / "b"
+        # Each branch finished and green, so the one thing a merge can be refused over is
+        # which pull request it was judged as.
+        for tree, branch in ((self.here, "feat/a"), (self.there, "feat/b")):
+            git(["worktree", "add", "-q", "-b", branch, str(tree)], self.repo)
+            (tree / f"{tree.name}.py").write_text("x = 1\n")
+            git(["add", "-A"], tree)
+            git(["commit", "-qm", f"add {tree.name}"], tree)
+            evidence.record_green(resolve(tree), ["pytest"])
+
+    def in_a(self, gate: str, event: dict):
+        """A hook for the session standing in tree a, run from the repository as the harness
+        runs it, so a relative `cd` has to be read against the session and not the process."""
+        return self.run_hook(gate, {"session_id": "s1", "cwd": str(self.here), **event})
+
+    def create(self, command: str, printed: str) -> None:
+        self.in_a("pre-tool", {"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                               "tool_input": {"command": command}})
+        self.in_a("pr-opened", {"hook_event_name": "PostToolUse", "tool_name": "Bash",
+                                "tool_input": {"command": command},
+                                "tool_response": {"stdout": printed, "stderr": "",
+                                                  "interrupted": False, "isImage": False}})
+
+    def body(self) -> str:
+        return f"--body \"$(cat <<'EOF'\n{self.BODY}\nEOF\n)\""
+
+    def numbers(self) -> dict:
+        return {record["branch"]: record["number"] for record in pullrequest.outstanding(self.ctx())}
+
+    def open_both(self, word: bool = True) -> None:
+        """#794 from the tree the session stands in, #813 from the other, and `+merge`."""
+        self.in_a("session-start", {"hook_event_name": "SessionStart"})
+        self.create(f"gh pr create --title a {self.body()}", "https://github.com/o/r/pull/794\n")
+        self.create(f"cd ../b && gh pr create --title b {self.body()}",
+                    "https://github.com/o/r/pull/813\n")
+        if word:
+            self.in_a("prompt-capture", {"hook_event_name": "UserPromptSubmit", "prompt": "+merge"})
+
+    def bash(self, command: str):
+        return self.in_a("pre-tool", {"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                                      "tool_input": {"command": command}})
+
+    def test_its_own_tree_is_the_branch_it_is_for(self):
+        self.open_both(word=False)
+        self.assertEqual({"feat/a": 794, "feat/b": 813}, self.numbers())
+
+    def test_a_cd_after_the_call_does_not_move_it(self):
+        self.in_a("session-start", {"hook_event_name": "SessionStart"})
+        self.create(f"gh pr create --title a {self.body()} && cd ../b",
+                    "https://github.com/o/r/pull/794\n")
+        self.assertEqual({"feat/a": 794}, self.numbers())
+
+    def test_a_tree_it_cannot_name_files_nothing_on_the_wrong_branch(self):
+        self.in_a("session-start", {"hook_event_name": "SessionStart"})
+        self.create(f"gh pr create --title a {self.body()}", "https://github.com/o/r/pull/794\n")
+        self.create(f"cd $TREE && gh pr create --title b {self.body()}",
+                    "https://github.com/o/r/pull/813\n")
+        self.assertEqual({"feat/a": 794}, self.numbers())
+
+    def test_the_word_reaches_both_and_each_merges_as_itself(self):
+        self.open_both()
+        for number in (794, 813):
+            with self.subTest(number=number):
+                proc = self.bash(f"gh pr merge {number} --admin --squash")
+                self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
+
+    def test_a_merge_run_in_the_other_tree_is_that_trees(self):
+        """`cd ../b && gh pr merge` merges #813. It was judged, spent and settled as #794, the
+        pull request of the tree the session stood in, which then could not merge at all."""
+        self.open_both()
+        proc = self.bash("cd ../b && gh pr merge --admin --squash")
+        self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
+        self.assertEqual({"feat/a": 794}, self.numbers())
+        proc = self.bash("gh pr merge --admin --squash")
+        self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
+        self.assertEqual({}, self.numbers())
+
+    def test_it_is_refused_over_that_trees_problems(self):
+        self.open_both()
+        (self.there / "b.py").write_text("x = 2\n")
+        proc = self.bash("cd ../b && gh pr merge --admin --squash")
+        self.assertEqual("deny", self.decision(proc))
+        self.assertIn("refusing to merge #813", self.reason(proc))
+        self.assertIn("uncommitted changes", self.reason(proc))
+        proc = self.bash("gh pr merge --admin --squash")
+        self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
+        self.assertEqual({"feat/b": 813}, self.numbers())
+
+    def test_a_cd_after_the_merge_does_not_move_it(self):
+        self.open_both()
+        proc = self.bash("gh pr merge --admin --squash && cd ../b")
+        self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
+        self.assertEqual({"feat/b": 813}, self.numbers())
+
+    def test_a_close_run_in_the_other_tree_closes_that_trees(self):
+        self.open_both(word=False)
+        self.bash("cd $TREE && gh pr close")
+        self.assertEqual({"feat/a": 794, "feat/b": 813}, self.numbers())
+        self.bash("cd ../b && gh pr close")
+        self.assertEqual({"feat/a": 794}, self.numbers())
+
+    def test_a_merge_it_cannot_place_is_named_by_the_session(self):
+        """`cd $TREE && gh pr merge` merges whatever `$TREE` has checked out, and only the shell
+        knows what that is; another clone's tree is not this one's to judge. Taking either for
+        the session's own pull request is the wrong answer this issue was, so the session is
+        asked for the number or the path instead."""
+        elsewhere = self.tmp / "elsewhere"
+        git(["init", "-q", str(elsewhere)], self.tmp)
+        self.open_both()
+        for place in ("$TREE", str(elsewhere)):
+            with self.subTest(place=place):
+                proc = self.bash(f"cd {place} && gh pr merge --admin --squash")
+                self.assertEqual("deny", self.decision(proc))
+                self.assertIn("gh pr merge <number> --squash", self.reason(proc))
+        self.assertEqual({"feat/a": 794, "feat/b": 813}, self.numbers())
+        proc = self.bash("cd $TREE && gh pr merge 813 --admin --squash")
+        self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
+
+    def test_an_issue_that_quotes_a_merge_is_not_one(self):
+        self.open_both(word=False)
+        quoting = ("gh issue create --title t --body \"$(cat <<'EOF'\n"
+                   'The gate said "no `+merge` on record", and\n'
+                   '`gh pr merge 794 --admin --squash` was refused.\nEOF\n)\"')
+        proc = self.bash(quoting)
+        self.assertNotIn("merge", self.reason(proc).lower(), self.reason(proc))

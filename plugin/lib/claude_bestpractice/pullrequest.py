@@ -34,6 +34,7 @@ a merge, or lets a `+merge` said about other work reach it until it is marked re
 
 from __future__ import annotations
 
+import os
 import re
 import time
 from typing import Any, Callable
@@ -343,7 +344,7 @@ def _closed_branch(ctx: GitContext, tool_name: str, command: str, tool_input: di
     found = _gh_subcommand(command, "close", _CLOSES_SHELL)
     if found is None:
         return ""
-    return _branch_named(ctx, found, command, cwd)
+    return _branch_named(ctx, found, command, cwd, "close")
 
 
 def readiness(ctx: GitContext, tool_name: str, command: str, tool_input: dict[str, Any],
@@ -366,7 +367,7 @@ def readiness(ctx: GitContext, tool_name: str, command: str, tool_input: dict[st
         if found is None:
             return None
         draft = "--undo" in (found[3:] if isinstance(found, list) else command.split())
-        branch = _branch_named(ctx, found, command, cwd)
+        branch = _branch_named(ctx, found, command, cwd, "ready")
     if not branch or not about_this_repository(ctx, tool_name, tool_input, command):
         return None
     return branch, draft
@@ -379,7 +380,7 @@ def redraft(ctx: GitContext, branch: str, draft: bool) -> None:
         _write(ctx, {**record, "draft": draft})
 
 
-def _branch_named(ctx: GitContext, found, command: str, cwd: str) -> str:
+def _branch_named(ctx: GitContext, found, command: str, cwd: str, verb: str) -> str:
     """The branch of the pull request a `gh pr close` or `gh pr ready` names.
 
     By number or URL through the record that learned it, by branch as written, or by
@@ -387,7 +388,8 @@ def _branch_named(ctx: GitContext, found, command: str, cwd: str) -> str:
     """
     selector = _selector(found)
     if not selector:
-        return _branch_of(_directory_of(command) or cwd) or ctx.branch
+        return (_branch_where(command, verb, cwd)
+                or ("" if _moved_to(command, verb) else ctx.branch))
     number = int(selector) if selector.isdigit() else number_in(selector)
     return _numbered(ctx, number) if number else selector
 
@@ -1164,16 +1166,90 @@ def head_of(tool_name: str, command: str, tool_input: dict[str, Any], cwd: str =
                 return argv[index + 1]
             if token.startswith("--head="):
                 return token.split("=", 1)[1]
-    return _branch_of(_directory_of(command) or cwd)
+    return _branch_where(command, "create", cwd)
 
 
-def _directory_of(command: str) -> str:
-    """The directory a `cd` in this line moves to, if there is one."""
+def opened_from(ctx: GitContext, tool_name: str, command: str, tool_input: dict[str, Any],
+                cwd: str) -> str:
+    """The branch a pull request this call opens is recorded on. "" when it cannot be told.
+
+    The session's own branch only when the call names no other place: on a line that moves
+    into a tree this cannot name, that branch is the one certainly wrong answer (#248).
+    """
+    head = head_of(tool_name, command, tool_input, cwd)
+    return head if head or _moved_to(command, "create") else ctx.branch
+
+
+def merged_in(ctx: GitContext, command: str, cwd: str) -> GitContext | None:
+    """The working tree a `gh pr merge` on this line runs in: `ctx`'s own, or the tree of this
+    clone a `cd` before it moves to. None when that is a place this cannot name, or not a
+    working tree of this clone.
+
+    `gh pr merge` with no number merges the pull request of the branch checked out where it
+    runs. The tree the session stood in was judged instead, so `cd <tree> && gh pr merge`
+    merged that tree's pull request as the session's own: judged by its blockers, its word
+    spent, its record settled as merged (#248).
+    """
+    where = _where(command, "merge", cwd)
+    if where is None:
+        return None
+    if where == cwd:
+        return ctx
+    from .gitctx import GitError, resolve
+
+    try:
+        there = resolve(where)
+    except (GitError, OSError):
+        return None
+    return there if there.repo_key == ctx.repo_key else None
+
+
+def unplaceable(command: str) -> str:
+    """The refusal for a merge that names no pull request, run where `merged_in` cannot place."""
+    return (
+        "claude-bestpractice: this merge names no pull request, and it runs after "
+        f"`cd {_moved_to(command, 'merge')}`, which this gate cannot place in a working tree of "
+        "this clone. `gh pr merge` with no number merges the pull request of the branch checked "
+        "out where it runs, so which one this is, whether the founder's `+merge` covers it and "
+        "what to check before it are all unknown here.\n"
+        "Name the pull request, or write its tree's path out:\n"
+        "  gh pr merge <number> --squash\n"
+        "  cd <path of its tree> && gh pr merge --squash"
+    )
+
+
+def _branch_where(command: str, verb: str, cwd: str) -> str:
+    """The branch checked out where this line runs `gh pr <verb>`. "" when that place cannot be
+    named, rather than the branch of the one the line left."""
+    return _branch_of(_where(command, verb, cwd) or "")
+
+
+def _where(command: str, verb: str, cwd: str) -> str | None:
+    """The directory this line runs `gh pr <verb>` in: `cwd`, moved by each `cd` before it.
+    None when a `cd` leads somewhere only the shell can name, as `cd $TREE` does.
+
+    Relative to `cwd`, which is where the session stands. It was read from wherever the hook
+    process happened to be started, so `cd ../b` named no tree, and the pull request opened in
+    `b` went on record for the branch the session stood on: #813's number landed on #794's
+    record, and #813 had none for the founder's word to name (#248).
+    """
+    moved = _moved_to(command, verb)
+    if "$" in moved or "`" in moved:
+        return None
+    return os.path.join(cwd, moved) if moved else cwd
+
+
+def _moved_to(command: str, verb: str) -> str:
+    """Where the `cd`s this line runs before `gh pr <verb>` lead, joined in order. "" when
+    none comes before it: a `cd` after it moves the shell once the call is already made."""
     from . import shellcmd
 
+    moved = ""
     for argv in shellcmd.commands(command):
-        if argv and argv[0] == "cd" and len(argv) > 1:
-            return argv[1]
+        if argv[0].rsplit("/", 1)[-1] == "gh" and argv[1:3] == ["pr", verb]:
+            return moved
+        if argv[0] == "cd" and len(argv) > 1:
+            moved = os.path.join(moved, os.path.expanduser(argv[1]))
     return ""
 
 

@@ -313,3 +313,62 @@ class TestANewlineEndsACommand(unittest.TestCase):
         self.assertEqual(["a#b", "two", "a|", "three"], proc.stdout.split())
 
 
+
+
+class TestADocumentReadInsideASubstitution(unittest.TestCase):
+    """Issue #248. `--body "$(cat <<'EOF' … EOF)"` is how nearly every pull request and issue
+    body is written, and the quoted word it sits in ended at the first `"` in the document. A
+    body that quoted anything declined the whole line, and every reader of it fell back to
+    guessing: an issue quoting `gh pr merge 794` was refused as that merge, and the branch of
+    `cd <tree> && gh pr create` became the one the session stood on."""
+
+    # A backtick between two of its quotes is what the old reading saw outside any quote.
+    BODY = ('The gate said "no `+merge` is on record", and (twice)\n'
+            "`gh pr merge 794 --admin --squash` was refused; it's the founder's word")
+
+    def line(self, before: str = "gh issue create --title t") -> str:
+        return f"{before} --body \"$(cat <<'EOF'\n{self.BODY}\nEOF\n)\""
+
+    def test_the_line_is_read(self):
+        [argv] = shellcmd.segments(self.line())
+        self.assertEqual(["gh", "issue", "create", "--title", "t", "--body"], argv[:6])
+
+    def test_what_the_document_quotes_is_not_run(self):
+        self.assertEqual([], shellcmd.runs(self.line(), "gh", "pr", "merge"))
+        self.assertIsNone(pullrequest.merge_target("Bash", self.line(), {}))
+
+    def test_the_words_around_it_are_read_as_they_were_written(self):
+        line = self.line("cd ../b && gh pr create --draft --head feat/b")
+        self.assertEqual(["cd", "../b"], shellcmd.segments(line)[0])
+        self.assertTrue(pullrequest.drafted("Bash", line, {}))
+        self.assertEqual("feat/b", pullrequest.head_of("Bash", line, {}, "/nowhere"))
+
+    def test_a_merge_outside_the_document_is_still_one(self):
+        line = self.line("gh pr merge 794 --squash && gh issue create --title t")
+        self.assertEqual(794, pullrequest.merge_target("Bash", line, {}))
+
+    def test_a_document_indented_for_its_dash_is_read_the_same(self):
+        line = f"gh issue create --title t --body \"$(cat <<-'EOF'\n\t{self.BODY}\n\tEOF\n)\""
+        self.assertEqual([], shellcmd.runs(line, "gh", "pr", "merge"))
+        self.assertIsNone(pullrequest.merge_target("Bash", line, {}))
+
+    def test_a_document_a_program_runs_is_still_read(self):
+        """Fed to `sh`, or piped on to one, the document is a script, and the merge in it runs."""
+        for opened in ("$(sh <<'EOF'", "$(cat <<'EOF' | sh"):
+            line = (f"echo \"{opened}\ngh pr merge 5 --squash\necho \"it ran (once)\"\n"
+                    "EOF\n)\"")
+            with self.subTest(opened=opened):
+                self.assertEqual(5, pullrequest.merge_target("Bash", line, {}))
+
+    def test_a_merge_between_two_documents_is_not_hidden_by_them(self):
+        """Bash 5.2 ends the first document at `EOF)`. Read on to the second one's `EOF`, the
+        merge between them is inside a document it was never part of."""
+        line = ("gh issue create --title t --body \"$(cat <<'EOF'\nquoted \"x\"\nEOF)\" && "
+                "gh pr merge 5 --squash && gh issue comment 1 --body \"$(cat <<'EOF'\n"
+                "more\nEOF\n)\"")
+        self.assertEqual(5, pullrequest.merge_target("Bash", line, {}))
+
+    def test_bash_reads_it_as_one_command_with_the_document_whole(self):
+        proc = subprocess.run(["bash", "-c", self.line("printf '%s\\n'")],
+                              capture_output=True, text=True, timeout=30)
+        self.assertEqual(f"--body\n{self.BODY}\n", proc.stdout)
