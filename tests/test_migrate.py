@@ -1389,6 +1389,16 @@ class TestRenamesGitWasNeverToldAbout(RepoCase):
         self.assertEqual([f"D\t{task.path.relative_to(self.repo).as_posix()}"], staged)
         self.assertTrue(target.is_file(), "the moved card left the disk")
 
+    def test_run_from_a_worktree_it_leaves_the_main_checkout_index_alone(self):
+        """That index is the main checkout's sessions' to write, and they take every card
+        out of it at start anyway (#254)."""
+        from claude_bestpractice.gitctx import resolve
+
+        self.stranded()
+        tree = self.add_worktree("worker")
+        self.assertEqual("", migrate._restage_ledger_moves_git_lost(resolve(tree)))
+        self.assertEqual("", git(["diff", "--cached", "--name-only"], self.repo))
+
     def test_a_deletion_with_no_counterpart_is_left_alone(self):
         """It may be one somebody meant; a repair that guesses is worse than the defect."""
         task = plan.add(self.ctx(), "Do a thing", done_when="stated", paths=["src/app.py"])
@@ -1410,15 +1420,16 @@ class TestRenamesGitWasNeverToldAbout(RepoCase):
         self.assertIn("D", git(["diff", "--cached", "--name-status"], self.repo))
 
 
-class TestCarryingATaskHomeIsAMoveInBothIndexes(RepoCase):
+class TestCarryingATaskHomeIsAMoveInTheTreeItLeft(RepoCase):
     """The carry-home repair recreated the defect the repair after it exists to undo.
 
     `_carry_this_worktrees_tasks_home` moves a task file out of the worktree and into the
     main checkout. Two worktrees of one clone have two indexes, so that move cannot be one
-    rename however git is asked: the deletion belongs to the tree the file left and the
-    addition to the tree it arrived in. Staging neither left a committed file gone from a
-    tracked path with nothing anywhere to say where it went — a bare `D` and an untracked
-    copy, which is #208 dealt out by the code that cleans up after #208.
+    rename however git is asked: the deletion belongs to the tree the file left. Staging
+    nothing left a committed file gone from a tracked path with nothing anywhere to say
+    where it went — a bare `D` and an untracked copy, which is #208 dealt out by the code
+    that cleans up after #208. The tree it arrived in is another tree, and its index is not
+    the carry's to write (#254).
     """
 
     def a_committed_card_in_a_worktree(self):
@@ -1464,6 +1475,22 @@ class TestCarryingATaskHomeIsAMoveInBothIndexes(RepoCase):
 
         self.assertTrue((plan.plan_dir(self.ctx(), plan.NEXT) / card.name).is_file())
         self.assertEqual("", git(["ls-files", store.TIER_A_DIRNAME + "/plan"], self.repo))
+
+    def test_the_main_checkouts_index_is_left_as_it_was(self):
+        """Even where the main checkout's own index holds the card at the very path it
+        arrives at: that index is its own sessions' to write, not this tree's (#254)."""
+        elsewhere, _tree, card = self.a_committed_card_in_a_worktree()
+        home = plan.plan_dir(self.ctx(), plan.NEXT) / card.name
+        home.parent.mkdir(parents=True, exist_ok=True)
+        home.write_text(card.read_text(encoding="utf-8"), encoding="utf-8")
+        git(["add", "-f", "--", str(home)], self.repo)
+        git(["commit", "-qm", "the trunk tracks it too"], self.repo)
+        home.unlink()
+
+        migrate._carry_this_worktrees_tasks_home(elsewhere)
+
+        self.assertTrue(home.is_file(), "the card was never carried home")
+        self.assertEqual("", git(["diff", "--cached", "--name-only"], self.repo))
 
     def test_a_card_the_founder_never_committed_stages_nothing(self):
         """Decision 0008: where the ledger is not in their history, this adds it to no

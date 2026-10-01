@@ -676,22 +676,22 @@ def _tracked(path: Path, tree: Path | None = None) -> bool:
     return code == 0 and bool(out)
 
 
-def follow_across_trees(source: Path, target: Path) -> bool:
-    """Take a tracked ledger file out of both indexes when it changes CHECKOUT.
+def follow_across_trees(source: Path) -> bool:
+    """Take a tracked ledger file out of the index of the tree it LEFT, when it changes checkout.
 
-    Two worktrees of one clone have two indexes, so a move between them touches two: the
-    deletion belongs to the tree the file left, and is staged there rather than left as
-    the bare `D` fifty stranded files taught this repository to read as lost work (#208).
-    The tree it arrived in — the main checkout — no longer gets an addition: that was the
-    ledger coming back into git (0018). Its index loses the path too if it held one.
+    The deletion belongs to the tree the file left — the one the carry runs in — and is
+    staged there rather than left as the bare `D` fifty stranded files taught this
+    repository to read as lost work (#208). The tree it arrived in, the main checkout, is
+    another tree, and its index is not this one's to write: the sessions that start there
+    take the ledger out of it themselves (`migrate.keep_the_ledger_out`), and a deletion
+    staged from here was one more line in a commit nobody standing there made (#254).
 
     Same rule as `follow_in_git`: only for a file git ALREADY tracks. Where the founder
-    does not commit the ledger, neither index is touched and nothing is granted (0008).
+    does not commit the ledger, no index is touched and nothing is granted (0008).
     """
     if not _tracked(source):
         return False
-    arrived = _untrack([target], target.parent)
-    return _untrack([source], source.parent) and arrived
+    return _untrack([source], source.parent)
 
 
 def stranded_deletions(root: Path, base: Path) -> list[Path]:
@@ -713,7 +713,8 @@ def _move(task: Task, state: str, owner: str = "", branch: str = "",
     """A state transition is a rename in the working tree, and never an addition in git.
 
     Where git still tracks the card, `follow_in_git` takes it out of the index rather than
-    staging the rename, because the ledger is out of git (decision 0018). The move itself is
+    staging the rename, because the ledger is out of git (decision 0018) — the index of the
+    tree the command runs in, never a sibling's (#254). The move itself is
     plain filesystem work, so that a repository where git is unavailable or the file
     untracked still transitions.
 
@@ -757,7 +758,10 @@ def _move(task: Task, state: str, owner: str = "", branch: str = "",
     store.atomic_write(target, updated, mode=0o644)
     if target != task.path:
         task.path.unlink(missing_ok=True)
-        follow_in_git(task.path, target)
+        # This tree's index only: staged in a sibling's, the move rode its next commit into
+        # a pull request about something else (#254). There it moves on disk alone.
+        if not task.worktree:
+            follow_in_git(task.path, target)
     moved = _load(target, state)
     if moved:
         moved.worktree = task.worktree

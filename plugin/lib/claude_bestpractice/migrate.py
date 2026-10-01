@@ -632,7 +632,7 @@ def _carry_one(path: Path, target: Path) -> int:
         path.replace(target)
     except OSError:
         return 0
-    plan.follow_across_trees(path, target)
+    plan.follow_across_trees(path)
     return 1
 
 
@@ -772,10 +772,17 @@ def _restage_ledger_moves_git_lost(ctx: GitContext) -> str:
     It restaged them as renames until the ledger left git (decision 0018). `follow_in_git`
     now stages the deletion and adds nothing, so a stranded `D` becomes the staged one the
     repair after this leaves everywhere else.
+
+    Only from the main checkout itself. Run from a worktree it staged into the main
+    checkout's index, which is not that tree's to write (#254) — and a session that starts
+    in the main checkout takes every tracked card out of it anyway, these included
+    (`keep_the_ledger_out`).
     """
     from . import plan
 
     root = _ledger_root(ctx)
+    if root.resolve() != ctx.worktree_root.resolve():
+        return ""
     base = root.joinpath(store.TIER_A_DIRNAME, plan.PLAN_DIR)
     gone_paths = plan.stranded_deletions(root, base)
     if not gone_paths:
@@ -809,7 +816,7 @@ def _reconcile_scattered_ledger_copies(ctx: GitContext) -> str:
 
 
 def _untrack_the_ledger(ctx: GitContext) -> str:
-    """Take the task ledger out of git's index, in every tree of this clone.
+    """Take the task ledger out of git's index, in the tree this session starts in.
 
     Every session in the clone writes cards into the one checkout they all share, and while
     those files were TRACKED that shared tree carried 67 modified cards belonging to a dozen
@@ -830,11 +837,16 @@ def _untrack_the_ledger(ctx: GitContext) -> str:
     A tree whose index git would not write — an `index.lock` held by an editor or a sibling
     for a moment — leaves the step unfinished rather than done: counted as done, it was
     never run again, and that clone kept its ledger in git for good.
+
+    This tree's index and no other. It ran over every tree of the clone, which wrote a
+    staged deletion into the index of sessions that were live in theirs, and their next
+    commit carried it into a pull request about something else (#254). Each of those trees
+    has it taken out by the session that starts there (`keep_the_ledger_out`).
     """
     from . import worktree
 
     worktree.hide(ctx)
-    counts = [untrack_ledger(ctx, tree) for tree in _trees_of(ctx)]
+    counts = [untrack_ledger(ctx, ctx.worktree_root)]
     said = _untracked_note(sum(count for count in counts if count > 0))
     if any(count < 0 for count in counts):
         # A tree whose index git refused — its lock held by an IDE or a sibling mid-commit —
@@ -855,6 +867,76 @@ def keep_the_ledger_out(ctx: GitContext) -> str:
     the first.
     """
     return _untracked_note(max(0, untrack_ledger(ctx, ctx.worktree_root)))
+
+
+def _unstage_what_another_tree_staged(ctx: GitContext) -> str:
+    """Card deletions a transition run from ANOTHER tree staged in a worktree's index.
+
+    Until 1.73.0 a transition moved every copy of a card and took each one out of the index
+    of the tree it sat in. Seventy-three cards closed from the main checkout left fourteen
+    staged deletions in every worktree of the clone, a live sibling's with an open pull
+    request among them, and that session's next `git commit` carried them into a pull
+    request about something else (#254).
+
+    Only the shape a transition leaves: the card is gone from the path git still records and
+    sits under the same file name in another state of that tree's ledger. A deletion with no
+    card left on disk may be one somebody meant, and one whose file is still there is the
+    tree's own untracking (decision 0018); both stay as they are. Not the main checkout,
+    whose sessions take every card out of its index at start and whose staged deletion is
+    what keeps the cards on its disk through the pull that untracks them; not the caller's
+    own tree, whose deletions are its own.
+
+    Index only: `git reset` puts back the entry HEAD has and touches no file. The card stays
+    where the transition put it, and a commit in that tree no longer carries anything of it.
+    This writes other trees' indexes once, to take back what this plugin wrote there.
+    """
+    from . import worktree
+
+    try:
+        skipped = {worktree.main_checkout(ctx).resolve(), ctx.worktree_root.resolve()}
+    except Exception:  # noqa: BLE001 - an unlistable clone has no sibling to repair
+        return ""
+    unstaged = 0
+    refused = False
+    for tree in _trees_of(ctx):
+        if tree.resolve() in skipped:
+            continue
+        moved = _staged_by_a_move(tree)
+        if not moved:
+            continue
+        done = subprocess.run(
+            ["git", "reset", "-q", "--", *moved],
+            cwd=str(tree), capture_output=True,
+            encoding="utf-8", errors="surrogateescape", timeout=120,
+        )
+        if done.returncode == 0:
+            unstaged += len(moved)
+        else:
+            refused = True
+    said = (f"{unstaged} card deletion(s) another tree had staged in a worktree's index "
+            "taken back out of it" if unstaged else "")
+    if refused:
+        # An index held by a sibling mid-commit for a moment is not done: recorded as done,
+        # its deletions would ride into that sibling's next commit after all.
+        raise Unfinished(said)
+    return said
+
+
+def _staged_by_a_move(tree: Path) -> list[str]:
+    """Card paths staged as deleted in `tree` whose card a transition moved inside it."""
+    from . import plan
+
+    listed = _git_out(tree, ["-c", "core.quotePath=false", "diff", "--cached", "--name-only",
+                             "-z", "--diff-filter=D", "--", _LEDGER_PATH])
+    base = tree.joinpath(store.TIER_A_DIRNAME, plan.PLAN_DIR)
+    moved: list[str] = []
+    for rel in (name for name in listed.split("\0") if name.strip()):
+        gone = PurePosixPath(rel)
+        if (tree / rel).exists():
+            continue
+        if any((base / state / gone.name).is_file() for state in plan.STATES):
+            moved.append(rel)
+    return moved
 
 
 def untrack_ledger(ctx: GitContext, tree: Path) -> int:
@@ -1626,6 +1708,7 @@ _REPAIRS = {
         (1, _close_no_pull_request_items_a_pull_request_answered),
     "0036-forget-a-number-another-tree-opened": (1, _forget_a_number_another_tree_opened),
     "0037-begin-the-log-of-the-founders-words": (1, _begin_the_log_of_the_founders_words),
+    "0038-unstage-what-another-tree-staged": (1, _unstage_what_another_tree_staged),
 }
 
 

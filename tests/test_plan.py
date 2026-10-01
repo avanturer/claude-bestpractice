@@ -1285,17 +1285,8 @@ class TestDeliveryClosesTheCard(PlanCase):
         self.assertEqual([mine.id], [t.id for t in plan.held_by(self.ctx(), "s1")])
 
 
-class TestATransitionIsARenameInGitToo(PlanCase):
-    """A tracked task file that moves must not leave git guessing (#208), and must not be
-    carried back into it (decision 0018).
-
-    The founder's global ignore covers `.claude/claude-bestpractice/`, so a state the
-    repository never committed — `paused` — is invisible to git. Moving a committed task
-    into it deleted a tracked file and created a hidden one: fifty unstaged `D` rows in a
-    working checkout, each one indistinguishable from lost work. The answer was to stage a
-    rename with `add -f`, and that is how the ledger came back into git after it was taken
-    out: the path the card left is taken out of the index now, and nothing is added.
-    """
+class TrackedLedgerCase(PlanCase):
+    """A repository whose trunk committed its cards before the ledger left git."""
 
     def ignore_the_ledger(self) -> None:
         """The founder's rule, in the one place a fixture may write it."""
@@ -1308,6 +1299,19 @@ class TestATransitionIsARenameInGitToo(PlanCase):
         self.commit("ledger")
         self.ignore_the_ledger()
         return task
+
+
+class TestATransitionIsARenameInGitToo(TrackedLedgerCase):
+    """A tracked task file that moves must not leave git guessing (#208), and must not be
+    carried back into it (decision 0018).
+
+    The founder's global ignore covers `.claude/claude-bestpractice/`, so a state the
+    repository never committed — `paused` — is invisible to git. Moving a committed task
+    into it deleted a tracked file and created a hidden one: fifty unstaged `D` rows in a
+    working checkout, each one indistinguishable from lost work. The answer was to stage a
+    rename with `add -f`, and that is how the ledger came back into git after it was taken
+    out: the path the card left is taken out of the index now, and nothing is added.
+    """
 
     def test_pausing_a_committed_task_leaves_no_phantom_deletion(self):
         task = self.committed_task()
@@ -1347,6 +1351,59 @@ class TestATransitionIsARenameInGitToo(PlanCase):
         plan.pause(self.ctx(), task.id, "waiting on the API key")
 
         self.assertEqual("", git(["diff", "--cached", "--name-only"], self.repo))
+
+
+class TestATransitionWritesOnlyItsOwnIndex(TrackedLedgerCase):
+    """Issue #254. A transition moved every copy of a card and staged each move in the index
+    of the tree the copy sat in: seventy-three cards closed from the main checkout left
+    fourteen staged deletions in every worktree, a live sibling's with an open pull request
+    among them, and that session's next `git commit` carried them into its pull request.
+    """
+
+    def a_neighbour(self):
+        task = self.committed_task()
+        return task, self.add_worktree("neighbour")
+
+    def staged_in(self, tree) -> str:
+        return git(["diff", "--cached", "--name-only"], tree)
+
+    def test_done_from_one_tree_stages_nothing_in_another(self):
+        task, tree = self.a_neighbour()
+        plan.complete(self.ctx(), task.id)
+
+        self.assertEqual("", self.staged_in(tree))
+        self.assertEqual([plan.DONE], sorted({c.state for c in plan.copies(self.ctx(), task.id)}),
+                         "the neighbour's copy stopped moving with the card")
+
+    def test_pause_from_one_tree_stages_nothing_in_another(self):
+        task, tree = self.a_neighbour()
+        plan.pause(self.ctx(), task.id, "waiting on the API key")
+        self.assertEqual("", self.staged_in(tree))
+
+    def test_the_neighbours_next_commit_carries_none_of_it(self):
+        task, tree = self.a_neighbour()
+        plan.complete(self.ctx(), task.id)
+        (tree / "src").mkdir(exist_ok=True)
+        (tree / "src" / "work.py").write_text("x = 1\n", encoding="utf-8")
+        git(["add", "src/work.py"], tree)
+        git(["commit", "-qm", "the neighbour's own work"], tree)
+
+        self.assertEqual("src/work.py", git(["show", "--name-only", "--format=", "HEAD"], tree))
+
+    def test_the_tree_it_runs_in_takes_its_own_copy_out(self):
+        """The half that stays: the index of the tree the command runs in (decision 0018)."""
+        task, _tree = self.a_neighbour()
+        plan.complete(self.ctx(), task.id)
+        self.assertEqual(task.path.relative_to(self.repo).as_posix(), self.staged_in(self.repo))
+
+    def test_a_transition_from_the_neighbour_leaves_the_main_checkout_alone(self):
+        task, tree = self.a_neighbour()
+        done = subprocess.run([sys.executable, str(BIN / "claude-bp-plan"), "done", task.id],
+                              capture_output=True, text=True, cwd=str(tree), timeout=120)
+        self.assertEqual(0, done.returncode, done.stderr)
+
+        self.assertEqual("", self.staged_in(self.repo))
+        self.assertNotEqual("", self.staged_in(tree), "the tree it ran in kept its copy in git")
 
 
 class TestATransitionReachesEveryCopy(RepoCase):

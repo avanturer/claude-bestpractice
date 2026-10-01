@@ -75,6 +75,16 @@ class TestTheLedgerIsKeptOutOfGit(RepoCase):
         self.assertEqual("", migrate._untrack_the_ledger(self.ctx()))
         self.assertEqual("", git(["diff", "--cached", "--name-only"], self.repo))
 
+    def test_a_sibling_trees_index_is_left_to_that_tree(self):
+        """#254: run over every tree of the clone, the upgrade wrote a staged deletion into
+        the index of sessions live in theirs, and their next commit carried it."""
+        self.a_committed_card()
+        sibling = self.add_worktree("sibling")
+        migrate._untrack_the_ledger(self.ctx())
+
+        self.assertEqual("", git(["diff", "--cached", "--name-only"], sibling))
+        self.assertNotEqual("", git(["ls-files", LEDGER], sibling))
+
     def test_the_founders_own_files_are_not_touched(self):
         """One key, one directory. Everything else in their repository stays theirs."""
         self.write("src/app.py", "x = 1\n")
@@ -111,6 +121,95 @@ class TestTheLedgerIsKeptOutOfGit(RepoCase):
         })
         migrate.repair(self.ctx())
         self.assertEqual([], self.tracked())
+
+
+class TestWhatAnotherTreeStagedIsTakenBack(RepoCase):
+    """Issue #254, the state 1.72.0 left behind: a transition run from one tree staged the
+    deletion of a moved card in the index of every other tree that held a copy, and those
+    trees' next commits carried it into pull requests about something else."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.task = plan.add(self.ctx(), "a card the trunk tracks", paths=["src/app.py"],
+                             done_when="stated")
+        self.commit("commit the ledger, as this repository's founder had")
+        worktree.hide(self.ctx())
+        self.tree = self.add_worktree("neighbour")
+        self.rel = self.task.path.relative_to(self.repo).as_posix()
+        self.moved = self.tree / self.rel.replace(f"/{plan.NEXT}/", f"/{plan.DONE}/")
+
+    def staged_by_a_transition_elsewhere(self, tree=None) -> None:
+        """What `done` run from another tree did to this one's copy and index in 1.72.0."""
+        tree = tree or self.tree
+        moved = tree / self.rel.replace(f"/{plan.NEXT}/", f"/{plan.DONE}/")
+        moved.parent.mkdir(parents=True, exist_ok=True)
+        (tree / self.rel).replace(moved)
+        git(["rm", "-q", "--cached", "--", self.rel], tree)
+
+    def staged(self, tree) -> str:
+        return git(["diff", "--cached", "--name-only"], tree)
+
+    def test_the_deletion_leaves_the_neighbours_index(self):
+        self.staged_by_a_transition_elsewhere()
+        said = migrate._unstage_what_another_tree_staged(self.ctx())
+
+        self.assertEqual("", self.staged(self.tree))
+        self.assertIn("1 card deletion(s)", said)
+
+    def test_the_card_stays_where_the_transition_put_it(self):
+        self.staged_by_a_transition_elsewhere()
+        migrate._unstage_what_another_tree_staged(self.ctx())
+
+        self.assertTrue(self.moved.is_file(), "the moved card left the disk")
+        self.assertFalse((self.tree / self.rel).exists(), "a stale copy came back")
+
+    def test_a_deletion_with_no_card_left_on_disk_stays(self):
+        """It may be one somebody meant."""
+        self.staged_by_a_transition_elsewhere()
+        self.moved.unlink()
+        migrate._unstage_what_another_tree_staged(self.ctx())
+        self.assertEqual(self.rel, self.staged(self.tree))
+
+    def test_the_trees_own_untracking_stays(self):
+        """The file is still there: that is the tree taking its own copy out (0018), even
+        beside a copy of the same card in another state."""
+        git(["rm", "-q", "--cached", "--", self.rel], self.tree)
+        self.moved.parent.mkdir(parents=True, exist_ok=True)
+        self.moved.write_text((self.tree / self.rel).read_text(encoding="utf-8"), encoding="utf-8")
+        migrate._unstage_what_another_tree_staged(self.ctx())
+        self.assertEqual(self.rel, self.staged(self.tree))
+
+    def test_the_main_checkout_keeps_its_staged_deletion(self):
+        """Its staged deletion is what keeps the cards on its disk through the pull that
+        untracks them, and its own sessions stage it again at every start anyway."""
+        from claude_bestpractice.gitctx import resolve
+
+        self.staged_by_a_transition_elsewhere(self.repo)
+        migrate._unstage_what_another_tree_staged(resolve(self.tree))
+        self.assertEqual(self.rel, self.staged(self.repo))
+
+    def test_the_callers_own_tree_is_its_own(self):
+        from claude_bestpractice.gitctx import resolve
+
+        self.staged_by_a_transition_elsewhere()
+        migrate._unstage_what_another_tree_staged(resolve(self.tree))
+        self.assertEqual(self.rel, self.staged(self.tree))
+
+    def test_an_index_git_would_not_write_is_tried_again(self):
+        self.staged_by_a_transition_elsewhere()
+        lock = self.tree / git(["rev-parse", "--git-dir"], self.tree) / "index.lock"
+        lock.write_text("", encoding="utf-8")
+        with self.assertRaises(migrate.Unfinished):
+            migrate._unstage_what_another_tree_staged(self.ctx())
+
+        lock.unlink()
+        migrate._unstage_what_another_tree_staged(self.ctx())
+        self.assertEqual("", self.staged(self.tree))
+
+    def test_the_upgrade_runs_it(self):
+        self.staged_by_a_transition_elsewhere()
+        migrate.repair(self.ctx())
+        self.assertEqual("", self.staged(self.tree))
 
 
 class TestEverySessionStartKeepsItOut(RepoCase):
