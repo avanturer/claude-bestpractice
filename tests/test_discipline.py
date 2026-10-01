@@ -106,6 +106,22 @@ class TestOnlyThisSessionsWork(RepoCase):
         found = discipline.introduced(self.ctx(), ["new.py"], self.ctx().head)
         self.assertEqual(len(found), 1)
 
+    def test_a_stub_that_came_with_a_fast_forward_is_upstreams(self):
+        """#255: measured against the baseline alone, a stub merged upstream and pulled into
+        a file this session then edited was "introduced in this turn"."""
+        from claude_bestpractice import discipline
+
+        self.write("legacy.py", "def old():\n    return 1\n")
+        self.commit()
+        baseline = self.ctx().head
+        self.write("legacy.py", "def old():\n    return 1\n\n\ndef theirs():\n    pass\n")
+        self.commit("somebody else's, merged and pulled")
+        floor = self.ctx().head
+
+        self.write("legacy.py", "def old():\n    return 2\n\n\ndef theirs():\n    pass\n")
+        self.assertEqual([], discipline.introduced(self.ctx(), ["legacy.py"], baseline, floor))
+        self.assertEqual(1, len(discipline.introduced(self.ctx(), ["legacy.py"], baseline)))
+
 
 class TestTheGateRefuses(RepoCase):
     def stop(self):
