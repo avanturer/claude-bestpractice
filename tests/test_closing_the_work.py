@@ -246,6 +246,84 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class TestALedgerCopyIsNotWork(TreeCase):
+    """Issue #254's other half. A transition run from another tree now moves this tree's
+    copy of a card on disk and never in its index, so a tree cut from a trunk that still
+    tracks the cards shows that copy as a tracked file deleted — and `git worktree remove`
+    refuses the tree over a card the main checkout holds. Every such tree would have stood
+    forever, which is #220 coming back through the fix for #254."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        worktree.hide(self.ctx())
+        self.tracked = plan.add(self.ctx(), "a card the trunk tracks", paths=["src/app.py"],
+                                done_when="stated")
+        git(["add", "-f", "--", str(self.tracked.path)], self.repo)
+        self.commit("commit the ledger, as this repository's founder had")
+        self.trunk()
+
+    def a_finished_tree_holding_a_copy(self) -> tuple:
+        tree, branch = self.a_tree()
+        self.work_in(tree)
+        self.merge(branch)
+        self.a_closed_card()
+        plan.complete(self.ctx(), self.tracked.id)
+        self.assertEqual("", git(["diff", "--cached", "--name-only"], tree),
+                         "precondition: nothing of the move reached the tree's index")
+        self.assertIn(self.tracked.path.name, git(["ls-files", "--deleted"], tree),
+                      "precondition: the copy moved on the tree's disk")
+        return tree, branch
+
+    def test_the_finished_tree_is_still_removed(self):
+        tree, branch = self.a_finished_tree_holding_a_copy()
+        self.assertEqual((str(tree), branch), worktree.release_mine(self.ctx(), self.session)[:2])
+        self.assertFalse(tree.is_dir())
+
+    def test_a_real_file_beside_the_copy_still_keeps_it(self):
+        tree, _branch = self.a_finished_tree_holding_a_copy()
+        (tree / "notes.txt").write_text("half an idea\n", encoding="utf-8")
+
+        self.assertIsNone(worktree.release_mine(self.ctx(), self.session))
+        self.assertTrue((tree / "notes.txt").is_file(), "it deleted somebody's file")
+
+    def test_a_tree_that_stays_keeps_its_index_as_it_was(self):
+        """Nothing is set aside for a removal git is going to refuse anyway."""
+        tree, branch = self.a_finished_tree_holding_a_copy()
+        (tree / "notes.txt").write_text("half an idea\n", encoding="utf-8")
+        worktree.release_now(self.ctx(), self.session)
+
+        copy = self.tracked.path.relative_to(self.repo).as_posix()
+        self.assertTrue(git(["ls-files", "-v", "--", copy], tree).startswith("H "),
+                        "the copy was marked in the index of a tree that stayed")
+
+    def test_a_card_this_tree_added_to_git_keeps_it(self):
+        """Only what the trunk handed the tree is a copy. A card added here is not, even one
+        the main checkout holds under the same name."""
+        tree, branch = self.a_tree()
+        self.work_in(tree)
+        self.merge(branch)
+        self.a_closed_card()
+        held = next(card for card in plan.load_all(self.ctx(), plan.DONE)
+                    if card.id != self.tracked.id)
+        added = tree / held.path.relative_to(self.repo)
+        added.parent.mkdir(parents=True, exist_ok=True)
+        added.write_text("added here\n", encoding="utf-8")
+        git(["add", "-f", "--", str(added)], tree)
+
+        self.assertIsNone(worktree.release_mine(self.ctx(), self.session))
+        self.assertTrue(tree.is_dir())
+
+    def test_a_card_the_main_checkout_does_not_hold_keeps_it(self):
+        """Only a COPY is set aside. A tracked card nowhere in the ledger is not one."""
+        tree, _branch = self.a_finished_tree_holding_a_copy()
+        for state in plan.STATES:
+            for card in (plan.plan_dir(self.ctx(), state)).glob(f"{self.tracked.id}-*.md"):
+                card.unlink()
+
+        self.assertIsNone(worktree.release_mine(self.ctx(), self.session))
+        self.assertTrue(tree.is_dir())
+
+
 class TestTheBoardNamesWhatNobodyWillComeBackTo(TreeCase):
     """The other half of #220's first two sections: what the plugin may NOT remove, it says
     out loud — a tree another tool made, a branch that never became a pull request, a pull
