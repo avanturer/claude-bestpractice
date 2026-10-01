@@ -860,14 +860,11 @@ def _verify_by_reading(ctx: GitContext, globs: list[str], changed: list[str]) ->
     )
 
 
-def _skipped(ctx: GitContext) -> list[str]:
-    """Paths the founder told the gate not to run, so the count expects their absence."""
-    from . import config
-
-    try:
-        return list(config.load(ctx).witness_exclude)
-    except (AttributeError, TypeError, ValueError):
-        return []
+def _declared(ctx: GitContext, root: Path) -> int:
+    """The tests the tree under `root` declares, less what the gate's own run leaves out —
+    what the founder excluded and the test files git ignores (`witness.left_out`) — so the
+    count expects their absence."""
+    return testcount.count_tree(root, witness.left_out(ctx, root))
 
 
 def _verify_by_running(
@@ -974,7 +971,7 @@ def _judge_witnessed(ctx: GitContext, seen: witness.Witnessed, suite=None, tree:
     # fewest questions: it checked that a run passed and never that the run was this
     # tree's suite. One line of `addopts = -k "not price"` therefore walked straight
     # through the path built to stop exactly that.
-    declared = testcount.count_tree(root, _skipped(ctx))
+    declared = _declared(ctx, root)
     if declared and not testcount.plausible(declared, seen.executed):
         return Verdict(
             True,
@@ -1120,7 +1117,7 @@ def _judge_by_counts(
     # filter was passed, a directory was skipped, and calling that a witnessed green is how
     # a red suite goes quiet. The threshold is loose because runners expand parametrised
     # cases, so `executed` routinely exceeds `declared`; only a large shortfall means anything.
-    declared = testcount.count_tree(_root_of(ctx, suite), _skipped(ctx))
+    declared = _declared(ctx, _root_of(ctx, suite))
     if declared and not testcount.plausible(declared, executed):
         # BOTH sides, because the two numbers have different authors. `declared` is read
         # off the test files by this gate; `executed` is a regex over the gated party's
@@ -1908,7 +1905,7 @@ def record_red(ctx: GitContext, command: list[str], tail: str, suite=None, tree:
     # executed more tests than the wider one did.
     if executed is None:
         executed = max(_executed_from_output(tail), 0)
-    declared = testcount.count_tree(_root_of(ctx, suite), _skipped(ctx))
+    declared = _declared(ctx, _root_of(ctx, suite))
     mine = _this_suites_record(previous, suite)
     counted = int(mine.get("executed") or 0) if _counted_by_this_gate(mine) else 0
     store.write_json(
