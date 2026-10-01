@@ -1561,6 +1561,95 @@ class TestEvidenceGate(GateCase):
         self.assertEqual(rec.tool_signatures.get("_consecutive_blocks"), 0)
 
 
+class TestATreeLetGoStaysLetGo(GateCase):
+    """Issue #255. The ceiling let a tree go after four blocks, and the next message began
+    four more over the same tree — each a full run of the suite, 5,887 tests at a time, with
+    nothing in the tree changed since."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.runs = self.tmp / "runs.txt"
+        # Counted outside the repository, so counting cannot change the tree being judged.
+        self.configure(test_command=[
+            sys.executable, "-c", f"open({str(self.runs)!r}, 'a').write('x'); raise SystemExit(1)",
+        ])
+        self.start()
+        self.write("feature.py", "x = 1\n")
+
+    def let_go(self) -> None:
+        from claude_bestpractice import evidence
+
+        codes = [self.stop().returncode for _ in range(evidence.MAX_CONSECUTIVE_BLOCKS + 1)]
+        self.assertEqual(0, codes[-1], "precondition: the ceiling let the tree go")
+
+    def ran(self) -> int:
+        return len(self.runs.read_text(encoding="utf-8")) if self.runs.exists() else 0
+
+    def test_the_next_message_over_the_same_tree_ends_without_a_block(self):
+        self.let_go()
+        proc = self.stop()
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn("nothing in this tree has changed", proc.stderr)
+
+    def test_let_go_inside_one_turn_is_remembered_too(self):
+        """The ceiling as it fires in the live loop: one message, every Stop after the first
+        flagged `stop_hook_active`."""
+        from claude_bestpractice import evidence
+
+        for attempt in range(evidence.MAX_CONSECUTIVE_BLOCKS + 1):
+            last = self.stop(stop_hook_active=attempt > 0)
+        self.assertEqual(0, last.returncode, "precondition: the ceiling let the tree go")
+        self.assertEqual(0, self.stop().returncode)
+
+    def test_the_suite_is_not_run_again(self):
+        self.let_go()
+        before = self.ran()
+        self.assertGreater(before, 0, "precondition: the suite ran while it was refused")
+        self.stop()
+        self.assertEqual(before, self.ran())
+
+    def test_it_is_not_filed_twice(self):
+        from claude_bestpractice import store
+
+        self.let_go()
+        self.stop()
+        self.assertEqual(1, len(store.read_jsonl(store.tier_b(self.ctx(), "unverified.jsonl"))))
+
+    def test_a_changed_tree_is_judged_from_the_start(self):
+        from claude_bestpractice import evidence
+
+        self.let_go()
+        self.write("feature.py", "x = 2\n")
+        proc = self.stop()
+        self.assertEqual(2, proc.returncode)
+        self.assertIn(f"[1/{evidence.MAX_CONSECUTIVE_BLOCKS}]", proc.stderr)
+
+    def test_something_new_to_refuse_is_still_refused(self):
+        from claude_bestpractice import inbox
+
+        self.let_go()
+        inbox.ask(self.ctx(), sid(self.repo, "s1"), "are you still in schemas.py?", sender="them")
+        proc = self.stop()
+        self.assertEqual(2, proc.returncode)
+        self.assertIn("unanswered", proc.stderr)
+
+    def test_a_different_test_command_is_judged_again(self):
+        self.let_go()
+        self.configure(test_command=[sys.executable, "-c", "raise SystemExit(1)"])
+        self.assertEqual(2, self.stop().returncode)
+
+    def test_an_hour_later_it_is_judged_again(self):
+        """Decision 0013's bound: a failure outside the tree must be able to clear."""
+        from claude_bestpractice import sessions
+
+        self.let_go()
+        record = sessions.get(self.ctx(), sid(self.repo, "s1"))
+        signatures = dict(record.tool_signatures)
+        signatures["_let_go_at"] = signatures["_let_go_at"] - 3601
+        sessions.touch(self.ctx(), record.session_id, tool_signatures=signatures)
+        self.assertEqual(2, self.stop().returncode)
+
+
 class TestCheckpoint(GateCase):
     def test_writes_a_checkpoint_with_provenance(self):
         self.start()

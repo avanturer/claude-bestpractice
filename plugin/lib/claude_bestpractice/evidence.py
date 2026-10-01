@@ -2052,6 +2052,35 @@ def tree_hash(ctx: GitContext) -> str:
         return ""
 
 
+def content_hash(ctx: GitContext, floor: str, changed: list[str]) -> str:
+    """The tree a Stop judged, as one hash: where its diff is measured from, and what every
+    file in that diff holds now. "" when it cannot be read, which never matches anything.
+
+    Every other file is what `floor` has, by the definition of the diff, so the two say
+    everything the suite could see — committed or not, which `tree_hash` cannot: a tree
+    carrying uncommitted work hashes to nothing there, and that is every turn of a session
+    in the middle of its work.
+    """
+    from .gitctx import _run
+
+    present = [rel for rel in changed if (ctx.worktree_root / rel).is_file()]
+    proc = subprocess.run(
+        ["git", "hash-object", "--stdin-paths"], input="\n".join(present),
+        cwd=str(ctx.worktree_root), capture_output=True,
+        encoding="utf-8", errors="surrogateescape", timeout=60,
+    ) if present else None
+    if proc is not None and proc.returncode != 0:
+        return ""
+    blobs = dict(zip(present, proc.stdout.split() if proc else []))
+    if not floor or len(blobs) != len(present):
+        return ""
+    head = _run(["rev-parse", "--verify", "--quiet", f"{floor}^{{commit}}"], ctx.worktree_root,
+                check=False)
+    listing = "\n".join(f"{rel}\t{blobs.get(rel, '-')}" for rel in sorted(changed))
+    return hashlib.sha256(f"{head}\n{listing}".encode("utf-8", "surrogateescape")).hexdigest() \
+        if head else ""
+
+
 def _is_work(status: str, path: str) -> bool:
     """Whether one `git status` entry is content the committed tree does not hold."""
     from . import config
