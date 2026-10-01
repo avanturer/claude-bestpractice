@@ -81,7 +81,7 @@ Three live chats: `ListAgents` said `fuddy-8b`, and everything this plugin print
 
 ### How it was checked
 
-Each report is a set of tests that fail on 1.72.0 and pass here, 87 new tests in all.
+Each report is a set of tests that fail on 1.72.0 and pass here, 88 new tests in all.
 
 ## v1.72.0
 

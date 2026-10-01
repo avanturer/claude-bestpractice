@@ -1638,6 +1638,23 @@ class TestATreeLetGoStaysLetGo(GateCase):
         self.configure(test_command=[sys.executable, "-c", "raise SystemExit(1)"])
         self.assertEqual(2, self.stop().returncode)
 
+    def test_a_finish_the_suite_could_not_witness_is_remembered_too(self):
+        """Let go without the ceiling: a suite that exits 0 without saying what it ran is
+        UNVERIFIED at the first Stop, and the next one over the same tree runs nothing."""
+        self.configure(test_command=[
+            sys.executable, "-c", f"open({str(self.runs)!r}, 'a').write('x')",
+        ])
+        self.claim_a_task("s1", "feature.py")
+        first = self.stop()
+        self.assertEqual(0, first.returncode, first.stderr)
+        self.assertIn("finishing UNVERIFIED", first.stderr)
+        before = self.ran()
+
+        again = self.stop()
+        self.assertEqual(0, again.returncode, again.stderr)
+        self.assertIn("nothing in this tree has changed", again.stderr)
+        self.assertEqual(before, self.ran())
+
     def test_an_hour_later_it_is_judged_again(self):
         """Decision 0013's bound: a failure outside the tree must be able to clear."""
         from claude_bestpractice import sessions
