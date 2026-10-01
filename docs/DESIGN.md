@@ -361,9 +361,15 @@ plus an optional refresh interval whose documented use case is *"when background
 state while the main session is idle."* That is the (repo, worktree, session) key plus a liveness
 heartbeat plus a human-facing display, for **zero context tokens**.
 
-Build the dashboard on `claude agents --json` (returns pid, cwd, kind, startedAt, sessionId, name,
-state ∈ working|blocked|done|failed|stopped, waitingFor). **Never parse transcript `.jsonl`** — the
-format is documented as internal and changing between versions.
+Name sessions from `claude agents --json`, the supported way to read session state from outside a
+session: on 2.1.286 it returns `pid`, `cwd`, `kind`, `startedAt`, `sessionId`, `name` and `status` for
+every live session, in about a third of a second. It is asked once per session start and per
+`claude-bp status`, never per tool call, and `name` is what `SendMessage` takes — so every place the
+plugin names a session puts that name beside the id (#253). A record whose process the answer lists
+under another id is a conversation left by `/clear` or `/resume`, and is reaped. **Never parse the
+transcript `.jsonl` for what anything else carries** — the format is internal and changes between
+versions. The one exception is the founder's word, which nothing else records (decision 0010), and
+the reader there takes a line it cannot read as nothing said.
 
 ## 9. Anti-bloat — limits, not intentions
 

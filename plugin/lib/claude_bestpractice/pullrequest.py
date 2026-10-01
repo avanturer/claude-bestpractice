@@ -1102,9 +1102,21 @@ def line(ctx: GitContext) -> str:
         state = "blocked" if row.get("blockers") else "ready to merge"
         if row.get("draft"):
             state = "draft"
-        shown.append(f"{named} on {row.get('branch', '')} ({state})")
+        shown.append(f"{named} on {row.get('branch', '')} ({state}){opened_by(ctx, row)}")
     more = f" (+{len(live) - 3} more)" if len(live) > 3 else ""
     return "OPEN PULL REQUESTS: " + "; ".join(shown) + more
+
+
+def opened_by(ctx: GitContext, row: dict) -> str:
+    """`, by <the chat that opened it>` for a pull-request row, or "" where nothing says.
+
+    The board listed a pull request and not who had it, so asking about one meant asking
+    every live chat (#253). By name where the chat is known, by id where only that is.
+    """
+    from . import sessions
+
+    opener = str(row.get("session_id") or "")
+    return f", by {sessions.called(ctx, opener)}" if opener else ""
 
 
 def opens_a_pull_request(tool_name: str, command: str) -> bool:

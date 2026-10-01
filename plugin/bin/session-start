@@ -507,10 +507,15 @@ def main() -> None:
     ctx = hookio.repo(event.cwd or os.getcwd())
 
     store.ensure_dir(store.tier_b(ctx))
-    reaped = sessions.reap(ctx, exclude=event.session_id)
+    # What Claude Code says is running, asked once: the name each session answers to, and
+    # which records belong to a conversation its process has since left (#253).
+    running = sessions.running()
+    reaped = sessions.reap(ctx, exclude=event.session_id, live=running)
 
     me = build_record(ctx, event)
     sessions.register(ctx, me)
+    sessions.learn_names(ctx, running)
+    me = sessions.get(ctx, me.session_id) or me
 
     # Before the board is built, so what it says is in flight is true when it is read.
     # A process restart leaves the session id alone and the pid dead, so a sibling's
@@ -519,7 +524,7 @@ def main() -> None:
     # already on the board (#131). Only what is still free is taken back.
     returned = plan.reclaim(ctx, me.session_id)
 
-    others = sessions.live_sessions(ctx, exclude=me.session_id)
+    others = sessions.live_sessions(ctx, exclude=me.session_id, live=running)
 
     # The plugin creates worktrees unasked, so clearing away the ones nobody is in is the
     # plugin's job too — nine accumulated on one repository in a single run, each an empty

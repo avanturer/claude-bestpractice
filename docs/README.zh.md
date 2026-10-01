@@ -4,8 +4,8 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-1.72.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-2308%20passing-2ea44f)](#已验证)
+[![version](https://img.shields.io/badge/version-1.73.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-2397%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#运行要求)
@@ -122,13 +122,17 @@ mtime 整体重置。当断言的对象被改写时，该断言会被抑制并�
 
 ```
 OTHER LIVE SESSIONS (2) — do not edit files they hold:
-  - a3f81c22 on feat/export  [ledger-export]  active 40s ago
+  - ledger-export-3c (a3f81c22) on feat/export [ledger-export] active 40s ago
       touched: src/billing.js, src/csv.js
       holds: src/billing.js
-      task: Add CSV export to src/billing.js
+      task: 0006 Add CSV export to src/billing.js
+  - invoice-rounding-7d (b7d29e01) on fix/rounding [invoice-rounding] active 2m ago
+      touched: src/invoice.js
+      task: 0004 Fix rounding in invoice totals
 
 IN FLIGHT:
-  - 0004 Fix rounding in invoice totals  [b7d29e01]
+  - 0004 Fix rounding in invoice totals [active in invoice-rounding-7d (b7d29e01), seen 2m ago]
+  - 0006 Add CSV export to src/billing.js [active in ledger-export-3c (a3f81c22), seen 40s ago]
 NEXT:
   - 0005 Add client search
 (12 done)
@@ -138,6 +142,11 @@ health: 3 live session(s), 1 reaped, 4 open item(s), 1 stale (suppressed)
 
 去编辑另一个存活会话正持有的文件会被**拒绝**，并指名持有者。崩溃会话的租约和认领由
 回收器释放——就在持有它们的那个 worktree 里——而不是永远挂在"进行中"。
+
+每个会话都以 `SendMessage` 寻址它的名字出现：在看板上、在 `claude-bp status` 里、作为
+卡片的持有者、在拉取请求那一行，以及每一条把一个会话指向另一个会话的拒绝里。名字在每次
+会话启动时向 Claude Code 询问一次（`claude agents --json`），绝不在每次工具调用时询问；
+`/clear` 或 `/resume` 在仍在运行的 CLI 里留下的旧对话会被回收，而不是被列为存活。
 
 安静下来的会话**不会**被当成死亡。按沉默回收意味着：创始人思考十五分钟回来，会话里
 所有 gate 都已经不再强制任何东西。现在判定死亡需要进程真的消失，或其 pid 被复用。
@@ -330,7 +339,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 ## 已验证
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2308 个测试 · 36 项 doctor 检查 · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2397 个测试 · 36 项 doctor 检查 · budget
 ```
 
 doctor 通过**真的去做那件坏事**来证明 gate 有效，而不是把配置读回来对一遍——

@@ -156,12 +156,17 @@ def scan(root: Path, relpaths: list[str]) -> list[Finding]:
     return out
 
 
-def introduced(ctx: GitContext, relpaths: list[str], baseline: str) -> list[Finding]:
+def introduced(ctx: GitContext, relpaths: list[str], baseline: str,
+               floor: str = "") -> list[Finding]:
     """Only what THIS session added. Pre-existing placeholders are not its fault.
 
     Subtracted by (path, kind, text) rather than by line number, because inserting a
     line above an old stub would otherwise report it as new every turn — and a check
     that cries wolf is one the agent stops reading.
+
+    `floor` is where the diff is measured from once upstream has moved past the baseline
+    (`gitctx.authored_floor`): a stub that arrived with a fast-forward is upstream's, and
+    was reported as "introduced in this turn" in tests the session had never opened (#255).
     """
     now = scan(ctx.worktree_root, relpaths)
     if not baseline:
@@ -177,15 +182,15 @@ def introduced(ctx: GitContext, relpaths: list[str], baseline: str) -> list[Find
     # finding to explain. Nothing else changes; `git show` on a path absent from the
     # baseline returned empty and cost a process.
     interesting = {f.path for f in now}
+    references = [baseline] + ([floor] if floor and floor != baseline else [])
     before = set()
     for rel in relpaths:
         if rel not in interesting:
             continue
-        source = _baseline_source(ctx, baseline, rel)
-        if source:
+        for reference in references:
             before |= {
                 (f.path, f.kind, f.text)
-                for f in _scan_text(source, rel)
+                for f in _scan_text(_baseline_source(ctx, reference, rel), rel)
             }
     return [f for f in now if (f.path, f.kind, f.text) not in before]
 

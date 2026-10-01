@@ -4,8 +4,8 @@
 
 **Память, координация и принуждение для разработки продукта в нескольких параллельных сессиях Claude Code.**
 
-[![version](https://img.shields.io/badge/version-1.72.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-2308%20passing-2ea44f)](#проверено)
+[![version](https://img.shields.io/badge/version-1.73.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-2397%20passing-2ea44f)](#проверено)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#проверено)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#требования)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#требования)
@@ -131,13 +131,17 @@ claude-bp status    # всё сразу
 
 ```
 OTHER LIVE SESSIONS (2) — do not edit files they hold:
-  - a3f81c22 on feat/export  [ledger-export]  active 40s ago
+  - ledger-export-3c (a3f81c22) on feat/export [ledger-export] active 40s ago
       touched: src/billing.js, src/csv.js
       holds: src/billing.js
-      task: Add CSV export to src/billing.js
+      task: 0006 Add CSV export to src/billing.js
+  - invoice-rounding-7d (b7d29e01) on fix/rounding [invoice-rounding] active 2m ago
+      touched: src/invoice.js
+      task: 0004 Fix rounding in invoice totals
 
 IN FLIGHT:
-  - 0004 Fix rounding in invoice totals  [b7d29e01]
+  - 0004 Fix rounding in invoice totals [active in invoice-rounding-7d (b7d29e01), seen 2m ago]
+  - 0006 Add CSV export to src/billing.js [active in ledger-export-3c (a3f81c22), seen 40s ago]
 NEXT:
   - 0005 Add client search
 (12 done)
@@ -148,6 +152,12 @@ health: 3 live session(s), 1 reaped, 4 open item(s), 1 stale (suppressed)
 Правка файла, который держит другая живая сессия, **запрещается** с указанием владельца.
 Лизы и заявки упавшей сессии освобождаются ридером — в том worktree, где они лежат, — а
 не висят в работе вечно.
+
+Каждая сессия названа так, как к ней обращается `SendMessage`: на доске, в
+`claude-bp status`, как владелец карточки, в строке пулл-реквеста и в каждом отказе, который
+отправляет одну сессию к другой. Имя спрашивается у Claude Code (`claude agents --json`)
+один раз на старте сессии, а не на каждом вызове инструмента. Разговор, который `/clear` или
+`/resume` оставили в работающем CLI, убирается ридером, а не числится живым.
 
 Замолчавшая сессия **не** считается мёртвой. Реапинг по молчанию означал, что основатель,
 подумавший пятнадцать минут, возвращался в сессию, где все гейты перестали что-либо
@@ -398,7 +408,7 @@ claude-bp-ci off        # снять pre-push хук
 ## Проверено
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2308 тестов · 36 проверок доктора · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2397 тестов · 36 проверок доктора · budget
 ```
 
 Доктор доказывает гейты **попыткой сделать плохое**, а не чтением конфигурации обратно —

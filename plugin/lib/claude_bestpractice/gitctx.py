@@ -1,7 +1,8 @@
 """Git context resolution.
 
 The harness is the source of truth for worktree existence; this module only reads.
-Never shells out to anything that mutates the repository.
+Never shells out to anything that mutates the repository: the one thing it writes is a
+session's baseline, as loose objects no ref points at — never a ref, the index or a file.
 
 Worktrees share a git common directory. That property is what makes cross-session
 coordination possible at all, so `common_dir` is the anchor for every shared path.
@@ -11,6 +12,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -159,7 +161,7 @@ def resolve(cwd: Path | str | None = None) -> GitContext:
     )
 
 
-def _authored_floor(ctx: GitContext, since: str) -> str:
+def authored_floor(ctx: GitContext, since: str) -> str:
     """`since`, raised past work that arrived from upstream rather than from this session.
 
     A fast-forward is not an edit. `git pull --ff-only` moved a local trunk past eighteen
@@ -186,16 +188,59 @@ def _authored_floor(ctx: GitContext, since: str) -> str:
     # for a session working on main, so the diff came back empty and every gate that reads
     # it stopped firing. Caught by the escalation-ceiling tests, which went to zero blocks.
     base = _run(["merge-base", f"origin/{trunk}", "HEAD"], ctx.worktree_root, check=False).strip()
-    if not base or base == since:
+    start = start_of(ctx, since)
+    if not base or base in (since, start):
         return since
     # An ancestor test, not a comparison: the floor rises only when upstream has genuinely
     # moved past where this session started. A session that branched long before it began
     # still measures from its own baseline rather than from the branch point.
+    #
+    # Asked of the commit HEAD stood on, never of the baseline itself. A tree dirty at
+    # session start has a `git stash create` commit for a baseline, which is on no branch
+    # and so the ancestor of nothing: the floor never rose, and a main checkout that only
+    # fast-forwarded over ninety-four merged commits had every file in them read as this
+    # session's work — stubs "introduced in this turn" included (#255).
     ahead = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", since, base],
+        ["git", "merge-base", "--is-ancestor", start, base],
         cwd=str(ctx.worktree_root), capture_output=True, timeout=30,
     )
     return base if ahead.returncode == 0 else since
+
+
+def start_of(ctx: GitContext, since: str) -> str:
+    """The commit HEAD stood on when the baseline `since` was taken.
+
+    `since` itself, unless it is the commit `git stash create` makes of a dirty tree: that
+    one's first parent is HEAD at the time and its second the index, filed as `index on …`.
+    Read off the commit, so every baseline already recorded is understood as it is.
+    """
+    parents = _run(["rev-list", "--parents", "-n", "1", since], ctx.worktree_root,
+                   check=False).split()
+    if len(parents) < 3:
+        return since
+    index = _run(["log", "-1", "--format=%s", parents[2]], ctx.worktree_root, check=False)
+    return parents[1] if index.startswith("index on ") else since
+
+
+def _carried_from_the_start(ctx: GitContext, since: str, floor: str) -> set[str]:
+    """Paths the tree was already carrying at session start, untouched by it since.
+
+    Only asked once the floor has risen past a dirty start. The baseline then no longer
+    subtracts what was dirty when the session began, so it is subtracted here: a path whose
+    content is still what the baseline recorded, and that upstream left alone, is the tree
+    the session was handed — in a main checkout shared by several sessions, someone else's.
+    """
+    start = since if floor == since else start_of(ctx, since)
+    if start == since:
+        return set()
+    quiet = ["-c", "core.quotePath=false"]
+    code_mine, mine = _status(quiet + ["diff", "--name-only", since], ctx.worktree_root)
+    code_theirs, theirs = _status(quiet + ["diff", "--name-only", start, floor],
+                                  ctx.worktree_root)
+    if code_mine or code_theirs:
+        return set()
+    dirty_then = _status(quiet + ["diff", "--name-only", start, since], ctx.worktree_root)[1]
+    return set(dirty_then.splitlines()) - set(mine.splitlines()) - set(theirs.splitlines())
 
 
 def changed_files(ctx: GitContext, since: str | None = None) -> list[str]:
@@ -213,7 +258,7 @@ def changed_files(ctx: GitContext, since: str | None = None) -> list[str]:
     out: set[str] = set()
     measured = False
     if since:
-        floor = _authored_floor(ctx, since)
+        floor = authored_floor(ctx, since)
         # The baseline against the WORKING TREE, in one diff: `floor..HEAD` answered for
         # the commits and the uncommitted scans below answered for everything else in the
         # tree — including files that were already dirty when the session started and have
@@ -225,6 +270,7 @@ def changed_files(ctx: GitContext, since: str | None = None) -> list[str]:
         code, diff = _status(quiet + ["diff", "--name-only", floor], ctx.worktree_root)
         measured = code == 0
         out.update(p for p in diff.splitlines() if p)
+        out -= _carried_from_the_start(ctx, since, floor)
 
     # The baseline is a `git stash create` commit, and git prunes unreachable objects: a
     # baseline it can no longer resolve answers nothing at all. Falling through to the
@@ -253,10 +299,11 @@ def changed_files(ctx: GitContext, since: str | None = None) -> list[str]:
 def _untracked_at(ctx: GitContext, since: str) -> dict[str, str]:
     """The untracked files the baseline captured, as path -> blob sha.
 
-    `stash create -u` files them in a third parent rather than in the commit's own tree,
-    so they are asked for by name. Empty for a baseline taken before this was recorded, or
-    for a clean tree — in which case every untracked file reads as new, which is the
-    behaviour this had always.
+    `stash_baseline` files them in a third parent rather than in the commit's own tree, as
+    `git stash push -u` does, so they are asked for by name. Empty for a baseline taken
+    before 1.73.0 — which never held one, whatever it was asked for — or for a tree with
+    none, in which case every untracked file reads as new, which is the behaviour this had
+    always.
 
     By CONTENT and not by name: a file that was there and has since been rewritten is this
     session's change, and dropping it by name would hide it.
@@ -277,21 +324,109 @@ def stash_baseline(ctx: GitContext) -> str:
     `git stash create` builds the commit objects and prints the SHA but does not
     modify the index, the working tree, or the stash reflog. Returns HEAD when the
     tree is clean (stash create prints nothing in that case).
+
+    The untracked files the tree was already carrying go in a third parent, built here.
+    `stash create` takes a message and nothing else, so the `-u` this used to pass was
+    filed as that message and no baseline ever held an untracked file: every one a shared
+    main checkout was carrying read as this session's work, another session's scratch as
+    scope drift against a session that never opened it (#213, #255).
     """
-    # `-u`, so the baseline also records the untracked files the tree was already carrying.
-    # Without it every untracked file present at session start read as this session's work
-    # for the rest of the session, which in a shared main checkout is another session's
-    # scratch — and it arrived as scope drift against the session that never touched it.
-    sha = _run(["stash", "create", "-u"], ctx.worktree_root, check=False)
-    if not sha:
-        sha = _run(["stash", "create"], ctx.worktree_root, check=False)
+    sha = _run(["stash", "create"], ctx.worktree_root, check=False)
     # VALIDATE, never trust the stdout. Mid-merge and mid-rebase `stash create` refuses
     # and prints its refusal, which was then stored as the session's baseline — a
     # baseline that resolves to nothing makes every diff empty, so the Stop gate saw no
     # changes and allowed every finish for the rest of that session. Silently.
-    if sha and _run(["rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}"], ctx.worktree_root, check=False):
-        return sha
-    return ctx.head
+    if not (sha and _run(["rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}"],
+                         ctx.worktree_root, check=False)):
+        sha = ""
+    return _with_untracked(ctx, sha) or sha or ctx.head
+
+
+# How much untracked content a baseline hashes. A session start that reads a gigabyte of
+# somebody's data directory is a session start that times out, and past these the files
+# are simply not recorded — which is how every baseline behaved before they ever were.
+MAX_UNTRACKED_FILES = 2_000
+MAX_UNTRACKED_BYTES = 64 * 1024 * 1024
+
+# Who the baseline's commits say made them. They are objects no ref points at and nobody
+# reads, and a machine with no identity configured must not lose its baseline over that.
+_BASELINE_IDENTITY = {
+    "GIT_AUTHOR_NAME": "claude-bestpractice", "GIT_AUTHOR_EMAIL": "baseline@claude-bestpractice",
+    "GIT_COMMITTER_NAME": "claude-bestpractice",
+    "GIT_COMMITTER_EMAIL": "baseline@claude-bestpractice",
+}
+
+
+def _with_untracked(ctx: GitContext, stash: str) -> str:
+    """`stash` — or HEAD, when nothing tracked has changed — with the untracked files as a
+    third parent, the shape `git stash push -u` gives them. "" when there are none, when
+    there are more than a baseline records, or when git would not build it.
+
+    Hashed through a throwaway index, so the tree's own index is never touched. Plumbing
+    throughout: `git commit` would honour `commit.gpgSign`, and a session start waiting on
+    a passphrase prompt is a session that never starts.
+    """
+    names = _untracked_names(ctx.worktree_root) if ctx.head else []
+    if not names:
+        return ""
+    root, label = ctx.worktree_root, f"{ctx.branch}: {ctx.head[:7]}"
+    env = {**os.environ, **_BASELINE_IDENTITY}
+    untracked = _object(root, ["commit-tree", _tree_of(root, names, env),
+                               "-m", f"untracked files on {label}"], env)
+    index = f"{stash}^2" if stash else _object(
+        root, ["commit-tree", f"{ctx.head}^{{tree}}", "-p", ctx.head, "-m", f"index on {label}"], env)
+    if not (untracked and index):
+        return ""
+    message = (_run(["log", "-1", "--format=%B", stash], root, check=False) if stash else "") \
+        or f"WIP on {label}"
+    return _object(root, ["commit-tree", f"{stash or ctx.head}^{{tree}}", "-p", ctx.head,
+                          "-p", index, "-p", untracked, "-m", message], env)
+
+
+def _untracked_names(root: Path) -> list[str]:
+    """The untracked files a baseline records, or none when there are more than it records."""
+    listed = _run(["ls-files", "-z", "--others", "--exclude-standard"], root, check=False)
+    # A trailing slash is a nested repository, which git lists and will not add.
+    names = [name for name in listed.split("\0") if name and not name.endswith("/")]
+    if len(names) > MAX_UNTRACKED_FILES or _bytes_in(root, names) > MAX_UNTRACKED_BYTES:
+        return []
+    return names
+
+
+def _tree_of(root: Path, names: list[str], env: dict[str, str]) -> str:
+    """A tree object holding exactly these files as they are on disk, built in an index of
+    its own. "" when git would not build it — which `commit-tree` then refuses."""
+    with tempfile.TemporaryDirectory() as scratch:
+        own = {**env, "GIT_INDEX_FILE": str(Path(scratch) / "index")}
+        added = subprocess.run(
+            ["git", "update-index", "--add", "-z", "--stdin"], input="\0".join(names),
+            cwd=str(root), env=own, capture_output=True,
+            encoding="utf-8", errors="surrogateescape", timeout=60,
+        )
+        return _object(root, ["write-tree"], own) if added.returncode == 0 else ""
+
+
+def _bytes_in(root: Path, names: list[str]) -> int:
+    """The size on disk of these paths under `root`, counting what cannot be read as nothing."""
+    total = 0
+    for name in names:
+        try:
+            total += (root / name).lstat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def _object(root: Path, args: list[str], env: dict[str, str]) -> str:
+    """The object name one object-writing git command prints, or "" when it failed."""
+    try:
+        proc = subprocess.run(
+            ["git", *args], cwd=str(root), env=env, capture_output=True,
+            encoding="utf-8", errors="surrogateescape", timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
 def resolve_for_cli(cwd: Path | str | None = None) -> GitContext:

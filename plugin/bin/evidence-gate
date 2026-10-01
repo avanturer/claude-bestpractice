@@ -16,6 +16,7 @@ Fails CLOSED: a crash blocks. If verification cannot run, "done" has not been ea
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os
 import shlex
 import sys
@@ -24,8 +25,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import attempts, board, config, delivery, discipline, drafts, evidence, founder, hookio, inbox, options, pullrequest, redact, sessions, stage, store, suites, witness, worktree  # noqa: E402
-from claude_bestpractice.gitctx import changed_files, resolve  # noqa: E402
+from claude_bestpractice import __version__, attempts, board, config, delivery, discipline, drafts, evidence, founder, hookio, inbox, options, pullrequest, redact, sessions, stage, store, suites, witness, worktree  # noqa: E402
+from claude_bestpractice.gitctx import authored_floor, changed_files, resolve  # noqa: E402
 
 BLOCK_COUNTER = "_consecutive_blocks"
 FAILURE_MARKER = "unverified.jsonl"
@@ -34,6 +35,21 @@ BLOCK_REASON = "_last_block_reason"
 BLOCK_PATHS = "_last_block_paths"
 BLOCK_AT = "_last_block_at"
 BLOCK_TREE = "_last_block_tree"
+BLOCK_SEEN = "_last_block_seen"
+BLOCK_SAID = "_last_block_said"
+
+# The tree this gate last finished UNVERIFIED, and what it said about it before any suite
+# ran. The ceiling let it go after four blocks, and the next message began four more over
+# the same tree, each a full run of the suite — 5,887 tests at a time, on every message,
+# with nothing in the tree changed since (#255).
+LET_GO_TREE = "_let_go_tree"
+LET_GO_SAID = "_let_go_said"
+LET_GO_AT = "_let_go_at"
+
+# How long a tree that was let go stays let go. The bound decision 0013 puts on a remembered
+# failure, for the same reason: a suite failing on something outside the tree — a database,
+# a package — has to be able to come back green without anything in the tree changing.
+LET_GO_SECONDS = 3600.0
 
 # A gap this long between blocks is not the thing the ceiling exists to stop. The ceiling
 # catches a session looping — block, retry, block, retry, minutes apart — and lets it
@@ -58,7 +74,8 @@ def _blocks(rec: sessions.SessionRecord) -> int:
 
 
 def _bump_blocks(ctx, rec: sessions.SessionRecord, value: int,
-                 reason: str = "", changed: list | None = None, tree: str = "") -> None:
+                 reason: str = "", changed: list | None = None, tree: str = "",
+                 seen: str = "", said: str = "") -> None:
     """Count the block, and remember WHAT it was about.
 
     The ceiling branch had nothing to hand forward, so it wrote the literal string
@@ -74,7 +91,48 @@ def _bump_blocks(ctx, rec: sessions.SessionRecord, value: int,
         payload[BLOCK_REASON] = _as_remembered(reason)
         payload[BLOCK_PATHS] = list(changed or [])[:64]
         payload[BLOCK_TREE] = tree
+        payload[BLOCK_SEEN] = seen
+        payload[BLOCK_SAID] = _as_remembered(said)
     sessions.touch(ctx, rec.session_id, tool_signatures=payload)
+
+
+def _let_go(ctx, rec: sessions.SessionRecord, seen: str, said: str) -> None:
+    """Remember the tree this gate has just finished UNVERIFIED, and what it said about it
+    besides the suite. Kept on `rec` as well as on disk, so a `_bump_blocks` later in the
+    same Stop writes it back rather than over it."""
+    if not seen:
+        return
+    rec.tool_signatures[LET_GO_TREE] = seen
+    rec.tool_signatures[LET_GO_SAID] = _as_remembered(said)
+    rec.tool_signatures[LET_GO_AT] = time.time()
+    sessions.touch(ctx, rec.session_id, tool_signatures=dict(rec.tool_signatures))
+
+
+def _let_go_already(rec: sessions.SessionRecord, seen: str) -> bool:
+    """Is this the tree the gate last finished UNVERIFIED, byte for byte?
+
+    Then the suite has nothing new to say about it: it ran over this content and the finish
+    is already on record as unverified, attempt and board item included. Running it again
+    can only cost the founder the minutes it takes. A tree with anything changed in it is
+    another tree, and is judged from the start.
+    """
+    at = rec.tool_signatures.get(LET_GO_AT)
+    return (bool(seen) and rec.tool_signatures.get(LET_GO_TREE) == seen
+            and isinstance(at, (int, float)) and time.time() - at < LET_GO_SECONDS)
+
+
+def _seen(ctx, floor: str, changed: list[str]) -> str:
+    """The tree this Stop judged, and what judged it: its content (`evidence.content_hash`),
+    this version of the gate, and the config it read. The same tree under a different gate
+    or a different `test_command` can get a different answer, and is judged afresh."""
+    content = evidence.content_hash(ctx, floor, changed)
+    if not content:
+        return ""
+    try:
+        settings = config.config_path(ctx).read_bytes()
+    except OSError:
+        settings = b""
+    return hashlib.sha256(f"{content}\n{__version__}\n".encode() + settings).hexdigest()
 
 
 def _as_remembered(reason: str) -> str:
@@ -169,13 +227,22 @@ def _closed_the_tree(ctx, rec: sessions.SessionRecord, cfg) -> str:
     return said
 
 
-def _allow(ctx, rec: sessions.SessionRecord, cfg) -> None:
+def _allow(ctx, rec: sessions.SessionRecord, cfg, opener: str) -> None:
     """Let the turn end: reset the escalation counter and hand back the leases.
 
     Releasing matters on every allow path, including the nothing-changed one. A
     session that claimed a file and then finished without touching it would otherwise
     hold that path against its siblings for the full TTL.
+
+    And take back the card the founder's message opened, if the turn never planned it.
+    A finish this gate accepts without that card is a turn that needed none: a question, a
+    remark, work not begun — and the card stayed in `next` for weeks, nobody's to close
+    (#256). `opener` is the harness id the message came from. A turn that wrote something
+    is refused before it gets here, with this card named as the one to plan.
     """
+    from claude_bestpractice import plan
+
+    plan.withdraw_unplanned(ctx, opener)
     _bump_blocks(ctx, rec, 0)
     sessions.release_all(ctx, rec.session_id)
     hookio.emit_silent(_closed_the_tree(ctx, rec, cfg))
@@ -403,10 +470,10 @@ def _card_commands(ctx, event, paths: list[str]) -> str:
     opened = plan.opened_for(ctx, str(event.raw.get("session_id") or ""))
     if opened is not None:
         return (
-            f"  Your founder's instruction is already on it as {opened.id} — plan it "
-            "and claim it:\n"
-            f'  claude-bp-plan update {opened.id} --paths {named} '
-            '--done-when "<what has to become true>"\n'
+            f"  Your founder's instruction is already on it as {opened.id} — name it, plan "
+            "it and claim it:\n"
+            f'  claude-bp-plan update {opened.id} --title "<what the work is>" '
+            f'--paths {named} --done-when "<what has to become true>"\n'
             f"  then: claude-bp-plan claim {opened.id}"
         )
     return (
@@ -524,6 +591,7 @@ def main() -> None:
     # provisioned for this session and git still has registered.
     ctx = worktree.working_context(hookio.repo(event.cwd or os.getcwd()), event.session_id)
     cfg = config.load(ctx)
+    opener = str(event.raw.get("session_id") or "")
 
     # Off means off, and it has to mean it in the gate that refuses a FINISH as much as in
     # the one that refuses a write — a plugin switched off that still holds the turn open
@@ -569,13 +637,15 @@ def main() -> None:
         # the live loop — so it carries the same detail the other one always did.
         ceiling_reason, ceiling_paths = _remembered_block(rec)
         _give_up(ctx, rec, ceiling_reason, ceiling_paths)
+        _let_go(ctx, rec, str(rec.tool_signatures.get(BLOCK_SEEN) or ""),
+                str(rec.tool_signatures.get(BLOCK_SAID) or ""))
         # What it just let go of does not come back. The founder still sees it — as an
         # unverified attempt and an open item — which is where a decision this gate could
         # not make belongs.
         evidence.settle_drift(ctx, rec.session_id, ceiling_paths)
         _bump_blocks(ctx, rec, 0)
         sys.stderr.write("claude-bestpractice: finishing UNVERIFIED — continuation ceiling reached.\n")
-        _allow(ctx, rec, cfg)
+        _allow(ctx, rec, cfg, opener)
     # A pull request this session opened and then walked away from. Checked before the
     # change list, because the whole failure is a turn that ends with nothing left to do
     # and a PR still sitting there — `changed` is empty in exactly that turn.
@@ -673,13 +743,17 @@ def main() -> None:
         # say. Asked here as well as at the verified exit, and nowhere earlier — the
         # checks between the two are about the tree and answer first.
         _refuse_to_end_on_an_unanswered_block(ctx, rec, pending_refusal)
-        _allow(ctx, rec, cfg)
+        _allow(ctx, rec, cfg, opener)
 
     # Which suites answer for these files. In a single-project repository this is the one
     # command the repository has always had; in a repository with two projects it is only
     # the suites the diff reaches, so a mobile-only branch is no longer refused over a
     # backend test it never touched (#206).
     must_pass = suites.for_changes(ctx, cfg, changed)
+    # Where the diff is measured from, once: the stubs are judged against it too, and the
+    # tree this Stop saw is named by it.
+    floor = authored_floor(ctx, rec.baseline_commit) if rec.baseline_commit else ""
+    seen = _seen(ctx, floor, changed)
 
     problems: list[str] = []
 
@@ -719,7 +793,8 @@ def main() -> None:
         first = asked[0]
         problems.append(
             f"{len(asked)} question(s) from another session are unanswered. "
-            f"{str(first.get('from') or 'a sibling')[:8]} asks: {first.get('text')}\n"
+            f"{sessions.called(ctx, str(first.get('from') or '')) or 'a sibling'} asks: "
+            f"{first.get('text')}\n"
             f"  Answer it: claude-bp answer {str(first.get('key') or '')[:12]} \"<your answer>\"\n"
             "  They are blocked on the reply, and a session that never answers is one "
             "the others learn to work around."
@@ -784,16 +859,24 @@ def main() -> None:
             problems.append(uncompared)
 
     if cfg.block_unfinished_work:
-        unfinished = discipline.introduced(ctx, changed, rec.baseline_commit)
+        unfinished = discipline.introduced(ctx, changed, rec.baseline_commit, floor)
         if unfinished:
             problems.append(discipline.render(unfinished))
+
+    # What a block would say before any suite has run. Over a tree already let go, the suite
+    # is not run again; and where this is ALSO what the gate said when it let it go, there is
+    # nothing new to refuse either.
+    said = "\n\n".join(problems)
+    let_go = _let_go_already(rec, seen)
+    if let_go and _as_remembered(said) == rec.tool_signatures.get(LET_GO_SAID):
+        problems = []
 
     unverified_reason = ""
     # ONE clock for every suite this Stop runs, the clean re-run included. Each tier used to
     # bring its own, so their sum could pass the hook's budget, where the harness kills the
     # gate and nobody is told anything.
     deadline = time.time() + witness.timeout_for()
-    if gates["evidence_gate"]:
+    if gates["evidence_gate"] and not let_go:
         try:
             verdict = evidence.verify(ctx, cfg.artifact_globs, changed, cfg.test_command, must_pass,
                                       deadline)
@@ -859,15 +942,20 @@ def main() -> None:
 
     if not problems:
         _refuse_to_end_on_an_unanswered_block(ctx, rec, pending_refusal)
-        if unverified_reason:
+        if let_go:
+            sys.stderr.write(
+                "claude-bestpractice: finishing UNVERIFIED — nothing in this tree has changed "
+                "since it was let go, so nothing was run again.\n")
+        elif unverified_reason:
             _give_up(ctx, rec, unverified_reason, changed)
+            _let_go(ctx, rec, seen, said)
             sys.stderr.write(f"claude-bestpractice: finishing UNVERIFIED — {unverified_reason}\n")
         else:
             # Last, and only where the work stands up. A turn being refused has something
             # more urgent to say, and one finishing UNVERIFIED is already on the record as
             # a failure — asking either of them for notes is the gate talking over itself.
             _ask_for_the_notes_once(ctx, rec, cfg, changed)
-        _allow(ctx, rec, cfg)
+        _allow(ctx, rec, cfg, opener)
 
     reason = "\n\n".join(problems)
     tree = evidence.tree_hash(ctx)
@@ -875,6 +963,7 @@ def main() -> None:
 
     if blocked >= evidence.MAX_CONSECUTIVE_BLOCKS or repeated:
         _give_up(ctx, rec, reason, changed)
+        _let_go(ctx, rec, seen, said)
         _bump_blocks(ctx, rec, 0)
         sys.stderr.write(
             "claude-bestpractice: finishing UNVERIFIED — the same refusal over a tree "
@@ -885,7 +974,8 @@ def main() -> None:
         )
         hookio.emit_silent()
 
-    _bump_blocks(ctx, rec, blocked + 1, reason=reason, changed=changed, tree=tree)
+    _bump_blocks(ctx, rec, blocked + 1, reason=reason, changed=changed, tree=tree,
+                 seen=seen, said=said)
     hookio.block(
         f"claude-bestpractice [{blocked + 1}/{evidence.MAX_CONSECUTIVE_BLOCKS}] — not done yet.\n\n"
         f"{reason}\n\n"

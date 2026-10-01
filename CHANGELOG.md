@@ -1,5 +1,92 @@
 # Changelog
 
+## v1.73.0
+
+This release fixes the reports filed from one board on 1.72.0. A card's move no longer reaches
+another tree's index (#254). The Stop gate measures a session's own work past a fast-forward,
+leaves ignored test files alone, and stops re-running the suite over a tree it already let go
+(#255). A chat message opens a card only when it is work (#256). Every session is named the way
+`SendMessage` addresses it (#253).
+
+### Another tree's index is that tree's (#254)
+
+Closing seventy-three cards from the main checkout left fourteen staged deletions of ledger
+files in every worktree, a live sibling's with an open pull request among them, and that
+session's next commit carried them into a pull request about something else.
+
+- A transition still moves every copy of a card, and now stages the move only in the tree the
+  command runs in. Repairs 0013 and 0015 stop writing other trees' indexes as well.
+- A finished tree whose only dirt is ledger copies the main checkout also holds is removed:
+  those copies are masked in its own index just before `git worktree remove`, still without
+  `--force`.
+- Repair 0038 takes back what earlier versions staged: in each worktree other than the caller's
+  and the main checkout, a deletion whose card was moved inside that tree is unstaged. Index
+  only; no file is touched. Decision 0025.
+
+A repository whose trunk still tracks the ledger keeps one staged deletion of it in the main
+checkout, which decision 0018 leaves for a commit to carry, and nobody commits there. One commit
+on the trunk with `git rm -r --cached .claude/claude-bestpractice/plan` ends that, and repair
+0032 puts back any card the next pull takes from the disk.
+
+### The Stop gate judges the session's own work, once (#255)
+
+After `git merge --ff-only origin/main` over 94 merged commits, in a main checkout that was dirty
+when the session started, every Stop called the stubs in those commits "introduced in this
+turn", ran `pytest` from the root into a test file in an ignored directory, called red a suite
+whose 5,887 tests passed, and began "[1/4]" again on every message.
+
+- A dirty start's baseline is a `git stash create` commit, which is on no branch, so the check
+  that raises the diff's floor past work pulled from upstream never passed. It now asks the
+  commit HEAD stood on when the baseline was taken, and what was already dirty then and has not
+  been touched since stays out. Stubs are measured from the same floor.
+- `git stash create -u` never captured an untracked file: `stash create` takes a message, and
+  `-u` became that message. The baseline now records untracked files the way
+  `git stash push -u` does, bounded so a start never hashes a data directory.
+- A test file git ignores and does not track is in no commit and no clean checkout. The gate's
+  pytest run passes `--ignore` for it, and the count the run is judged against leaves it out. A
+  test force-added past the rule still runs.
+- A tree the gate let go UNVERIFIED stays let go while nothing in it changes: the suite is not
+  run again, and only something new is refused. After an hour it is judged afresh. Decision
+  0026.
+
+### A message opens a card only when it is work (#256)
+
+Twenty-one of one board's 156 open cards were «статус», «тебя можно закрывать?», «не в тот чат
+отправил» and an idle notice, and a real task had been renamed «тебя можно закрывать?».
+
+- A card opens only for a statement of work that is not a question. A session's first message
+  still records what the session was told, and opens nothing.
+- Claude Code's plain-text cross-session idle notice is the harness, not the founder.
+- Once a session has written anything on its card, a later message no longer renames it, and
+  `claude-bp-plan update --title` lets the session name it.
+- A finish the Stop gate allows withdraws the card its message opened when nothing was planned
+  on it: moved to `withdrawn/`, never deleted, and its number never handed out again.
+- Repair 0039 withdraws such cards already on the board whose session is gone; a live
+  session's goes at its own next Stop. Decision 0027.
+
+### Every session by the name `SendMessage` takes (#253)
+
+Three live chats: `ListAgents` said `fuddy-8b`, and everything this plugin printed said
+`80672d34`. The same board listed two sessions nobody was in, one chat in a tree it had only
+`cd`-ed into to read, and a `task:` line that was the founder's last message.
+
+- A session start and `claude-bp status` ask `claude agents --json` once. The board, status,
+  card owners and notes, pull-request rows, and every refusal or note that sends one session
+  to another show `name (id)`. Never on a tool call; five seconds at most, and no answer only
+  means no names.
+- A record whose process Claude Code lists under another id is a conversation `/clear` or
+  `/resume` left in a running CLI, and is reaped.
+- A session is listed once, where it last wrote or else where it started, and its `task:` is
+  the card it holds. Decision 0028.
+
+### How it was checked
+
+Each report is a set of tests, 89 new in all. The 72 that pin a reported failure fail on 1.72.0
+and pass here. The other 17 hold what has to stay, such as a card the session planned or a test
+force-added past `.gitignore`, and pass on both. A mutation sweep took the four fixes apart 33
+ways, and every one is caught; the two the first sweep missed (a let-go not remembered on an
+UNVERIFIED finish, and repair 0039 not registered) each have a test now.
+
 ## v1.72.0
 
 The founder's word is heard however it was sent: a `+merge` sent while the session was working,

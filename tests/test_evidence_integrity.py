@@ -1088,6 +1088,61 @@ class TestASuiteSlowerThanTheCeiling(RepoCase):
                       "an addopts line narrowed the run the gate drives")
 
 
+class TestAFileGitIgnoresIsNotTheSuite(RepoCase):
+    """Issue #255. pytest does not read `.gitignore`, and the gate started it at the root: it
+    collected `data/eval/test_providers.py` out of an ignored directory and called a suite
+    red whose 5,887 tests passed. A file git ignores is in no commit and no clean checkout."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.write("tests/test_ok.py", "def test_ok():\n    assert True\n")
+        self.write(".gitignore", "data/\n")
+        self.commit("a suite that passes")
+        self.write("data/eval/test_providers.py", "def test_needs_a_key():\n    assert False\n")
+
+    def verdict(self):
+        from claude_bestpractice import evidence
+
+        return evidence.verify(self.ctx(), ["junit.xml"], ["python3", "-m", "pytest", "-q"],
+                               ["tests/test_ok.py"])
+
+    def test_an_ignored_test_file_is_not_run(self):
+        verdict = self.verdict()
+        self.assertTrue(verdict.ok, verdict.reason)
+        self.assertFalse(verdict.unverified, verdict.reason)
+
+    def test_a_test_file_only_untracked_still_runs(self):
+        """New and not yet added is a session's own work, and the gate's to judge."""
+        self.write("tests/test_new.py", "def test_new():\n    assert False\n")
+        self.assertFalse(self.verdict().ok)
+
+    def test_a_tracked_test_under_an_ignored_directory_still_runs(self):
+        self.write("data/test_kept.py", "def test_kept():\n    assert False\n")
+        git(["add", "-f", "data/test_kept.py"], self.repo)
+        self.commit("forced in past the rule")
+        self.assertFalse(self.verdict().ok)
+
+    def test_a_whole_ignored_directory_is_one_exclusion(self):
+        from claude_bestpractice import witness
+
+        self.write("data/test_other.py", "def test_other():\n    assert False\n")
+        self.assertEqual(["data"], witness.ignored_tests(self.repo))
+
+    def test_a_directory_git_tracks_something_in_is_not_one_exclusion(self):
+        """It holds a file the suite may need, so only what under it is wholly ignored is."""
+        from claude_bestpractice import witness
+
+        self.write("data/schema.json", "{}\n")
+        git(["add", "-f", "data/schema.json"], self.repo)
+        self.commit("one tracked file under the ignored directory")
+        self.assertEqual(["data/eval"], witness.ignored_tests(self.repo))
+
+        self.write("data/eval/fixture.json", "{}\n")
+        git(["add", "-f", "data/eval/fixture.json"], self.repo)
+        self.commit("and one beside the ignored test")
+        self.assertEqual(["data/eval/test_providers.py"], witness.ignored_tests(self.repo))
+
+
 class TestTheProjectsOwnCommandRunsOnTheSameClock(RepoCase):
     """#158 put the witnessed run on the hook's budget and never reached the project's own
     command: `make test` of five minutes and five seconds was killed at a fixed 300, the kill

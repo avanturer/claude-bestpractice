@@ -416,11 +416,13 @@ def _within(target: Path, root: Path) -> bool:
 
 
 def foreign_refusal(target: Path, owner: Path, ctx: GitContext) -> str:
-    kind = "the main checkout" if owner == ctx.common_dir.parent.resolve() else "another session's worktree"
+    main = owner == ctx.common_dir.parent.resolve()
+    kind = "the main checkout" if main else "another session's worktree"
     return (
         f"claude-bestpractice: {target} belongs to {kind} ({owner}), not to this session's "
         f"working tree ({ctx.worktree_root}).\n"
-        "  Editing across working trees is the exact silent overwrite worktrees exist to "
+        + ("" if main else _who_is_there(ctx, owner))
+        + "  Editing across working trees is the exact silent overwrite worktrees exist to "
         "prevent — git does not notice, and neither would you.\n"
         "  Make the change in your own tree and merge it, or start a session there."
     )
@@ -509,7 +511,8 @@ def foreign_git_refusal(owner: Path, ctx: GitContext) -> str:
     return (
         f"claude-bestpractice: this git command operates on {kind} ({owner}), not on this "
         f"session's working tree ({ctx.worktree_root}).\n"
-        "  reset, checkout, switch, clean and stash discard uncommitted work and move the "
+        + ("" if main else _who_is_there(ctx, owner))
+        + "  reset, checkout, switch, clean and stash discard uncommitted work and move the "
         "HEAD another session is standing on. Nothing names a file, so nothing shows up in "
         "a diff and no lease covers it.\n"
         + (
@@ -520,6 +523,16 @@ def foreign_git_refusal(owner: Path, ctx: GitContext) -> str:
             "  Run it in your own tree, or let the session that owns that one run it."
         )
     )
+
+
+def _who_is_there(ctx: GitContext, tree: Path) -> str:
+    """The line naming who works in another session's tree, by the name `SendMessage` takes,
+    or "" where no live session is known to. The refusal said whose tree it was and not who
+    to ask about it (#253)."""
+    from . import sessions
+
+    who = sessions.who_works_in(ctx, tree)
+    return f"  {who} works there.\n" if who else ""
 
 
 def split_git(argv: list[str]) -> tuple[list[str], str, list[str]]:

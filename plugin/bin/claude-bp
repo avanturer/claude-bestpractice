@@ -38,7 +38,11 @@ def cmd_status(ctx) -> int:
     # command whose entire job is to look.
     resolved_stage, signals = stage.current(ctx, record=False)
     counts = plan.summary(ctx)
-    live = sessions.live_sessions(ctx)
+    # Asked of Claude Code once: each session by the name it answers to, once, at the tree it
+    # works in, and none whose process has moved to another conversation (#253).
+    running = sessions.running()
+    sessions.learn_names(ctx, running)
+    live = sessions.one_per_session(sessions.live_sessions(ctx, live=running))
     items = board.open_items(ctx)
     prov = provenance.summarize(items)
     layer = knowledge.load(ctx)
@@ -86,9 +90,10 @@ def cmd_status(ctx) -> int:
     if live:
         for rec in live:
             held = sessions.leases_held_by(ctx, rec.session_id)
-            print(f"  {rec.session_id[:8]}  {rec.branch:<20} {Path(rec.worktree).name}")
-            if rec.task_statement:
-                print(f"      task: {rec.task_statement[:100]}")
+            print(f"  {sessions.label(rec):<28} {rec.branch:<20} {Path(rec.worktree).name}")
+            task = board.doing(ctx, rec)
+            if task:
+                print(f"      task: {task[:100]}")
             if held:
                 print(f"      holds: {', '.join(held[:4])}")
     else:
@@ -113,12 +118,12 @@ def cmd_status(ctx) -> int:
             named = f"#{row['number']}" if row.get("number") else row.get("branch", "")
             reasons = row.get("blockers") or []
             state = f"BLOCKED — {reasons[0][:90]}" if reasons else "ready to merge"
-            print(f"  {named:<24} {state}")
+            print(f"  {named:<24} {state}{pullrequest.opened_by(ctx, row)}")
 
     heading("PLAN")
     print(f"  {counts['doing']} in flight · {counts['next']} next · {counts['done']} done")
     for task in plan.load_all(ctx, plan.DOING):
-        owner = f"[{task.owner[:8]}]" if task.owner else "[unclaimed]"
+        owner = f"[{sessions.called(ctx, task.owner)}]" if task.owner else "[unclaimed]"
         print(f"    doing  {task.id}  {task.title[:70]} {owner}")
     for task in plan.load_all(ctx, plan.NEXT)[:5]:
         print(f"    next   {task.id}  {task.title[:70]}")

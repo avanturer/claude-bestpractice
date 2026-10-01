@@ -42,6 +42,12 @@ NEXT, DOING, DONE = "next", "doing", "done"
 PAUSED = "paused"
 STATES = (NEXT, DOING, PAUSED, DONE)
 
+# Off the board and still on the disk: a card a founder's message opened that no work
+# followed (`withdraw_unplanned`, #256). Kept rather than deleted, so its number is never
+# handed to another card — a session may have been told "claim 0123" about it — and so
+# moving the file back is all it takes to undo.
+WITHDRAWN = "withdrawn"
+
 MAX_TITLE_CHARS = 120
 MAX_BODY_CHARS = 2_000
 
@@ -309,7 +315,7 @@ def next_id(ctx: GitContext) -> str:
     """
     highest = 0
     for root in sibling_worktrees(ctx) or [ctx.worktree_root]:
-        for state in STATES:
+        for state in (*STATES, WITHDRAWN):
             directory = root / store.TIER_A_DIRNAME / PLAN_DIR / state
             if not directory.is_dir():
                 continue
@@ -419,6 +425,36 @@ def opened_for(ctx: GitContext, opener: str) -> Task | None:
     return None
 
 
+def _untouched(task: Task) -> bool:
+    """Is this card exactly as a founder's message opened it — nothing planned, noted or held?"""
+    return not (task.paths or task.done_when.strip() or task.owner
+                or task.body.strip() not in ("", NO_DETAIL))
+
+
+def withdraw_unplanned(ctx: GitContext, opener: str) -> list[Task]:
+    """Take back the cards a founder's message opened for this session that no work followed.
+
+    A card opened at the message is a claim about the turn it starts, made before anything
+    is known. The turn that followed either planned it — a write demands that, a card
+    `update`d and `claim`ed — or it did not, and then the message was a question, a remark,
+    or work that has not begun: twenty-one of one board's 156 open cards were «статус»,
+    «обнови» and «не в тот чат отправил», and nobody ever closed them (#256). The session's
+    statement still says what it is for, and work that comes later is demanded a card
+    then, named by the session doing it.
+
+    `opener` is the harness id the message came from, as `open_for` files it. Moved to
+    `withdrawn/` in every tree that holds a copy, off the board and still on disk.
+    """
+    if not opener:
+        return []
+    taken: list[Task] = []
+    for task in load_all(ctx, NEXT):
+        if task.source == FROM_THE_FOUNDER and task.opened_by == opener and _untouched(task):
+            if _move_every(ctx, task.id, WITHDRAWN) is not None:
+                taken.append(task)
+    return taken
+
+
 def open_for(ctx: GitContext, statement: str, session_id: str, opener: str = "") -> Task | None:
     """Put the founder's instruction on the board the moment it arrives. None if one is.
 
@@ -459,10 +495,11 @@ def open_for(ctx: GitContext, statement: str, session_id: str, opener: str = "")
         # have. The statement itself already follows them; the card had no reason not to
         # (#170).
         #
-        # Only while UNCLAIMED. Once a session has claimed it, that session wrote a plan —
-        # a `done_when` and the paths — and overwriting its title with whatever was said
-        # next would clobber work with conversation.
-        if mine.title != said:
+        # Only while UNTOUCHED. Once a session has written anything on it — a plan, a note,
+        # a title of its own — overwriting its title with whatever was said next clobbers
+        # work with conversation: a card about a login-code budget alarm was renamed
+        # «тебя можно закрывать?», with what it was about left only in its body (#256).
+        if mine.title != said and _untouched(mine):
             amend(ctx, mine.id, title=said)
         return None
     return add(ctx, said, branch=ctx.branch, source=FROM_THE_FOUNDER, opened_by=opener)
@@ -676,22 +713,22 @@ def _tracked(path: Path, tree: Path | None = None) -> bool:
     return code == 0 and bool(out)
 
 
-def follow_across_trees(source: Path, target: Path) -> bool:
-    """Take a tracked ledger file out of both indexes when it changes CHECKOUT.
+def follow_across_trees(source: Path) -> bool:
+    """Take a tracked ledger file out of the index of the tree it LEFT, when it changes checkout.
 
-    Two worktrees of one clone have two indexes, so a move between them touches two: the
-    deletion belongs to the tree the file left, and is staged there rather than left as
-    the bare `D` fifty stranded files taught this repository to read as lost work (#208).
-    The tree it arrived in — the main checkout — no longer gets an addition: that was the
-    ledger coming back into git (0018). Its index loses the path too if it held one.
+    The deletion belongs to the tree the file left — the one the carry runs in — and is
+    staged there rather than left as the bare `D` fifty stranded files taught this
+    repository to read as lost work (#208). The tree it arrived in, the main checkout, is
+    another tree, and its index is not this one's to write: the sessions that start there
+    take the ledger out of it themselves (`migrate.keep_the_ledger_out`), and a deletion
+    staged from here was one more line in a commit nobody standing there made (#254).
 
     Same rule as `follow_in_git`: only for a file git ALREADY tracks. Where the founder
-    does not commit the ledger, neither index is touched and nothing is granted (0008).
+    does not commit the ledger, no index is touched and nothing is granted (0008).
     """
     if not _tracked(source):
         return False
-    arrived = _untrack([target], target.parent)
-    return _untrack([source], source.parent) and arrived
+    return _untrack([source], source.parent)
 
 
 def stranded_deletions(root: Path, base: Path) -> list[Path]:
@@ -713,7 +750,8 @@ def _move(task: Task, state: str, owner: str = "", branch: str = "",
     """A state transition is a rename in the working tree, and never an addition in git.
 
     Where git still tracks the card, `follow_in_git` takes it out of the index rather than
-    staging the rename, because the ledger is out of git (decision 0018). The move itself is
+    staging the rename, because the ledger is out of git (decision 0018) — the index of the
+    tree the command runs in, never a sibling's (#254). The move itself is
     plain filesystem work, so that a repository where git is unavailable or the file
     untracked still transitions.
 
@@ -757,7 +795,10 @@ def _move(task: Task, state: str, owner: str = "", branch: str = "",
     store.atomic_write(target, updated, mode=0o644)
     if target != task.path:
         task.path.unlink(missing_ok=True)
-        follow_in_git(task.path, target)
+        # This tree's index only: staged in a sibling's, the move rode its next commit into
+        # a pull request about something else (#254). There it moves on disk alone.
+        if not task.worktree:
+            follow_in_git(task.path, target)
     moved = _load(target, state)
     if moved:
         moved.worktree = task.worktree
@@ -813,15 +854,18 @@ def sweep_idle(ctx: GitContext, hours: float = IDLE_HOURS) -> list[Task]:
     is waiting on nobody. It goes back where anyone can pick it up, carrying a line saying
     what happened so the next session does not rediscover it.
     """
+    from . import sessions
+
     now = time.time()
     moved: list[Task] = []
     for task in load_all(ctx, DOING):
         idle = _stale_for(task, now, hours)
         if not idle or _still_on_it(ctx, task):
             continue
+        # By the name the chat answers to as well, so whoever reads this can ask it (#253).
         note = (f"[{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now))}] returned to the "
-                f"queue: claimed by {task.owner[:8] or 'nobody'} and untouched for "
-                f"{int(idle)}h.")
+                f"queue: claimed by {sessions.called(ctx, task.owner) if task.owner else 'nobody'}"
+                f" and untouched for {int(idle)}h.")
         task.body = f"{task.body}\n\n{note}".strip() if task.body else note
         _rewrite_body(task)
         released = _move(task, NEXT)
@@ -919,9 +963,9 @@ def activity(ctx: GitContext, task: Task) -> str:
     if holder is None:
         return f"claimed by {task.owner[:8]}, which has no record — reclaimable"
     if not sessions.is_live(ctx, holder):
-        return f"held by {task.owner[:8]}, which is gone — reclaimable"
+        return f"held by {sessions.label(holder)}, which is gone — reclaimable"
     idle = max(time.time() - float(holder.heartbeat_at or 0), 0)
-    return f"active in {task.owner[:8]}, seen {_ago(idle)} ago"
+    return f"active in {sessions.label(holder)}, seen {_ago(idle)} ago"
 
 
 def _ago(seconds: float) -> str:
@@ -1081,7 +1125,7 @@ def _held_elsewhere(ctx: GitContext, task: Task, mine: set[str]) -> str:
     holder = sessions.get(ctx, task.owner)
     if holder is None or not sessions.is_live(ctx, holder):
         return ""
-    return f"task {task.id} is held by live session {task.owner[:8]}"
+    return f"task {task.id} is held by live session {sessions.label(holder)}"
 
 
 def _claimable(ctx: GitContext, task_id: str, session_id: str) -> tuple[Task | None, str]:

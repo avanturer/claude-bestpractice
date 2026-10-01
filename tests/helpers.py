@@ -44,6 +44,14 @@ from claude_bestpractice import config as _config  # noqa: E402
 # tests about the wait itself restore it with `real_acceptance_grace` (#232).
 _os.environ[_config.GRACE_ENV] = "0"
 
+# And no word with the Claude Code running the suite. A session start asks `claude agents
+# --json` what is live, and a real `claude` on PATH would answer about that machine's own
+# sessions — a third of a second each time, about whatever is open there. The tests about
+# the asking put a `claude` of their own first on PATH and take this away.
+from claude_bestpractice import sessions as _sessions  # noqa: E402
+
+_os.environ[_sessions.NO_AGENTS_ENV] = "1"
+
 # And no word with GitHub. The Stop gate asks `gh` whether a branch already has a pull
 # request before it demands one (#239), and a `gh` logged in where the suite runs would
 # answer about whatever repository a fixture's remote names. With no token and an empty

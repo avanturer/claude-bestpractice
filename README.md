@@ -4,8 +4,8 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-1.72.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-2308%20passing-2ea44f)](#verified)
+[![version](https://img.shields.io/badge/version-1.73.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-2397%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
@@ -136,13 +136,17 @@ rather than leaving your memory describing something that no longer exists.
 
 ```
 OTHER LIVE SESSIONS (2) — do not edit files they hold:
-  - a3f81c22 on feat/export  [ledger-export]  active 40s ago
+  - ledger-export-3c (a3f81c22) on feat/export [ledger-export] active 40s ago
       touched: src/billing.js, src/csv.js
       holds: src/billing.js
-      task: Add CSV export to src/billing.js
+      task: 0006 Add CSV export to src/billing.js
+  - invoice-rounding-7d (b7d29e01) on fix/rounding [invoice-rounding] active 2m ago
+      touched: src/invoice.js
+      task: 0004 Fix rounding in invoice totals
 
 IN FLIGHT:
-  - 0004 Fix rounding in invoice totals  [b7d29e01]
+  - 0004 Fix rounding in invoice totals [active in invoice-rounding-7d (b7d29e01), seen 2m ago]
+  - 0006 Add CSV export to src/billing.js [active in ledger-export-3c (a3f81c22), seen 40s ago]
 NEXT:
   - 0005 Add client search
 (12 done)
@@ -153,6 +157,12 @@ health: 3 live session(s), 1 reaped, 4 open item(s), 1 stale (suppressed)
 Editing a file another live session holds is **denied**, naming the owner. A crashed
 session's leases and claims are released by the reaper — in whichever worktree holds
 them — instead of staying in flight forever.
+
+Every session is named the way `SendMessage` addresses it: on the board, in
+`claude-bp status`, as a card's owner, on a pull request's row, and in every refusal that
+sends one session to another. The name is asked of Claude Code (`claude agents --json`)
+once per session start, never per tool call, and a conversation that `/clear` or `/resume`
+left behind in a running CLI is reaped rather than listed as live.
 
 A session that goes quiet is **not** treated as dead. Reaping on silence meant a founder
 who thought for fifteen minutes came back to a session whose every gate had stopped
@@ -465,7 +475,7 @@ roughly 0.1 % of a 200k window.
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2308 tests · 36 doctor checks · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2397 tests · 36 doctor checks · budget
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration

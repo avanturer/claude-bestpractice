@@ -1146,6 +1146,10 @@ def _release(ctx: GitContext, tree: tuple, record_path: Path, notes: list[str] |
     # `--force` is never this plugin's idea: it is passed only where the session typed it
     # itself, and every path that decides on its own to remove a tree leaves it off, so
     # git's refusal over a modified or untracked file stays the thing protecting the work.
+    # What git would refuse over that is NOT work — a ledger copy the trunk gave this tree,
+    # moved by a transition run elsewhere — is set aside in this tree's own index first, or
+    # every tree cut from a trunk that tracks the cards stood forever (#254).
+    _set_the_ledger_copies_aside(ctx, Path(path))
     gone = subprocess.run(
         ["git", "worktree", "remove", *(["--force"] if force else []), path],
         cwd=str(where), capture_output=True,
@@ -1219,7 +1223,7 @@ def _delete_branch(where: Path, branch: str, trunk: str) -> bool:
     return done.returncode == 0
 
 
-def _nothing_left_in(tree: Path) -> bool:
+def _nothing_left_in(ctx: GitContext, tree: Path) -> bool:
     """git's own answer to "would removing this lose a byte?", asked the way git asks it.
 
     `git status --porcelain -uall` and not `delivery.dirty`, which exempts `.claude/`: that
@@ -1227,16 +1231,102 @@ def _nothing_left_in(tree: Path) -> bool:
     where the question is whether a directory can be deleted. Ignored files are invisible
     to both this and to `git worktree remove` — verified, including the `.env` this plugin
     writes into every tree it provisions.
+
+    Less the ledger copies a trunk that still tracks the cards gave this tree
+    (`_copies_of_the_ledger`): every one is a card the main checkout holds, and a
+    transition run from another tree moves it here on disk and nowhere in git (#254).
     """
+    entries = _status_of(tree)
+    if entries is None:
+        return False
+    return len(_copies_of_the_ledger(ctx, entries)) == len(entries)
+
+
+def _status_of(tree: Path) -> list[tuple[str, str]] | None:
+    """`git status` of one tree as (XY, path) pairs, untracked files included. None when git
+    would not say, which every caller reads as "keep the tree"."""
     try:
         proc = subprocess.run(
-            ["git", "status", "--porcelain", "--untracked-files=all"],
+            ["git", "-c", "core.quotePath=false", "status", "--porcelain", "-z",
+             "--untracked-files=all"],
             cwd=str(tree), capture_output=True,
             encoding="utf-8", errors="surrogateescape", timeout=60,
         )
     except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    entries: list[tuple[str, str]] = []
+    fields = iter(proc.stdout.split("\0"))
+    for field in fields:
+        if len(field) < 4:
+            continue
+        entries.append((field[:2], field[3:]))
+        # A rename or copy is followed by the path it came from, in a field of its own.
+        if field[0] in "RC":
+            next(fields, None)
+    return entries
+
+
+def _copies_of_the_ledger(ctx: GitContext, entries: list[tuple[str, str]]) -> list[str]:
+    """The entries that are only a tracked copy of a card the main checkout holds.
+
+    A tree cut from a trunk that still tracks the ledger carries a copy of every card in
+    it, and every transition moves that copy wherever it is. Since #254 the move reaches
+    this tree's disk and never its index, so git reads it as a tracked file deleted or
+    changed — and `git worktree remove` refuses the tree over a card the main checkout,
+    where the ledger lives (decision 0018), holds under the same file name. Deleted or
+    changed only: a card this tree added to git, or one git was never given, is not a copy
+    the trunk handed it, and stays git's to refuse.
+    """
+    from . import plan
+
+    try:
+        home = main_checkout(ctx).joinpath(store.TIER_A_DIRNAME, plan.PLAN_DIR)
+    except Exception:  # noqa: BLE001 - no main checkout to compare with means no copies
+        return []
+    prefix = f"{store.TIER_A_DIRNAME}/{plan.PLAN_DIR}/"
+    copies: list[str] = []
+    for status, path in entries:
+        if not path.startswith(prefix) or not set(status) <= {" ", "M", "D"}:
+            continue
+        name = path.rsplit("/", 1)[-1]
+        if any((home / state / name).is_file() for state in plan.STATES):
+            copies.append(path)
+    return copies
+
+
+def _set_the_ledger_copies_aside(ctx: GitContext, tree: Path) -> bool:
+    """Tell git, in this tree's own index, that its ledger copies are not its work.
+
+    Called by a removal and nothing else, on the tree being removed, and only when those
+    copies are ALL that stands between it and `git worktree remove`. A staged change goes
+    back to what HEAD has, then the entry is marked `--assume-unchanged`, which `git status`
+    — and so the removal's own check — reads as unchanged. Everything else in the tree is
+    still git's to refuse, so a write that lands before the removal still keeps the tree.
+    Left in place if git then refuses anyway: a copy git no longer notices in this tree is
+    one no commit from it can carry.
+    """
+    entries = _status_of(tree)
+    if not entries:
         return False
-    return proc.returncode == 0 and not proc.stdout.strip()
+    copies = _copies_of_the_ledger(ctx, entries)
+    if len(copies) != len(entries):
+        return False
+    staged = [path for status, path in entries if path in copies and status[0] != " "]
+    steps = ([["reset", "-q", "--", *staged]] if staged else []) + [
+        ["update-index", "--assume-unchanged", "--", *copies]]
+    for step in steps:
+        try:
+            done = subprocess.run(
+                ["git", *step], cwd=str(tree), capture_output=True,
+                encoding="utf-8", errors="surrogateescape", timeout=60,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        if done.returncode != 0:
+            return False
+    return True
 
 
 def _board_is_clear(ctx: GitContext, session_id: str, branch: str) -> bool:
@@ -1315,7 +1405,7 @@ def finished(ctx: GitContext, session_id: str) -> tuple[str, str] | None:
     found = _in_the_trunk(tree)
     if not found or not _board_is_clear(ctx, session_id, found[1]):
         return None
-    return found if _nothing_left_in(tree) else None
+    return found if _nothing_left_in(ctx, tree) else None
 
 
 def release_mine(ctx: GitContext, session_id: str) -> tuple[str, str, list[str]] | None:

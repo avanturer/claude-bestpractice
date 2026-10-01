@@ -226,7 +226,7 @@ def answer(ctx: GitContext, session_id: str, ask_id: str, text: str) -> bool:
         box[0] = notes
     if not asker:
         return False
-    post(ctx, asker, f"answer from {session_id[:8]}: {said}", sender=session_id)
+    post(ctx, asker, f"answer from {sessions.called(ctx, session_id)}: {said}", sender=session_id)
     return True
 
 

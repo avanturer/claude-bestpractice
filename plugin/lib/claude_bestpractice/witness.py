@@ -362,6 +362,61 @@ def _excluded(ctx: GitContext) -> list[str]:
     return [name for name in wanted if isinstance(name, str) and name.strip()]
 
 
+def left_out(ctx: GitContext, root: Path) -> list[str]:
+    """What the gate's own run leaves out under `root`, relative to it: the founder's
+    `witness_exclude`, and the test files git ignores and holds no copy of."""
+    return _excluded(ctx) + ignored_tests(root)
+
+
+def ignored_tests(root: Path) -> list[str]:
+    """Test files under `root` that git ignores and does not track, relative to `root`.
+
+    A file git ignores is in no commit and no clean checkout, so it is nobody's change and
+    no part of the suite the trunk carries — and pytest does not read `.gitignore`. Started
+    at the root, it collected `data/eval/test_providers.py` out of an ignored directory and
+    the gate called a suite red whose 5,887 tests passed (#255).
+
+    Each is named by the outermost ignored directory holding it, so a whole scratch tree
+    costs one `--ignore` rather than one per file; otherwise by the file itself. Both come
+    from `git check-ignore`, which names no tracked file and no directory git tracks a file
+    under — so a test force-added past the rule still runs, and so does anything beside it.
+    Empty when git cannot say.
+    """
+    from . import testcount
+
+    found = [path.relative_to(root).as_posix() for path in testcount.files(root)]
+    ignored = _git_listed(root, ["check-ignore", "-z", "--stdin"], found)
+    if not ignored:
+        return []
+    above = sorted({directory for rel in ignored for directory in _parents_of(rel)})
+    cover = set(_git_listed(root, ["check-ignore", "-z", "--stdin"], above))
+    return sorted({next((d for d in _parents_of(rel) if d in cover), rel) for rel in ignored})
+
+
+def _parents_of(rel: str) -> list[str]:
+    """`a/b/c.py` -> [`a`, `a/b`]: outermost first."""
+    parts = rel.split("/")
+    return ["/".join(parts[:depth]) for depth in range(1, len(parts))]
+
+
+def _git_listed(root: Path, args: list[str], paths: list[str]) -> list[str]:
+    """The NUL-separated paths one git command prints, given `paths` on stdin. Empty on any
+    failure — `check-ignore` exits 1 for "none of them", which is an answer, not an error."""
+    if not paths:
+        return []
+    try:
+        proc = subprocess.run(
+            ["git", "-c", "core.quotePath=false", *args], input="\0".join(paths),
+            cwd=str(root), capture_output=True,
+            encoding="utf-8", errors="surrogateescape", timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if proc.returncode not in (0, 1):
+        return []
+    return [name for name in proc.stdout.split("\0") if name]
+
+
 def projects(root: Path, skip: list[str] | None = None) -> list[Path]:
     """Where pytest has to be started to run the tests under `root` as they are configured.
 
@@ -411,7 +466,7 @@ def _run_pytest(ctx: GitContext, scratch: Path, env: dict[str, str] | None,
     it to their own. The runs share one budget, and running out in any of them is running out.
     """
     root = where or ctx.worktree_root
-    skipped = _excluded(ctx)
+    skipped = left_out(ctx, root)
     homes = projects(root, skipped)
     budget = _budget(seconds)
     until = time.monotonic() + budget

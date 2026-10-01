@@ -11,7 +11,7 @@ import time
 import unittest
 from unittest import mock
 
-from helpers import BIN, LIB, RepoCase, git, hooks_at_once, session_record_for, sid
+from helpers import BIN, LIB, RepoCase, add_origin, git, hooks_at_once, session_record_for, sid
 
 from claude_bestpractice import sessions, store, worktree
 
@@ -717,6 +717,133 @@ class TestTheDiffIsWhatThisSessionChanged(RepoCase):
         self.write("src/mine.py", "print('mine')\n")
         self.commit("this session's work")
         self.assertIn("src/mine.py", changed_files(self.ctx(), baseline))
+
+    def test_an_untracked_file_already_there_is_not_this_session_s(self):
+        """`stash create -u` was a message, not a flag: no baseline ever held one (#255)."""
+        from claude_bestpractice.gitctx import changed_files, stash_baseline
+
+        self.write("scratch/notes.txt", "another session's scratch\n")
+        baseline = stash_baseline(self.ctx())
+        self.assertEqual([], changed_files(self.ctx(), baseline))
+
+    def test_an_untracked_file_rewritten_since_is(self):
+        from claude_bestpractice.gitctx import changed_files, stash_baseline
+
+        self.write("scratch/notes.txt", "another session's scratch\n")
+        baseline = stash_baseline(self.ctx())
+        self.write("scratch/notes.txt", "and then this session\n")
+        self.assertEqual(["scratch/notes.txt"], changed_files(self.ctx(), baseline))
+
+    def test_past_what_a_baseline_records_they_read_as_new_as_before(self):
+        """A start that hashed somebody's whole data directory would time out; past the
+        bound the baseline records none, which is how every baseline behaved before."""
+        from unittest import mock
+
+        from claude_bestpractice import gitctx
+
+        self.write("scratch/a.txt", "a\n")
+        self.write("scratch/b.txt", "b\n")
+        with mock.patch.object(gitctx, "MAX_UNTRACKED_FILES", 1):
+            baseline = gitctx.stash_baseline(self.ctx())
+        self.assertEqual(self.ctx().head, baseline)
+        self.assertEqual(["scratch/a.txt", "scratch/b.txt"],
+                         gitctx.changed_files(self.ctx(), baseline))
+
+    def test_the_tree_and_index_are_left_as_they_were(self):
+        from claude_bestpractice.gitctx import stash_baseline
+
+        self.write("README.md", "seed\nmid-edit\n")
+        self.write("scratch/notes.txt", "scratch\n")
+        before = git(["status", "--porcelain"], self.repo)
+        stash_baseline(self.ctx())
+        self.assertEqual(before, git(["status", "--porcelain"], self.repo))
+        self.assertEqual("", git(["stash", "list"], self.repo))
+
+    def test_a_signing_setup_is_never_asked_for_a_baseline(self):
+        """Plumbing, which never signs: `git commit` would, and a session start must not
+        wait on a passphrase."""
+        from claude_bestpractice.gitctx import stash_baseline
+
+        git(["config", "commit.gpgsign", "true"], self.repo)
+        git(["config", "gpg.program", "false"], self.repo)
+        self.write("scratch/notes.txt", "scratch\n")
+        baseline = stash_baseline(self.ctx())
+        self.assertIn("scratch/notes.txt", git(["ls-tree", "-r", "--name-only", f"{baseline}^3"],
+                                               self.repo))
+
+
+class TestAFastForwardIsNotTheSessionsWork(RepoCase):
+    """Issue #255. A main checkout dirty at session start has a `git stash create` commit for
+    its baseline, and that commit is on no branch: the floor that steps over work pulled from
+    upstream never rose. After `git merge --ff-only origin/main` over ninety-four merged
+    commits, every file in them was this session's — stubs "introduced in this turn" in
+    tests it had never opened, and the whole suite run for them."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        add_origin(self.repo, self.tmp)
+        self.write("src/app.py", "x = 1\n")
+        self.commit("the trunk")
+        git(["push", "-q", "origin", "main"], self.repo)
+        self.upstream = self.tmp / "upstream"
+        git(["clone", "-q", str(self.tmp / "origin.git"), str(self.upstream)], self.tmp)
+        for key, value in (("user.email", "u@claude-bestpractice"), ("user.name", "u"),
+                           ("commit.gpgsign", "false")):
+            git(["config", key, value], self.upstream)
+
+    def merged_upstream(self, rel: str, text: str) -> None:
+        path = self.upstream / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        git(["add", "-A"], self.upstream)
+        git(["commit", "-qm", f"somebody else's {rel}"], self.upstream)
+        git(["push", "-q", "origin", "main"], self.upstream)
+
+    def fast_forward(self) -> None:
+        git(["fetch", "-q", "origin"], self.repo)
+        git(["merge", "-q", "--ff-only", "origin/main"], self.repo)
+
+    def a_dirty_start(self) -> str:
+        from claude_bestpractice.gitctx import stash_baseline
+
+        self.write("README.md", "seed\n# another session was mid-edit here\n")
+        return stash_baseline(self.ctx())
+
+    def test_pulling_merged_work_changes_nothing(self):
+        from claude_bestpractice.gitctx import changed_files
+
+        baseline = self.a_dirty_start()
+        self.merged_upstream("backend/tests/test_api.py", "def test_x():\n    pass  # TODO\n")
+        self.fast_forward()
+        self.assertEqual([], changed_files(self.ctx(), baseline))
+
+    def test_what_was_dirty_at_the_start_stays_somebody_elses(self):
+        from claude_bestpractice.gitctx import changed_files
+
+        baseline = self.a_dirty_start()
+        self.merged_upstream("src/other.py", "y = 2\n")
+        self.fast_forward()
+        self.assertNotIn("README.md", changed_files(self.ctx(), baseline))
+
+    def test_the_sessions_own_edit_after_the_pull_is_still_counted(self):
+        from claude_bestpractice.gitctx import changed_files
+
+        baseline = self.a_dirty_start()
+        self.merged_upstream("src/other.py", "y = 2\n")
+        self.fast_forward()
+        self.write("src/app.py", "x = 2\n")
+        self.write("README.md", "seed\n# and then this session\n")
+        self.assertEqual(["README.md", "src/app.py"], changed_files(self.ctx(), baseline))
+
+    def test_a_clean_start_still_steps_over_the_pull(self):
+        """The case the floor was written for (#71), unchanged."""
+        from claude_bestpractice.gitctx import changed_files, stash_baseline
+
+        baseline = stash_baseline(self.ctx())
+        self.assertEqual(self.ctx().head, baseline)
+        self.merged_upstream("src/other.py", "y = 2\n")
+        self.fast_forward()
+        self.assertEqual([], changed_files(self.ctx(), baseline))
 
 
 def backdate(ctx, session_id: str, seconds: float) -> None:
