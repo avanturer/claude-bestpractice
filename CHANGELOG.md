@@ -81,7 +81,11 @@ Three live chats: `ListAgents` said `fuddy-8b`, and everything this plugin print
 
 ### How it was checked
 
-Each report is a set of tests that fail on 1.72.0 and pass here, 88 new tests in all.
+Each report is a set of tests, 89 new in all. The 72 that pin a reported failure fail on 1.72.0
+and pass here. The other 17 hold what has to stay, such as a card the session planned or a test
+force-added past `.gitignore`, and pass on both. A mutation sweep took the four fixes apart 33
+ways, and every one is caught; the two the first sweep missed (a let-go not remembered on an
+UNVERIFIED finish, and repair 0039 not registered) each have a test now.
 
 ## v1.72.0
 

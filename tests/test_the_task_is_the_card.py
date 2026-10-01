@@ -322,3 +322,11 @@ class TestTheUpgradeWithdrawsWhatOlderVersionsOpened(GateCase):
         self.a_card_opened_by("a-session-that-is-gone", note="the real task: budget alarm")
         migrate._withdraw_messages_that_were_never_work(self.ctx())
         self.assertEqual(1, len(plan.load_all(self.ctx(), plan.NEXT)))
+
+    def test_the_upgrade_runs_it(self):
+        from claude_bestpractice import migrate
+
+        card = self.a_card_opened_by("a-session-that-is-gone")
+        migrate.repair(self.ctx())
+        self.assertEqual([], plan.load_all(self.ctx(), plan.NEXT))
+        self.assertTrue((plan.plan_dir(self.ctx(), plan.WITHDRAWN) / card.path.name).is_file())
