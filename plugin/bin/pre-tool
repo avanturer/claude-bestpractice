@@ -477,9 +477,10 @@ def _card_commands(ctx, event, paths: str) -> str:
     done_when = '--done-when "<what has to become true>"'
     opened = plan.opened_for(ctx, str(event.raw.get("session_id") or ""))
     if opened is not None:
-        return (f"  Your founder's instruction is already on it as {opened.id} — plan it and "
-                "claim it:\n"
-                f"  claude-bp-plan update {opened.id} --paths {paths} {done_when}\n"
+        return (f"  Your founder's instruction is already on it as {opened.id} — name it, plan "
+                "it and claim it:\n"
+                f'  claude-bp-plan update {opened.id} --title "<what the work is>" '
+                f"--paths {paths} {done_when}\n"
                 f"  then: claude-bp-plan claim {opened.id}")
     return (f'  claude-bp-plan add "<what you are about to do>" --paths {paths} {done_when}\n'
             "  then: claude-bp-plan claim <id>   (or claim the task you are on)")

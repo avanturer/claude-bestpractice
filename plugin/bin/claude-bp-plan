@@ -285,6 +285,9 @@ def main() -> int:
     amended.add_argument("--paths", default="", help="replace the files, comma separated")
     amended.add_argument("--done-when", dest="done_when", default="",
                          help="what has to be true for this to be finishable")
+    amended.add_argument("--title", default="",
+                         help="what the work is, in one line — a card a founder's message "
+                              "opened carries their words until it is named")
 
     claim = sub.add_parser("claim", help="take a task and move it to doing")
     claim.add_argument("task_id")
@@ -343,7 +346,7 @@ def main() -> int:
 
     if args.command == "update":
         wanted = [p.strip() for p in args.paths.split(",") if p.strip()] if args.paths else None
-        task, problem = plan.amend(ctx, args.id, args.note, wanted, args.done_when)
+        task, problem = plan.amend(ctx, args.id, args.note, wanted, args.done_when, args.title)
         if task is None:
             print(problem, file=sys.stderr)
             return 1

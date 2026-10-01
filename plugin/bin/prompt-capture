@@ -30,6 +30,7 @@ from claude_bestpractice.statements import (  # noqa: E402
     is_harness_block,
     is_pasted_output,
     is_statement_of_work,
+    opens_a_card,
 )
 
 MAX_TASK_CHARS = 600
@@ -221,7 +222,13 @@ def main() -> None:
             # moments every sibling deciding what is safe to touch read an empty board
             # while somebody was already working — and the card, when it came, described
             # work already done instead of claiming work about to happen.
-            if config.load(ctx).require_task:
+            #
+            # Only for a message that is work. The blank-board fallback above opened one
+            # too, and so did every question: twenty-one cards on one board were «статус»,
+            # «тебя можно закрывать?» and an idle notice, and a real task was renamed by
+            # one (#256). A record of what the session is for is worth a guess; a row every
+            # sibling reads as somebody's job is not.
+            if config.load(ctx).require_task and opens_a_card(safe, fresh):
                 from claude_bestpractice import plan
 
                 plan.open_for(ctx, statement, event.session_id,

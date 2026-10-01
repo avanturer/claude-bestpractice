@@ -227,13 +227,22 @@ def _closed_the_tree(ctx, rec: sessions.SessionRecord, cfg) -> str:
     return said
 
 
-def _allow(ctx, rec: sessions.SessionRecord, cfg) -> None:
+def _allow(ctx, rec: sessions.SessionRecord, cfg, opener: str) -> None:
     """Let the turn end: reset the escalation counter and hand back the leases.
 
     Releasing matters on every allow path, including the nothing-changed one. A
     session that claimed a file and then finished without touching it would otherwise
     hold that path against its siblings for the full TTL.
+
+    And take back the card the founder's message opened, if the turn never planned it.
+    A finish this gate accepts without that card is a turn that needed none: a question, a
+    remark, work not begun — and the card stayed in `next` for weeks, nobody's to close
+    (#256). `opener` is the harness id the message came from. A turn that wrote something
+    is refused before it gets here, with this card named as the one to plan.
     """
+    from claude_bestpractice import plan
+
+    plan.withdraw_unplanned(ctx, opener)
     _bump_blocks(ctx, rec, 0)
     sessions.release_all(ctx, rec.session_id)
     hookio.emit_silent(_closed_the_tree(ctx, rec, cfg))
@@ -461,10 +470,10 @@ def _card_commands(ctx, event, paths: list[str]) -> str:
     opened = plan.opened_for(ctx, str(event.raw.get("session_id") or ""))
     if opened is not None:
         return (
-            f"  Your founder's instruction is already on it as {opened.id} — plan it "
-            "and claim it:\n"
-            f'  claude-bp-plan update {opened.id} --paths {named} '
-            '--done-when "<what has to become true>"\n'
+            f"  Your founder's instruction is already on it as {opened.id} — name it, plan "
+            "it and claim it:\n"
+            f'  claude-bp-plan update {opened.id} --title "<what the work is>" '
+            f'--paths {named} --done-when "<what has to become true>"\n'
             f"  then: claude-bp-plan claim {opened.id}"
         )
     return (
@@ -582,6 +591,7 @@ def main() -> None:
     # provisioned for this session and git still has registered.
     ctx = worktree.working_context(hookio.repo(event.cwd or os.getcwd()), event.session_id)
     cfg = config.load(ctx)
+    opener = str(event.raw.get("session_id") or "")
 
     # Off means off, and it has to mean it in the gate that refuses a FINISH as much as in
     # the one that refuses a write — a plugin switched off that still holds the turn open
@@ -635,7 +645,7 @@ def main() -> None:
         evidence.settle_drift(ctx, rec.session_id, ceiling_paths)
         _bump_blocks(ctx, rec, 0)
         sys.stderr.write("claude-bestpractice: finishing UNVERIFIED — continuation ceiling reached.\n")
-        _allow(ctx, rec, cfg)
+        _allow(ctx, rec, cfg, opener)
     # A pull request this session opened and then walked away from. Checked before the
     # change list, because the whole failure is a turn that ends with nothing left to do
     # and a PR still sitting there — `changed` is empty in exactly that turn.
@@ -733,7 +743,7 @@ def main() -> None:
         # say. Asked here as well as at the verified exit, and nowhere earlier — the
         # checks between the two are about the tree and answer first.
         _refuse_to_end_on_an_unanswered_block(ctx, rec, pending_refusal)
-        _allow(ctx, rec, cfg)
+        _allow(ctx, rec, cfg, opener)
 
     # Which suites answer for these files. In a single-project repository this is the one
     # command the repository has always had; in a repository with two projects it is only
@@ -944,7 +954,7 @@ def main() -> None:
             # more urgent to say, and one finishing UNVERIFIED is already on the record as
             # a failure — asking either of them for notes is the gate talking over itself.
             _ask_for_the_notes_once(ctx, rec, cfg, changed)
-        _allow(ctx, rec, cfg)
+        _allow(ctx, rec, cfg, opener)
 
     reason = "\n\n".join(problems)
     tree = evidence.tree_hash(ctx)

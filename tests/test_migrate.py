@@ -1121,7 +1121,7 @@ class TestTheGoalCommandIsTakenOffWhatItWasRecordedIn(RepoCase):
         planned = plan.add(self.ctx(), self.GOAL, source=plan.FROM_THE_FOUNDER, opened_by="s2",
                            paths=["src/app.py"], done_when="stated")
         plan.claim(self.ctx(), planned.id, "s2", "main")
-        migrate.repair(self.ctx())
+        migrate._take_the_goal_command_off_a_statement(self.ctx())
 
         self.assertEqual("довести v4 до готовности, все тесты зелёные",
                          plan.find(self.ctx(), opened.id).title)

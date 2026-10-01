@@ -1086,7 +1086,7 @@ class TestTheBoardLearnsTheTaskWhenItArrives(RepoCase):
         said next is clobbering work with conversation."""
         from claude_bestpractice import plan
 
-        self.say("почини импортер")
+        self.say("почини импортер каталога")
         card = self.board("next")[0]
         plan.amend(self.ctx(), card.id, paths=["importer.py"], done_when="stated")
         plan.claim(self.ctx(), card.id, sid(self.repo, "s1"), self.ctx().branch)
@@ -1122,7 +1122,7 @@ class TestTheBoardLearnsTheTaskWhenItArrives(RepoCase):
         """So `list` does not present the founder's own words as a plan somebody wrote."""
         from claude_bestpractice import plan
 
-        self.say("почини импортер")
+        self.say("почини импортер каталога")
         self.assertEqual(plan.FROM_THE_FOUNDER, self.board("next")[0].source)
 
     def test_a_second_session_does_not_retitle_the_first_ones_card(self):
@@ -1153,7 +1153,7 @@ class TestTheBoardLearnsTheTaskWhenItArrives(RepoCase):
     def test_a_transition_keeps_who_opened_the_card(self):
         from claude_bestpractice import plan
 
-        self.say("почини импортер", session="s1")
+        self.say("почини импортер каталога", session="s1")
         card = self.board("next")[0]
         moved, _ = plan.amend(self.ctx(), card.id, paths=["importer.py"], done_when="stated")
         self.assertEqual("s1", moved.opened_by)
@@ -1164,12 +1164,13 @@ class TestTheBoardLearnsTheTaskWhenItArrives(RepoCase):
     def test_the_finish_names_the_card_instead_of_asking_for_another(self):
         """Told to `add`, a real session filed a duplicate and left its own card in NEXT
         over finished work — an invitation to the next session to do the job again."""
-        self.say("почини импортер", session="s1")
+        self.say("почини импортер каталога", session="s1")
         card = self.board("next")[0]
         self.write("importer.py", "x = 1\n")
         proc = self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop"})
         self.assertIn(f"claude-bp-plan claim {card.id}", proc.stderr)
-        self.assertIn(f"claude-bp-plan update {card.id} --paths importer.py", proc.stderr)
+        self.assertIn(f"claude-bp-plan update {card.id} --title", proc.stderr)
+        self.assertIn("--paths importer.py", proc.stderr)
         self.assertNotIn("claude-bp-plan add", proc.stderr)
 
     def test_the_write_refusal_names_the_card_too_and_what_it_prints_runs(self):
@@ -1178,7 +1179,7 @@ class TestTheBoardLearnsTheTaskWhenItArrives(RepoCase):
         import os
         import re
 
-        self.say("почини импортер", session="s1")
+        self.say("почини импортер каталога", session="s1")
         card = self.board("next")[0]
         write = {"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Write",
                  "tool_input": {"file_path": str(self.repo / "importer.py"), "content": "x = 1\n"}}

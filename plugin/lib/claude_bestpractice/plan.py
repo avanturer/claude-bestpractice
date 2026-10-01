@@ -42,6 +42,12 @@ NEXT, DOING, DONE = "next", "doing", "done"
 PAUSED = "paused"
 STATES = (NEXT, DOING, PAUSED, DONE)
 
+# Off the board and still on the disk: a card a founder's message opened that no work
+# followed (`withdraw_unplanned`, #256). Kept rather than deleted, so its number is never
+# handed to another card — a session may have been told "claim 0123" about it — and so
+# moving the file back is all it takes to undo.
+WITHDRAWN = "withdrawn"
+
 MAX_TITLE_CHARS = 120
 MAX_BODY_CHARS = 2_000
 
@@ -309,7 +315,7 @@ def next_id(ctx: GitContext) -> str:
     """
     highest = 0
     for root in sibling_worktrees(ctx) or [ctx.worktree_root]:
-        for state in STATES:
+        for state in (*STATES, WITHDRAWN):
             directory = root / store.TIER_A_DIRNAME / PLAN_DIR / state
             if not directory.is_dir():
                 continue
@@ -419,6 +425,36 @@ def opened_for(ctx: GitContext, opener: str) -> Task | None:
     return None
 
 
+def _untouched(task: Task) -> bool:
+    """Is this card exactly as a founder's message opened it — nothing planned, noted or held?"""
+    return not (task.paths or task.done_when.strip() or task.owner
+                or task.body.strip() not in ("", NO_DETAIL))
+
+
+def withdraw_unplanned(ctx: GitContext, opener: str) -> list[Task]:
+    """Take back the cards a founder's message opened for this session that no work followed.
+
+    A card opened at the message is a claim about the turn it starts, made before anything
+    is known. The turn that followed either planned it — a write demands that, a card
+    `update`d and `claim`ed — or it did not, and then the message was a question, a remark,
+    or work that has not begun: twenty-one of one board's 156 open cards were «статус»,
+    «обнови» and «не в тот чат отправил», and nobody ever closed them (#256). The session's
+    statement still says what it is for, and work that comes later is demanded a card
+    then, named by the session doing it.
+
+    `opener` is the harness id the message came from, as `open_for` files it. Moved to
+    `withdrawn/` in every tree that holds a copy, off the board and still on disk.
+    """
+    if not opener:
+        return []
+    taken: list[Task] = []
+    for task in load_all(ctx, NEXT):
+        if task.source == FROM_THE_FOUNDER and task.opened_by == opener and _untouched(task):
+            if _move_every(ctx, task.id, WITHDRAWN) is not None:
+                taken.append(task)
+    return taken
+
+
 def open_for(ctx: GitContext, statement: str, session_id: str, opener: str = "") -> Task | None:
     """Put the founder's instruction on the board the moment it arrives. None if one is.
 
@@ -459,10 +495,11 @@ def open_for(ctx: GitContext, statement: str, session_id: str, opener: str = "")
         # have. The statement itself already follows them; the card had no reason not to
         # (#170).
         #
-        # Only while UNCLAIMED. Once a session has claimed it, that session wrote a plan —
-        # a `done_when` and the paths — and overwriting its title with whatever was said
-        # next would clobber work with conversation.
-        if mine.title != said:
+        # Only while UNTOUCHED. Once a session has written anything on it — a plan, a note,
+        # a title of its own — overwriting its title with whatever was said next clobbers
+        # work with conversation: a card about a login-code budget alarm was renamed
+        # «тебя можно закрывать?», with what it was about left only in its body (#256).
+        if mine.title != said and _untouched(mine):
             amend(ctx, mine.id, title=said)
         return None
     return add(ctx, said, branch=ctx.branch, source=FROM_THE_FOUNDER, opened_by=opener)

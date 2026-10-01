@@ -1,7 +1,8 @@
-"""Whether a message the founder sent is a statement of work.
+"""Whether a message the founder sent is a statement of work, and whether it opens a card.
 
-Read by `prompt-capture`, which records the statement. In the library rather than in the
-hook, so anything else that has to tell an instruction from a remark reads it the same way.
+Read by `prompt-capture`, which records the statement, and by the repair that takes back the
+cards older versions opened from messages that were never work. One reader, so the two can
+never disagree about what an instruction looks like.
 
 The cost of a wrong answer is asymmetric everywhere in this module. Refusing a real
 instruction leaves the previous statement standing, and a card is still demanded at the
@@ -81,7 +82,8 @@ def is_harness_block(text: str) -> bool:
     stripped = text.strip()
     if not stripped:
         return False
-    return stripped.startswith(_OUR_VOICES) or not outside_markup(stripped).strip()
+    return (stripped.startswith(_OUR_VOICES) or not outside_markup(stripped).strip()
+            or is_a_notice(stripped))
 
 
 def is_statement_of_work(prompt: str, paths: list[str]) -> bool:
@@ -142,3 +144,44 @@ def is_pasted_output(prompt: str) -> bool:
         return False
     hits = sum(1 for line in lines if any(pattern.match(line) for pattern in _PASTED))
     return hits >= 2 or len(lines) == 1
+
+
+# The harness also speaks in plain text, and says so: Claude Code 2.1.286 delivers
+# `[Cross-session idle notice] "fuddy-8b", which you asked to be notified about, is idle now
+# … This is an automated notice from that session's harness — not a message from a person`
+# as a prompt of its own, and it became a card on the board (#256). A bracketed tag opening
+# the message AND the notice's own word that it is automated: a founder writing "[срочно]"
+# says nothing of the kind.
+_NOTICE_TAG = re.compile(r"^\[[^\]\n]{3,80}\]")
+_SAYS_IT_IS_AUTOMATED = re.compile(r"(?i)\bautomated notice\b|\bnot a message from a person\b")
+
+
+def is_a_notice(text: str) -> bool:
+    """A plain-text notice the harness wrote, saying of itself that it is not a person."""
+    stripped = text.strip()
+    return bool(_NOTICE_TAG.match(stripped) and _SAYS_IT_IS_AUTOMATED.search(stripped))
+
+
+# A question asks for an answer, not for work: «тебя можно закрывать?», «что осталось
+# сделать». Twenty-one of one repository's 156 open cards were questions and remarks like
+# these, a real task among them renamed by one (#256). Only words that ask and nothing else
+# open a question here — «как» and "how" also start "как обычно, почини тесты".
+_ASKING = re.compile(
+    r"(?i)^(?:что|чего|почему|зачем|где|когда|сколько|кто|какой|какая|какое|какие|чей|"
+    r"what|why|where|when|which|who)\b"
+)
+
+
+def is_a_question(text: str) -> bool:
+    """Does this message ask something rather than ask for something?"""
+    flat = " ".join(text.split())
+    return flat.endswith("?") or bool(_ASKING.match(flat))
+
+
+def opens_a_card(prompt: str, paths: list[str]) -> bool:
+    """Is this message work enough to go on the board as a card?
+
+    A statement of work that is not a question. Naming a file still settles it, as it does
+    for the statement: «почему падает tests/test_api.py?» is about that file.
+    """
+    return is_statement_of_work(prompt, paths) and (bool(paths) or not is_a_question(prompt))

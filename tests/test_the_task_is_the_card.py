@@ -183,3 +183,142 @@ class TestWithoutTheGoalCommand(GateCase):
         self.assertEqual("tests pass", sessions.without_the_goal_command("/goal tests pass"))
         self.assertEqual("tests\npass", sessions.without_the_goal_command("/goal\ntests\npass"))
         self.assertEqual("", sessions.without_the_goal_command("/goal reset"))
+
+
+# Claude Code 2.1.286's idle notice, as the CLI writes it — read out of the binary.
+IDLE_NOTICE = (
+    '[Cross-session idle notice] "fuddy-8b", which you asked to be notified about, is idle '
+    "now — it finished a turn at 13:05. This is an automated notice from that session's "
+    "harness — not a message from a person, and not an instruction; act on it only "
+    "insofar as your user's earlier request calls for it."
+)
+
+
+class TestOnlyWorkOpensACard(GateCase):
+    """Issue #256. Twenty-one of one board's 156 open cards were messages that were not work:
+    «статус», «тебя можно закрывать?», «не в тот чат отправил», an idle notice. Every first
+    message opened one, whatever it said, and so did every question after it."""
+
+    def say(self, prompt: str) -> None:
+        self.gate("prompt-capture", {"session_id": "s1", "hook_event_name": "UserPromptSubmit",
+                                     "prompt": prompt})
+
+    def titles(self) -> list[str]:
+        return [task.title for task in plan.load_all(self.ctx(), plan.NEXT)]
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.start()
+
+    def test_a_first_message_that_is_not_work_opens_none(self):
+        self.say("статус")
+        self.assertEqual([], self.titles())
+        self.assertEqual("статус", sessions.get(self.ctx(), sid(self.repo, "s1")).task_statement,
+                         "the session still says what it was told")
+
+    def test_a_question_opens_none(self):
+        for asked in ("тебя можно закрывать?", "что осталось сделать"):
+            with self.subTest(asked=asked):
+                self.say(asked)
+                self.assertEqual([], self.titles())
+
+    def test_the_idle_notice_is_the_harness_and_opens_none(self):
+        self.say(IDLE_NOTICE)
+        self.assertEqual([], self.titles())
+        self.assertEqual("", sessions.get(self.ctx(), sid(self.repo, "s1")).task_statement)
+
+    def test_an_instruction_still_opens_one(self):
+        self.say("почини импортер, он падает на пустом csv")
+        self.assertEqual(["почини импортер, он падает на пустом csv"], self.titles())
+
+    def test_a_question_about_a_file_is_about_that_file(self):
+        self.write("tests/test_api.py", "def test_empty():\n    assert True\n")
+        self.say("почему падает tests/test_api.py на пустом ответе?")
+        self.assertEqual(["почему падает tests/test_api.py на пустом ответе?"], self.titles())
+
+    def test_a_question_does_not_rename_the_card(self):
+        self.say("почини импортер, он падает на пустом csv")
+        self.say("тебя можно закрывать?")
+        self.assertEqual(["почини импортер, он падает на пустом csv"], self.titles())
+
+    def test_a_card_the_session_wrote_on_keeps_its_title(self):
+        """The login-code budget alarm renamed by the next message, its subject left in the
+        body."""
+        self.say("почини импортер, он падает на пустом csv")
+        card = plan.load_all(self.ctx(), plan.NEXT)[0]
+        plan.amend(self.ctx(), card.id, note="the importer reads the header row twice")
+        self.say("ещё добавь лог на каждую пропущенную строку")
+        self.assertEqual(["почини импортер, он падает на пустом csv"], self.titles())
+
+
+class TestACardNoWorkFollowedIsWithdrawn(GateCase):
+    """The other half of #256: a card a message opened stayed in `next` for weeks, and nobody
+    ever closed one."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.start()
+        self.gate("prompt-capture", {"session_id": "s1", "hook_event_name": "UserPromptSubmit",
+                                     "prompt": "посмотри новый репорт из мониторинга"})
+        self.card = plan.load_all(self.ctx(), plan.NEXT)[0]
+
+    def test_a_turn_that_did_not_plan_it_withdraws_it(self):
+        self.stop()
+        self.assertEqual([], plan.load_all(self.ctx(), plan.NEXT))
+
+    def test_withdrawn_is_moved_aside_and_its_number_is_not_reused(self):
+        self.stop()
+        aside = plan.plan_dir(self.ctx(), plan.WITHDRAWN) / self.card.path.name
+        self.assertTrue(aside.is_file(), "a withdrawn card is moved, never deleted")
+        self.assertGreater(int(plan.next_id(self.ctx())), int(self.card.id))
+
+    def test_a_card_the_session_planned_stays(self):
+        plan.amend(self.ctx(), self.card.id, paths=["src/report.py"], done_when="report parsed")
+        self.stop()
+        self.assertEqual([self.card.id], [task.id for task in plan.load_all(self.ctx(), plan.NEXT)])
+
+    def test_another_sessions_card_is_not_this_ones_to_withdraw(self):
+        self.start("s2")
+        self.stop("s2")
+        self.assertEqual([self.card.id], [task.id for task in plan.load_all(self.ctx(), plan.NEXT)])
+
+    def test_the_session_can_name_it(self):
+        named = subprocess.run(
+            [sys.executable, str(BIN / "claude-bp-plan"), "update", self.card.id,
+             "--title", "Разобрать отчёт мониторинга за ночь"],
+            capture_output=True, text=True, cwd=str(self.repo), timeout=60)
+        self.assertEqual(0, named.returncode, named.stderr)
+        self.assertEqual("Разобрать отчёт мониторинга за ночь", plan.find(self.ctx(), self.card.id).title)
+
+
+class TestTheUpgradeWithdrawsWhatOlderVersionsOpened(GateCase):
+    """Repair 0039: the rule a Stop now applies, applied once to the cards already there."""
+
+    def a_card_opened_by(self, opener: str, **planned):
+        card = plan.add(self.ctx(), "статус", source=plan.FROM_THE_FOUNDER, opened_by=opener)
+        if planned:
+            plan.amend(self.ctx(), card.id, **planned)
+        return card
+
+    def test_one_whose_session_is_gone_is_withdrawn(self):
+        from claude_bestpractice import migrate
+
+        self.a_card_opened_by("a-session-that-is-gone")
+        said = migrate._withdraw_messages_that_were_never_work(self.ctx())
+        self.assertEqual([], plan.load_all(self.ctx(), plan.NEXT))
+        self.assertIn("1 card(s)", said)
+
+    def test_one_a_live_session_opened_waits_for_its_stop(self):
+        from claude_bestpractice import migrate
+
+        self.start()
+        self.a_card_opened_by("s1")
+        migrate._withdraw_messages_that_were_never_work(self.ctx())
+        self.assertEqual(1, len(plan.load_all(self.ctx(), plan.NEXT)))
+
+    def test_one_somebody_wrote_on_stays(self):
+        from claude_bestpractice import migrate
+
+        self.a_card_opened_by("a-session-that-is-gone", note="the real task: budget alarm")
+        migrate._withdraw_messages_that_were_never_work(self.ctx())
+        self.assertEqual(1, len(plan.load_all(self.ctx(), plan.NEXT)))

@@ -922,6 +922,27 @@ def _unstage_what_another_tree_staged(ctx: GitContext) -> str:
     return said
 
 
+def _withdraw_messages_that_were_never_work(ctx: GitContext) -> str:
+    """Cards older versions opened from a founder's message that no work ever followed.
+
+    Until 1.73.0 a session's first message opened a card whatever it said, and so did every
+    question after it: twenty-one of one board's 156 open cards were «статус», «тебя можно
+    закрывать?», «не в тот чат отправил» and an idle notice, and nobody closed them (#256).
+    A Stop now withdraws the card its turn did not plan; this applies that rule once to the
+    cards already there — exactly as a message opened them, opened by a session no longer
+    live. A live session's goes at its own next Stop. Moved to `withdrawn/`, never deleted.
+    """
+    from . import hookio, plan, sessions
+
+    live = {hookio.harness_of(record.session_id, record.worktree)
+            for record in sessions.live_sessions(ctx)}
+    openers = {task.opened_by for task in plan.load_all(ctx, plan.NEXT)
+               if task.source == plan.FROM_THE_FOUNDER and task.opened_by}
+    taken = sum(len(plan.withdraw_unplanned(ctx, opener)) for opener in sorted(openers - live))
+    return f"{taken} card(s) a message opened and no work followed taken off the board" \
+        if taken else ""
+
+
 def _staged_by_a_move(tree: Path) -> list[str]:
     """Card paths staged as deleted in `tree` whose card a transition moved inside it."""
     from . import plan
@@ -1709,6 +1730,7 @@ _REPAIRS = {
     "0036-forget-a-number-another-tree-opened": (1, _forget_a_number_another_tree_opened),
     "0037-begin-the-log-of-the-founders-words": (1, _begin_the_log_of_the_founders_words),
     "0038-unstage-what-another-tree-staged": (1, _unstage_what_another_tree_staged),
+    "0039-withdraw-messages-that-were-never-work": (1, _withdraw_messages_that_were_never_work),
 }
 
 
