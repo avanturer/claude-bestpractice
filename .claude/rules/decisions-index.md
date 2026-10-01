@@ -1,9 +1,5 @@
 # Decisions
 
-- [0014] A gate's refusal is the session's to resolve, never the founder's to hear first — `decisions/0014-a-refusal-is-the-sessions-to-resolve.md`
-- [0015] A spawn names the tier it runs as, and the count is the founder's number — `decisions/0015-a-spawn-names-its-tier.md`
-- [0016] Off means off, on the next tool call, and only the founder says it — `decisions/0016-off-means-off.md`
-- [0017] A gate never refuses the act that resolves it — `decisions/0017-a-gate-does-not-block-its-own-remedy.md`
 - [0018] The ledger lives in the main checkout and out of git — `decisions/0018-the-ledger-is-out-of-git.md`
 - [0019] A finished tree removes itself, and what the plugin may not remove it names — `decisions/0019-a-finished-tree-removes-itself.md`
 - [0020] Every refusal leaves at least one command that runs on this machine — `decisions/0020-a-refusal-leaves-a-runnable-command.md`
@@ -11,4 +7,8 @@
 - [0022] A removal carries its own cleanup, and happens where the session survives it — `decisions/0022-a-removal-carries-its-own-cleanup.md`
 - [0023] One `+merge` accepts every pull request its chat has open — `decisions/0023-one-merge-accepts-the-chats-pool.md`
 - [0024] A draft is paused work, and a missing pull request is asked of GitHub before it is claimed — `decisions/0024-a-draft-is-paused-work.md`
-- ... 11 older, see `decisions/`
+- [0025] A command writes the index of the tree it runs in, and no other — `decisions/0025-a-command-writes-its-own-trees-index.md`
+- [0026] A tree the Stop gate let go stays let go until something in it changes — `decisions/0026-a-tree-let-go-stays-let-go.md`
+- [0027] A card opens from work, and one no work followed is withdrawn — `decisions/0027-a-card-opens-from-work.md`
+- [0028] A session is named the way SendMessage addresses it, asked of Claude Code at the start — `decisions/0028-a-session-is-named-as-sendmessage-addresses-it.md`
+- ... 15 older, see `decisions/`
