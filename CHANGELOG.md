@@ -2,10 +2,10 @@
 
 ## v1.73.0
 
-Four reports from one board on 1.72.0, fixed together. A card's move no longer reaches another
-tree's index (#254). The Stop gate measures a session's own work past a fast-forward, leaves
-ignored test files alone, and stops re-running the suite over a tree it already let go (#255).
-A chat message opens a card only when it is work (#256). Every session is named the way
+This release fixes the reports filed from one board on 1.72.0. A card's move no longer reaches
+another tree's index (#254). The Stop gate measures a session's own work past a fast-forward,
+leaves ignored test files alone, and stops re-running the suite over a tree it already let go
+(#255). A chat message opens a card only when it is work (#256). Every session is named the way
 `SendMessage` addresses it (#253).
 
 ### Another tree's index is that tree's (#254)
