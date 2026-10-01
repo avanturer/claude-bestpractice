@@ -28,8 +28,11 @@ it was obtained, and one that was never resolved to the CLI is not evidence of a
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import shutil
+import subprocess
 import time
 from dataclasses import dataclass, asdict, field
 from pathlib import Path, PurePosixPath
@@ -74,6 +77,17 @@ _CLI_PACKAGE = "claude-code"
 LEASES_FILE = "leases.json"
 REAPED_LOG = "reaped.jsonl"
 
+# Set to anything, and `running` asks Claude Code nothing: the sessions read as unnamed, as
+# they did before names were read at all. It can only take an answer away, so a session that
+# set it would gain nothing; the suite sets it, because a real `claude` on the machine
+# running it would otherwise answer about that machine's sessions on every session start.
+NO_AGENTS_ENV = "CLAUDE_BESTPRACTICE_NO_AGENTS"
+
+# What `claude agents --json` is given to answer: about a third of a second measured, and a
+# sixth of the 30 seconds the session start has in all. Past this it goes on without names
+# rather than spend the board on them.
+AGENTS_TIMEOUT_SECONDS = 5.0
+
 # The reap log is the only append-only structure in Tier B. Bounded so a repository
 # worked for a year does not carry a megabyte of dead sessions that `reaped_memory`
 # scans on every resume.
@@ -113,6 +127,11 @@ class SessionRecord:
     # because the cost being bounded is the fan-out — five agents at once — and not the
     # fifth question of a long conversation. `prompt-capture` puts it back to zero.
     spawns_this_turn: int = 0
+    # The name Claude Code gives this session, which `SendMessage` takes as its address —
+    # `fuddy-8b`, where everything here said `80672d34` and the only way to tell which chat
+    # to write to was reading `~/.claude/sessions/` by hand (#253). As `running` last
+    # reported it; empty until it has.
+    name: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -316,6 +335,115 @@ def is_live(ctx: GitContext, rec: SessionRecord, known_worktrees: set[str] | Non
     if known_worktrees and rec.worktree not in known_worktrees:
         return False
     return True
+
+
+def running() -> dict[str, dict]:
+    """The sessions Claude Code says are live on this machine, by session id. {} when it
+    cannot say.
+
+    `claude agents --json` is the interface the harness supports for reading session state
+    from outside it, and it carries the one thing no hook payload does: the name a session
+    answers to. Asked at a session start and by `claude-bp status`, never on a tool call.
+    """
+    if os.environ.get(NO_AGENTS_ENV):
+        return {}
+    # The binary running this session, for a hook whose PATH has no `claude` on it. Not a
+    # documented variable, so only ever the second answer, and gone it is no answer at all.
+    cli = shutil.which("claude") or os.environ.get("CLAUDE_CODE_EXECPATH", "")
+    if not cli:
+        return {}
+    try:
+        proc = subprocess.run(
+            [cli, "agents", "--json"], capture_output=True, stdin=subprocess.DEVNULL,
+            encoding="utf-8", errors="replace", timeout=AGENTS_TIMEOUT_SECONDS,
+        )
+        listed = json.loads(proc.stdout) if proc.returncode == 0 else []
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return {}
+    return {str(entry["sessionId"]): entry for entry in listed if isinstance(entry, dict)
+            and isinstance(entry.get("sessionId"), str)} if isinstance(listed, list) else {}
+
+
+def learn_names(ctx: GitContext, live: dict[str, dict]) -> None:
+    """Write onto every record the name its session answers to now. A session renamed with
+    `/rename` or by accepting a plan is renamed here the next time anyone asks."""
+    for rec in load_all(ctx):
+        name = str(live.get(hookio.harness_of(rec.session_id, rec.worktree), {}).get("name") or "")
+        if name and name != rec.name:
+            _name(ctx, rec.session_id, name)
+
+
+def _name(ctx: GitContext, session_id: str, name: str) -> None:
+    """Set one record's name under its lock. Not through `touch`: that stamps the heartbeat,
+    and a sibling naming a session must not make it look more alive than it is."""
+    path = _record_path(ctx, session_id)
+    with store.file_lock(path.with_name(path.name + ".lock")):
+        rec = get(ctx, session_id)
+        if rec is not None:
+            rec.name = name
+            store.write_json(path, rec.to_dict())
+
+
+def superseded(rec: SessionRecord, live: dict[str, dict]) -> bool:
+    """Is this record's process now running ANOTHER conversation?
+
+    `/clear` and `/resume` move a running CLI to a new session id. The record left under the
+    old one names a process that is alive, with the start time it registered with, so every
+    liveness test here proves it alive for as long as the CLI runs: two sessions on one board
+    that nobody was in (#253). Claude Code reporting that very process under a different id is
+    the positive evidence the reaper accepts — and only for a pid that is the CLI itself, read
+    in this pid namespace.
+    """
+    harness = hookio.harness_of(rec.session_id, rec.worktree)
+    if not live or not harness or harness in live or rec.pid_trust != PID_TRUST_OWNER:
+        return False
+    if rec.pid_identity and rec.pid_identity != store.lock_identity():
+        return False
+    return any(entry.get("pid") == rec.pid for entry in live.values())
+
+
+def label(rec: SessionRecord) -> str:
+    """How a session is named wherever this plugin names one: its name, then the id prefix
+    the rest of the board uses, or the prefix alone until a name is known."""
+    short = rec.session_id[:8]
+    return f"{rec.name} ({short})" if rec.name else short
+
+
+def called(ctx: GitContext, session_id: str) -> str:
+    """`label` for a session known only by id — a card's owner, a pull request's opener."""
+    rec = get(ctx, session_id) if session_id else None
+    return label(rec) if rec is not None else session_id[:8]
+
+
+def who_works_in(ctx: GitContext, tree: Path) -> str:
+    """`label` of each live session working in `tree`, or "" where none is known to. For the
+    refusal that sends a session out of another's tree, which named the tree and not who to
+    ask about it (#253)."""
+    where = tree.resolve()
+    return ", ".join(label(rec) for rec in one_per_session(live_sessions(ctx))
+                     if Path(rec.worktree).resolve() == where)
+
+
+def one_per_session(records: list[SessionRecord]) -> list[SessionRecord]:
+    """Each running session once, at the tree it is working in.
+
+    Identity is (harness id, tree), so a session that so much as `cd`s into another tree to
+    read is registered there too, and was listed in that tree as if working in it (#253).
+    Records of one process are one session (`_process_of`). The one shown is the latest to
+    have written something, or, where none has, the one it started in.
+    """
+    chosen: dict[object, SessionRecord] = {}
+    for rec in records:
+        key = _process_of(rec) or rec.session_id
+        if key not in chosen or _where_it_works(rec) > _where_it_works(chosen[key]):
+            chosen[key] = rec
+    return list(chosen.values())
+
+
+def _where_it_works(rec: SessionRecord) -> tuple[bool, float]:
+    """Ranks one session's records: having written beats not, then the latest write, or the
+    earliest start among records that never wrote."""
+    return (True, rec.heartbeat_at) if rec.last_touched else (False, -rec.started_at)
 
 
 def is_idle(rec: SessionRecord) -> bool:
@@ -532,11 +660,15 @@ def unregister(ctx: GitContext, session_id: str) -> None:
     release_all(ctx, session_id)
 
 
-def reap(ctx: GitContext, exclude: str | None = None) -> list[SessionRecord]:
+def reap(ctx: GitContext, exclude: str | None = None,
+         live: dict[str, dict] | None = None) -> list[SessionRecord]:
     """Remove dead sessions and release their leases. Returns what was reaped.
 
     Without this, every tool in the surveyed field leaves a crashed session marked
     in-progress forever, and its file leases poison those paths permanently.
+
+    `live` is what `running` returned, when the caller asked: a record whose CLI has moved
+    to another conversation is dead too (`superseded`).
     """
     known = {p.as_posix() for p in worktree_paths(ctx)}
     dead: list[SessionRecord] = []
@@ -547,7 +679,7 @@ def reap(ctx: GitContext, exclude: str | None = None) -> list[SessionRecord]:
         # and the Stop gate saw nothing to verify. An ordinary resume disarmed it.
         if rec.session_id == exclude:
             continue
-        if not is_live(ctx, rec, known):
+        if not _still_running(ctx, rec, known, live):
             dead.append(rec)
             # The baseline goes into the reap log, not just the record. A crashed
             # session is reaped by a sibling, and when the founder resumes it the rebuild
@@ -614,13 +746,20 @@ def reaped_memory(ctx: GitContext, session_id: str) -> dict:
     return latest
 
 
-def live_sessions(ctx: GitContext, exclude: str | None = None) -> list[SessionRecord]:
+def live_sessions(ctx: GitContext, exclude: str | None = None,
+                  live: dict[str, dict] | None = None) -> list[SessionRecord]:
     known = {p.as_posix() for p in worktree_paths(ctx)}
     return [
         r
         for r in load_all(ctx)
-        if r.session_id != exclude and is_live(ctx, r, known)
+        if r.session_id != exclude and _still_running(ctx, r, known, live)
     ]
+
+
+def _still_running(ctx: GitContext, rec: SessionRecord, known: set[str],
+                   live: dict[str, dict] | None) -> bool:
+    """Live by the record's own evidence, and not a conversation its process has left."""
+    return is_live(ctx, rec, known) and not superseded(rec, live or {})
 
 
 def my_pid(ctx: GitContext, session_id: str) -> int:

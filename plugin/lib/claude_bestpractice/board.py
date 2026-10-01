@@ -198,24 +198,37 @@ def health_line(ctx: GitContext, live_count: int, reaped: int) -> str:
     )
 
 
-def _sessions_block(others: list[SessionRecord], leases: dict, now: float) -> list[str]:
-    """Who else is live, what they hold, and what they are doing."""
+def _sessions_block(ctx: GitContext, others: list[SessionRecord], leases: dict,
+                    now: float) -> list[str]:
+    """Who else is live, what they hold, and what they are doing — each by the name
+    `SendMessage` takes, so writing to the one that holds a file needs nothing else (#253)."""
     if not others:
         return ["OTHER LIVE SESSIONS: none. This session is alone on the repository."]
 
     out = [f"OTHER LIVE SESSIONS ({len(others)}) — do not edit files they hold:"]
     for rec in sorted(others, key=lambda r: r.heartbeat_at, reverse=True):
         out.append(
-            f"  - {rec.session_id[:8]} on {rec.branch} "
+            f"  - {sessions.label(rec)} on {rec.branch} "
             f"[{Path(rec.worktree).name}] active {_age(now - rec.heartbeat_at)}"
         )
         out.append(f"      touched: {', '.join(rec.last_touched[:3]) or 'nothing yet'}")
         held = leases.get(rec.session_id, [])
         if held:
             out.append(f"      holds: {', '.join(held[:5])}")
-        if rec.task_statement:
-            out.append(f"      task: {rec.task_statement[:120]}")
+        task = doing(ctx, rec)
+        if task:
+            out.append(f"      task: {task[:120]}")
     return out
+
+
+def doing(ctx: GitContext, rec: SessionRecord) -> str:
+    """What a session is doing: the card it holds, or what it was last told when it holds
+    none. The last message alone was the answer, typos and all, while the session's own card
+    said what it had actually taken on (#253)."""
+    from . import plan
+
+    held = plan.held_by(ctx, rec.session_id)
+    return f"{held[0].id} {held[0].title}" if held else rec.task_statement
 
 
 def _alerts(ctx: GitContext) -> list[str]:
@@ -277,7 +290,7 @@ def render(
 ) -> str:
     """Build the board, health footer last and guaranteed present."""
     leases = leases or {}
-    others = _siblings(ctx, me, others)
+    others = sessions.one_per_session(_siblings(ctx, me, others))
     now = time.time()
     lines: list[str] = []
 
@@ -295,7 +308,7 @@ def render(
         lines.append(tried)
 
     lines.append("")
-    lines.extend(_sessions_block(others, leases, now))
+    lines.extend(_sessions_block(ctx, others, leases, now))
 
     # Suppressed, not deleted. A claim whose subject was rewritten underneath it is
     # usually still mostly right, and stale context is measurably worse than none —

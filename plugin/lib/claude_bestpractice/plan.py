@@ -854,15 +854,18 @@ def sweep_idle(ctx: GitContext, hours: float = IDLE_HOURS) -> list[Task]:
     is waiting on nobody. It goes back where anyone can pick it up, carrying a line saying
     what happened so the next session does not rediscover it.
     """
+    from . import sessions
+
     now = time.time()
     moved: list[Task] = []
     for task in load_all(ctx, DOING):
         idle = _stale_for(task, now, hours)
         if not idle or _still_on_it(ctx, task):
             continue
+        # By the name the chat answers to as well, so whoever reads this can ask it (#253).
         note = (f"[{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now))}] returned to the "
-                f"queue: claimed by {task.owner[:8] or 'nobody'} and untouched for "
-                f"{int(idle)}h.")
+                f"queue: claimed by {sessions.called(ctx, task.owner) if task.owner else 'nobody'}"
+                f" and untouched for {int(idle)}h.")
         task.body = f"{task.body}\n\n{note}".strip() if task.body else note
         _rewrite_body(task)
         released = _move(task, NEXT)
@@ -960,9 +963,9 @@ def activity(ctx: GitContext, task: Task) -> str:
     if holder is None:
         return f"claimed by {task.owner[:8]}, which has no record — reclaimable"
     if not sessions.is_live(ctx, holder):
-        return f"held by {task.owner[:8]}, which is gone — reclaimable"
+        return f"held by {sessions.label(holder)}, which is gone — reclaimable"
     idle = max(time.time() - float(holder.heartbeat_at or 0), 0)
-    return f"active in {task.owner[:8]}, seen {_ago(idle)} ago"
+    return f"active in {sessions.label(holder)}, seen {_ago(idle)} ago"
 
 
 def _ago(seconds: float) -> str:
@@ -1122,7 +1125,7 @@ def _held_elsewhere(ctx: GitContext, task: Task, mine: set[str]) -> str:
     holder = sessions.get(ctx, task.owner)
     if holder is None or not sessions.is_live(ctx, holder):
         return ""
-    return f"task {task.id} is held by live session {task.owner[:8]}"
+    return f"task {task.id} is held by live session {sessions.label(holder)}"
 
 
 def _claimable(ctx: GitContext, task_id: str, session_id: str) -> tuple[Task | None, str]:

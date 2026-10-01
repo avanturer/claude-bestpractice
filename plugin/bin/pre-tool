@@ -2136,8 +2136,8 @@ def main() -> None:
             if clash:
                 deny(
                     ctx, rec,
-                    f"claude-bestpractice: session {clash[0][:8]} is already using the database "
-                    f"`{clash[1]}`, and this tree points at the same one.\n"
+                    f"claude-bestpractice: session {sessions.called(ctx, clash[0])} is already "
+                    f"using the database `{clash[1]}`, and this tree points at the same one.\n"
                     "  Worktrees isolate files and nothing else — one open transaction "
                     "there stops the tests here, and neither side can see why.\n"
                     f"  Give this tree its own: set DATABASE_URL in {worktree.ENV_FILE} to "
@@ -2164,11 +2164,13 @@ def main() -> None:
                 other = sessions.get(ctx, neighbour)
                 where = f" on {other.branch}" if other else " in another tree"
                 inbox.post(ctx, neighbour,
-                           f"another session is editing {touched[0]} too, on {rec.branch}. "
+                           f"session {sessions.label(rec)} is editing {touched[0]} too, on "
+                           f"{rec.branch}. "
                            "Separate trees, so this is a merge rather than an overwrite — "
                            "worth knowing before the merge.", sender=event.session_id)
                 inbox.post(ctx, event.session_id,
-                           f"session {neighbour[:8]}{where} is editing {touched[0]} too. "
+                           f"session {sessions.called(ctx, neighbour)}{where} is editing "
+                           f"{touched[0]} too. "
                            "Separate trees, so this is a merge rather than an overwrite — "
                            "worth knowing before the merge.", sender=neighbour)
             if owner:
@@ -2183,13 +2185,14 @@ def main() -> None:
                 # their Stop gate will not let them end a turn on gets an answer.
                 inbox.ask(
                     ctx, owner,
-                    f"another session is blocked on {touched[0]}, which you hold. "
+                    f"session {sessions.label(rec)} is blocked on {touched[0]}, which you hold. "
                     "Are you still in it, or can they take it?",
                     sender=event.session_id,
                 )
                 deny(
                     ctx, rec,
-                    f"claude-bestpractice: session {owner[:8]}{where} is editing {touched[0]} "
+                    f"claude-bestpractice: session {sessions.called(ctx, owner)}{where} is editing "
+                    f"{touched[0]} "
                     "right now, in this same worktree. Work on something else, or coordinate "
                     "before touching this file — whoever writes second wins silently and "
                     "neither of you would notice."
