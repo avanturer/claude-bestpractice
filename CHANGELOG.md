@@ -1,5 +1,76 @@
 # Changelog
 
+## v2.0.0
+
+The plugin is called `bestpractice` now, because Claude Code 2.1.289 reserves every plugin
+name that starts `claude-`, and this one did. Everything else keeps its name: the repository,
+the marketplace, the `claude-bp` commands, and `.claude/claude-bestpractice/` with your state
+in it. **Upgrading from 1.x takes one install, once.** A major version, because the plugin's
+id and its in-session commands changed.
+
+### Upgrading from 1.x
+
+```sh
+claude plugin marketplace update claude-bestpractice
+claude plugin install bestpractice@claude-bestpractice
+```
+
+Add `--scope project` to the second line if you installed it that way. Or run `install.sh`
+again, which does both and takes the old id out first. Then restart Claude Code. In a session
+the commands are `/bestpractice:status`, `/bestpractice:plan` and `/bestpractice:review`.
+
+The marketplace's `renames` map moves `claude-bestpractice@claude-bestpractice` to the new id
+in your user, project and local settings on its own. It does not install the plugin under it.
+Measured on 2.1.289 against a git-hosted copy of this marketplace: after the marketplace update,
+`claude plugin list` shows nothing installed, and `claude plugin update
+bestpractice@claude-bestpractice` answers `Plugin "bestpractice" is not installed`, until the
+install above runs. None of this plugin's code runs in that gap, so these notes and the README
+are the only places that can tell you.
+
+### What happened
+
+Claude Code's releases since 2.1.286 were read against this plugin, and `claude plugin
+validate` was run on 2.1.289. It failed both manifests:
+
+> Plugin name "claude-bestpractice" is reserved: it passes as one of Anthropic's own. A third
+> party's plugin name cannot start with "claude-", …
+
+The changelog says nothing about it, and the plugin still installs and loads on 2.1.289. The
+README promised `validate --strict` passed: measured once, against 2.1.281, and never again.
+What follows has a precedent. In 2.1.280 a marketplace name Claude Code came to reserve went
+straight from accepted to refused, and one already added stopped loading with its plugins.
+
+### What changed
+
+- `plugin.json` and the marketplace entry name the plugin `bestpractice`, and the
+  marketplace's `renames` map sends `claude-bestpractice` there. Both manifests pass
+  `claude plugin validate --strict` on 2.1.289.
+- A `false` under the old key is still the founder's off switch, read and guarded like the
+  new one. Claude Code never rewrites managed settings, nor a settings file committed on a
+  branch nobody has opened since.
+- `install.sh` uninstalls `claude-bestpractice@claude-bestpractice` before it installs the
+  new id, so the gates never run twice. It also tells the two apart: the new id is the tail
+  of the old one, and a plain match found both.
+- The board's "a newer version is on disk" line looks under the new name, and the update
+  command the plugin prints is `claude plugin update bestpractice@claude-bestpractice`.
+- `make check` asks the `claude` on the machine to validate both manifests
+  (`tools/check_manifests.py`), and says so when there is no CLI to ask. Decision 0029.
+- `/bestpractice:status` ran `claude-bp status` under `Bash(claude-bestpractice:*)`, a
+  prefix no command of this plugin has had since the commands became `claude-bp`. It now
+  allows exactly the command it runs, and a test holds every command to its own frontmatter.
+
+No `migrate._REPAIRS` step: no state of this plugin is keyed by its id, and the settings that
+are, Claude Code rewrites.
+
+### How it was checked
+
+The upgrade was run end to end on Claude Code 2.1.289 in an isolated config: 1.73.0 installed
+from a git-hosted copy of this marketplace, the rename published to it, the marketplace
+updated, and the new id installed. User and project settings were rewritten to the new key,
+and the install was the one step that brought the plugin back. `tools/check_manifests.py`
+fails on the 1.73.0 tree and passes on this one. 20 new tests; the ones for the old key, the
+installer's match and the `/status` permission each fail with their fix taken out.
+
 ## v1.73.0
 
 This release fixes the reports filed from one board on 1.72.0. A card's move no longer reaches
