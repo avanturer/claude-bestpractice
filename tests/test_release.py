@@ -447,6 +447,36 @@ class TestItInstallsTheShortestWay(unittest.TestCase):
         self.assertIn(f'MARKETPLACE="{market["name"]}"', installer)
 
 
+class TestEveryCommandMayRunWhatItRuns(unittest.TestCase):
+    """A command's `!` line runs before the model sees anything, under its `allowed-tools`.
+
+    `/status` ran `claude-bp status` under `Bash(claude-bestpractice:*)`, a prefix no command
+    of this plugin has had since the commands were renamed `claude-bp`, so the one line the
+    command exists to show needed a permission it never asked for.
+    """
+
+    BANG = re.compile(r"^!`([^`]+)`", re.M)
+    BASH_RULE = re.compile(r"Bash\(([^)]*)\)")
+
+    @staticmethod
+    def covers(rule: str, command: str) -> bool:
+        if rule.endswith(":*"):
+            prefix = rule[:-2]
+            return command == prefix or command.startswith(prefix + " ")
+        return command == rule
+
+    def test_each_bang_line_is_allowed_by_its_own_frontmatter(self):
+        for path in sorted((BIN.parent / "commands").glob("*.md")):
+            text = path.read_text(encoding="utf-8")
+            front = text.split("---", 2)[1] if text.startswith("---") else ""
+            allowed = re.search(r"^allowed-tools:(.*)$", front, re.M)
+            rules = self.BASH_RULE.findall(allowed.group(1)) if allowed else []
+            for command in self.BANG.findall(text):
+                with self.subTest(command=path.name):
+                    self.assertTrue(any(self.covers(rule, command) for rule in rules),
+                                    f"{path.name}: `{command}` is not covered by {rules}")
+
+
 if __name__ == "__main__":
     unittest.main()
 
