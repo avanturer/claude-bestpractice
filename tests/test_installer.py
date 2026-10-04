@@ -40,13 +40,8 @@ class InstallerCase(unittest.TestCase):
                               timeout=300, env=env, stdin=subprocess.DEVNULL)
 
 
-class TestARerunKeepsWorkOfYourOwn(InstallerCase):
-    """Re-running the installer hard-reset the install directory to origin/HEAD.
-
-    A commit and an uncommitted edit made there — a founder patching the plugin in place —
-    were gone after a run that said nothing but "updating", with `reset: moving to
-    origin/HEAD` in the reflog.
-    """
+class InstalledCase(InstallerCase):
+    """A founder's machine with this plugin's clone already in the install directory."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -70,6 +65,15 @@ class TestARerunKeepsWorkOfYourOwn(InstallerCase):
         for key, value in (("user.email", "t@example.com"), ("user.name", "t"),
                            ("commit.gpgsign", "false")):
             git(["config", key, value], repo)
+
+
+class TestARerunKeepsWorkOfYourOwn(InstalledCase):
+    """Re-running the installer hard-reset the install directory to origin/HEAD.
+
+    A commit and an uncommitted edit made there — a founder patching the plugin in place —
+    were gone after a run that said nothing but "updating", with `reset: moving to
+    origin/HEAD` in the reflog.
+    """
 
     def test_a_local_commit_and_an_edit_survive_a_rerun(self):
         (self.installed / "LOCAL").write_text("a patch of my own\n")
@@ -96,6 +100,57 @@ class TestARerunKeepsWorkOfYourOwn(InstallerCase):
         self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
         self.assertEqual("a fix upstream", git(["log", "-1", "--format=%s"], self.installed))
         self.assertEqual("edited here, not committed\n", (self.installed / "NOTES").read_text())
+
+
+class TestTheIdFromBeforeTheRenameIsTakenOut(InstalledCase):
+    """2.0.0 renamed the plugin from `claude-bestpractice` to `bestpractice`: Claude Code
+    2.1.289 reserves plugin names that start `claude-` (decision 0029).
+
+    Both ids load the same hooks. An upgrade that installed the new one beside the old would
+    run every gate twice, two refusals for one call and two writers on one ledger, so the
+    old one goes first.
+    """
+
+    def listing(self, *ids: str) -> None:
+        """A `claude` that lists `ids` as installed and records every call it is given."""
+        self.calls = self.tmp / "claude-calls"
+        listed = "".join(f"  > {plugin_id}\\n    Version: 1.0.0\\n" for plugin_id in ids)
+        self.stub("claude", (
+            "#!/bin/sh\n"
+            f'echo "$*" >> "{self.calls}"\n'
+            'case "$1 $2" in\n'
+            '  "--version "*) echo "2.1.289 (Claude Code)" ;;\n'
+            f'  "plugin list") printf "Installed plugins:\\n\\n{listed}" ;;\n'
+            "esac\n"
+            "exit 0\n"
+        ))
+
+    def calls_made(self) -> list[str]:
+        return self.calls.read_text(encoding="utf-8").splitlines()
+
+    def test_the_former_id_is_uninstalled_before_the_new_one_goes_in(self):
+        self.listing("claude-bestpractice@claude-bestpractice")
+        proc = self.install()
+        self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
+        calls = self.calls_made()
+        removed = calls.index("plugin uninstall claude-bestpractice@claude-bestpractice")
+        added = calls.index("plugin install bestpractice@claude-bestpractice")
+        self.assertLess(removed, added)
+
+    def test_the_new_id_is_not_mistaken_for_the_former_one(self):
+        """`bestpractice@claude-bestpractice` is the tail of the former id, so a plain grep
+        for it matches both."""
+        self.listing("claude-bestpractice@claude-bestpractice")
+        self.install()
+        self.assertNotIn("plugin uninstall bestpractice@claude-bestpractice", self.calls_made())
+
+    def test_an_install_under_the_new_id_is_refreshed_and_nothing_else_removed(self):
+        self.listing("bestpractice@claude-bestpractice")
+        proc = self.install()
+        self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
+        calls = self.calls_made()
+        self.assertIn("plugin uninstall bestpractice@claude-bestpractice", calls)
+        self.assertNotIn("plugin uninstall claude-bestpractice@claude-bestpractice", calls)
 
 
 class TestTheInstallerNamesThePythonItFound(InstallerCase):

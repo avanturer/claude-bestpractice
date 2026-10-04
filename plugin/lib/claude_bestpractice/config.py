@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from . import store
+from . import MARKETPLACE, PLUGIN, store
 from .gitctx import GitContext
 
 CONFIG_NAME = "config.json"
@@ -891,9 +891,24 @@ def load_checked(ctx: GitContext) -> tuple[Config, list[str]]:
     return cfg, complaints
 
 
-# What the harness calls this plugin where enablement is recorded. The marketplace name
-# and the plugin name, which is the spelling `enabledPlugins` uses.
-PLUGIN_KEY = "claude-bestpractice@claude-bestpractice"
+# What the harness calls this plugin where enablement is recorded. The plugin name and the
+# marketplace name, which is the spelling `enabledPlugins` uses.
+PLUGIN_KEY = f"{PLUGIN}@{MARKETPLACE}"
+
+# Every key this plugin has been enabled under. Until 2.0.0 it was `claude-bestpractice`,
+# and Claude Code rewrites that key to the current one through the marketplace's `renames`
+# map in user, project and local settings, but never in managed settings, and never in a
+# file committed on a branch nobody has opened since. A `false` under the old key is still
+# the founder's switch, so it still switches the plugin off (decision 0029).
+PLUGIN_KEYS = (PLUGIN_KEY, f"{MARKETPLACE}@{MARKETPLACE}")
+
+
+def switched_off(enabled_plugins: Any) -> bool:
+    """Whether an `enabledPlugins` mapping switches this plugin off, under any key it has had."""
+    return isinstance(enabled_plugins, dict) and any(
+        enabled_plugins.get(key) is False for key in PLUGIN_KEYS
+    )
+
 
 # Where a project records which plugins it wants. Read and never written: this is the
 # founder's file and the harness's schema, and a gate that edits the settings deciding
@@ -916,8 +931,7 @@ def disabled_for_project(ctx: GitContext) -> str:
     for root in dict.fromkeys((founders_tree(ctx), ctx.worktree_root)):
         for rel in PROJECT_SETTINGS:
             raw = store.read_json(root / rel, default={})
-            wanted = raw.get("enabledPlugins") if isinstance(raw, dict) else None
-            if isinstance(wanted, dict) and wanted.get(PLUGIN_KEY) is False:
+            if isinstance(raw, dict) and switched_off(raw.get("enabledPlugins")):
                 return _shown(ctx, root / rel)
     return ""
 

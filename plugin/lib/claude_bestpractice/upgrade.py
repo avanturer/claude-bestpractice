@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from . import __version__
+from . import MARKETPLACE, PLUGIN, __version__
 
 # `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`, written by the CLI. Matched
 # rather than assumed: a checkout has a parent directory too, and it is not a version.
@@ -48,7 +48,7 @@ def known_bad(version: str | None = None) -> str:
     reason = KNOWN_BAD.get(version or __version__, "")
     return (
         f"claude-bestpractice {version or __version__} has a known defect: {reason}. "
-        "Update with `claude plugin update claude-bestpractice`."
+        f"Update with `{update_command()}`."
         if reason else ""
     )
 
@@ -124,10 +124,11 @@ def newer_in_the_cache(home: Path | None = None) -> str | None:
     root = (home or Path.home()) / CACHE
     try:
         # The glob does the filtering that a name check used to: whichever marketplace it
-        # came from, only OUR plugin's directory is opened.
+        # came from, only OUR plugin's directory is opened. Under its current name only:
+        # the CLI never unpacks a version past 1.73.0 under `claude-bestpractice/`.
         cached = [
             entry.name
-            for plugin_dir in root.glob("*/claude-bestpractice")
+            for plugin_dir in root.glob(f"*/{PLUGIN}")
             for entry in plugin_dir.iterdir()
             if entry.is_dir() and _VERSION_DIR.match(entry.name)
         ]
@@ -166,10 +167,10 @@ def stale_line(root: Path | None = None, home: Path | None = None) -> str:
 
 
 def update_command() -> str:
-    """The command that works, qualified, because the short form does not.
+    """The command that works, qualified, because the short form has not always worked.
 
-    `claude plugin update claude-bestpractice` fails with `Plugin not found` while the
-    plugin is installed and enabled, which reads as a broken install rather than a wrong
-    argument. `install` accepts the short name; `update` does not.
+    `claude plugin update claude-bestpractice` failed with `Plugin not found` while the
+    plugin was installed and enabled, which reads as a broken install rather than a wrong
+    argument. 2.1.289 takes the short form too; the qualified one works on both.
     """
-    return "claude plugin update claude-bestpractice@claude-bestpractice"
+    return f"claude plugin update {PLUGIN}@{MARKETPLACE}"

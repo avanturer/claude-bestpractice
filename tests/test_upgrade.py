@@ -19,7 +19,7 @@ from pathlib import Path
 
 from helpers import BIN, REPO_ROOT, RepoCase, sid
 
-from claude_bestpractice import upgrade
+from claude_bestpractice import PLUGIN, upgrade
 
 TOOL = REPO_ROOT / "tools" / "check_shipped.py"
 
@@ -212,7 +212,8 @@ class TestRunningIsNotInstalled(unittest.TestCase):
         """The short form fails with `Plugin not found` while the plugin is installed."""
         from claude_bestpractice import upgrade
 
-        self.assertIn("claude-bestpractice@claude-bestpractice", upgrade.update_command())
+        self.assertEqual("claude plugin update bestpractice@claude-bestpractice",
+                         upgrade.update_command())
 
 
 class _clone:
@@ -281,7 +282,7 @@ class TestACopyOutsideTheCacheIsStillTold(unittest.TestCase):
         home = Path(tempfile.mkdtemp(prefix="claude-bestpractice-home-"))
         self.addCleanup(shutil.rmtree, home, ignore_errors=True)
         for version in versions:
-            (home / upgrade.CACHE / "someone" / "claude-bestpractice" / version).mkdir(
+            (home / upgrade.CACHE / "someone" / PLUGIN / version).mkdir(
                 parents=True, exist_ok=True)
         return home
 
@@ -294,6 +295,15 @@ class TestACopyOutsideTheCacheIsStillTold(unittest.TestCase):
 
     def test_the_newest_wins_when_several_are_lying_around(self):
         self.assertEqual("99.1.0", upgrade.newer_in_the_cache(self.cache("99.0.0", "99.1.0")))
+
+    def test_the_name_from_before_the_rename_is_not_ours_any_more(self):
+        """The CLI unpacks nothing past 1.73.0 under `claude-bestpractice/`. A version found
+        there belongs to some other install, not to a newer copy of this plugin."""
+        home = Path(tempfile.mkdtemp(prefix="claude-bestpractice-home-"))
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        (home / upgrade.CACHE / "claude-bestpractice" / "claude-bestpractice" / "99.0.0").mkdir(
+            parents=True)
+        self.assertIsNone(upgrade.newer_in_the_cache(home))
 
     def test_another_plugin_is_not_ours(self):
         home = Path(tempfile.mkdtemp(prefix="claude-bestpractice-home-"))
@@ -339,7 +349,7 @@ class TestAnUpdateMidSessionReachesTheSession(RepoCase):
         )
 
     def unpack(self, version: str) -> None:
-        (self.home / upgrade.CACHE / "someone" / "claude-bestpractice"
+        (self.home / upgrade.CACHE / "someone" / PLUGIN
          / version).mkdir(parents=True, exist_ok=True)
 
     def notes(self) -> list[str]:

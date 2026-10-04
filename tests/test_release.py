@@ -446,6 +446,64 @@ class TestItInstallsTheShortestWay(unittest.TestCase):
         market = json.loads(read(".claude-plugin/marketplace.json"))
         self.assertIn(f'MARKETPLACE="{market["name"]}"', installer)
 
+    def test_the_installer_installs_that_plugin(self):
+        from claude_bestpractice import PLUGIN
+
+        self.assertIn(f'PLUGIN="{PLUGIN}"', read("install.sh"))
+
+
+class TestThePluginHasANameTheCliAccepts(unittest.TestCase):
+    """Claude Code 2.1.289 reserves every plugin name that starts `claude-`, and this one did.
+
+    `claude plugin validate` failed both manifests, while the plugin still installed and
+    loaded and the changelog said nothing. 2.1.280 had already shown the next step for a
+    marketplace name: refused when added, and one already added stopped loading with its
+    plugins. Renamed in 2.0.0, with a `renames` map so Claude Code moves every install that
+    names the old id (decision 0029).
+
+    The rule below is the CLI's own, as 2.1.289 words it. `tools/check_manifests.py` asks the
+    CLI itself where there is one; this holds the line where there is not.
+    """
+
+    RESERVED_PREFIXES = ("claude-", "anthropic-", "anthropics-", "cc-plugin-")
+    RESERVED_NAMES = {"claude", "anthropic", "anthropics", "claude-code", "claude-mods"}
+    FORMER = "claude-bestpractice"
+
+    def manifests(self) -> tuple[dict, dict]:
+        return (json.loads(read("plugin/.claude-plugin/plugin.json")),
+                json.loads(read(".claude-plugin/marketplace.json")))
+
+    def test_the_package_names_the_plugin_the_manifests_name(self):
+        from claude_bestpractice import MARKETPLACE, PLUGIN
+
+        plugin, market = self.manifests()
+        self.assertEqual(PLUGIN, plugin["name"])
+        self.assertEqual([PLUGIN], [entry["name"] for entry in market["plugins"]])
+        self.assertEqual(MARKETPLACE, market["name"])
+
+    def test_the_name_is_not_one_the_cli_reserves(self):
+        name = self.manifests()[0]["name"]
+        self.assertFalse(name.startswith(self.RESERVED_PREFIXES), name)
+        self.assertNotIn(name, self.RESERVED_NAMES)
+        words = set(re.split(r"[^a-z0-9]+", name.lower()))
+        self.assertFalse("official" in words and words & {"claude", "anthropic"}, name)
+
+    def test_the_former_name_moves_to_the_current_one(self):
+        """Without the map, an installed 1.x reports `not found in marketplace` and loads
+        nothing; with it, Claude Code rewrites `enabledPlugins` to the new id."""
+        plugin, market = self.manifests()
+        self.assertEqual({self.FORMER: plugin["name"]}, market.get("renames"))
+
+    def test_the_former_key_still_switches_the_plugin_off(self):
+        from claude_bestpractice import config
+
+        self.assertEqual(f"{plugin_name()}@claude-bestpractice", config.PLUGIN_KEY)
+        self.assertIn(f"{self.FORMER}@claude-bestpractice", config.PLUGIN_KEYS)
+
+
+def plugin_name() -> str:
+    return json.loads(read("plugin/.claude-plugin/plugin.json"))["name"]
+
 
 class TestTheCliIsAskedAboutTheManifests(unittest.TestCase):
     """`tools/check_manifests.py`, against a stand-in for the CLI.
@@ -764,7 +822,7 @@ class TestThisRepositoryRunsUnderItsOwnPlugin(unittest.TestCase):
     """
 
     SETTINGS = REPO_ROOT / ".claude" / "settings.json"
-    PLUGIN = "claude-bestpractice@claude-bestpractice"
+    PLUGIN = "bestpractice@claude-bestpractice"
 
     def settings(self) -> dict:
         return json.loads(self.SETTINGS.read_text(encoding="utf-8"))
@@ -803,7 +861,7 @@ class TestThisRepositoryRunsUnderItsOwnPlugin(unittest.TestCase):
         is project-scoped: without the flag it fails with "not installed at scope user".
         The step shipped without it and did not work the first time it was run."""
         body = (REPO_ROOT / "RELEASING.md").read_text(encoding="utf-8")
-        self.assertIn("claude plugin update claude-bestpractice@claude-bestpractice --scope project", body)
+        self.assertIn("claude plugin update bestpractice@claude-bestpractice --scope project", body)
 
 
 class TestEveryCommandTheGatesNameCanBeRun(unittest.TestCase):
