@@ -447,6 +447,82 @@ class TestItInstallsTheShortestWay(unittest.TestCase):
         self.assertIn(f'MARKETPLACE="{market["name"]}"', installer)
 
 
+class TestTheCliIsAskedAboutTheManifests(unittest.TestCase):
+    """`tools/check_manifests.py`, against a stand-in for the CLI.
+
+    The README promised `claude plugin validate --strict` passed, from one run against 2.1.281.
+    On 2.1.289 it failed, and nothing that runs on its own said so. `make check` now asks.
+    """
+
+    TOOL = REPO_ROOT / "tools" / "check_manifests.py"
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="claude-bestpractice-manifests-"))
+        self.addCleanup(lambda: subprocess.run(["rm", "-rf", str(self.tmp)], check=False))
+        self.bin = self.tmp / "bin"
+        self.bin.mkdir()
+        self.asked = self.tmp / "asked"
+
+    def cli(self, answer: str, code: int) -> None:
+        """A `claude` that records what it was asked and answers every validate the same."""
+        stub = self.bin / "claude"
+        stub.write_text(
+            "#!/bin/sh\n"
+            'if [ "$1" = --version ]; then echo "9.9.9 (Claude Code)"; exit 0; fi\n'
+            f'echo "$*" >> "{self.asked}"\n'
+            f"cat <<'ANSWER'\n{answer}\nANSWER\n"
+            f"exit {code}\n"
+        )
+        stub.chmod(0o755)
+
+    def check(self, path: str | None = None) -> subprocess.CompletedProcess:
+        """The tool, with the stand-in first on PATH and the system's own tools after it."""
+        path = path or os.pathsep.join((str(self.bin), "/usr/bin", "/bin"))
+        return subprocess.run([sys.executable, str(self.TOOL)], capture_output=True, text=True,
+                              timeout=120, env={**os.environ, "PATH": path})
+
+    def test_it_passes_when_the_cli_accepts_both(self):
+        self.cli(json.dumps({"success": True, "manifest": {"errors": [], "warnings": []}}), 0)
+        proc = self.check()
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn("accepts both", proc.stdout)
+
+    def test_both_manifests_are_asked_about_under_strict(self):
+        self.cli(json.dumps({"success": True}), 0)
+        self.check()
+        asked = self.asked.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(2, len(asked), asked)
+        self.assertTrue(all(line.startswith("plugin validate --strict --json ") for line in asked))
+        self.assertEqual({str(REPO_ROOT / "."), str(REPO_ROOT / "plugin")},
+                         {line.rsplit(" ", 1)[-1] for line in asked})
+
+    def test_it_fails_and_says_what_the_cli_said(self):
+        reserved = 'Plugin name "claude-bestpractice" is reserved'
+        self.cli(json.dumps({"success": False, "manifest": {
+            "errors": [{"path": "name", "message": reserved}], "warnings": []}}), 1)
+        proc = self.check()
+        self.assertEqual(1, proc.returncode)
+        self.assertIn(f"name: {reserved}", proc.stderr)
+        self.assertIn("rejects", proc.stderr)
+
+    def test_an_answer_that_is_not_json_still_fails_and_is_shown(self):
+        """An older CLI without `--json`, or one that crashed: what it printed is the reason."""
+        self.cli("error: unknown option '--json'", 1)
+        proc = self.check()
+        self.assertEqual(1, proc.returncode)
+        self.assertIn("unknown option '--json'", proc.stderr)
+
+    def test_with_no_cli_it_says_nothing_was_asked(self):
+        proc = self.check(path=str(self.bin))
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn("not checked", proc.stdout)
+
+    def test_make_check_runs_it(self):
+        check = re.search(r"^check:(.*)$", read("Makefile"), re.M)
+        self.assertIsNotNone(check)
+        self.assertIn("manifests", check.group(1).split())
+
+
 class TestEveryCommandMayRunWhatItRuns(unittest.TestCase):
     """A command's `!` line runs before the model sees anything, under its `allowed-tools`.
 
