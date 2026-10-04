@@ -232,6 +232,54 @@ class TestOnlyTheFounderThrowsIt(OffCase):
         self.assertEqual("deny", self.hook_decision(proc))
 
 
+class TestTheKeyFromBeforeTheRenameIsStillTheSwitch(OffCase):
+    """Until 2.0.0 this plugin was enabled as `claude-bestpractice@claude-bestpractice`.
+
+    Claude Code 2.1.289 reserves plugin names that start `claude-`, so the plugin was renamed,
+    and the marketplace's `renames` map has Claude Code rewrite the old key in the user,
+    project and local settings. Not everywhere: never in managed settings, and not in a copy
+    committed on a branch nobody has opened since. A `false` there is still the founder's
+    switch, and still not a session's to throw (decision 0029).
+    """
+
+    FORMER = "claude-bestpractice@claude-bestpractice"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.write("seed.py", "x = 0\n")
+        self.commit("seed a history")
+
+    def a_secret_write(self):
+        """A call every enforcing gate refuses, whatever the worktree rule says."""
+        return self.tool("Write", {"file_path": str(self.repo / "cfg.py"),
+                                   "content": 'AWS_SECRET_ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE"\n'})
+
+    def test_the_precondition_is_a_refusal(self):
+        self.assertEqual("deny", self.hook_decision(self.a_secret_write()))
+
+    def test_a_false_under_the_former_key_stands_it_down(self):
+        self.write(".claude/settings.json", json.dumps({"enabledPlugins": {self.FORMER: False}}))
+        self.assertIsNone(self.hook_decision(self.a_secret_write()))
+
+    def test_a_session_cannot_throw_it_under_the_former_key(self):
+        proc = self.tool("Write", {
+            "file_path": str(self.repo / ".claude" / "settings.json"),
+            "content": json.dumps({"enabledPlugins": {self.FORMER: False}}),
+        })
+        self.assertEqual("deny", self.hook_decision(proc))
+        self.assertIn("switches this plugin off", self.hook_reason(proc))
+
+    def test_nor_by_an_edit_that_carries_only_the_fragment(self):
+        self.write(".claude/settings.json", json.dumps({"enabledPlugins": {self.FORMER: True}}))
+        proc = self.tool("Edit", {
+            "file_path": str(self.repo / ".claude" / "settings.json"),
+            "old_string": f'"{self.FORMER}": true',
+            "new_string": f'"{self.FORMER}": false',
+        })
+        self.assertEqual("deny", self.hook_decision(proc))
+        self.assertIn("switches this plugin off", self.hook_reason(proc))
+
+
 class TestNothingInTheConfigCanTakeTheSwitchAway(OffCase):
     """`config.load` raised on values a hand edit or a stray tool produces, and every gate
     calls it first. `{"subagent_fanout": "inf"}` refused every tool call in the repository

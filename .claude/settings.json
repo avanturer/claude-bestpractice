@@ -6,7 +6,7 @@
     ]
   },
   "enabledPlugins": {
-    "claude-bestpractice@claude-bestpractice": true
+    "bestpractice@claude-bestpractice": true
   },
   "extraKnownMarketplaces": {
     "claude-bestpractice": {

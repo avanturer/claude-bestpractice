@@ -14,7 +14,10 @@ set -euo pipefail
 REPO_URL="${CLAUDE_BESTPRACTICE_REPO:-https://github.com/avanturer/claude-bestpractice.git}"
 INSTALL_DIR="${CLAUDE_BESTPRACTICE_DIR:-$HOME/.claude-bestpractice}"
 MARKETPLACE="claude-bestpractice"
-PLUGIN="claude-bestpractice"
+PLUGIN="bestpractice"
+# The plugin's id until 2.0.0, when Claude Code 2.1.289 reserved plugin names that start
+# `claude-`. Taken out before the new one goes in, so the two never run side by side.
+FORMER_PLUGIN="claude-bestpractice"
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
 dim()  { printf '\033[2m%s\033[0m\n' "$*"; }
@@ -112,11 +115,17 @@ if ! claude plugin marketplace add "$INSTALL_DIR" >/dev/null 2>&1; then
 fi
 
 # `claude plugin list` indents and bullets its entries, so a "^name@" grep never matched
-# and the upgrade branch was dead. Match anywhere on the line.
+# and the upgrade branch was dead. Matched after whitespace instead, because the current id
+# is the tail of the former one: `bestpractice@…` alone also matches `claude-bestpractice@…`.
 # `update` is also a no-op when the version string has not changed, which is exactly the
 # case during development — so uninstall and reinstall, which does refresh the cache.
 LOG="$(mktemp -t claude-bestpractice-register.XXXXXX)"
-if claude plugin list 2>/dev/null | grep -q "${PLUGIN}@${MARKETPLACE}"; then
+listed() { claude plugin list 2>/dev/null | grep -qE "[[:space:]]$1@${MARKETPLACE}([[:space:]]|\$)"; }
+if listed "$FORMER_PLUGIN"; then
+  dim "taking out ${FORMER_PLUGIN}@${MARKETPLACE}, which this version replaces"
+  claude plugin uninstall "${FORMER_PLUGIN}@${MARKETPLACE}" >"$LOG" 2>&1 || true
+fi
+if listed "$PLUGIN"; then
   dim "refreshing the installed copy"
   claude plugin uninstall "${PLUGIN}@${MARKETPLACE}" >"$LOG" 2>&1 || true
 fi
@@ -143,12 +152,12 @@ EOF
 # ASK THE CLI where it put the copy. Do not go looking for it.
 #
 # Two rounds of this check were wrong in the same way. Searching by `-name claude-bestpractice`
-# cannot work at all: the cache is `cache/<marketplace>/<plugin>/<version>/`, both
-# MARKETPLACE and PLUGIN are the literal string "claude-bestpractice", and the two matching
+# cannot work at all: the cache is `cache/<marketplace>/<plugin>/<version>/`, MARKETPLACE and
+# PLUGIN were both the literal string "claude-bestpractice" until 2.0.0, and the matching
 # directories are version-UNSCOPED — so `cache/claude-bestpractice` and `cache/claude-bestpractice/claude-bestpractice`
 # hash identically, and after one version bump either of them hashes both versions at
 # once against a source tree containing one. Neither "-print -quit" nor "newest by mtime"
-# fixes that; the search itself is the bug.
+# fixes that; the search itself is the bug, whatever the two names are.
 #
 # `installed_plugins.json` carries `installPath`, which is the exact versioned directory
 # the CLI actually executes from. That is the only thing worth fingerprinting.
@@ -223,9 +232,9 @@ cat <<TEXT
     claude-bp doctor    prove every gate still fires
 
   Inside a Claude session:
-    /claude-bestpractice:status   the same view, read by the agent
-    /claude-bestpractice:plan     the work ledger
-    /claude-bestpractice:review   fresh-context review of the current diff
+    /bestpractice:status   the same view, read by the agent
+    /bestpractice:plan     the work ledger
+    /bestpractice:review   fresh-context review of the current diff
 
 TEXT
 

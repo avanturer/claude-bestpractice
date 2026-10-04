@@ -7,15 +7,18 @@
   },
   "plugins": [
     {
-      "name": "claude-bestpractice",
+      "name": "bestpractice",
       "source": "./plugin",
       "description": "Enforcement, memory and parallel-session coordination for solo founders running several Claude Code sessions on one repository.",
-      "version": "1.73.0",
+      "version": "2.0.0",
       "category": "development",
       "author": { "name": "avanturer" },
       "homepage": "https://github.com/avanturer/claude-bestpractice",
       "license": "MIT",
       "keywords": ["memory", "hooks", "worktree", "verification", "parallel-sessions", "enforcement"]
     }
-  ]
+  ],
+  "renames": {
+    "claude-bestpractice": "bestpractice"
+  }
 }

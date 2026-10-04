@@ -446,6 +446,170 @@ class TestItInstallsTheShortestWay(unittest.TestCase):
         market = json.loads(read(".claude-plugin/marketplace.json"))
         self.assertIn(f'MARKETPLACE="{market["name"]}"', installer)
 
+    def test_the_installer_installs_that_plugin(self):
+        from claude_bestpractice import PLUGIN
+
+        self.assertIn(f'PLUGIN="{PLUGIN}"', read("install.sh"))
+
+
+class TestThePluginHasANameTheCliAccepts(unittest.TestCase):
+    """Claude Code 2.1.289 reserves every plugin name that starts `claude-`, and this one did.
+
+    `claude plugin validate` failed both manifests, while the plugin still installed and
+    loaded and the changelog said nothing. 2.1.280 had already shown the next step for a
+    marketplace name: refused when added, and one already added stopped loading with its
+    plugins. Renamed in 2.0.0, with a `renames` map so Claude Code moves every install that
+    names the old id (decision 0029).
+
+    The rule below is the CLI's own, as 2.1.289 words it. `tools/check_manifests.py` asks the
+    CLI itself where there is one; this holds the line where there is not.
+    """
+
+    RESERVED_PREFIXES = ("claude-", "anthropic-", "anthropics-", "cc-plugin-")
+    RESERVED_NAMES = {"claude", "anthropic", "anthropics", "claude-code", "claude-mods"}
+    FORMER = "claude-bestpractice"
+
+    def manifests(self) -> tuple[dict, dict]:
+        return (json.loads(read("plugin/.claude-plugin/plugin.json")),
+                json.loads(read(".claude-plugin/marketplace.json")))
+
+    def test_the_package_names_the_plugin_the_manifests_name(self):
+        from claude_bestpractice import MARKETPLACE, PLUGIN
+
+        plugin, market = self.manifests()
+        self.assertEqual(PLUGIN, plugin["name"])
+        self.assertEqual([PLUGIN], [entry["name"] for entry in market["plugins"]])
+        self.assertEqual(MARKETPLACE, market["name"])
+
+    def test_the_name_is_not_one_the_cli_reserves(self):
+        name = self.manifests()[0]["name"]
+        self.assertFalse(name.startswith(self.RESERVED_PREFIXES), name)
+        self.assertNotIn(name, self.RESERVED_NAMES)
+        words = set(re.split(r"[^a-z0-9]+", name.lower()))
+        self.assertFalse("official" in words and words & {"claude", "anthropic"}, name)
+
+    def test_the_former_name_moves_to_the_current_one(self):
+        """Without the map, an installed 1.x reports `not found in marketplace` and loads
+        nothing; with it, Claude Code rewrites `enabledPlugins` to the new id."""
+        plugin, market = self.manifests()
+        self.assertEqual({self.FORMER: plugin["name"]}, market.get("renames"))
+
+    def test_the_former_key_still_switches_the_plugin_off(self):
+        from claude_bestpractice import config
+
+        self.assertEqual(f"{plugin_name()}@claude-bestpractice", config.PLUGIN_KEY)
+        self.assertIn(f"{self.FORMER}@claude-bestpractice", config.PLUGIN_KEYS)
+
+
+def plugin_name() -> str:
+    return json.loads(read("plugin/.claude-plugin/plugin.json"))["name"]
+
+
+class TestTheCliIsAskedAboutTheManifests(unittest.TestCase):
+    """`tools/check_manifests.py`, against a stand-in for the CLI.
+
+    The README promised `claude plugin validate --strict` passed, from one run against 2.1.281.
+    On 2.1.289 it failed, and nothing that runs on its own said so. `make check` now asks.
+    """
+
+    TOOL = REPO_ROOT / "tools" / "check_manifests.py"
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="claude-bestpractice-manifests-"))
+        self.addCleanup(lambda: subprocess.run(["rm", "-rf", str(self.tmp)], check=False))
+        self.bin = self.tmp / "bin"
+        self.bin.mkdir()
+        self.asked = self.tmp / "asked"
+
+    def cli(self, answer: str, code: int) -> None:
+        """A `claude` that records what it was asked and answers every validate the same."""
+        stub = self.bin / "claude"
+        stub.write_text(
+            "#!/bin/sh\n"
+            'if [ "$1" = --version ]; then echo "9.9.9 (Claude Code)"; exit 0; fi\n'
+            f'echo "$*" >> "{self.asked}"\n'
+            f"cat <<'ANSWER'\n{answer}\nANSWER\n"
+            f"exit {code}\n"
+        )
+        stub.chmod(0o755)
+
+    def check(self, path: str | None = None) -> subprocess.CompletedProcess:
+        """The tool, with the stand-in first on PATH and the system's own tools after it."""
+        path = path or os.pathsep.join((str(self.bin), "/usr/bin", "/bin"))
+        return subprocess.run([sys.executable, str(self.TOOL)], capture_output=True, text=True,
+                              timeout=120, env={**os.environ, "PATH": path})
+
+    def test_it_passes_when_the_cli_accepts_both(self):
+        self.cli(json.dumps({"success": True, "manifest": {"errors": [], "warnings": []}}), 0)
+        proc = self.check()
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn("accepts both", proc.stdout)
+
+    def test_both_manifests_are_asked_about_under_strict(self):
+        self.cli(json.dumps({"success": True}), 0)
+        self.check()
+        asked = self.asked.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(2, len(asked), asked)
+        self.assertTrue(all(line.startswith("plugin validate --strict --json ") for line in asked))
+        self.assertEqual({str(REPO_ROOT / "."), str(REPO_ROOT / "plugin")},
+                         {line.rsplit(" ", 1)[-1] for line in asked})
+
+    def test_it_fails_and_says_what_the_cli_said(self):
+        reserved = 'Plugin name "claude-bestpractice" is reserved'
+        self.cli(json.dumps({"success": False, "manifest": {
+            "errors": [{"path": "name", "message": reserved}], "warnings": []}}), 1)
+        proc = self.check()
+        self.assertEqual(1, proc.returncode)
+        self.assertIn(f"name: {reserved}", proc.stderr)
+        self.assertIn("rejects", proc.stderr)
+
+    def test_an_answer_that_is_not_json_still_fails_and_is_shown(self):
+        """An older CLI without `--json`, or one that crashed: what it printed is the reason."""
+        self.cli("error: unknown option '--json'", 1)
+        proc = self.check()
+        self.assertEqual(1, proc.returncode)
+        self.assertIn("unknown option '--json'", proc.stderr)
+
+    def test_with_no_cli_it_says_nothing_was_asked(self):
+        proc = self.check(path=str(self.bin))
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn("not checked", proc.stdout)
+
+    def test_make_check_runs_it(self):
+        check = re.search(r"^check:(.*)$", read("Makefile"), re.M)
+        self.assertIsNotNone(check)
+        self.assertIn("manifests", check.group(1).split())
+
+
+class TestEveryCommandMayRunWhatItRuns(unittest.TestCase):
+    """A command's `!` line runs before the model sees anything, under its `allowed-tools`.
+
+    `/status` ran `claude-bp status` under `Bash(claude-bestpractice:*)`, a prefix no command
+    of this plugin has had since the commands were renamed `claude-bp`, so the one line the
+    command exists to show needed a permission it never asked for.
+    """
+
+    BANG = re.compile(r"^!`([^`]+)`", re.M)
+    BASH_RULE = re.compile(r"Bash\(([^)]*)\)")
+
+    @staticmethod
+    def covers(rule: str, command: str) -> bool:
+        if rule.endswith(":*"):
+            prefix = rule[:-2]
+            return command == prefix or command.startswith(prefix + " ")
+        return command == rule
+
+    def test_each_bang_line_is_allowed_by_its_own_frontmatter(self):
+        for path in sorted((BIN.parent / "commands").glob("*.md")):
+            text = path.read_text(encoding="utf-8")
+            front = text.split("---", 2)[1] if text.startswith("---") else ""
+            allowed = re.search(r"^allowed-tools:(.*)$", front, re.M)
+            rules = self.BASH_RULE.findall(allowed.group(1)) if allowed else []
+            for command in self.BANG.findall(text):
+                with self.subTest(command=path.name):
+                    self.assertTrue(any(self.covers(rule, command) for rule in rules),
+                                    f"{path.name}: `{command}` is not covered by {rules}")
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -658,7 +822,7 @@ class TestThisRepositoryRunsUnderItsOwnPlugin(unittest.TestCase):
     """
 
     SETTINGS = REPO_ROOT / ".claude" / "settings.json"
-    PLUGIN = "claude-bestpractice@claude-bestpractice"
+    PLUGIN = "bestpractice@claude-bestpractice"
 
     def settings(self) -> dict:
         return json.loads(self.SETTINGS.read_text(encoding="utf-8"))
@@ -697,7 +861,7 @@ class TestThisRepositoryRunsUnderItsOwnPlugin(unittest.TestCase):
         is project-scoped: without the flag it fails with "not installed at scope user".
         The step shipped without it and did not work the first time it was run."""
         body = (REPO_ROOT / "RELEASING.md").read_text(encoding="utf-8")
-        self.assertIn("claude plugin update claude-bestpractice@claude-bestpractice --scope project", body)
+        self.assertIn("claude plugin update bestpractice@claude-bestpractice --scope project", body)
 
 
 class TestEveryCommandTheGatesNameCanBeRun(unittest.TestCase):

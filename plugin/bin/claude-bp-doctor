@@ -618,7 +618,7 @@ def check_off_means_off(repo: Path) -> Result:
     settings = repo / ".claude" / "settings.json"
     settings.parent.mkdir(parents=True, exist_ok=True)
     settings.write_text(
-        json.dumps({"enabledPlugins": {"claude-bestpractice@claude-bestpractice": False}}),
+        json.dumps({"enabledPlugins": {config.PLUGIN_KEY: False}}),
         encoding="utf-8",
     )
     stood_down = run_gate("pre-tool", secret, repo)
@@ -627,9 +627,7 @@ def check_off_means_off(repo: Path) -> Result:
         "pre-tool",
         {**secret, "tool_input": {
             "file_path": str(settings),
-            "content": json.dumps(
-                {"enabledPlugins": {"claude-bestpractice@claude-bestpractice": False}}
-            ),
+            "content": json.dumps({"enabledPlugins": {config.PLUGIN_KEY: False}}),
         }},
         repo,
     )

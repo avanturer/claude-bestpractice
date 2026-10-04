@@ -93,11 +93,11 @@ def _protected_state(relpath: str) -> bool:
     return any(p.startswith(rel.rstrip("/") + "/") for p in PROTECTED_STATE)
 
 
-# `"claude-bestpractice@claude-bestpractice": false`, as it reads in a file a session is
-# part-way through writing. The JSON parse below is the real reader; this catches the
-# fragment an `Edit` or a heredoc carries, where there is no whole document to parse.
+# `"bestpractice@claude-bestpractice": false`, or the key it had before 2.0.0, as it reads
+# in a file a session is part-way through writing. The JSON parse below is the real reader;
+# this catches the fragment an `Edit` or a heredoc carries, where there is no whole document.
 _SWITCHED_OFF = re.compile(
-    r'"' + re.escape(config.PLUGIN_KEY) + r'"\s*:\s*false', re.I
+    r'"(?:' + "|".join(map(re.escape, config.PLUGIN_KEYS)) + r')"\s*:\s*false', re.I
 )
 
 
@@ -136,8 +136,7 @@ def _turns_it_off(content: str) -> bool:
     except (TypeError, ValueError):
         parsed = None
     if isinstance(parsed, dict):
-        wanted = parsed.get("enabledPlugins")
-        return isinstance(wanted, dict) and wanted.get(config.PLUGIN_KEY) is False
+        return config.switched_off(parsed.get("enabledPlugins"))
     return bool(_SWITCHED_OFF.search(content or ""))
 
 

@@ -4,8 +4,8 @@
 
 **Память, координация и принуждение для разработки продукта в нескольких параллельных сессиях Claude Code.**
 
-[![version](https://img.shields.io/badge/version-1.73.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-2397%20passing-2ea44f)](#проверено)
+[![version](https://img.shields.io/badge/version-2.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-2417%20passing-2ea44f)](#проверено)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#проверено)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#требования)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#требования)
@@ -22,14 +22,14 @@
 
 ```
 /plugin marketplace add avanturer/claude-bestpractice
-/plugin install claude-bestpractice
+/plugin install bestpractice
 ```
 
 Из терминала — то же самое:
 
 ```sh
 claude plugin marketplace add avanturer/claude-bestpractice
-claude plugin install claude-bestpractice@claude-bestpractice
+claude plugin install bestpractice@claude-bestpractice
 ```
 
 Если первая строка полезет в `git@github.com:` и упрётся в отсутствующий SSH-ключ —
@@ -381,7 +381,7 @@ claude-bp-ci off        # снять pre-push хук
 | `claude-bp-ship` | Что доставила эта ветка — для того, кто не читает код (`--pr` откроет PR) |
 | `claude-bp-report` | Дефекты этого плагина здесь; `defect "…"` записывает гейт, отказавший не по делу |
 
-В сессии: `/claude-bestpractice:status` · `/claude-bestpractice:plan` · `/claude-bestpractice:review`
+В сессии: `/bestpractice:status` · `/bestpractice:plan` · `/bestpractice:review`
 
 ## Гейты
 
@@ -408,7 +408,7 @@ claude-bp-ci off        # снять pre-push хук
 ## Проверено
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2397 тестов · 36 проверок доктора · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2417 тестов · 36 проверок доктора · budget
 ```
 
 Доктор доказывает гейты **попыткой сделать плохое**, а не чтением конфигурации обратно —
@@ -426,7 +426,7 @@ readback конфига не способен обнаружить измене�
 
 ```sh
 claude plugin marketplace update claude-bestpractice
-claude plugin update claude-bestpractice@claude-bestpractice
+claude plugin update bestpractice@claude-bestpractice
 ```
 
 Дальше — **перезапустить Claude Code**. Обновление кладётся в новую директорию, а каждая
@@ -435,10 +435,11 @@ claude plugin update claude-bestpractice@claude-bestpractice
 работающая на устаревшей копии, теперь сама пишет об этом на доске — больше узнать об
 этом неоткуда.
 
-Вторая команда требует **квалифицированной** формы `name@marketplace`. `install` короткое
-имя принимает, `update` — нет: короткая форма отвечает `Plugin "claude-bestpractice" not
+Вторая команда записана в **квалифицированной** форме `name@marketplace`. `install` короткое
+имя принимал, `update` — нет: короткая форма отвечала `Plugin "claude-bestpractice" not
 found` при установленном и включённом плагине, и это читается как сломанная установка, а
 не как неверный аргумент. Проверено обновлением 1.0.1 на 1.0.2 на живой установке.
+2.1.289 принимает и короткую форму; квалифицированная работает в обоих случаях.
 
 **Строка версии — это ключ обновления, и знать это стоит, потому что иначе вас молча
 замораживает.** `claude plugin update` сравнивает установленную версию с версией
@@ -466,6 +467,25 @@ claude-bestpractice is already at the latest version (1.0.0).
 терминале, а гейты всех сессий останутся на старом коде. Установщик сам скачает обновление,
 прогонит доктора и обновит эту копию.
 
+### С 1.x на 2.0: одна установка, один раз
+
+Claude Code 2.1.289 резервирует имена плагинов, начинающиеся с `claude-`, поэтому в 2.0.0
+из имени плагина убран `claude-`: теперь он `bestpractice` (решение 0029). Карта `renames`
+маркетплейса сама переносит ваши настройки на новый id. Установить плагин под ним — ваше,
+один раз:
+
+```sh
+claude plugin marketplace update claude-bestpractice
+claude plugin install bestpractice@claude-bestpractice
+```
+
+Если ставили с `--scope project`, добавьте его ко второй строке. Замерено на 2.1.289: пока
+вторая строка не выполнена, `claude plugin list` показывает, что ничего не установлено, а
+`claude plugin update` отвечает «not installed», и ни строчки кода плагина в этом промежутке
+не работает, чтобы вам об этом сказать. `install.sh` делает обе строки и сначала убирает
+старый id. Состояние, команды `claude-bp` и оба выключателя переезжают без изменений;
+команды внутри сессии теперь `/bestpractice:…`.
+
 ## Требования
 
 Python 3.9+ и git. **Никаких других зависимостей, по конструкции** — эти хуки бегут на
@@ -474,7 +494,8 @@ Python 3.9+ и git. **Никаких других зависимостей, по
 доверия. Проверяется в CI.
 
 Протестировано на Python 3.9, 3.11 и 3.13. `claude plugin validate --strict` проходит
-на Claude Code 2.1.281.
+на Claude Code 2.1.289, и `make check` спрашивает CLI заново при каждом запуске
+(`tools/check_manifests.py`).
 
 Всё работает на любой свежей Claude Code; двум возможностям нужен минимум версии, и обе
 отказывают молча — поэтому это записано:
@@ -538,8 +559,10 @@ pre_push off         # затем: claude-bp-ci off   (только pre-push х�
 Либо в проектном `.claude/settings.json` — своей записью харнесса:
 
 ```json
-{"enabledPlugins": {"claude-bestpractice@claude-bestpractice": false}}
+{"enabledPlugins": {"bestpractice@claude-bestpractice": false}}
 ```
+
+Ключ, который был до 2.0.0, — тот же с `claude-` впереди — по-прежнему считается.
 
 И то и другое — слово основателя, и только его: сессия, которая попробует сама, получит
 отказ и указание попросить эту строку. Гейт, к которому нет двери, снимают вместе с

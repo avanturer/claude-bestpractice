@@ -4,8 +4,8 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-1.73.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-2397%20passing-2ea44f)](#已验证)
+[![version](https://img.shields.io/badge/version-2.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-2417%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#运行要求)
@@ -22,14 +22,14 @@
 
 ```
 /plugin marketplace add avanturer/claude-bestpractice
-/plugin install claude-bestpractice
+/plugin install bestpractice
 ```
 
 从终端出发，同样的事情：
 
 ```sh
 claude plugin marketplace add avanturer/claude-bestpractice
-claude plugin install claude-bestpractice@claude-bestpractice
+claude plugin install bestpractice@claude-bestpractice
 ```
 
 如果第一行走到 `git@github.com:` 并因为没有 SSH key 而停下，就把 URL 直接传进去，不要用简写。
@@ -313,7 +313,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 | `claude-bp-ship` | 这条分支交付了什么，写给不读代码的人（`--pr` 直接开 PR）|
 | `claude-bp-report` | 本仓库里这个插件的缺陷；`defect "…"` 记录一次拦错的门禁 |
 
-在会话中：`/claude-bestpractice:status` · `/claude-bestpractice:plan` · `/claude-bestpractice:review`
+在会话中：`/bestpractice:status` · `/bestpractice:plan` · `/bestpractice:review`
 
 ## 各个 Gate
 
@@ -339,7 +339,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 ## 已验证
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2397 个测试 · 36 项 doctor 检查 · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2417 个测试 · 36 项 doctor 检查 · budget
 ```
 
 doctor 通过**真的去做那件坏事**来证明 gate 有效，而不是把配置读回来对一遍——
@@ -355,16 +355,17 @@ doctor 通过**真的去做那件坏事**来证明 gate 有效，而不是把配
 
 ```sh
 claude plugin marketplace update claude-bestpractice
-claude plugin update claude-bestpractice@claude-bestpractice
+claude plugin update bestpractice@claude-bestpractice
 ```
 
 然后**重启 Claude Code**。更新会落到一个新目录里，而所有已经在运行的会话在重启之前
 都还在执行旧的那份副本——CLI 只说一次 `Restart to apply changes.`，之后再也不提。
 正在运行被取代副本的会话现在会自己在 board 上说出来，这也是你唯一能发现它的地方。
 
-第二条命令需要**带限定**的 `name@marketplace` 形式。`install` 接受短名，`update` 不接受：
-在插件已安装且已启用的情况下，短名会返回 `Plugin "claude-bestpractice" not found`，
+第二条命令用的是**带限定**的 `name@marketplace` 形式。`install` 曾接受短名，`update` 却不接受：
+在插件已安装且已启用的情况下，短名曾返回 `Plugin "claude-bestpractice" not found`，
 读起来像是安装坏了，而不是参数写错了。已在真实安装上把 1.0.1 升到 1.0.2 验证过。
+2.1.289 也接受短名；带限定的形式在两种情况下都能用。
 
 **版本字符串就是更新的键，值得知道这一点，因为它会悄悄把你冻住。**
 `claude plugin update` 只比较已安装版本和 marketplace 上的版本，然后就停下。
@@ -384,6 +385,22 @@ claude-bestpractice is already at the latest version (1.0.0).
 
 用 `install.sh` 装的？再运行一次即可。克隆只是源码：Claude Code 运行的是它插件缓存里的副本，所以在克隆里 `git pull` 只会更新终端命令，每个会话的门仍在跑旧代码。安装脚本会拉取、运行 doctor 并刷新那份副本。
 
+### 从 1.x 升到 2.0：只需安装一次
+
+Claude Code 2.1.289 保留了所有以 `claude-` 开头的插件名，所以 2.0.0 去掉了插件名里的
+`claude-`：现在叫 `bestpractice`（决策 0029）。marketplace 的 `renames` 映射会自动把你的设置
+迁到新 id 上；以新 id 安装这一步需要你自己做，只做一次：
+
+```sh
+claude plugin marketplace update claude-bestpractice
+claude plugin install bestpractice@claude-bestpractice
+```
+
+如果当初是用 `--scope project` 安装的，第二行也加上它。在 2.1.289 上实测：第二行执行之前，
+`claude plugin list` 显示什么都没安装，`claude plugin update` 回答 "not installed"，而这段时间里插件的代码
+一行都不会运行，没有任何东西会提醒你。`install.sh` 会做这两步，并先移除旧 id。你的状态、`claude-bp`
+命令和两个关闭开关都原样保留；会话内的命令现在是 `/bestpractice:…`。
+
 ## 运行要求
 
 Python 3.9+ 和 git。**没有任何其他依赖，这是硬约束**——这些 hook 在每一次工具调用时
@@ -391,7 +408,7 @@ Python 3.9+ 和 git。**没有任何其他依赖，这是硬约束**——这些
 全部职责恰恰就是可信。此约束在 CI 中强制执行。
 
 已在 Python 3.9、3.11 和 3.13 上测试。`claude plugin validate --strict` 在
-Claude Code 2.1.281 上通过。
+Claude Code 2.1.289 上通过，并且 `make check` 每次运行都会重新询问 CLI（`tools/check_manifests.py`）。
 
 在任何较新的 Claude Code 上都能工作；有两项功能需要版本下限，而且两者都是**静默**失效的，
 所以在此写明：
@@ -447,8 +464,10 @@ pre_push off         # 然后：claude-bp-ci off   （只关 pre-push 钩子）
 或者在项目的 `.claude/settings.json` 里，用 harness 自己的那条记录：
 
 ```json
-{"enabledPlugins": {"claude-bestpractice@claude-bestpractice": false}}
+{"enabledPlugins": {"bestpractice@claude-bestpractice": false}}
 ```
+
+2.0.0 之前的键（前面多一个 `claude-`）依然有效。
 
 两者都只属于创始人：会话自己去动会被拒绝，并被告知去请他们说出那一行。一个没有门的 gate
 会连插件一起被卸掉，而被卸掉的 gate 什么都保障不了。

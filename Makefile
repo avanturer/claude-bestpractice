@@ -1,4 +1,4 @@
-.PHONY: check check-fast test test-fast needs-pytest doctor lint budget docs knowledge slop ratchet shipped clean help
+.PHONY: check check-fast test test-fast needs-pytest doctor lint budget docs knowledge slop ratchet shipped manifests clean help
 
 PY := python3
 
@@ -13,12 +13,13 @@ help:
 	@echo "make slop    - catch the code an LLM writes that a person would not"
 	@echo "make ratchet - lower the structural budgets to what is actually there"
 	@echo "make shipped - refuse a change to plugin/ that no installed copy could receive"
+	@echo "make manifests - ask the claude CLI on this machine to validate both manifests"
 	@echo "make knowledge - validate the decided layer and refresh its index"
 	@echo "make budget  - assert the always-on context budget is not exceeded"
 
 # One definition of done, identical in every session, with no --no-verify path.
 # Eight parallel sessions must not converge on eight notions of finished.
-check: lint docs slop polyglot knowledge shipped test doctor budget
+check: lint docs slop polyglot knowledge shipped manifests test doctor budget
 	@echo ""
 	@echo "check: all green"
 
@@ -27,6 +28,12 @@ check: lint docs slop polyglot knowledge shipped test doctor budget
 # receive — while every attempt to get it reports success.
 shipped:
 	@$(PY) tools/check_shipped.py
+
+# The CLI decides what a valid plugin is, and it changes its mind without saying so: 2.1.289
+# reserved every plugin name starting `claude-`, this one's included. Asked on every check;
+# with no `claude` on PATH there is nobody to ask, and the tool says so.
+manifests:
+	@$(PY) tools/check_manifests.py
 
 # Defect classes have a permanent budget of zero. Structural debt is baselined on the
 # first run and may only fall after that — a ratchet seeded at zero can never be

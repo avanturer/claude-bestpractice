@@ -4,8 +4,8 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-1.73.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-2397%20passing-2ea44f)](#verified)
+[![version](https://img.shields.io/badge/version-2.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-2417%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
@@ -22,14 +22,14 @@ Already in a Claude Code session — the shortest path, no terminal:
 
 ```
 /plugin marketplace add avanturer/claude-bestpractice
-/plugin install claude-bestpractice
+/plugin install bestpractice
 ```
 
 From a terminal, the same thing:
 
 ```sh
 claude plugin marketplace add avanturer/claude-bestpractice
-claude plugin install claude-bestpractice@claude-bestpractice
+claude plugin install bestpractice@claude-bestpractice
 ```
 
 If that first line reaches for `git@github.com:` and stops on a missing SSH key, pass the
@@ -448,7 +448,7 @@ configuration silently.
 | `claude-bp-ship` | What this branch delivered, for someone who never reads code (`--pr` opens one) |
 | `claude-bp-report` | Defects this plugin hit here; `defect "…"` records a gate that refused the wrong thing |
 
-In a session: `/claude-bestpractice:status` · `/claude-bestpractice:plan` · `/claude-bestpractice:review`
+In a session: `/bestpractice:status` · `/bestpractice:plan` · `/bestpractice:review`
 
 ## The gates
 
@@ -475,7 +475,7 @@ roughly 0.1 % of a 200k window.
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2397 tests · 36 doctor checks · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2417 tests · 36 doctor checks · budget
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration
@@ -492,7 +492,7 @@ violation, a failing suite, a green finish, and a second session reading the his
 
 ```sh
 claude plugin marketplace update claude-bestpractice
-claude plugin update claude-bestpractice@claude-bestpractice
+claude plugin update bestpractice@claude-bestpractice
 ```
 
 Then **restart Claude Code**. The update lands in a new directory and every session
@@ -500,10 +500,11 @@ already running keeps executing the old copy until it is restarted — the CLI s
 `Restart to apply changes.` once and never mentions it again. A session that is running
 superseded code now says so on its own board, which is the only place you would find out.
 
-The second command needs the **qualified** `name@marketplace` form. `install` accepts the
-short name and `update` does not — the short form fails with `Plugin "claude-bestpractice"
-not found` while the plugin is installed and enabled, which reads as a broken install
+The second command uses the **qualified** `name@marketplace` form. `install` accepted the
+short name and `update` did not — the short form failed with `Plugin "claude-bestpractice"
+not found` while the plugin was installed and enabled, which reads as a broken install
 rather than a wrong argument. Verified by upgrading 1.0.1 to 1.0.2 on a real install.
+2.1.289 takes the short form too; the qualified one works on both.
 
 **The version string is the update key, and this is worth knowing because it can strand
 you silently.** `claude plugin update` compares the installed version against the
@@ -530,6 +531,23 @@ runs a copy in its own plugin cache, so `git pull` in the clone updates the term
 and leaves every session's gates on the old code. The installer fetches, runs the doctor,
 and refreshes that copy.
 
+### From 1.x to 2.0: one install, once
+
+Claude Code 2.1.289 reserves plugin names that start `claude-`, so 2.0.0 took `claude-` off
+this plugin's name: it is `bestpractice` now (decision 0029). The marketplace's `renames` map
+moves your settings to the new id on its own. Installing under it is yours, once:
+
+```sh
+claude plugin marketplace update claude-bestpractice
+claude plugin install bestpractice@claude-bestpractice
+```
+
+Add `--scope project` to the second line if that is how you installed it. Measured on 2.1.289:
+until that line runs, `claude plugin list` shows nothing installed and `claude plugin update`
+answers "not installed", and none of the plugin's code runs in the gap to tell you.
+`install.sh` does both, and takes the old id out first. Your state, the `claude-bp` commands and
+both off switches carry over unchanged; the in-session commands are `/bestpractice:…` now.
+
 ## Requirements
 
 Python 3.9+ and git. **No other dependency, by constraint** — these hooks run on every
@@ -537,7 +555,7 @@ tool call, so a dependency tree is latency, an extra failure mode and a supply-c
 surface for the component whose whole job is to be trustworthy. Enforced in CI.
 
 Tested on Python 3.9, 3.11 and 3.13. `claude plugin validate --strict` passes against
-Claude Code 2.1.281.
+Claude Code 2.1.289, and `make check` asks the CLI again on every run (`tools/check_manifests.py`).
 
 Everything works on any recent Claude Code; two features need a floor, and both fail
 quiet rather than loud, which is why they are written down:
@@ -599,8 +617,10 @@ pre_push off         # then: claude-bp-ci off   (the pre-push hook only)
 Or, in the project's `.claude/settings.json`, the harness's own entry:
 
 ```json
-{"enabledPlugins": {"claude-bestpractice@claude-bestpractice": false}}
+{"enabledPlugins": {"bestpractice@claude-bestpractice": false}}
 ```
+
+The key it had before 2.0.0, the same with `claude-` in front, still counts.
 
 Either is the founder's to throw, and only theirs: a session that tries is refused and told
 to ask for the line. A gate with no reachable door gets uninstalled, and an uninstalled gate

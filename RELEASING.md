@@ -90,7 +90,7 @@ never reached, the other asserted tolerance that a lower layer was already provi
 
    ```
    claude plugin marketplace update claude-bestpractice
-   claude plugin update claude-bestpractice@claude-bestpractice --scope project
+   claude plugin update bestpractice@claude-bestpractice --scope project
    ```
 
    `--scope project` is not optional: the enablement is committed in the repository, so
@@ -105,8 +105,10 @@ never reached, the other asserted tolerance that a lower layer was already provi
    which is why it is a step and not a hope.
 
    On a machine that has never had it, `claude plugin install
-   claude-bestpractice@claude-bestpractice` once; the marketplace and the enablement are
-   already committed in `.claude/settings.json`.
+   bestpractice@claude-bestpractice --scope project` once; the marketplace and the
+   enablement are already committed in `.claude/settings.json`. The same once on a machine
+   that had it as `claude-bestpractice` before 2.0.0: the marketplace's `renames` map moves
+   the key, and installs nothing (decision 0029).
 
 ## When a release turns out to be bad
 
