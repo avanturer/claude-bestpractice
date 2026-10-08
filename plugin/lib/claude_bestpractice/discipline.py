@@ -103,30 +103,49 @@ def python_stubs(source: str, relpath: str) -> list[Finding]:
         # which blocks WITHOUT advancing the escalation counter: a permanent wedge.
         return []
 
+    # A protocol's methods are its interface: a docstring or `...` is the whole body of each
+    # one by design, because the implementations are the classes that match it. Read as
+    # stubs, a `Protocol` with docstrings blocked a finish four times and then its merge (#258).
+    # Only the protocol's own methods: a class that implements one is ordinary code.
+    declared = {
+        id(member)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef) and any(_named(base, "Protocol") for base in node.bases)
+        for member in node.body
+    }
     out: list[Finding] = []
     for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and id(node) not in declared:
             finding = _stub_finding(node, relpath)
             if finding:
                 out.append(finding)
     return out
 
 
-def _is_abstract(node) -> bool:
-    """An abstract method is empty on purpose and says so."""
-    for decorator in node.decorator_list:
-        name = getattr(decorator, "id", "") or getattr(decorator, "attr", "")
-        if "abstract" in str(name).lower():
-            return True
-    return False
+def _named(node, name: str) -> bool:
+    """Is this expression `name`, however it is spelled: bare, `typing.name`, or
+    subscripted like `Protocol[T]`."""
+    if isinstance(node, ast.Subscript):
+        node = node.value
+    return name in (getattr(node, "id", None), getattr(node, "attr", None))
+
+
+def _is_declaration(node) -> bool:
+    """Empty on purpose and says so: an abstract method, or one `@overload` signature of a
+    function whose body is written once, after them."""
+    return any(
+        "abstract" in str(getattr(decorator, "id", "") or getattr(decorator, "attr", "")).lower()
+        or _named(decorator, "overload")
+        for decorator in node.decorator_list
+    )
 
 
 def _stub_finding(node, relpath: str):
     """One function: unfinished, or not."""
+    if _is_declaration(node):
+        return None
     body = [n for n in node.body if not isinstance(n, ast.Expr) or not isinstance(n.value, ast.Constant)]
     if not body:
-        if _is_abstract(node):
-            return None
         return Finding(relpath, node.lineno, "empty-function", f"{node.name}() has no body")
     if len(body) == 1 and isinstance(body[0], ast.Pass):
         return Finding(relpath, node.lineno, "stub", f"{node.name}() is `pass`")

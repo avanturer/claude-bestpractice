@@ -4,8 +4,8 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-2.0.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-2417%20passing-2ea44f)](#已验证)
+[![version](https://img.shields.io/badge/version-2.0.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-2423%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#运行要求)
@@ -339,7 +339,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 ## 已验证
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2417 个测试 · 36 项 doctor 检查 · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2423 个测试 · 36 项 doctor 检查 · budget
 ```
 
 doctor 通过**真的去做那件坏事**来证明 gate 有效，而不是把配置读回来对一遍——
@@ -408,7 +408,7 @@ Python 3.9+ 和 git。**没有任何其他依赖，这是硬约束**——这些
 全部职责恰恰就是可信。此约束在 CI 中强制执行。
 
 已在 Python 3.9、3.11 和 3.13 上测试。`claude plugin validate --strict` 在
-Claude Code 2.1.289 上通过，并且 `make check` 每次运行都会重新询问 CLI（`tools/check_manifests.py`）。
+Claude Code 2.1.294 上通过，并且 `make check` 每次运行都会重新询问 CLI（`tools/check_manifests.py`）。
 
 在任何较新的 Claude Code 上都能工作；有两项功能需要版本下限，而且两者都是**静默**失效的，
 所以在此写明：
