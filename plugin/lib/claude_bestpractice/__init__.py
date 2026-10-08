@@ -9,7 +9,7 @@ dependency tree is latency, a failure mode, and a supply-chain surface for a com
 whose entire job is to be trustworthy.
 """
 
-__version__ = "2.0.0"
+__version__ = "2.0.1"
 
 # What Claude Code calls this plugin, and the marketplace that lists it: `plugin.json` and
 # `marketplace.json` say the same, and `PLUGIN@MARKETPLACE` is the id `enabledPlugins` and

@@ -70,6 +70,55 @@ class TestStubDetection(unittest.TestCase):
         source = "import abc\n\n\nclass P:\n    @abstractmethod\n    def f(self):\n        ...\n"
         self.assertEqual(self.kinds("a.py", source), set())
 
+    def test_an_abstract_method_spelled_pass_is_not_a_stub(self):
+        source = "import abc\n\n\nclass P(abc.ABC):\n    @abc.abstractmethod\n    def f(self):\n        pass\n"
+        self.assertEqual(self.kinds("a.py", source), set())
+
+    def test_a_protocol_method_with_only_a_docstring_is_not_a_stub(self):
+        """#258: the interface from the report, as it was written. Its method blocked a finish
+        four times as `empty-function — exists() has no body`, and then the merge."""
+        source = (
+            "from typing import Protocol\n\n\n"
+            "class PhotoStorage(Protocol):\n"
+            "    def exists(self, key: str) -> bool:\n"
+            '        """Whether a photo is stored under this key."""\n\n'
+            "    async def save(self, key: str, data: bytes) -> None:\n"
+            "        ...\n"
+        )
+        self.assertEqual(self.kinds("photo_storage.py", source), set())
+
+    def test_a_protocol_is_recognised_however_it_is_spelled(self):
+        for base in ("typing.Protocol", "Protocol[T]", "typing_extensions.Protocol", "Base, Protocol"):
+            with self.subTest(base=base):
+                source = f"class Store({base}):\n    def get(self, key):\n        ...\n"
+                self.assertEqual(self.kinds("a.py", source), set())
+
+    def test_a_class_implementing_a_protocol_is_still_checked(self):
+        """Only the protocol's own methods are its interface. A class that matches it is the
+        implementation, and an empty method there is the unfinished work this gate is for."""
+        source = (
+            "from typing import Protocol\n\n\n"
+            "class Store(Protocol):\n"
+            "    def get(self, key): ...\n\n\n"
+            "class DiskStore(Store):\n"
+            "    def get(self, key):\n"
+            '        """Read it from disk."""\n\n\n'
+            "class CloudStore:\n"
+            "    def get(self, key):\n"
+            "        pass\n"
+        )
+        found = {(f.kind, f.text) for f in self.scan("a.py", source)}
+        self.assertEqual(found, {("empty-function", "get() has no body"), ("stub", "get() is `pass`")})
+
+    def test_overload_signatures_are_not_stubs(self):
+        source = (
+            "import typing\nfrom typing import overload\n\n\n"
+            "@overload\ndef parse(raw: str) -> int: ...\n\n\n"
+            "@typing.overload\ndef parse(raw: bytes) -> int: ...\n\n\n"
+            "def parse(raw):\n    return int(raw)\n"
+        )
+        self.assertEqual(self.kinds("a.py", source), set())
+
     def test_a_file_that_does_not_parse_does_not_crash(self):
         self.assertIsInstance(self.scan("a.py", "def broken(:\n"), list)
 
@@ -139,6 +188,23 @@ class TestTheGateRefuses(RepoCase):
         self.assertEqual(proc.returncode, 2)
         self.assertIn("Unfinished work", proc.stderr)
         self.assertIn("charge", proc.stderr)
+
+    def test_a_protocol_written_this_turn_is_not_unfinished_work(self):
+        """#258 end to end: the interface was refused as a stub at Stop, and the finish it
+        marked UNVERIFIED then held up the merge."""
+        self.write("api.py", "def existing():\n    return 1\n")
+        self.commit()
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
+        self.write("api.py", (
+            "from typing import Protocol\n\n\n"
+            "def existing():\n    return 1\n\n\n"
+            "class PhotoStorage(Protocol):\n"
+            "    def exists(self, key: str) -> bool:\n"
+            '        """Whether a photo is stored under this key."""\n'
+        ))
+        stderr = self.stop().stderr
+        self.assertNotIn("Unfinished work", stderr)
+        self.assertNotIn("exists()", stderr)
 
     def test_it_can_be_switched_off(self):
         self.configure(block_unfinished_work=False)

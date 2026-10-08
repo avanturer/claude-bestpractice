@@ -1,5 +1,38 @@
 # Changelog
 
+## v2.0.1
+
+The Stop gate no longer reads an interface as unfinished work: a `typing.Protocol`'s methods,
+an `@overload` signature, and an abstract method whose body is `pass`.
+
+### What broke
+
+The unfinished-work check flags a Python function whose whole body is a docstring, `...` or
+`pass`. That is also how an interface is written. A `Protocol` whose method had only a
+docstring blocked a finish four times as `empty-function — exists() has no body`, and the
+UNVERIFIED mark it left then held up the merge (#258). `@abstractmethod` was already exempt,
+but only with a `...` body, and only the abstract decorator: `pass` under `@abstractmethod`
+and every `@overload` signature were refused the same way.
+
+### What changed
+
+- The methods a `Protocol` class declares are never stubs, however the base is spelled:
+  `Protocol`, `typing.Protocol`, `typing_extensions.Protocol`, `Protocol[T]`, or one base
+  among several. A class that implements a protocol is checked as before, since an empty
+  method there is the unfinished work this gate is for.
+- `@overload` and `@typing.overload` signatures are never stubs.
+- An abstract method is exempt whatever its body says, `pass` included.
+
+The issue's second half, a file brought in by fast-forwarding onto another pull request's
+branch being read as this turn's, is still open: the floor rises past the trunk's commits
+and no one else's.
+
+Six new tests. Five fail on 2.0.0, and the one that pins a protocol's implementation as
+still checked passes on both. Each of the five parts of the change, taken out on its own,
+turns at least one test red. Both manifests pass `claude plugin validate --strict` on Claude
+Code 2.1.294, the newest release, after its changes since 2.1.289 were read against the
+plugin's hooks.
+
 ## v2.0.0
 
 The plugin is called `bestpractice` now, because Claude Code 2.1.289 reserves every plugin
