@@ -126,6 +126,28 @@ def add_origin(repo: Path, parent: Path) -> Path:
     return origin
 
 
+def another_clone(origin: Path, where: Path) -> Path:
+    """A second clone of `origin`, committing as somebody else: how another session's work
+    reaches this one, through the remote."""
+    git(["clone", "-q", str(origin), str(where)], where.parent)
+    for key, value in (("user.email", "other@claude-bestpractice"), ("user.name", "other"),
+                       ("commit.gpgsign", "false")):
+        git(["config", key, value], where)
+    return where
+
+
+def push_from(clone: Path, branch: str, rel: str, text: str, base: str = "") -> None:
+    """One commit writing `rel` on `branch` — cut from `base`, or from where `clone` stands —
+    pushed to its `origin`."""
+    git(["checkout", "-q", "-B", branch, *([base] if base else [])], clone)
+    path = clone / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    git(["add", "-A"], clone)
+    git(["commit", "-qm", f"{branch}: {rel}"], clone)
+    git(["push", "-q", "origin", branch], clone)
+
+
 class RepoCase(unittest.TestCase):
     """Base class providing a throwaway repository per test."""
 

@@ -706,9 +706,15 @@ _EXCLUDE_LINE = "/.claude/worktrees/"
 # `git worktree remove` still cannot take them.
 _LEDGER_EXCLUDE = "/.claude/claude-bestpractice/plan/"
 
+# The JUnit reports the Stop gate asks for where it cannot watch a suite run itself
+# (`evidence.report_path`). A report the gate asked for that git can see is uncommitted work
+# to every check that asks git, and the merge was refused over one (#261).
+_REPORTS_EXCLUDE = "/.claude/claude-bestpractice/test-reports/"
+
 _EXCLUDED = (
     (_EXCLUDE_LINE, "worktrees this plugin provisions"),
     (_LEDGER_EXCLUDE, "the task ledger, written by every session and committed by none"),
+    (_REPORTS_EXCLUDE, "the test reports the Stop gate asks for and reads"),
 )
 
 

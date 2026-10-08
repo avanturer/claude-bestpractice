@@ -7,7 +7,7 @@ import os
 import time
 import unittest
 
-from helpers import RepoCase, git
+from helpers import RepoCase, add_origin, another_clone, git, push_from
 
 from claude_bestpractice import evidence, store
 from claude_bestpractice.gitctx import changed_files
@@ -101,6 +101,14 @@ class TestVerify(RepoCase):
         verdict = evidence.verify(self.ctx(), ["junit.xml"], self.changed())
         self.assertIn("vitest", verdict.reason)
         self.assertNotIn("pytest", verdict.reason)
+
+    def test_a_go_report_counts_the_tests_that_passed(self):
+        """go-junit-report reads `go test -v`. Without `-v` a passing test prints nothing for
+        it to count, and the report the hint produced said no test had run."""
+        self.write("go.mod", "module example.com/x\n")
+        self.write("x.go", "package x\n")
+        verdict = evidence.verify(self.ctx(), ["junit.xml"], self.changed())
+        self.assertIn("go test -v ./... 2>&1 | go-junit-report -iocopy -out ", verdict.reason)
 
     def test_the_hint_degrades_when_the_stack_is_unknown(self):
         self.write("feature.txt", "hello\n")
@@ -459,6 +467,155 @@ class TestAFastForwardIsNotAnEdit(RepoCase):
         git(["commit", "-qm", "my work"], self.repo)
 
         self.assertIn("mine.py", changed_files(self.ctx(), baseline))
+
+
+class TestAnotherPullRequestsBranchIsNotThisSessionsWork(RepoCase):
+    """Issue #258. The floor rose past the trunk's commits and nobody else's, so a session
+    that fast-forwarded onto another pull request's branch to build on it had every file of
+    that branch read as its own: a stub in one of them refused the finish four times as
+    "introduced in this turn", and the UNVERIFIED mark that left held up the merge.
+
+    What arrived on a remote branch other than this one's own is somebody else's. What the
+    session pushed to its own is still its own (decision 0030).
+    """
+
+    STUB = "class PhotoStorage:\n    def exists(self, key):\n        pass\n"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.theirs = another_clone(add_origin(self.repo, self.tmp), self.tmp / "theirs")
+        push_from(self.theirs, "feat/theirs", "photo_storage.py", self.STUB)
+
+        git(["checkout", "-q", "-b", "feat/mine"], self.repo)
+        self.baseline = git(["rev-parse", "HEAD"], self.repo)
+        git(["fetch", "-q", "origin"], self.repo)
+
+    def changed(self) -> list[str]:
+        return changed_files(self.ctx(), self.baseline)
+
+    def onto_theirs(self) -> None:
+        git(["merge", "-q", "--ff-only", "origin/feat/theirs"], self.repo)
+
+    def my_work(self) -> None:
+        self.write("mine.py", "y = 2\n")
+        self.commit("this session's work")
+
+    def test_a_fast_forward_onto_it_is_not_an_edit(self):
+        self.onto_theirs()
+        self.assertEqual([], self.changed())
+
+    def test_its_stub_is_not_introduced_in_this_turn(self):
+        """The reported shape: the session then edits the file it arrived with."""
+        from claude_bestpractice import discipline
+        from claude_bestpractice.gitctx import authored_floor
+
+        self.onto_theirs()
+        self.write("photo_storage.py", self.STUB + "\n\nVERSION = 2\n")
+        floor = authored_floor(self.ctx(), self.baseline)
+        self.assertEqual([], discipline.introduced(
+            self.ctx(), ["photo_storage.py"], self.baseline, floor))
+
+    def test_a_branch_pruned_meanwhile_costs_nothing(self):
+        """A sibling's `git fetch --prune` can delete a remote branch between the listing and
+        the walk, and one name git no longer knows failed the whole walk."""
+        from unittest import mock
+
+        from claude_bestpractice import gitctx
+
+        self.onto_theirs()
+        listed = gitctx._arrived_from(self.ctx())
+        with mock.patch.object(gitctx, "_arrived_from",
+                               return_value=[*listed, "refs/remotes/origin/pruned-meanwhile"]):
+            self.assertEqual([], self.changed())
+
+    def test_work_on_top_of_it_is_still_this_sessions(self):
+        self.onto_theirs()
+        self.my_work()
+        self.assertEqual(["mine.py"], self.changed())
+
+    def test_pushing_its_own_branch_does_not_hand_its_work_away(self):
+        """The widening #258 was left open over: every remote branch, this one's own
+        included, takes the session's work out of its diff the moment it is pushed."""
+        self.onto_theirs()
+        self.my_work()
+        git(["push", "-q", "-u", "origin", "feat/mine"], self.repo)
+        self.assertEqual(["mine.py"], self.changed())
+
+    def test_a_branch_cut_from_it_does_not_make_it_the_sessions_own(self):
+        """`checkout -b` from a remote branch makes that branch the upstream, so the upstream
+        is not what names a session's own remote branch."""
+        git(["checkout", "-q", "-b", "feat/cut", "origin/feat/theirs"], self.repo)
+        self.my_work()
+        self.assertEqual(["mine.py"], self.changed())
+
+    def test_merging_it_into_the_sessions_work_keeps_only_that_work(self):
+        self.my_work()
+        git(["merge", "-q", "--no-ff", "--no-edit", "origin/feat/theirs"], self.repo)
+        self.assertEqual(["mine.py"], self.changed())
+
+    def theirs_again(self, branch: str, rel: str, base: str = "") -> None:
+        """One more commit of somebody else's, pushed to `branch` from `base` (or its tip)."""
+        push_from(self.theirs, branch, rel, "z = 3\n", base)
+        git(["fetch", "-q", "origin"], self.repo)
+
+    def test_joining_it_twice_steps_over_the_later_join(self):
+        """Fast-forwarded onto it, worked, then merged its next commit in: the session's work
+        stands on two of their commits, and the floor is the later of them."""
+        self.onto_theirs()
+        self.my_work()
+        self.theirs_again("feat/theirs", "photo_index.py")
+        git(["merge", "-q", "--no-ff", "--no-edit", "origin/feat/theirs"], self.repo)
+        self.assertEqual(["mine.py"], self.changed())
+
+    def test_two_pull_requests_joined_one_floor_steps_over_the_longer(self):
+        """Neither inside the other, so no single floor steps over both: it steps over the
+        one with more commits, whichever was merged first, and the other is still counted
+        (decision 0030)."""
+        self.theirs_again("feat/theirs", "photo_index.py")
+        self.theirs_again("feat/other", "other.py", base=self.baseline)
+        self.my_work()
+        mine = git(["rev-parse", "HEAD"], self.repo)
+        for order in (("origin/feat/theirs", "origin/feat/other"),
+                      ("origin/feat/other", "origin/feat/theirs")):
+            with self.subTest(merged=order):
+                git(["reset", "-q", "--hard", mine], self.repo)
+                for branch in order:
+                    git(["merge", "-q", "--no-ff", "--no-edit", branch], self.repo)
+                self.assertEqual(["mine.py", "other.py"], self.changed())
+
+    def test_a_pull_request_cut_before_the_session_began_brings_no_trunk_with_it(self):
+        """The floor rises only past where the session started. Their branch forked from an
+        older trunk, and stepping over it would hand the session every trunk commit between
+        that fork and its start."""
+        git(["checkout", "-q", "main"], self.repo)
+        self.write("trunk.py", "t = 1\n")
+        self.commit("the trunk moves on before this session starts")
+        git(["push", "-q", "origin", "main"], self.repo)
+        git(["checkout", "-q", "-B", "feat/mine"], self.repo)
+        self.baseline = git(["rev-parse", "HEAD"], self.repo)
+        git(["fetch", "-q", "origin"], self.repo)
+
+        self.my_work()
+        git(["merge", "-q", "--no-ff", "--no-edit", "origin/feat/theirs"], self.repo)
+        changed = self.changed()
+        self.assertNotIn("trunk.py", changed)
+        self.assertIn("mine.py", changed)
+
+    def test_a_local_branch_never_takes_the_work_away(self):
+        """`git branch backup` before a risky rebase must not make the session's whole
+        history somebody else's."""
+        self.my_work()
+        git(["branch", "backup"], self.repo)
+        self.assertEqual(["mine.py"], self.changed())
+
+    def test_with_no_branch_checked_out_what_it_pushed_is_still_its_own(self):
+        """Nothing names a remote copy as a detached session's own, so only the trunk is
+        asked: counting every remote branch would take away the work it pushed by name."""
+        git(["checkout", "-q", "--detach"], self.repo)
+        self.my_work()
+        git(["push", "-q", "origin", "HEAD:refs/heads/feat/detached"], self.repo)
+        git(["fetch", "-q", "origin"], self.repo)
+        self.assertEqual(["mine.py"], self.changed())
 
 
 APP_READING_ITS_DATA = (

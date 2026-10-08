@@ -28,10 +28,12 @@ cache: one was tried, and every way of keying it turned out to be a way of answe
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -192,26 +194,77 @@ def _json_failures(data: dict) -> tuple[str, ...]:
     return tuple(out[:8])
 
 
+# Where this gate asks for a report it reads instead of witnessing a run, under Tier A and
+# kept out of git by `worktree.hide`. In the working tree, because that is the one place both
+# ends can reach: Claude Code's sandbox lets a command write the tree and its own temp
+# directory, which is not the temp directory this hook sees, and `.git` is a path it asks the
+# founder about. Out of git, because the report the gate asked for must not be what refuses
+# the merge: a `backend/` suite was told to "run your test suite with a JUnit XML reporter",
+# the session wrote one to a file the repository tracks, and the tree read as uncommitted
+# work from then on (#261).
+REPORTS_DIR = "test-reports"
+
+
+def report_path(ctx: GitContext, suite=None) -> Path:
+    """Where this gate asks `suite` to write its JUnit report, and reads it first.
+
+    One per suite, under the suite's own path, so a report about `backend/` never answers for
+    `mobile/`; `junit.xml` at the top for the repository's own suite.
+    """
+    where = PurePosixPath(suite.path).parts if suite is not None and suite.path else ()
+    return store.tier_a(ctx, REPORTS_DIR, *where, "junit.xml")
+
+
+def _ready(ctx: GitContext, report: Path) -> Path:
+    """`report`, with its directory made and kept out of git, so a command naming it runs as
+    printed and what it writes is never anybody's uncommitted work."""
+    from . import worktree
+
+    with contextlib.suppress(OSError):
+        report.parent.mkdir(parents=True, exist_ok=True)
+    worktree.hide(ctx)
+    return report
+
+
 # A gate that tells a Node project to run pytest is a gate the agent learns to ignore.
+# `{report}` is filled with `report_path`; Cargo, Maven and Gradle write where their build puts
+# reports, so their lines name that place instead.
+_PYTEST = "python3 -m pytest --junitxml={report}"
+# go-junit-report reads `go test -v`: without `-v` a passing test prints nothing for it to
+# count, and the report it wrote said no test had run.
+_GO = "go test -v ./... 2>&1 | go-junit-report -iocopy -out {report}"
 _ARTIFACT_HINTS: list[tuple[str, str]] = [
-    ("pytest.ini", "pytest --junitxml=junit.xml"),
-    ("tox.ini", "pytest --junitxml=junit.xml"),
+    ("pytest.ini", _PYTEST),
+    ("tox.ini", _PYTEST),
     ("Cargo.toml", "cargo nextest run --profile ci   # writes target/nextest/ci/junit.xml"),
-    ("go.mod", "go test ./... 2>&1 | go-junit-report > junit.xml"),
+    ("go.mod", _GO),
     ("pom.xml", "mvn -q test   # surefire writes target/surefire-reports/*.xml"),
     ("build.gradle", "gradle test   # writes build/test-results/test/*.xml"),
-    ("Gemfile", "bundle exec rspec --format RspecJunitFormatter --out junit.xml"),
-    ("package.json", "npx vitest run --reporter=junit --outputFile=junit.xml"),
-    ("pyproject.toml", "pytest --junitxml=junit.xml"),
+    ("Gemfile", "bundle exec rspec --format RspecJunitFormatter --out {report}"),
+    ("package.json", "npx vitest run --reporter=junit --outputFile={report}"),
+    ("pyproject.toml", _PYTEST),
 ]
 
+# The runners this gate drives itself (`witness.detect`), by the name a run it stopped carries.
+_DRIVEN = {"pytest": _PYTEST, "go": _GO}
 
-def artifact_hint(ctx: GitContext) -> str:
-    """How THIS project should emit a result file, inferred from what is on disk."""
-    for marker, command in _ARTIFACT_HINTS:
-        if (ctx.worktree_root / marker).exists():
-            return command
-    return "run your test suite with a JUnit XML reporter, then finish"
+
+def artifact_hint(ctx: GitContext, suite=None, runner: str = "") -> str:
+    """How THIS suite should write its report: one command, run where the suite is, writing
+    to `report_path`.
+
+    The runner this gate drove when it is the one that was stopped; otherwise inferred from
+    what is on disk where the suite runs. The suite's directory, not the repository's: the
+    markers were read at the top of the tree, so a `backend/` suite got no command and no path
+    at all (#261).
+    """
+    root = _root_of(ctx, suite)
+    report = shlex.quote(str(_ready(ctx, report_path(ctx, suite))))
+    command = _DRIVEN.get(runner) or next(
+        (line for marker, line in _ARTIFACT_HINTS if (root / marker).exists()), "")
+    if not command:
+        return f"run your test suite with a JUnit XML reporter writing {report}, then finish"
+    return f"cd {shlex.quote(str(root))} && {command.format(report=report)}"
 
 
 def newest_source_mtime(root: Path, relpaths: list[str]) -> float:
@@ -540,7 +593,7 @@ def _verify_one(ctx: GitContext, globs: list[str], changed: list[str], suite,
         # setting can grant time it does not have. Refusing outright left the repository
         # blocked on every turn; reading the artifact its own run wrote is weaker evidence,
         # says so in the verdict, and is the only thing that can be true (#158).
-        return _too_long_to_witness(ctx, globs, changed, killed.seconds)
+        return _too_long_to_witness(ctx, globs, changed, killed.seconds, suite, killed.runner)
     finally:
         _retire_nonce(ctx, nonce)
     if seen is not None:
@@ -779,21 +832,21 @@ def _counted_by_this_gate(entry: dict) -> bool:
 
 
 def _too_long_to_witness(
-    ctx: GitContext, globs: list[str], changed: list[str], seconds: float, declared=None
+    ctx: GitContext, globs: list[str], changed: list[str], seconds: float, suite, runner: str = ""
 ) -> Verdict:
     """The suite outran the hook. Read what the project's own run left, and name why.
 
-    `declared` is the suite when what was stopped is the project's OWN command rather than a
-    runner this gate drove. The lever is different then: `witness_exclude` only reaches a run
-    the gate builds itself, and naming it for `make test` would be naming a switch that is
-    not connected to anything.
+    `runner` is the runner this gate drove, when that is what was stopped. Empty, what was
+    stopped is the project's OWN command, `suite.command`, and the lever is different:
+    `witness_exclude` only reaches a run the gate builds itself, and naming it for `make test`
+    would be naming a switch that is not connected to anything.
     """
-    verdict = _verify_by_reading(ctx, globs, changed)
+    verdict = _verify_by_reading(ctx, globs, changed, suite, runner)
     lever = (
         "  `witness_exclude` in .claude/claude-bestpractice/config.json names paths this "
         "gate should skip, if part of the suite is what makes it long."
-        if declared is None else
-        f"  `{' '.join(declared.command)}` is the project's own command. `test_commands` in "
+        if runner else
+        f"  `{' '.join(suite.command)}` is the project's own command. `test_commands` in "
         ".claude/claude-bestpractice/config.json can split it into suites by path, so a "
         "change runs only the part it reaches."
     )
@@ -808,14 +861,51 @@ def _too_long_to_witness(
     )
 
 
-def _verify_by_reading(ctx: GitContext, globs: list[str], changed: list[str]) -> Verdict:
-    """Fall back to reading an artifact. Weaker, and the verdict says so."""
-    candidates = find_artifacts(ctx.worktree_root, globs)
+def _reports(ctx: GitContext, globs: list[str], suite=None) -> list[Path]:
+    """Every report this gate reads for `suite`, newest first.
+
+    The one it names (`report_path`), then what the configured globs find in the suite's own
+    directory — the artifact search follows the suite (decision 0012) — and, as they always
+    were, at the top of the tree.
+    """
+    named = report_path(ctx, suite)
+    found = [named.resolve()] if named.is_file() else []
+    for root in dict.fromkeys((_root_of(ctx, suite), ctx.worktree_root)):
+        found += find_artifacts(root, globs)
+    return sorted(dict.fromkeys(found), key=_mtime, reverse=True)
+
+
+def _mtime(path: Path) -> float:
+    """When `path` was written, or 0.0 for a file gone since it was found."""
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _shown(ctx: GitContext, path: Path) -> str:
+    """A report as a refusal names it: from the top of the tree, since more than one place
+    holds a `junit.xml`."""
+    try:
+        return path.relative_to(ctx.worktree_root).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def _verify_by_reading(ctx: GitContext, globs: list[str], changed: list[str], suite=None,
+                       runner: str = "") -> Verdict:
+    """Fall back to reading an artifact. Weaker, and the verdict says so.
+
+    `suite` is the suite the report is about, and `runner` the runner this gate drove for it
+    when that is what was stopped: together they say where the report is read and which
+    command writes it there.
+    """
+    candidates = _reports(ctx, globs, suite)
     if not candidates:
         return Verdict(
             False,
             "No machine-readable test artifact found. Run the suite so it writes one:\n"
-            f"  {artifact_hint(ctx)}\n"
+            f"  {artifact_hint(ctx, suite, runner)}\n"
             "A statement that tests pass is not accepted as evidence.",
         )
 
@@ -827,8 +917,8 @@ def _verify_by_reading(ctx: GitContext, globs: list[str], changed: list[str]) ->
     if artifact is None:
         return Verdict(
             False,
-            f"Found {candidates[0].name} but could not parse it as JUnit XML or a pytest "
-            "JSON report. Emit one of those formats.",
+            f"Found {_shown(ctx, candidates[0])} but could not parse it as JUnit XML or a "
+            "pytest JSON report. Emit one of those formats.",
         )
 
     source_mtime = newest_source_mtime(ctx.worktree_root, changed)
@@ -836,22 +926,24 @@ def _verify_by_reading(ctx: GitContext, globs: list[str], changed: list[str]) ->
         stale_by = source_mtime - artifact.mtime
         return Verdict(
             False,
-            f"{artifact.path.name} is {stale_by:.0f}s older than the newest changed file. "
-            "It describes code that no longer exists. Re-run the suite.",
+            f"{_shown(ctx, artifact.path)} is {stale_by:.0f}s older than the newest changed "
+            "file. It describes code that no longer exists. Re-run the suite:\n"
+            f"  {artifact_hint(ctx, suite, runner)}",
             artifact,
         )
 
     if not artifact.passed:
         return Verdict(
             False,
-            f"{artifact.path.name}: {artifact.detail}. Fix the failures, re-run, then finish.",
+            f"{_shown(ctx, artifact.path)}: {artifact.detail}. Fix the failures, then re-run:\n"
+            f"  {artifact_hint(ctx, suite, runner)}",
             artifact,
         )
 
     return Verdict(
         True,
-        f"{artifact.path.name}: {artifact.detail} — UNBOUND. No test command could be run "
-        "here, so this artifact was read, not witnessed, and a hand-written one is "
+        f"{_shown(ctx, artifact.path)}: {artifact.detail} — UNBOUND. No test command could be "
+        "run here, so this artifact was read, not witnessed, and a hand-written one is "
         "indistinguishable from a real one. `test_command` in "
         ".claude/claude-bestpractice/config.json makes finishing verifiable — that file is "
         "refused to sessions, so this is the founder's to set, not yours.",
@@ -1089,7 +1181,7 @@ def _judge_by_counts(
             "The suite exited 0 but EXECUTED NOTHING — every test was skipped, or none was "
             f"collected.\n$ {' '.join(command)}\n{tail}\n"
             "A run that asserts nothing is not evidence. Make the tests runnable here, or "
-            f"emit a machine-readable report: {artifact_hint(ctx)}",
+            f"emit a machine-readable report: {artifact_hint(ctx, suite)}",
         )
 
     # -1 is "the output said nothing I can count", and it was being treated as a pass.

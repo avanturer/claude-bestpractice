@@ -24,6 +24,7 @@ from __future__ import annotations
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Iterator
 
 from . import store
 from .gitctx import GitContext
@@ -282,6 +283,10 @@ def _unverified_here(ctx: GitContext) -> bool:
     )
 
 
+# How many uncommitted paths a refusal names before it counts the rest.
+SHOWN = 3
+
+
 def ready(ctx: GitContext, base: str) -> list[str]:
     """Reasons this branch is not ready to open a pull request. Empty when it is."""
     from . import evidence
@@ -301,8 +306,13 @@ def ready(ctx: GitContext, base: str) -> list[str]:
     if _unverified_here(ctx):
         problems.append(f"this branch {UNVERIFIED}")
 
-    if dirty(ctx):
-        problems.append("there are uncommitted changes")
+    # Named, because the merge refusal hands this list to the founder word for word, and
+    # "there are uncommitted changes" left them to find out that the only one was the test
+    # report the Stop gate had asked for (#261).
+    left = uncommitted(ctx)
+    if left:
+        more = f" (+{len(left) - SHOWN} more)" if len(left) > SHOWN else ""
+        problems.append(f"there are uncommitted changes: {', '.join(left[:SHOWN])}{more}")
     return problems
 
 
@@ -321,6 +331,16 @@ _NOT_THE_FOUNDERS = (".claude/claude-bestpractice/", ".claude/worktrees/")
 
 def dirty(ctx: GitContext) -> bool:
     """Uncommitted work that would not reach the remote, ignoring the gates' own state."""
+    return next(_uncommitted(ctx), None) is not None
+
+
+def uncommitted(ctx: GitContext) -> list[str]:
+    """The paths `dirty` is about, as `git status` names them."""
+    return list(_uncommitted(ctx))
+
+
+def _uncommitted(ctx: GitContext) -> Iterator[str]:
+    """Each uncommitted path of the founder's, in `git status` order, read only as far as asked."""
     listed = subprocess.run(
         # Forced: see evidence.py — a repository can otherwise declare itself clean.
         ["git", "status", "--porcelain", "--untracked-files=normal"],
@@ -331,8 +351,7 @@ def dirty(ctx: GitContext) -> bool:
         # later commit would carry, so that is the one judged.
         path = line[3:].split(" -> ")[-1].strip().strip('"')
         if path and _the_founders(ctx, path):
-            return True
-    return False
+            yield path
 
 
 def _the_founders(ctx: GitContext, path: str) -> bool:
