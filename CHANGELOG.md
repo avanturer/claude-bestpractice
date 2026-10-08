@@ -1,5 +1,57 @@
 # Changelog
 
+## v2.1.0
+
+The test report the Stop gate asks for can no longer be what refuses the merge: the gate says
+where to write it, and that place is out of git. And a file that came with a fast-forward onto
+another pull request's branch is no longer read as this session's work.
+
+### What broke
+
+**The report the gate asked for refused the merge (#261).** The gate's own run of a `backend/`
+suite was stopped at 401 seconds, when the Stop hook's time ran out, so it fell back to reading
+a JUnit report and asked for one: "run your test suite with a JUnit XML reporter, then finish".
+It had looked for the project's runner at the top of the tree rather than in `backend/`, so it
+named no command and no place to write. The session wrote `backend/junit-backend.xml`, a file
+that repository tracks, and the next merge check refused the pull request with "there are
+uncommitted changes". That report was the only one. The gate also looked for reports only at
+the top of the tree, so `cd backend && pytest --junitxml=junit.xml` wrote one it never read.
+
+**Another pull request's code was read as this turn's (#258).** A session fast-forwarded onto
+another pull request's branch to build on it. The diff the gates read steps over work that
+arrived from elsewhere, but only the trunk counted as elsewhere, so every file of that branch
+was the session's own, and a stub in one of them refused its finish as "introduced in this
+turn". v2.0.1 left this half of #258 open: counting every remote branch as elsewhere would also
+take a session's own work out of its diff the moment it pushed it.
+
+### What changed
+
+- Where the gate reads a report because it cannot watch the suite run, it names one command:
+  run in the suite's own directory, by the runner it drove when that run was stopped, writing
+  `.claude/claude-bestpractice/test-reports/<suite path>/junit.xml`. That directory goes into
+  `.git/info/exclude` before the path is first named, so a report there shows in no
+  `git status` and refuses no merge (decision 0031).
+- The gate reads that report first, then `artifact_globs` in the suite's own directory, then at
+  the top of the tree as before. The newest wins, as it always has.
+- The Go line runs `go test -v`. go-junit-report reads verbose output, and without it the
+  report said no test had run.
+- The merge check names what is uncommitted: `there are uncommitted changes:
+  backend/junit-backend.xml`.
+- The diff steps over what any remote branch carries except the branch's own remote copy, the
+  one of the same name (decision 0030). Pushing keeps the work the session's. A branch cut from
+  `origin/theirs` does not make theirs its own, though git sets it as the upstream. A local
+  branch never takes work away, and with no branch checked out only the trunk counts, as before.
+
+No `migrate._REPAIRS` step: no state this plugin wrote has changed. A report a session already
+wrote into the tree stays the tree's own content, and the merge check now says which file it is.
+
+22 new tests. 19 fail on 2.0.1. The other three pin what the old code already kept and the new
+one must not lose: a local branch never takes work away, a session with no branch checked out
+keeps what it pushed, and a pull request cut before the session started brings no trunk commits
+with it. Each of 20 parts of the change, taken out on its own, turns a test red. Both manifests
+pass `claude plugin validate --strict` on Claude Code 2.1.295, whose changes since 2.1.294 were
+read against the plugin's hooks.
+
 ## v2.0.1
 
 The Stop gate no longer reads an interface as unfinished work: a `typing.Protocol`'s methods,

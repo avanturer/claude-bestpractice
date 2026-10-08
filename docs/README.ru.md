@@ -4,8 +4,8 @@
 
 **Память, координация и принуждение для разработки продукта в нескольких параллельных сессиях Claude Code.**
 
-[![version](https://img.shields.io/badge/version-2.0.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-2423%20passing-2ea44f)](#проверено)
+[![version](https://img.shields.io/badge/version-2.1.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-2445%20passing-2ea44f)](#проверено)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#проверено)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#требования)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#требования)
@@ -408,7 +408,7 @@ claude-bp-ci off        # снять pre-push хук
 ## Проверено
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2423 тестов · 36 проверок доктора · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2445 тестов · 36 проверок доктора · budget
 ```
 
 Доктор доказывает гейты **попыткой сделать плохое**, а не чтением конфигурации обратно —
@@ -494,7 +494,7 @@ Python 3.9+ и git. **Никаких других зависимостей, по
 доверия. Проверяется в CI.
 
 Протестировано на Python 3.9, 3.11 и 3.13. `claude plugin validate --strict` проходит
-на Claude Code 2.1.294, и `make check` спрашивает CLI заново при каждом запуске
+на Claude Code 2.1.295, и `make check` спрашивает CLI заново при каждом запуске
 (`tools/check_manifests.py`).
 
 Всё работает на любой свежей Claude Code; двум возможностям нужен минимум версии, и обе

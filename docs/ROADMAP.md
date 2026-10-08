@@ -6,8 +6,8 @@ is required for anything earlier to pay off.
 ## Where this actually stands
 
 **Shipped and verified.** Every item below is implemented, wired and covered:
-**2423 tests, 36 doctor checks, `make check` green on Python 3.9 / 3.11 / 3.13**, and
-`claude plugin validate --strict` passing against the installed CLI (2.1.294), asked on
+**2445 tests, 36 doctor checks, `make check` green on Python 3.9 / 3.11 / 3.13**, and
+`claude plugin validate --strict` passing against the installed CLI (2.1.295), asked on
 every `make check`. One command installs it into any repository, and the installer refuses to
 register the plugin if the doctor fails.
 
