@@ -162,7 +162,7 @@ def resolve(cwd: Path | str | None = None) -> GitContext:
 
 
 def authored_floor(ctx: GitContext, since: str) -> str:
-    """`since`, raised past work that arrived from upstream rather than from this session.
+    """`since`, raised past work that arrived from elsewhere rather than from this session.
 
     A fast-forward is not an edit. `git pull --ff-only` moved a local trunk past eighteen
     commits other sessions had already merged, and every file in them was reported as this
@@ -170,41 +170,117 @@ def authored_floor(ctx: GitContext, since: str) -> str:
     followed literally means rewinding other people's merged work. A gate whose remedy is
     destructive on its own false positive is worse than no gate (#71).
 
-    The floor becomes the merge base with the trunk ONLY when upstream has genuinely moved
-    past the baseline, so a session that branched long before it started still has its own
-    work measured from where it started rather than from the branch point.
+    Elsewhere is any remote branch but this branch's own (decision 0030). The trunk was the
+    only one asked, so a session that fast-forwarded onto another pull request's branch to
+    build on it had every file of that branch read as its own, and a stub in one of them
+    refused its finish as "introduced in this turn" (#258).
+
+    The floor is the commit this session's own commits stand on — the ones no other remote
+    branch carries — and it rises ONLY past where the session started, so a session that
+    branched long before it began still has its own work measured from its own baseline
+    rather than from the branch point.
     """
-    trunk = ""
+    start = start_of(ctx, since)
+    arrived = _arrived_from(ctx)
+    stands_on = _stands_on(ctx, start, arrived) if start and ctx.head and arrived else []
+    # An ancestor test, not a comparison: the floor rises only past where this session
+    # started. Asked of the commit HEAD stood on, never of the baseline itself. A tree dirty
+    # at session start has a `git stash create` commit for a baseline, which is on no branch
+    # and so the ancestor of nothing: the floor never rose, and a main checkout that only
+    # fast-forwarded over ninety-four merged commits had every file in them read as this
+    # session's work — stubs "introduced in this turn" included (#255).
+    rising = [commit for commit in dict.fromkeys(stands_on)
+              if commit != start and is_ancestor(ctx, start, commit)]
+    return _highest(ctx, start, rising) or since
+
+
+def _stands_on(ctx: GitContext, start: str, arrived: list[str]) -> list[str]:
+    """The commits this session's own commits stand on: HEAD itself when it made none.
+
+    Its own are what HEAD carries since `start` that none of `arrived` carries, and what they
+    stand on are the `-` lines of the same walk. One walk, however many branches the remote
+    holds, because this runs twice in every Stop. Empty when git cannot say.
+
+    `--ignore-missing`, because a sibling's `git fetch --prune` can delete a remote branch
+    between listing it and walking it, and one name git no longer knows would otherwise fail
+    the walk and take the trunk's step with it.
+    """
+    proc = subprocess.run(
+        ["git", "rev-list", "--ignore-missing", "--boundary", "HEAD", f"^{start}", "--stdin"],
+        input="".join(f"^{ref}\n" for ref in arrived),
+        cwd=str(ctx.worktree_root), capture_output=True,
+        encoding="utf-8", errors="surrogateescape", timeout=60,
+    )
+    if proc.returncode != 0:
+        return []
+    listed = proc.stdout.split()
+    stands_on = [line[1:] for line in listed if line.startswith("-")]
+    return stands_on if len(stands_on) < len(listed) else [ctx.head]
+
+
+def _arrived_from(ctx: GitContext) -> list[str]:
+    """The remote branches whose commits are somebody else's work when this branch carries them.
+
+    Every one but this branch's own remote copy, the one of the same name, which is where the
+    session's own work goes when it is pushed: counted as arrived, a session's commits left
+    its diff the moment it pushed them, and every gate that reads the diff stopped seeing
+    them. That is the widening #258 was left open over.
+
+    The same name, never the configured upstream. A branch cut from a remote branch tracks
+    that branch, so `git checkout -b mine origin/theirs` — the ordinary way to build on
+    another pull request — would make theirs the session's own, and a branch cut from
+    `origin/main` would make the trunk its own.
+
+    The trunk is never its own, even when it is the branch checked out. Work lands there by
+    being pushed and pulled, which is what "somebody else's, already merged" means; the LOCAL
+    trunk is the branch a session on it commits to. With no branch checked out nothing names a
+    remote copy as the session's own, so the trunk is the only one asked, as it was before.
+
+    Local branches are never asked. `git branch backup` before a risky rebase would otherwise
+    make the session's whole history somebody else's.
+    """
+    root = ctx.worktree_root
+    remote = _run(["for-each-ref", "--format=%(refname)", "refs/remotes"], root, check=False).split()
+    if not remote:
+        return []
     try:
         from .gitpolicy import default_branch
 
         trunk = default_branch(ctx)
     except Exception:  # noqa: BLE001 - an unknown trunk is not a reason to lose the diff
-        return since
-    # The REMOTE trunk, never the local one. Work arrives from other sessions by being
-    # pushed and pulled, so `origin/<trunk>` is what "somebody else's, already merged"
-    # means. The local trunk is a branch this session may be committing to itself, and
-    # measuring against it erases the session's own work: merge-base(main, HEAD) is HEAD
-    # for a session working on main, so the diff came back empty and every gate that reads
-    # it stopped firing. Caught by the escalation-ceiling tests, which went to zero blocks.
-    base = _run(["merge-base", f"origin/{trunk}", "HEAD"], ctx.worktree_root, check=False).strip()
-    start = start_of(ctx, since)
-    if not base or base in (since, start):
-        return since
-    # An ancestor test, not a comparison: the floor rises only when upstream has genuinely
-    # moved past where this session started. A session that branched long before it began
-    # still measures from its own baseline rather than from the branch point.
-    #
-    # Asked of the commit HEAD stood on, never of the baseline itself. A tree dirty at
-    # session start has a `git stash create` commit for a baseline, which is on no branch
-    # and so the ancestor of nothing: the floor never rose, and a main checkout that only
-    # fast-forwarded over ninety-four merged commits had every file in them read as this
-    # session's work — stubs "introduced in this turn" included (#255).
-    ahead = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", start, base],
-        cwd=str(ctx.worktree_root), capture_output=True, timeout=30,
-    )
-    return base if ahead.returncode == 0 else since
+        trunk = ""
+    names = _run(["remote"], root, check=False).split()
+    branch = "" if ctx.branch in ("", "HEAD") else ctx.branch
+    if not branch:
+        return [ref for ref in remote if trunk and ref in _copies(names, trunk)]
+    own = set() if branch == trunk else _copies(names, branch)
+    return [ref for ref in remote if ref not in own]
+
+
+def _copies(remotes: list[str], branch: str) -> set[str]:
+    """The remote-tracking refs a branch of this name has, one per remote."""
+    return {f"refs/remotes/{name}/{branch}" for name in remotes}
+
+
+def _highest(ctx: GitContext, start: str, commits: list[str]) -> str:
+    """The one commit of `commits` that every other one is an ancestor of; "" for none.
+
+    Two lines of somebody else's work joined by a merge, neither inside the other, have no
+    such commit, and one floor can step over only one of them. It steps over the longer, so
+    the diff carries as little of anyone else's work as a single floor can.
+    """
+    if len(commits) < 2:
+        return commits[0] if commits else ""
+    tips = _run(["merge-base", "--independent", *commits], ctx.worktree_root, check=False).split()
+    if len(tips) < 2:
+        return tips[0] if tips else ""
+    return max(tips, key=lambda tip: _count(ctx, f"{start}..{tip}"))
+
+
+def _count(ctx: GitContext, revisions: str) -> int:
+    """How many commits `git rev-list` lists for `revisions`; 0 when it cannot say."""
+    said = _run(["rev-list", "--count", revisions], ctx.worktree_root, check=False)
+    return int(said) if said.isdigit() else 0
 
 
 def start_of(ctx: GitContext, since: str) -> str:

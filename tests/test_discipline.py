@@ -6,7 +6,7 @@ import json
 import unittest
 from pathlib import Path
 
-from helpers import RepoCase
+from helpers import RepoCase, add_origin, another_clone, git, push_from
 
 
 class TestStubDetection(unittest.TestCase):
@@ -205,6 +205,24 @@ class TestTheGateRefuses(RepoCase):
         stderr = self.stop().stderr
         self.assertNotIn("Unfinished work", stderr)
         self.assertNotIn("exists()", stderr)
+
+    def test_a_stub_that_arrived_on_another_pull_requests_branch_is_not_this_turns(self):
+        """#258's other half end to end: the file came with a fast-forward onto another pull
+        request's branch, and the gate refused it as written in this turn."""
+        self.configure(manage_pull_requests=False, require_task=False)
+        self.commit("the founder's settings")
+        theirs = another_clone(add_origin(self.repo, self.tmp), self.tmp / "theirs")
+        push_from(theirs, "feat/theirs", "photo_storage.py",
+                  "class PhotoStorage:\n    def exists(self, key):\n        pass\n")
+
+        git(["checkout", "-q", "-b", "feat/mine"], self.repo)
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
+        git(["fetch", "-q", "origin"], self.repo)
+        git(["merge", "-q", "--ff-only", "origin/feat/theirs"], self.repo)
+
+        proc = self.stop()
+        self.assertNotIn("Unfinished work", proc.stderr)
+        self.assertEqual(0, proc.returncode, proc.stderr)
 
     def test_it_can_be_switched_off(self):
         self.configure(block_unfinished_work=False)
