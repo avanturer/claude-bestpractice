@@ -284,7 +284,19 @@ class TestPullRequestReadiness(DeliveryCase):
         from claude_bestpractice import delivery
 
         self.write("dirty.py", "x = 1\n")
-        self.assertIn("there are uncommitted changes", delivery.ready(self.ctx(), "main"))
+        self.assertIn("there are uncommitted changes: dirty.py", delivery.ready(self.ctx(), "main"))
+
+    def test_the_uncommitted_paths_are_named(self):
+        """The merge refusal hands this line to the founder word for word, and "there are
+        uncommitted changes" left them to find out that the only one was the test report the
+        Stop gate had asked for (#261). Three, then a count."""
+        from claude_bestpractice import delivery
+
+        for name in ("a.py", "b.py", "c.py", "d.py", "e.py"):
+            self.write(name, "x = 1\n")
+        said = [p for p in delivery.ready(self.ctx(), "main")
+                if p.startswith("there are uncommitted changes")]
+        self.assertEqual(["there are uncommitted changes: a.py, b.py, c.py (+2 more)"], said)
 
     def test_no_commits_blocks_it(self):
         from claude_bestpractice import delivery
@@ -298,7 +310,8 @@ class TestPullRequestReadiness(DeliveryCase):
         from claude_bestpractice import delivery
 
         self.write(".claude/rules/decisions/0001-keep-the-importer.md", "decided\n")
-        self.assertIn("there are uncommitted changes", delivery.ready(self.ctx(), "main"))
+        self.assertIn("there are uncommitted changes: .claude/rules/",
+                      delivery.ready(self.ctx(), "main"))
 
     def test_an_edited_settings_file_is_uncommitted_work(self):
         from claude_bestpractice import delivery

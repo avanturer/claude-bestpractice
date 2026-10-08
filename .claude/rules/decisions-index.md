@@ -1,6 +1,5 @@
 # Decisions
 
-- [0020] Every refusal leaves at least one command that runs on this machine — `decisions/0020-a-refusal-leaves-a-runnable-command.md`
 - [0021] A gate refuses only where the refusal reaches the model — `decisions/0021-a-gate-refuses-where-the-refusal-reaches-the-model.md`
 - [0022] A removal carries its own cleanup, and happens where the session survives it — `decisions/0022-a-removal-carries-its-own-cleanup.md`
 - [0023] One `+merge` accepts every pull request its chat has open — `decisions/0023-one-merge-accepts-the-chats-pool.md`
@@ -11,4 +10,5 @@
 - [0028] A session is named the way SendMessage addresses it, asked of Claude Code at the start — `decisions/0028-a-session-is-named-as-sendmessage-addresses-it.md`
 - [0029] The plugin is named so the CLI accepts it, and the old id moves by the marketplace's map — `decisions/0029-the-plugin-is-named-so-the-cli-accepts-it.md`
 - [0030] A session's work is what no remote branch but its own already carries — `decisions/0030-work-no-other-branch-carries-is-the-sessions-own.md`
-- ... 17 older, see `decisions/`
+- [0031] The gate names where the report it reads is written, and git never sees it — `decisions/0031-the-gate-names-where-its-report-goes.md`
+- ... 18 older, see `decisions/`

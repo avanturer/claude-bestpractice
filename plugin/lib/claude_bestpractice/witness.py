@@ -71,11 +71,15 @@ class RanOutOfTime(Exception):
     Collapsing this into None is what made the advice wrong: a killed run and an absent
     one are the same emptiness from outside, and only one of them is fixed by running the
     suite again.
+
+    `runner` is the runner this gate was driving when it was a run of its own (`run`), so the
+    advice that follows names the same runner; empty for the project's own command.
     """
 
-    def __init__(self, seconds: float) -> None:
+    def __init__(self, seconds: float, runner: str = "") -> None:
         super().__init__(f"the run did not finish within {int(seconds)}s")
         self.seconds = seconds
+        self.runner = runner
 
 
 def timeout_for() -> float:
@@ -213,9 +217,12 @@ def run(ctx: GitContext, env: dict[str, str] | None = None,
     # The report lands OUTSIDE the working tree. Inside it, the project's own recipe could
     # write the file before we ever run — which is the attack this exists to end.
     with tempfile.TemporaryDirectory(prefix="claude-bestpractice-witness-") as scratch:
-        if runner == "pytest":
-            return _run_pytest(ctx, Path(scratch), env, root, seconds)
-        return _run_go(ctx, env, root, seconds)
+        try:
+            if runner == "pytest":
+                return _run_pytest(ctx, Path(scratch), env, root, seconds)
+            return _run_go(ctx, env, root, seconds)
+        except RanOutOfTime as killed:
+            raise RanOutOfTime(killed.seconds, runner) from None
 
 
 def _budget(seconds: float | None) -> float:

@@ -1088,6 +1088,127 @@ class TestASuiteSlowerThanTheCeiling(RepoCase):
                       "an addopts line narrowed the run the gate drives")
 
 
+PASSING_REPORT = (
+    '<?xml version="1.0"?><testsuite name="s" tests="4" failures="0" errors="0"></testsuite>')
+
+
+class TestTheReportTheGateAsksForIsTheOneItReads(RepoCase):
+    """Issue #261. The gate's own run of a `backend/` suite outlived the Stop hook, and it
+    asked for "run your test suite with a JUnit XML reporter, then finish": no command and no
+    path, because it read the project's markers at the top of the tree. The session wrote
+    `backend/junit-backend.xml`, a file that repository tracks, and every merge check after
+    that refused over "there are uncommitted changes" — the report the gate had asked for.
+
+    It names one command now, run where the suite is, writing to a place the gate reads first
+    and git never sees (decision 0031).
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.write(".gitignore", "__pycache__/\n")
+        self.write("backend/pyproject.toml", "[tool.pytest.ini_options]\n")
+        # Slow for the gate's own run, quick for the command the refusal names.
+        self.write("backend/tests/test_slow.py", (
+            "import os\nimport time\n\n\n"
+            "def test_slow():\n    time.sleep(float(os.environ.get('SLOW_SECONDS', '30')))\n"))
+        self.write("backend/junit-backend.xml", PASSING_REPORT)
+        self.commit("a backend whose suite outlives the hook, and a report it tracks")
+
+    def suite(self, path: str = "backend/"):
+        from claude_bestpractice import suites
+
+        return suites.Suite(path, ("python3", "-m", "pytest", "-q"), False)
+
+    def verdict(self, suite=None):
+        """The gate's own run of the suite, cut short where the hook would cut it."""
+        from unittest import mock
+
+        from claude_bestpractice import config, evidence, witness
+
+        with mock.patch.object(witness, "timeout_for", return_value=1):
+            return evidence._verify_one(self.ctx(), list(config.DEFAULT_ARTIFACT_GLOBS),
+                                        ["backend/tests/test_slow.py"], suite or self.suite())
+
+    def named(self, suite=None) -> str:
+        """The command the refusal names, as it prints it."""
+        reason = self.verdict(suite).reason
+        return next(line.strip() for line in reason.splitlines() if "--junitxml=" in line)
+
+    def run_as_printed(self, command: str) -> None:
+        proc = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=120,
+                              env={**os.environ, "SLOW_SECONDS": "0"})
+        self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
+
+    def test_the_refusal_names_one_command_where_the_suite_runs(self):
+        import shlex
+
+        from claude_bestpractice import evidence
+
+        report = evidence.report_path(self.ctx(), self.suite())
+        self.assertEqual(
+            self.repo / ".claude" / "claude-bestpractice" / "test-reports" / "backend" / "junit.xml",
+            report)
+        self.assertEqual(f"cd {shlex.quote(str(self.repo / 'backend'))} && python3 -m pytest "
+                         f"--junitxml={shlex.quote(str(report))}", self.named())
+
+    def test_what_it_writes_is_read_and_is_nobodys_uncommitted_work(self):
+        """The whole of #261: the command run as printed, then the finish and the merge."""
+        from claude_bestpractice import delivery
+
+        self.run_as_printed(self.named())
+
+        self.assertEqual("", git(["status", "--porcelain"], self.repo))
+        self.assertEqual([], delivery.uncommitted(self.ctx()))
+        verdict = self.verdict()
+        self.assertTrue(verdict.ok, verdict.reason)
+        self.assertTrue(verdict.unverified, "read, not witnessed — the verdict must say so")
+        self.assertIn(".claude/claude-bestpractice/test-reports/backend/junit.xml", verdict.reason)
+
+    def test_git_is_told_before_the_session_is(self):
+        """The exclude rule is written when the path is named, not when something is found
+        there, so the first report ever written is already out of `git status`."""
+        from claude_bestpractice import evidence
+
+        self.named()
+        report = evidence.report_path(self.ctx(), self.suite())
+        ignored = subprocess.run(["git", "check-ignore", "-q", str(report)], cwd=str(self.repo))
+        self.assertEqual(0, ignored.returncode, "the report the gate names is visible to git")
+
+    def test_a_worktrees_report_is_its_own_and_hidden_there_too(self):
+        from claude_bestpractice import evidence
+        from claude_bestpractice.gitctx import resolve
+
+        tree = self.add_worktree("feat-report")
+        ctx = resolve(tree)
+        evidence.artifact_hint(ctx, self.suite())
+        report = evidence.report_path(ctx, self.suite())
+        self.assertEqual(tree.resolve(), report.parents[4])
+        report.write_text(PASSING_REPORT, encoding="utf-8")
+        self.assertEqual("", git(["status", "--porcelain"], tree))
+
+    def test_the_suites_own_directory_is_searched(self):
+        """The artifact search follows the suite (decision 0012); it read the top of the tree,
+        so `cd backend && pytest --junitxml=junit.xml` wrote a report it never found."""
+        self.write("backend/junit.xml", PASSING_REPORT)
+        verdict = self.verdict()
+        self.assertTrue(verdict.ok, verdict.reason)
+        self.assertIn("backend/junit.xml", verdict.reason)
+
+    def test_one_suites_report_never_answers_for_another(self):
+        from claude_bestpractice import config, evidence
+
+        self.run_as_printed(self.named())
+        mobile = self.suite("mobile/")
+        verdict = evidence._verify_by_reading(
+            self.ctx(), list(config.DEFAULT_ARTIFACT_GLOBS), ["mobile/app.js"], mobile)
+        self.assertFalse(verdict.ok, verdict.reason)
+        self.assertIn("test-reports/mobile/junit.xml", verdict.reason)
+
+    def test_the_runner_the_gate_drove_is_the_one_it_names(self):
+        """No marker at the top of the tree says pytest, but pytest is what was stopped."""
+        self.assertIn("python3 -m pytest --junitxml=", self.named(self.suite("")))
+
+
 class TestAFileGitIgnoresIsNotTheSuite(RepoCase):
     """Issue #255. pytest does not read `.gitignore`, and the gate started it at the root: it
     collected `data/eval/test_providers.py` out of an ignored directory and called a suite

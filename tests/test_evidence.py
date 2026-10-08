@@ -102,6 +102,14 @@ class TestVerify(RepoCase):
         self.assertIn("vitest", verdict.reason)
         self.assertNotIn("pytest", verdict.reason)
 
+    def test_a_go_report_counts_the_tests_that_passed(self):
+        """go-junit-report reads `go test -v`. Without `-v` a passing test prints nothing for
+        it to count, and the report the hint produced said no test had run."""
+        self.write("go.mod", "module example.com/x\n")
+        self.write("x.go", "package x\n")
+        verdict = evidence.verify(self.ctx(), ["junit.xml"], self.changed())
+        self.assertIn("go test -v ./... 2>&1 | go-junit-report -iocopy -out ", verdict.reason)
+
     def test_the_hint_degrades_when_the_stack_is_unknown(self):
         self.write("feature.txt", "hello\n")
         verdict = evidence.verify(self.ctx(), ["junit.xml"], self.changed())
