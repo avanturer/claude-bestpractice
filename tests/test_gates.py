@@ -63,6 +63,18 @@ class GateCase(RepoCase):
             },
         )
 
+    def a_red_suite(self) -> None:
+        """A suite that fails every run and counts its runs in `self.runs` — outside the
+        repository, so counting cannot change the tree being judged."""
+        self.runs = self.tmp / "runs.txt"
+        self.configure(test_command=[
+            sys.executable, "-c", f"open({str(self.runs)!r}, 'a').write('x'); raise SystemExit(1)",
+        ])
+
+    def ran(self) -> int:
+        """How many times the suite has run since `a_red_suite`."""
+        return len(self.runs.read_text(encoding="utf-8")) if self.runs.exists() else 0
+
 
 class TestSessionStart(GateCase):
     def test_emits_fenced_context_with_a_health_footer(self):
@@ -1568,11 +1580,7 @@ class TestATreeLetGoStaysLetGo(GateCase):
 
     def setUp(self) -> None:
         super().setUp()
-        self.runs = self.tmp / "runs.txt"
-        # Counted outside the repository, so counting cannot change the tree being judged.
-        self.configure(test_command=[
-            sys.executable, "-c", f"open({str(self.runs)!r}, 'a').write('x'); raise SystemExit(1)",
-        ])
+        self.a_red_suite()
         self.start()
         self.write("feature.py", "x = 1\n")
 
@@ -1581,9 +1589,6 @@ class TestATreeLetGoStaysLetGo(GateCase):
 
         codes = [self.stop().returncode for _ in range(evidence.MAX_CONSECUTIVE_BLOCKS + 1)]
         self.assertEqual(0, codes[-1], "precondition: the ceiling let the tree go")
-
-    def ran(self) -> int:
-        return len(self.runs.read_text(encoding="utf-8")) if self.runs.exists() else 0
 
     def test_the_next_message_over_the_same_tree_ends_without_a_block(self):
         self.let_go()
@@ -2738,3 +2743,252 @@ class TestDeliveryClosesTheCardEndToEnd(GateCase):
     def test_reading_about_a_merge_is_not_refused_as_one(self):
         self.working_on()
         self.assertNotEqual("deny", self.decision(self.running('echo "git merge main"')))
+
+
+class TestAPauseIsNotAFinish(GateCase):
+    """Issue #264. Told to stop until tomorrow, over tests it had left red on purpose and
+    committed, the session was refused twice for the red suite. It paused its card with the
+    founder's words as the blocker and was refused a third time: the red suite again, and
+    now "nothing on the board says this session is working", with `claim` named to take
+    the card back.
+
+    A pause claims nothing is done. What only a finish owes is not asked of a turn that ends
+    on one; what the board and the other sessions are owed still is."""
+
+    WORDS = "ставь всё на паузу, завтра продолжим"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.a_red_suite()
+        self.commit("the suite this repository runs")
+        git(["switch", "-q", "-c", "feat/new-signatures"], self.repo)
+        self.start()
+        self.card = self.claim_a_task("s1", "feature.py")
+        self.write("feature.py", "def total(prices, tax):\n    return sum(prices) * tax\n")
+        self.commit("total takes the tax rate; its tests are next")
+
+    def pause(self, card: str = "", command: str = "") -> None:
+        """`claude-bp-plan pause`, run by this session the way its shell runs it."""
+        env = {**os.environ, "CLAUDE_CODE_SESSION_ID": "s1",
+               "PATH": f"{BIN}{os.pathsep}{os.environ.get('PATH', '')}"}
+        proc = subprocess.run(
+            command or f"claude-bp-plan pause {card or self.card.id} --blocker '{self.WORDS}'",
+            shell=True, capture_output=True, text=True, cwd=str(self.repo), env=env, timeout=60,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+
+    def test_the_turn_ends_on_the_pause(self):
+        self.assertEqual(2, self.stop().returncode, "precondition: the suite is red")
+        self.pause()
+        before = self.ran()
+
+        proc = self.stop(stop_hook_active=True)
+
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn(f"paused, not finished — {self.card.id} waits on: {self.WORDS}", proc.stderr)
+        self.assertNotIn("Nothing on the board says this session is working", proc.stderr)
+        self.assertEqual(before, self.ran(), "the suite was run for a turn that claims nothing")
+
+    def test_the_ceiling_does_not_file_it_as_finished_without_proof(self):
+        """An UNVERIFIED mark stays on its branch until the founder accepts it, so a pause
+        that comes after the fourth block is still a pause."""
+        from claude_bestpractice import evidence, store
+
+        for attempt in range(evidence.MAX_CONSECUTIVE_BLOCKS):
+            self.assertEqual(2, self.stop(stop_hook_active=attempt > 0).returncode)
+        self.pause()
+
+        proc = self.stop(stop_hook_active=True)
+
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertNotIn("UNVERIFIED", proc.stderr)
+        self.assertEqual([], store.read_jsonl(store.tier_b(self.ctx(), "unverified.jsonl")))
+
+    def test_the_red_suite_names_the_pause_and_it_runs_as_printed(self):
+        refused = self.stop()
+        named = [line.strip() for line in refused.stderr.splitlines()
+                 if line.strip().startswith("claude-bp-plan pause")]
+        self.assertEqual(
+            [f"claude-bp-plan pause {self.card.id} --blocker \"<the founder's words>\""], named)
+
+        self.pause(command=named[0])
+
+        self.assertEqual(0, self.stop(stop_hook_active=True).returncode)
+
+    def test_unfinished_work_is_not_asked_of_a_pause(self):
+        self.write("feature.py", "def total(prices, tax):\n    raise NotImplementedError\n")
+        self.commit("half of it")
+        self.assertIn("Unfinished work introduced in this turn", self.stop().stderr,
+                      "precondition: the gate refuses this stub")
+        self.pause()
+        proc = self.stop(stop_hook_active=True)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+
+    def test_unfinished_work_names_the_pause_too(self):
+        self.configure(test_command=[sys.executable, "-c", "print('1 passed')"])
+        self.write("feature.py", "def total(prices, tax):\n    raise NotImplementedError\n")
+        self.commit("half of it")
+        proc = self.stop()
+        self.assertIn("Unfinished work introduced in this turn", proc.stderr)
+        self.assertNotIn("FAILED", proc.stderr, "precondition: the suite itself is green")
+        self.assertIn(f"claude-bp-plan pause {self.card.id} --blocker", proc.stderr)
+
+    def test_a_tree_green_only_where_it_stands_names_the_pause_too(self):
+        """Past prototype the suite runs again on a clean checkout of the commit, and a tree
+        green only in the working directory is refused there: a finish owes that too."""
+        self.configure(stage_override="traction", test_command=[
+            sys.executable, "-c",
+            "import os, sys; ok = os.path.exists('local.txt'); "
+            "print('1 passed' if ok else '1 failed'); sys.exit(0 if ok else 1)",
+        ])
+        self.write("local.txt", "only in this working tree\n")
+        proc = self.stop()
+        self.assertIn("committed tree", proc.stderr, "precondition: the clean run refused it")
+        self.assertIn(f"claude-bp-plan pause {self.card.id} --blocker", proc.stderr)
+
+    def test_its_files_are_its_own_and_not_drift(self):
+        from claude_bestpractice import sessions
+
+        self.write("importer.py", "RATE = 1\n")
+        self.commit("the importer the founder means")
+        self.gate("prompt-capture", {"session_id": "s1", "hook_event_name": "UserPromptSubmit",
+                                     "prompt": "then fix the rounding in importer.py"})
+        self.assertEqual(["importer.py"],
+                         sessions.get(self.ctx(), sid(self.repo, "s1")).task_paths,
+                         "precondition: the drift gate measures against the founder's file")
+        self.write("feature.py", "def total(prices, tax):\n    return round(sum(prices) * tax)\n")
+        self.pause()
+        proc = self.stop()
+        self.assertEqual(0, proc.returncode, proc.stderr)
+
+    def test_a_write_after_the_pause_is_work_no_card_covers(self):
+        self.pause()
+        later = plan.moved_at(plan.find(self.ctx(), self.card.id)) + 5
+        written = self.write("feature.py", "def total(prices, tax):\n    return 0\n")
+        os.utime(written, (later, later))
+
+        proc = self.stop()
+
+        self.assertEqual(2, proc.returncode)
+        self.assertIn("Nothing on the board says this session is working", proc.stderr)
+
+    def test_a_write_in_the_second_of_the_pause_reads_as_before_it(self):
+        """A card keeps its time to the second, and the write just before the pause often
+        lands in that same second."""
+        self.pause()
+        moment = plan.moved_at(plan.find(self.ctx(), self.card.id)) + 0.5
+        os.utime(self.repo / "feature.py", (moment, moment))
+        self.assertEqual(0, self.stop().returncode)
+
+    def test_a_card_still_in_flight_keeps_it_a_finish(self):
+        parked = plan.add(self.ctx(), "the importer, tomorrow", paths=["importer.py"],
+                          done_when="stated")
+        self.pause(parked.id)
+
+        proc = self.stop()
+
+        self.assertEqual(2, proc.returncode, "work still claimed was let go as a pause")
+        self.assertGreater(self.ran(), 0)
+
+    def test_a_card_closed_in_this_turn_is_still_a_finish(self):
+        parked = plan.add(self.ctx(), "the importer, tomorrow", paths=["importer.py"],
+                          done_when="stated")
+        self.pause(parked.id)
+        plan.complete(self.ctx(), self.card.id, sid(self.repo, "s1"))
+
+        proc = self.stop()
+
+        self.assertEqual(2, proc.returncode, "a card closed over a red suite was let go")
+        self.assertGreater(self.ran(), 0, "the suite never ran for the card that was closed")
+
+    def test_a_card_closed_in_a_turn_that_has_ended_is_not_this_ones(self):
+        from claude_bestpractice import evidence
+
+        earlier = plan.add(self.ctx(), "yesterday's half", paths=["feature.py"],
+                           done_when="stated")
+        plan.claim(self.ctx(), earlier.id, sid(self.repo, "s1"), "feat/new-signatures")
+        plan.complete(self.ctx(), earlier.id, sid(self.repo, "s1"))
+        for attempt in range(evidence.MAX_CONSECUTIVE_BLOCKS + 1):
+            ended = self.stop(stop_hook_active=attempt > 0)
+        self.assertEqual(0, ended.returncode, "precondition: that turn ended")
+        self.pause()
+
+        proc = self.stop()
+
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn(f"paused, not finished — {self.card.id}", proc.stderr)
+
+    def upgraded(self) -> list[str]:
+        """The repairs a session start runs once this version arrives: the ones it brings
+        are not yet on record as done in this clone."""
+        from claude_bestpractice import migrate, store
+
+        done = store.tier_b(self.ctx(), migrate.LEDGER)
+        record = store.read_json(done, default={})
+        record.pop("0040-name-who-paused-a-card", None)
+        store.write_json(done, record)
+        return migrate.repair(self.ctx())
+
+    def paused_yesterday_by_an_older_version(self) -> str:
+        """The card paused a day ago naming nobody, as versions before 2.2.0 paused it, over
+        work written before that. Its time, as the card keeps it."""
+        plan.pause(self.ctx(), self.card.id, self.WORDS)
+        then = time.time() - 86400
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(then))
+        card = plan.find(self.ctx(), self.card.id).path
+        card.write_text("".join(f"updated_at: {stamp}\n" if line.startswith("updated_at: ")
+                                else line for line in card.read_text("utf-8").splitlines(True)),
+                        encoding="utf-8")
+        os.utime(self.repo / "feature.py", (then - 60, then - 60))
+        return stamp
+
+    def test_a_card_paused_before_it_said_who_is_given_the_session_on_its_branch(self):
+        """Repair 0040. A card an older version paused names nobody, so the turn that ended
+        on it was refused as before. The one live session on its branch is the one that set
+        it down, and the card's time stays the moment it did."""
+        stamp = self.paused_yesterday_by_an_older_version()
+        self.assertEqual(2, self.stop().returncode, "precondition: the turn is refused")
+
+        said = self.upgraded()
+
+        card = plan.find(self.ctx(), self.card.id)
+        self.assertEqual((sid(self.repo, "s1"), stamp), (card.paused_by, card.updated_at))
+        self.assertIn("0040-name-who-paused-a-card: 1 paused card(s)", "; ".join(said))
+        self.assertEqual(0, self.stop(stop_hook_active=True).returncode)
+
+    def test_the_repair_names_nobody_it_cannot_tell(self):
+        """Two sessions on the card's branch, or a card that names no branch at all: it could
+        be either's, or anybody's, and it goes on naming nobody."""
+        from claude_bestpractice import sessions
+
+        from helpers import session_record_for
+
+        self.paused_yesterday_by_an_older_version()
+        loose = plan.add(self.ctx(), "found on no branch", done_when="stated")
+        plan.pause(self.ctx(), loose.id, self.WORDS)
+        sessions.register(self.ctx(), session_record_for(self.ctx(), sid(self.repo, "s2")))
+        detached = session_record_for(self.ctx(), sid(self.repo, "s3"))
+        detached.branch = ""
+        sessions.register(self.ctx(), detached)
+
+        self.upgraded()
+
+        self.assertEqual(["", ""], [plan.find(self.ctx(), card).paused_by
+                                    for card in (self.card.id, loose.id)])
+
+    def test_a_card_that_says_who_paused_it_keeps_that(self):
+        plan.pause(self.ctx(), self.card.id, self.WORDS, sid(self.repo, "s9"))
+        self.upgraded()
+        self.assertEqual(sid(self.repo, "s9"), plan.find(self.ctx(), self.card.id).paused_by)
+
+    def test_a_question_from_another_session_still_holds_the_turn(self):
+        from claude_bestpractice import inbox
+
+        inbox.ask(self.ctx(), sid(self.repo, "s1"), "are you still in feature.py?", sender="them")
+        self.pause()
+
+        proc = self.stop()
+
+        self.assertEqual(2, proc.returncode)
+        self.assertIn("unanswered", proc.stderr)
+        self.assertEqual(0, self.ran(), "the suite was run for a turn that claims nothing")

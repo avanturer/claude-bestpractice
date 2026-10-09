@@ -208,6 +208,21 @@ class TestOnlyItsHolderHandsACardBack(PlanCase):
         self.assertEqual(0, proc.returncode, proc.stderr)
         self.assertEqual(plan.PAUSED, self.state()[0])
 
+    def test_a_paused_card_says_who_paused_it_until_it_moves_on(self):
+        """A pause clears the owner, so the Stop gate asks who paused it instead (#264)."""
+        def pausers() -> list[list[str]]:
+            return [[card.id for card in plan.paused_by(self.ctx(), who)]
+                    for who in (self.holder, sid(self.repo, "s1"))]
+
+        proc = self.cli("pause", self.task.id, "--blocker", "waiting on the schema decision",
+                        session="s2")
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual([[self.task.id], []], pausers())
+        self.cli("update", self.task.id, "--note", "the schema is in review, resume when it lands")
+        self.assertEqual([[self.task.id], []], pausers(), "an amended card forgot who paused it")
+        plan.resume(self.ctx(), self.task.id)
+        self.assertEqual([[], []], pausers())
+
     def test_a_dead_holders_card_is_anybodys_to_hand_back(self):
         self.session(self.holder, pid=999_999_999)
         proc = self.cli("pause", self.task.id, "--blocker", "waiting on the schema decision",

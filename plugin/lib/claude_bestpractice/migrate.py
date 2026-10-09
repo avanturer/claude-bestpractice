@@ -943,6 +943,27 @@ def _withdraw_messages_that_were_never_work(ctx: GitContext) -> str:
         if taken else ""
 
 
+def _name_who_paused_a_card(ctx: GitContext) -> str:
+    """Cards paused before a pause said who set them down.
+
+    A pause clears the owner, and until 2.2.0 it wrote nobody in its place, so the Stop gate
+    reads such a card as nobody's: a turn ending on it is asked for a green suite and sent
+    to `claim` it back (#264). A card keeps the branch it was claimed on, and the session
+    working on that branch is the one that paused it. Named where exactly one live session
+    is on it; where none is, or more, the card goes on naming nobody, and pausing it again
+    names whoever does. Its time is left alone: it is the moment of the pause.
+    """
+    from . import plan, sessions
+
+    live = sessions.live_sessions(ctx)
+    named = 0
+    for card in plan.load_all(ctx, plan.PAUSED):
+        on_it = [record for record in live if card.branch and record.branch == card.branch]
+        if len(on_it) == 1:
+            named += bool(plan.name_the_pauser(ctx, card.id, on_it[0].session_id))
+    return f"{named} paused card(s) given the session that paused them" if named else ""
+
+
 def _staged_by_a_move(tree: Path) -> list[str]:
     """Card paths staged as deleted in `tree` whose card a transition moved inside it."""
     from . import plan
@@ -1731,6 +1752,7 @@ _REPAIRS = {
     "0037-begin-the-log-of-the-founders-words": (1, _begin_the_log_of_the_founders_words),
     "0038-unstage-what-another-tree-staged": (1, _unstage_what_another_tree_staged),
     "0039-withdraw-messages-that-were-never-work": (1, _withdraw_messages_that_were_never_work),
+    "0040-name-who-paused-a-card": (1, _name_who_paused_a_card),
 }
 
 
