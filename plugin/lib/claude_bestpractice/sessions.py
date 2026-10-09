@@ -415,13 +415,26 @@ def called(ctx: GitContext, session_id: str) -> str:
     return label(rec) if rec is not None else session_id[:8]
 
 
-def who_works_in(ctx: GitContext, tree: Path) -> str:
+def who_works_in(ctx: GitContext, tree: Path, me: SessionRecord | None = None) -> str:
     """`label` of each live session working in `tree`, or "" where none is known to. For the
     refusal that sends a session out of another's tree, which named the tree and not who to
-    ask about it (#253)."""
+    ask about it (#253).
+
+    One that is `me`'s own chat says so. Its name and id are the reader's own, and named bare
+    they told fuddy-71 that fuddy-71 worked there, as if it were somebody else (#263).
+    """
     where = tree.resolve()
-    return ", ".join(label(rec) for rec in one_per_session(live_sessions(ctx))
+    return ", ".join(_as_seen_by(me, rec) for rec in one_per_session(live_sessions(ctx))
                      if Path(rec.worktree).resolve() == where)
+
+
+def _as_seen_by(me: SessionRecord | None, rec: SessionRecord) -> str:
+    """`label`, marked with what `rec` is to `me` where the two are one chat."""
+    if me is None or not same_chat(me, rec):
+        return label(rec)
+    if of_this_chat(me, rec):
+        return f"{label(rec)} [this chat]"
+    return f"{label(rec)} [another process of this chat, such as a `claude -p` it started]"
 
 
 def one_per_session(records: list[SessionRecord]) -> list[SessionRecord]:
@@ -834,6 +847,26 @@ def _one_session(process: tuple | None, other: tuple | None, linked: bool) -> bo
     if process is not None and other is not None:
         return process == other
     return linked
+
+
+def same_chat(me: SessionRecord, record: SessionRecord) -> bool:
+    """Do two records carry one harness id: one chat, in whichever process (decision 0023)?"""
+    harness = hookio.harness_of(me.session_id, me.worktree)
+    return bool(harness) and hookio.harness_of(record.session_id, record.worktree) == harness
+
+
+def of_this_chat(me: SessionRecord, record: SessionRecord) -> bool:
+    """Is `record` this session, as far as anything this machine holds can tell?
+
+    `identities` asks the process, because a `claude -p` shares its parent's harness id, and
+    the tree registry where no pid was resolved. A tree made by hand is in no registry, so on
+    a machine with no /proc the record a session left in its earlier tree was a stranger's:
+    the session was refused the removal of its own finished tree, as another session's
+    (#263). Here the harness id decides wherever the pids cannot. That is the most this
+    machine can say, and it cannot tell such a record from a `claude -p` this chat started,
+    so what it lets through is only an act that loses no uncommitted work.
+    """
+    return _one_session(_process_of(me), _process_of(record), same_chat(me, record))
 
 
 def _through_a_tree(ctx: GitContext, me: SessionRecord, harness: str,

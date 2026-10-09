@@ -290,19 +290,26 @@ def _occupied(ctx: GitContext, tree: Path, session_id: str = "") -> bool:
     the cost of being wrong runs one way: a refusal is an inconvenience, and a silent
     cross-tree overwrite is the thing this gate exists to prevent.
     """
-    from . import sessions
-
-    mine = sessions.my_pid(ctx, session_id)
     try:
         if tree == ctx.common_dir.parent.resolve():
             return True
     except OSError:
         return True
+    occupants = _occupants(ctx, tree, session_id)
+    return occupants is None or bool(occupants)
 
+
+def _occupants(ctx: GitContext, tree: Path, session_id: str = "") -> list | None:
+    """The live records standing in `tree`, but this session's own process; None where the
+    registry cannot be read, which every caller takes as somebody being there."""
+    from . import sessions
+
+    mine = sessions.my_pid(ctx, session_id)
     try:
         live = sessions.live_sessions(ctx)
     except Exception:  # noqa: BLE001 - an unreadable registry is not permission to write
-        return True
+        return None
+    found = []
     for record in live:
         # Not me under an older identity. A resumed chat gets a NEW session id, so the
         # record it left in its previous tree is live and is not excluded by id — and the
@@ -312,10 +319,26 @@ def _occupied(ctx: GitContext, tree: Path, session_id: str = "") -> bool:
             continue
         try:
             if Path(record.worktree).resolve() == tree:
-                return True
+                found.append(record)
         except OSError:
-            return True
-    return False
+            return None
+    return found
+
+
+def only_this_chat_in(ctx: GitContext, tree: Path, session_id: str) -> bool:
+    """Is everybody standing in `tree` this session's own chat, as far as anything can tell?
+
+    #89 answered it with the process, and a pid names one only where /proc does. Everywhere
+    else, macOS included, the record a session left in a tree it made by hand stays live and
+    is nobody it knows: it finished in one tree, moved to the next, and was refused the
+    removal of the first as "another session's worktree", which the refusal said it worked
+    in itself (#263). `sessions.of_this_chat` lets the harness id decide where no pid can.
+    """
+    from . import sessions
+
+    me = sessions.get(ctx, session_id) if session_id else None
+    occupants = _occupants(ctx, tree, session_id) if me is not None else None
+    return bool(occupants) and all(sessions.of_this_chat(me, record) for record in occupants)
 
 
 def ignored_by_git(tree: Path, target: Path) -> bool:
@@ -415,17 +438,25 @@ def _within(target: Path, root: Path) -> bool:
     return True
 
 
-def foreign_refusal(target: Path, owner: Path, ctx: GitContext) -> str:
+def foreign_refusal(target: Path, owner: Path, ctx: GitContext, session_id: str = "") -> str:
     main = owner == ctx.common_dir.parent.resolve()
-    kind = "the main checkout" if main else "another session's worktree"
+    ours = not main and only_this_chat_in(ctx, owner, session_id)
     return (
-        f"claude-bestpractice: {target} belongs to {kind} ({owner}), not to this session's "
-        f"working tree ({ctx.worktree_root}).\n"
-        + ("" if main else _who_is_there(ctx, owner))
+        f"claude-bestpractice: {target} belongs to {_kind(main, ours)} ({owner}), not to this "
+        f"session's working tree ({ctx.worktree_root}).\n"
+        + ("" if main else _who_is_there(ctx, owner, session_id, ours))
         + "  Editing across working trees is the exact silent overwrite worktrees exist to "
         "prevent — git does not notice, and neither would you.\n"
-        "  Make the change in your own tree and merge it, or start a session there."
+        + ("  Make the change from inside that tree, or in your own tree and merge it." if ours
+           else "  Make the change in your own tree and merge it, or start a session there.")
     )
+
+
+def _kind(main: bool, ours: bool) -> str:
+    """What a refusal calls the tree it keeps a session out of."""
+    if main:
+        return "the main checkout"
+    return "a worktree only this chat is registered in" if ours else "another session's worktree"
 
 
 def _provisioned_trees(ctx: GitContext, session_id: str) -> list[Path]:
@@ -494,7 +525,7 @@ def provisioned_tree_of(ctx: GitContext, session_id: str, target: Path) -> Path 
     return None
 
 
-def foreign_git_refusal(owner: Path, ctx: GitContext) -> str:
+def foreign_git_refusal(owner: Path, ctx: GitContext, session_id: str = "") -> str:
     """A git command aimed at somebody else's working tree.
 
     Separate from the file refusal because the loss is a different shape and the founder
@@ -505,34 +536,56 @@ def foreign_git_refusal(owner: Path, ctx: GitContext) -> str:
     Nobody owns the main checkout, so for it the second half of that advice named nobody —
     and it is the tree decision 0018 needs kept level with the trunk. It is told the one
     update that is allowed there instead.
+
+    A tree only this chat is registered in has no other session to defer to either. It is
+    told the removal that is allowed there, which is what a session wants of the tree it
+    finished in (#263).
     """
     main = owner == ctx.common_dir.parent.resolve()
-    kind = "the main checkout" if main else "another session's worktree"
+    ours = not main and only_this_chat_in(ctx, owner, session_id)
     return (
-        f"claude-bestpractice: this git command operates on {kind} ({owner}), not on this "
-        f"session's working tree ({ctx.worktree_root}).\n"
-        + ("" if main else _who_is_there(ctx, owner))
+        f"claude-bestpractice: this git command operates on {_kind(main, ours)} ({owner}), not "
+        f"on this session's working tree ({ctx.worktree_root}).\n"
+        + ("" if main else _who_is_there(ctx, owner, session_id, ours))
         + "  reset, checkout, switch, clean and stash discard uncommitted work and move the "
         "HEAD another session is standing on. Nothing names a file, so nothing shows up in "
         "a diff and no lease covers it.\n"
-        + (
-            "  Run it in your own tree. Bringing the main checkout up to the trunk is allowed, "
-            "and so is anything that only reads it:\n"
-            f"  git -C {shlex.quote(str(owner))} pull --ff-only"
-            if main else
-            "  Run it in your own tree, or let the session that owns that one run it."
-        )
+        + _git_way_out(ctx, owner, main, ours)
     )
 
 
-def _who_is_there(ctx: GitContext, tree: Path) -> str:
+def _git_way_out(ctx: GitContext, owner: Path, main: bool, ours: bool) -> str:
+    """What a refused git command can do instead, by whose tree it was aimed at."""
+    where = shlex.quote(str(owner))
+    if main:
+        return ("  Run it in your own tree. Bringing the main checkout up to the trunk is "
+                "allowed, and so is anything that only reads it:\n"
+                f"  git -C {where} pull --ff-only")
+    if ours:
+        return ("  Run it from inside that tree. Removing the tree is allowed from here, "
+                "without `--force`, which git refuses while anything in it is uncommitted:\n"
+                f"  git -C {shlex.quote(str(ctx.common_dir.parent.resolve()))} worktree remove "
+                f"{where}")
+    return "  Run it in your own tree, or let the session that owns that one run it."
+
+
+def _who_is_there(ctx: GitContext, tree: Path, session_id: str = "", ours: bool = False) -> str:
     """The line naming who works in another session's tree, by the name `SendMessage` takes,
     or "" where no live session is known to. The refusal said whose tree it was and not who
-    to ask about it (#253)."""
+    to ask about it (#253).
+
+    And, where that is this chat, why it is still kept out: told "fuddy-71 works there",
+    fuddy-71 read its own name given as somebody else's (#263)."""
     from . import sessions
 
-    who = sessions.who_works_in(ctx, tree)
-    return f"  {who} works there.\n" if who else ""
+    me = sessions.get(ctx, session_id) if session_id else None
+    who = sessions.who_works_in(ctx, tree, me)
+    line = f"  {who} works there.\n" if who else ""
+    if ours:
+        line += ("  What is registered there is this chat, and nothing on this machine names "
+                 "the process behind that record, so it cannot be told from a `claude -p` this "
+                 "chat started.\n")
+    return line
 
 
 def split_git(argv: list[str]) -> tuple[list[str], str, list[str]]:
@@ -556,6 +609,20 @@ def split_git(argv: list[str]) -> tuple[list[str], str, list[str]]:
         index += 2 if word in _GLOBAL_WITH_VALUE else 1
     subcommand = argv[index] if index < len(argv) else ""
     return pointed, subcommand, argv[index + 1:]
+
+
+def directory_moves(argv: list[str]) -> list[str]:
+    """Where git's own `-C` options move it before the subcommand runs, in order: git takes
+    each relative one from the last. Empty for anything that is not git."""
+    if not argv or argv[0].rsplit("/", 1)[-1] != "git":
+        return []
+    moves: list[str] = []
+    index = 1
+    while index < len(argv) and argv[index].startswith("-"):
+        if argv[index] == "-C" and index + 1 < len(argv):
+            moves.append(argv[index + 1])
+        index += 2 if argv[index] in _GLOBAL_WITH_VALUE else 1
+    return moves
 
 
 def worktree_paths_in_use(ctx: GitContext) -> dict[str, str]:
