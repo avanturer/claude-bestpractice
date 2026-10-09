@@ -939,20 +939,71 @@ def _removal_targets(rest: str, literal: str, here: Path) -> list[Path]:
     inside, the one step decision 0022 exists to take for it (#224).
     """
     commands = _commands_in(literal)
-    named = [word for argv in commands for word in _removed_by(argv)] if commands else [
-        a for removal in _WORKTREE_REMOVE.finditer(rest)
-        for a in _ARG.findall(removal.group("args")) if not a.startswith("-")
-    ]
-    return [_resolve(here, word) for word in named]
+    if commands:
+        return [path for argv in commands for path in _removed_from(argv, here)]
+    return [_resolve(here, a) for removal in _WORKTREE_REMOVE.finditer(rest)
+            for a in _ARG.findall(removal.group("args")) if not a.startswith("-")]
 
 
 def _removed_by(argv: list[str]) -> list[str]:
     """What one command's `git worktree remove` names, or nothing when it is not one."""
+    return _removal(argv)[1]
+
+
+def _removal(argv: list[str]) -> tuple[list[str], list[str]]:
+    """One command's `git worktree remove` as (its options, the paths it names); both empty
+    when it is not one."""
     argv = _launched(argv, "git")
     for at in range(1, len(argv) - 1):
         if argv[at:at + 2] == ["worktree", "remove"]:
-            return [word for word in argv[at + 2:] if not word.startswith("-")]
-    return []
+            words = argv[at + 2:]
+            return ([word for word in words if word.startswith("-")],
+                    [word for word in words if not word.startswith("-")])
+    return [], []
+
+
+def _removed_from(argv: list[str], here: Path) -> list[Path | None]:
+    """The trees one command's `git worktree remove` deletes, resolved where git resolves
+    them: from wherever its `-C`s move it, each from the last, never from the shell.
+
+    `git -C <main checkout> worktree remove ../proj-a` deletes the `proj-a` beside the main
+    checkout wherever the shell stands. Read from a shell in `.claude/worktrees/<tree>`, it
+    named a path inside the main checkout: another chat's tree went unguarded, and a tree
+    named from the main checkout was not seen as the one the shell stood in (#263).
+    """
+    named = _removed_by(argv)
+    if not named:
+        return []
+    base = here
+    for directory in gitpolicy.directory_moves(_launched(argv, "git")):
+        base = _resolve(base, directory) or base
+    return [_resolve(base, word) for word in named]
+
+
+def _forces(options: list[str]) -> bool:
+    """Do these `git worktree remove` options take uncommitted work with the tree?
+
+    `-f` in any bundle, and `--force` spelled out or cut short, as git accepts it.
+    """
+    for word in options:
+        if word.startswith("--"):
+            if len(word) > 2 and "--force".startswith(word):
+                return True
+        elif "f" in word[1:]:
+            return True
+    return False
+
+
+def unforced_removals(command: str, cwd: Path) -> set[Path]:
+    """The trees this command removes without `--force`, which git refuses while anything in
+    them is modified or untracked. Read off words the shell would hand git, or not at all."""
+    scannable = _QUOTED.sub(lambda m: " " * len(m.group(0)), command)
+    out: set[Path] = set()
+    for _segment, literal, here, _start in _segments_with_cwd(scannable, cwd, command):
+        for argv in _commands_in(literal):
+            if not _forces(_removal(argv)[0]):
+                out.update(path for path in _removed_from(argv, here) if path is not None)
+    return out
 
 
 def worktree_removals(command: str, cwd: Path) -> list[Path]:
@@ -1015,8 +1066,10 @@ def _trees_changed(commands: list[list[str]], here: Path) -> list[tuple[Path | N
         # command does not go near, and git will not remove a tree from inside it either,
         # so the advice to "run it in your own tree" named the one place it cannot be run
         # (#218).
-        bases = _removed_by(launched) or pointed or ["."]
-        out += [(_resolve(here, base), _fast_forwards(verb, args)) for base in bases]
+        trees = _removed_from(launched, here) or [
+            _resolve(here, base) for base in pointed or ["."]
+        ]
+        out += [(tree, _fast_forwards(verb, args)) for tree in trees]
     return out
 
 
@@ -1773,7 +1826,7 @@ def main() -> None:
             # (issue #37); the write path, which is what the founder actually hits, was
             # never given the same exemption.
             if owner is not None and not gitpolicy.provisioned_for(ctx, event.session_id, owner):
-                deny(ctx, rec, gitpolicy.foreign_refusal(path, owner, ctx))
+                deny(ctx, rec, gitpolicy.foreign_refusal(path, owner, ctx, event.session_id))
 
     # The other step this session does not survive: removing the tree it is standing in.
     # git obliges — the directory goes, and the shell is left with no working directory at
@@ -1850,7 +1903,9 @@ def main() -> None:
     # taken, and then refused here, for `git pull --ff-only` among others.
     if cfg.require_worktree and event.tool_name == "Bash":
         main_checkout = ctx.common_dir.parent.resolve()
-        for path, fast_forward in git_tree_targets(str(ti.get("command", "")), session_cwd):
+        command = str(ti.get("command", ""))
+        unforced = unforced_removals(command, session_cwd)
+        for path, fast_forward in git_tree_targets(command, session_cwd):
             owner = gitpolicy.foreign_tree(ctx, path, rec.session_id)
             # A fast-forward of the main checkout moves it to the trunk and nowhere else:
             # it makes no commit, and git refuses it rather than overwrite anything
@@ -1863,8 +1918,18 @@ def main() -> None:
             # hands a session a worktree also makes that worktree permanent: the main
             # checkout is told it belongs to another session, and a worktree cannot remove
             # itself from the inside.
-            if not gitpolicy.provisioned_for(ctx, rec.session_id, path):
-                deny(ctx, rec, gitpolicy.foreign_git_refusal(owner, ctx))
+            if gitpolicy.provisioned_for(ctx, rec.session_id, path):
+                continue
+            # And the tree this chat made by hand and finished in, removed the one way that
+            # loses nothing: without `--force`, which git refuses while anything in the tree
+            # is modified or untracked. Where no pid names a process, macOS among them, the
+            # record the chat left there is nobody it knows, and its removal of its own
+            # finished tree was refused as another session's, naming itself as the one
+            # working there (#263). Nothing else goes through on that: a write, a reset or a
+            # forced removal takes what may be a `claude -p`'s uncommitted work.
+            if path in unforced and gitpolicy.only_this_chat_in(ctx, owner, rec.session_id):
+                continue
+            deny(ctx, rec, gitpolicy.foreign_git_refusal(owner, ctx, rec.session_id))
 
     # Before the shell takes a step it cannot take back. Claude Code refuses every Bash
     # call whose working directory is inside the protected checkout — judged before the

@@ -17,6 +17,7 @@ anything looser hides the sibling the per-tree identity exists to surface.
 from __future__ import annotations
 
 import os
+import subprocess
 import unittest
 
 from helpers import BIN, RepoCase, git, session_record_for, sid
@@ -101,7 +102,6 @@ class MovedSession(RepoCase):
                          tool_input={"file_path": str(tree / relpath), "content": "x = 1\n"})
 
     def cli(self, cwd, *args: str, session: str = "S"):
-        import subprocess
         import sys
 
         env = {**os.environ, "CLAUDE_CODE_SESSION_ID": session}
@@ -184,6 +184,15 @@ class TestItsCardComesWithIt(MovedSession):
         self.assertEqual("deny", self.hook_decision(proc), proc.stdout + proc.stderr)
         self.assertIn(f"{self.tree} is removed", self.hook_reason(proc))
         self.assertIn(f"cd {self.main}", self.hook_reason(proc))
+        self.assertFalse(self.tree.is_dir(), "the gate did not remove the tree")
+
+    def test_its_own_tree_named_from_the_main_checkout_is_found_where_git_looks(self):
+        """`git -C <main checkout> worktree remove .claude/worktrees/<it>` names the tree from
+        where git runs. Read from the shell standing in the tree, it named nothing there, and
+        the call went to the shell it strands (#263)."""
+        proc = self.bash(f"git -C {self.main} worktree remove {self.tree.relative_to(self.main)}")
+        self.assertEqual("deny", self.hook_decision(proc), proc.stdout + proc.stderr)
+        self.assertIn(f"{self.tree} is removed", self.hook_reason(proc))
         self.assertFalse(self.tree.is_dir(), "the gate did not remove the tree")
 
 
@@ -329,6 +338,110 @@ class TestWithNoProcToNameTheProcess(MovedSession):
                              sessions.identities(self.ctx(), sid(tree, "B")))
             self.assertNotIn(sid(tree, "B"),
                              sessions.identities(self.ctx(), sid(self.repo, "S")))
+
+
+class TestTheTreeItFinishedIn(MovedSession):
+    """Issue #263. A session made a tree by hand, finished in it, made a second and went on
+    there, and removed the first from the main checkout. Refused, as another session's
+    worktree, and the session the refusal said worked there was itself. Seen in three trees
+    from two sessions in two days; nine finished trees were removed by hand.
+
+    No pid names a process there, so #89's rule never applies, and a tree made by hand is in
+    no registry for `_through_a_tree` to read: the record the session left in it was nobody's
+    it knew. The harness id is all such a machine has, and it cannot tell that record from a
+    `claude -p` the chat started. So it lets one act through and no other: the removal git
+    refuses while anything in the tree is modified or untracked."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.pin(self.repo, "S", UNRESOLVED, trust=sessions.PID_TRUST_PARENT)
+        self.pin(self.tree, "S", UNRESOLVED + 1, trust=sessions.PID_TRUST_PARENT)
+        self.finished = self.by_hand("proj-a", "x/a")
+        self.current = self.by_hand("proj-b", "x/b")
+        self.pin(self.finished, "S", UNRESOLVED + 2, trust=sessions.PID_TRUST_PARENT)
+        self.pin(self.current, "S", UNRESOLVED + 3, trust=sessions.PID_TRUST_PARENT)
+
+    def by_hand(self, name: str, branch: str):
+        """`git worktree add ../<name> -b <branch>`, as the session typed it."""
+        tree = self.main.parent / name
+        git(["worktree", "add", "-q", "-b", branch, str(tree)], self.repo)
+        return tree
+
+    def removing(self, option: str = "", cwd=None):
+        """The command from the issue: the tree named as git reads it, from the main checkout."""
+        return self.bash(f"git -C {self.main} worktree remove {option}../{self.finished.name}",
+                         cwd=cwd or self.current)
+
+    def test_it_removes_the_tree_it_finished_in(self):
+        proc = self.removing()
+        self.assertNotEqual("deny", self.hook_decision(proc), self.hook_reason(proc))
+
+    def test_it_is_never_told_that_it_works_there_as_somebody_else(self):
+        proc = self.bash(f"git -C {self.finished} reset --hard", cwd=self.current)
+        said = self.hook_reason(proc)
+        self.assertEqual("deny", self.hook_decision(proc))
+        self.assertNotIn("another session's worktree", said)
+        self.assertIn(f"{sid(self.finished, 'S')[:8]} [this chat] works there", said)
+        self.assertIn("cannot be told from a `claude -p` this chat started", said)
+
+    def test_force_is_refused_and_the_removal_it_names_runs(self):
+        """`--force` takes what is uncommitted, and the record there may be a `claude -p`'s.
+        The way out is the removal git guards, which runs as printed (decision 0020)."""
+        (self.finished / "half-done.py").write_text("x = 1\n", encoding="utf-8")
+        refused = self.removing("--force ")
+        self.assertEqual("deny", self.hook_decision(refused))
+        named = [line.strip() for line in self.hook_reason(refused).splitlines()
+                 if "worktree remove" in line]
+        self.assertEqual([f"git -C {self.main} worktree remove {self.finished}"], named)
+
+        self.assertNotEqual("deny", self.hook_decision(self.bash(named[0], cwd=self.current)))
+        kept = subprocess.run(named[0], shell=True, cwd=str(self.current), capture_output=True,
+                              text=True, timeout=60)
+        self.assertNotEqual(0, kept.returncode, "git removed a tree holding an untracked file")
+        (self.finished / "half-done.py").unlink()
+        gone = subprocess.run(named[0], shell=True, cwd=str(self.current), capture_output=True,
+                              text=True, timeout=60)
+        self.assertEqual(0, gone.returncode, gone.stderr)
+        self.assertFalse(self.finished.exists())
+
+    def test_nothing_else_there_is_let_through(self):
+        for command in (f"git -C {self.finished} reset --hard",
+                        f"git -C {self.finished} clean -fd",
+                        f"git -C {self.main} worktree remove -f ../{self.finished.name}",
+                        f"git -C {self.main} worktree remove -ff ../{self.finished.name}",
+                        f"git -C {self.main} worktree remove --forc ../{self.finished.name}"):
+            proc = self.bash(command, cwd=self.current)
+            self.assertEqual("deny", self.hook_decision(proc), command)
+        proc = self.hook("pre-tool", self.current, hook_event_name="PreToolUse", tool_name="Write",
+                         tool_input={"file_path": str(self.finished / "src" / "app.py"),
+                                     "content": "x = 1\n"})
+        self.assertEqual("deny", self.hook_decision(proc))
+        self.assertIn("only this chat is registered in", self.hook_reason(proc))
+
+    def test_another_chat_in_that_tree_keeps_it(self):
+        self.pin(self.finished, "B", UNRESOLVED + 4, trust=sessions.PID_TRUST_PARENT)
+        proc = self.removing()
+        self.assertEqual("deny", self.hook_decision(proc))
+        self.assertIn("another session's worktree", self.hook_reason(proc))
+
+    def test_a_process_the_pids_tell_apart_keeps_it(self):
+        """Where both pids were resolved they decide, as everywhere: a different process of
+        this chat is a `claude -p` it started, and the refusal says so of it."""
+        self.pin(self.finished, "S", ANOTHER_PROCESS)
+        self.pin(self.current, "S", THIS_PROCESS)
+        proc = self.removing()
+        self.assertEqual("deny", self.hook_decision(proc))
+        self.assertIn("[another process of this chat, such as a `claude -p` it started]",
+                      self.hook_reason(proc))
+
+    def test_the_path_is_read_from_where_git_runs(self):
+        """`../proj-a` from the main checkout is the tree beside it. Read from the shell in a
+        tree two levels deeper, it named a path inside the main checkout, and another chat's
+        tree went unguarded."""
+        self.pin(self.finished, "B", UNRESOLVED + 4, trust=sessions.PID_TRUST_PARENT)
+        proc = self.removing(cwd=self.tree)
+        self.assertEqual("deny", self.hook_decision(proc))
+        self.assertIn(f"another session's worktree ({self.finished})", self.hook_reason(proc))
 
 
 class TestTheFoundersLatestWordReachesEveryId(MovedSession):

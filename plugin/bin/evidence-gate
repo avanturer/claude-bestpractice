@@ -51,6 +51,11 @@ LET_GO_AT = "_let_go_at"
 # a package — has to be able to come back green without anything in the tree changing.
 LET_GO_SECONDS = 3600.0
 
+# When this gate last let one of this session's turns end, however it ended. A card closed
+# after it was closed in the turn being judged, and that turn is a finish whatever else it
+# paused (#264).
+SETTLED_AT = "_settled_at"
+
 # A gap this long between blocks is not the thing the ceiling exists to stop. The ceiling
 # catches a session looping — block, retry, block, retry, minutes apart — and lets it
 # finish UNVERIFIED rather than burning turns forever. Four blocks spread across an
@@ -87,6 +92,8 @@ def _bump_blocks(ctx, rec: sessions.SessionRecord, value: int,
     payload = dict(rec.tool_signatures)
     payload[BLOCK_COUNTER] = value
     payload[BLOCK_AT] = time.time()
+    if not value:
+        payload[SETTLED_AT] = payload[BLOCK_AT]
     if reason:
         payload[BLOCK_REASON] = _as_remembered(reason)
         payload[BLOCK_PATHS] = list(changed or [])[:64]
@@ -581,6 +588,103 @@ def _refuse_to_end_on_an_unanswered_block(ctx, rec, pending: dict) -> None:
     )
 
 
+def _the_changes(ctx, rec: sessions.SessionRecord, cfg) -> tuple[list, list, list]:
+    """(exempt, everything, changed): what a Stop leaves out of the diff, every path in it,
+    and the paths it judges."""
+    # The test artifact is exempt from scope drift because THIS GATE demands it. Without
+    # this the two checks deadlock: finish without evidence and you are blocked for the
+    # missing artifact, produce it and you are blocked for touching a file the task did
+    # not name. Found by running a whole project lifecycle end to end, not by reading.
+    exempt = (
+        list(cfg.exempt_paths)
+        + [".claude/claude-bestpractice/", ".claude/"]
+        + list(evidence.RUN_BYPRODUCTS)
+    )
+    # Artifact globs are matched AS GLOBS. Truncating `reports/**/*.xml` to `reports`
+    # exempted every file under reports/ — so a repository whose source lives in
+    # `reports/api/` had its whole service made invisible: `changed` came back empty, the
+    # suite was never run, and Stop exited 0 in silence over a genuine regression. Same
+    # for `target/` and `test-results/`, which are ordinary directory names.
+    everything = changed_files(ctx, rec.baseline_commit)
+    changed = evidence.material_changes(everything, exempt, artifact_globs=cfg.artifact_globs)
+
+    # A HEURISTIC must never be the reason a change list became empty. The explicit path
+    # exemptions are a deliberate statement that these files cannot break anything — a
+    # turn that only touched `.claude/` genuinely needs no test run, and demanding one for
+    # the gate's own bookkeeping is what teaches the agent the gate is noise.
+    #
+    # The glob and byproduct rules are guesses about directory names, and a wrong guess
+    # there hides real source. So when they are what emptied the list, run the suite:
+    # "I cannot tell what changed" must resolve to checking, never to certifying.
+    if not changed:
+        by_path = [
+            rel for rel in everything
+            if not any(rel == p or rel.startswith(p.rstrip("/") + "/") for p in exempt)
+        ]
+        if by_path:
+            changed = by_path
+    return exempt, everything, changed
+
+
+def _ends_on_a_pause(ctx, rec: sessions.SessionRecord, changed: list):
+    """The card this session's turn ends by pausing, or None where it ends any other way.
+
+    A pause is a stop the founder asked for, or a blocker the session cannot clear, and it
+    claims nothing is finished. It was judged as a finish all the same: told to stop until
+    tomorrow over tests left red on purpose, a session was refused for the red suite, and
+    once it paused its card, refused again with "nothing on the board says this session is
+    working" and `claim` named to take the card back (#264).
+
+    Three facts make it one, each read off the disk. Nothing is held in `doing`: a card in
+    flight is work still claimed. Nothing was closed since the last turn ended: a closed
+    card is a finish, whatever else was paused. And no file in the diff was written after
+    the pause: such a write is work no card covers.
+    """
+    from claude_bestpractice import plan
+
+    if plan.held_by(ctx, rec.session_id):
+        return None
+    paused = plan.paused_by(ctx, rec.session_id)
+    if not paused:
+        return None
+    settled = rec.tool_signatures.get(SETTLED_AT)
+    since = settled if isinstance(settled, (int, float)) else 0.0
+    if any(plan.moved_at(card) > since for card in plan.closed_by(ctx, rec.session_id)):
+        return None
+    last = max(paused, key=plan.moved_at)
+    return None if _written_since(ctx, changed, plan.moved_at(last)) else last
+
+
+def _written_since(ctx, changed: list, moment: float) -> bool:
+    """Was a file in `changed` written in a later second than `moment`? A card keeps its time
+    to the second, so a write in the second of the pause itself reads as before it."""
+    for rel in changed:
+        try:
+            if (ctx.worktree_root / rel).stat().st_mtime >= moment + 1:
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _how_to_stop_here(ctx, rec: sessions.SessionRecord) -> str:
+    """The way to end a turn the founder asked to end before the work is finished, for a
+    refusal only a finish owes; "" where the session holds no card to pause. The session in
+    #264 was refused twice over the suite it had been told to leave red before it found it.
+    """
+    from claude_bestpractice import plan
+
+    held = plan.held_by(ctx, rec.session_id)
+    if not held:
+        return ""
+    return (
+        "If the founder asked to stop before this is finished, pause the card with their words "
+        "as the blocker. A pause claims nothing is done, so nothing is run for it until the "
+        "card is claimed and finished again:\n"
+        f"  claude-bp-plan pause {held[0].id} --blocker \"<the founder's words>\"\n\n"
+    )
+
+
 def main() -> None:
     event = hookio.read_event()
     # The tree this session works in, which is not always the directory the harness hands
@@ -632,7 +736,11 @@ def main() -> None:
     # four was unreachable past one. So the flag now bounds the LOOP, not the check:
     # verification still runs, and only the escalation ceiling can end the turn.
     blocked = _blocks(rec)
-    if event.stop_hook_active and blocked >= evidence.MAX_CONSECUTIVE_BLOCKS:
+    exempt, everything, changed = _the_changes(ctx, rec, cfg)
+    # Asked before the ceiling: a turn that ends on a pause is not a finish, and the ceiling
+    # would let it go UNVERIFIED, a mark its branch carries until the founder accepts it.
+    paused = _ends_on_a_pause(ctx, rec, changed)
+    if event.stop_hook_active and blocked >= evidence.MAX_CONSECUTIVE_BLOCKS and paused is None:
         # Both ceiling exits describe the same outcome, and this is the one that fires in
         # the live loop — so it carries the same detail the other one always did.
         ceiling_reason, ceiling_paths = _remembered_block(rec)
@@ -646,9 +754,10 @@ def main() -> None:
         _bump_blocks(ctx, rec, 0)
         sys.stderr.write("claude-bestpractice: finishing UNVERIFIED — continuation ceiling reached.\n")
         _allow(ctx, rec, cfg, opener)
-    # A pull request this session opened and then walked away from. Checked before the
-    # change list, because the whole failure is a turn that ends with nothing left to do
-    # and a PR still sitting there — `changed` is empty in exactly that turn.
+    # A pull request this session opened and then walked away from. Checked before an empty
+    # change list lets the turn go, because the whole failure is a turn that ends with
+    # nothing left to do and a PR still sitting there — `changed` is empty in exactly that
+    # turn.
     #
     # Raised at most ONCE per pull request, and the hand-off is written before the block
     # rather than after: a session that ignores this, crashes, or hits the escalation
@@ -704,39 +813,6 @@ def main() -> None:
                 ctx.branch, base, asked, accepted=bool(pullrequest.acceptance(ctx, None))
             ))
 
-    # The test artifact is exempt from scope drift because THIS GATE demands it. Without
-    # this the two checks deadlock: finish without evidence and you are blocked for the
-    # missing artifact, produce it and you are blocked for touching a file the task did
-    # not name. Found by running a whole project lifecycle end to end, not by reading.
-    exempt = (
-        list(cfg.exempt_paths)
-        + [".claude/claude-bestpractice/", ".claude/"]
-        + list(evidence.RUN_BYPRODUCTS)
-    )
-    # Artifact globs are matched AS GLOBS. Truncating `reports/**/*.xml` to `reports`
-    # exempted every file under reports/ — so a repository whose source lives in
-    # `reports/api/` had its whole service made invisible: `changed` came back empty, the
-    # suite was never run, and Stop exited 0 in silence over a genuine regression. Same
-    # for `target/` and `test-results/`, which are ordinary directory names.
-    everything = changed_files(ctx, rec.baseline_commit)
-    changed = evidence.material_changes(everything, exempt, artifact_globs=cfg.artifact_globs)
-
-    # A HEURISTIC must never be the reason a change list became empty. The explicit path
-    # exemptions are a deliberate statement that these files cannot break anything — a
-    # turn that only touched `.claude/` genuinely needs no test run, and demanding one for
-    # the gate's own bookkeeping is what teaches the agent the gate is noise.
-    #
-    # The glob and byproduct rules are guesses about directory names, and a wrong guess
-    # there hides real source. So when they are what emptied the list, run the suite:
-    # "I cannot tell what changed" must resolve to checking, never to certifying.
-    if not changed:
-        by_path = [
-            rel for rel in everything
-            if not any(rel == p or rel.startswith(p.rstrip("/") + "/") for p in exempt)
-        ]
-        if by_path:
-            changed = by_path
-
     if not changed:
         # A turn that wrote nothing is the commonest way to end on a block: the write was
         # refused, so there is nothing to verify and nothing above this has anything to
@@ -774,11 +850,12 @@ def main() -> None:
         # paths and its refusal says they are what this gate measures against — and this
         # gate never read them, so a session that declared a file on its card was still
         # told to revert it, measured against whatever the founder had said last (#236).
+        # A card it paused is its work too, set down rather than given away (#264).
         from claude_bestpractice import plan
 
         held = plan.held_by(ctx, rec.session_id)
         declared = [path for card in held + plan.closed_by(ctx, rec.session_id)
-                    for path in card.paths]
+                    + plan.paused_by(ctx, rec.session_id) for path in card.paths]
         drift = [p for p in evidence.scope_drift(changed, rec.task_paths, exempt, declared)
                  if p not in forgiven]
         if drift:
@@ -841,7 +918,10 @@ def main() -> None:
             # `pause`, never a question put to the founder, who accepted this work when
             # they accepted the merge (decision 0010).
             problems.append(plan.closure_demand(mine))
-        if not mine and not closed and not delivered:
+        # And the card it ended this turn by pausing: the board says what the work is and
+        # what it waits on. Asked to `claim` instead, a session was told to take back the
+        # card it had just set down at the founder's word (#264).
+        if not mine and not closed and not delivered and paused is None:
             # Quoted, and the card given its `--done-when`: printed any other way the second
             # command failed on the first one's card, or the first on a path with a space in
             # it (decision 0020 — every command a refusal names runs as printed).
@@ -858,10 +938,15 @@ def main() -> None:
         if uncompared:
             problems.append(uncompared)
 
-    if cfg.block_unfinished_work:
+    # What only a finish owes — nothing left unfinished, the suite green on the tree and on
+    # the commit — is not asked of a turn that ends on a pause, which claims nothing is done.
+    # Each still holds when the card is claimed again and finished.
+    owed_by_a_finish = False
+    if cfg.block_unfinished_work and paused is None:
         unfinished = discipline.introduced(ctx, changed, rec.baseline_commit, floor)
         if unfinished:
             problems.append(discipline.render(unfinished))
+            owed_by_a_finish = True
 
     # What a block would say before any suite has run. Over a tree already let go, the suite
     # is not run again; and where this is ALSO what the gate said when it let it go, there is
@@ -876,7 +961,7 @@ def main() -> None:
     # bring its own, so their sum could pass the hook's budget, where the harness kills the
     # gate and nobody is told anything.
     deadline = time.time() + witness.timeout_for()
-    if gates["evidence_gate"] and not let_go:
+    if gates["evidence_gate"] and not let_go and paused is None:
         try:
             verdict = evidence.verify(ctx, cfg.artifact_globs, changed, cfg.test_command, must_pass,
                                       deadline)
@@ -900,6 +985,7 @@ def main() -> None:
             # has observed the trunk's suite, so this says what it knows and blocks anyway.
             problems.append(verdict.reason + evidence.not_this_trees_code(
                 ctx, evidence.failing_files(ctx, verdict), changed))
+            owed_by_a_finish = True
             # A red suite is everyone's problem: the board tells them "fix it before new
             # work", but the board is injected once at session start, so a session already
             # running builds on top of the break for hours without ever being told.
@@ -938,11 +1024,16 @@ def main() -> None:
                 clean = evidence.clean_rerun(ctx, list(suite.command), suite.path, deadline)
                 if not clean.ok:
                     problems.append(clean.reason)
+                    owed_by_a_finish = True
                     break
 
     if not problems:
         _refuse_to_end_on_an_unanswered_block(ctx, rec, pending_refusal)
-        if let_go:
+        if paused is not None:
+            sys.stderr.write(
+                f"claude-bestpractice: paused, not finished — {paused.id} waits on: "
+                f"{paused.blocker}. Nothing was run: a pause claims nothing is done.\n")
+        elif let_go:
             sys.stderr.write(
                 "claude-bestpractice: finishing UNVERIFIED — nothing in this tree has changed "
                 "since it was let go, so nothing was run again.\n")
@@ -979,7 +1070,8 @@ def main() -> None:
     hookio.block(
         f"claude-bestpractice [{blocked + 1}/{evidence.MAX_CONSECUTIVE_BLOCKS}] — not done yet.\n\n"
         f"{reason}\n\n"
-        "Your description of what you did is not evidence and was not read."
+        + (_how_to_stop_here(ctx, rec) if owed_by_a_finish else "")
+        + "Your description of what you did is not evidence and was not read."
     )
 
 

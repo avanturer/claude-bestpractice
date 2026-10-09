@@ -23,6 +23,7 @@ ever committed.
 
 from __future__ import annotations
 
+import calendar
 import re
 import subprocess
 import time
@@ -59,6 +60,9 @@ NO_DETAIL = "(no detail)"
 
 # The front-matter key naming the session a founder's message opened a card for.
 OPENED_BY = "opened_by"
+
+# The front-matter key naming the session that paused a card, kept only while it is paused.
+PAUSED_BY = "paused_by"
 
 
 @dataclass
@@ -99,6 +103,9 @@ class Task:
     # The harness session whose founder's message opened this card — the one session whose
     # later messages may retitle it while it sits unclaimed. Empty on every other card.
     opened_by: str = ""
+    # The session that paused this card, while it is paused. A pause hands the work back,
+    # so the owner goes; this is what still says whose turn ended on it (#264).
+    paused_by: str = ""
 
     @property
     def number(self) -> int:
@@ -211,6 +218,7 @@ def _load(path: Path, state: str) -> Task | None:
         after=_ids(meta.get("after", "")),
         together=_ids(meta.get("with", "")),
         opened_by=meta.get(OPENED_BY, ""),
+        paused_by=meta.get(PAUSED_BY, ""),
     )
 
 
@@ -353,7 +361,7 @@ def _render(task_id: str, title: str, state: str, owner: str, branch: str, body:
             paths: list[str] | None = None, source: str = "",
             done_when: str = "", blocker: str = "", created_at: str = "",
             after: list[str] | None = None, together: list[str] | None = None,
-            opened_by: str = "") -> str:
+            opened_by: str = "", paused_by: str = "") -> str:
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     lines = [
         "---",
@@ -364,8 +372,9 @@ def _render(task_id: str, title: str, state: str, owner: str, branch: str, body:
         f"branch: {_one_line(branch)}",
         f"paths: {_one_line(', '.join(paths or []))}",
         f"source: {_one_line(source)}",
-        # Only on the cards it concerns, so every other card keeps the shape it has always had.
+        # Only on the cards they concern, so every other card keeps the shape it always had.
         *([f"{OPENED_BY}: {_one_line(opened_by)}"] if opened_by else []),
+        *([f"{PAUSED_BY}: {_one_line(paused_by)}"] if paused_by else []),
         f"done_when: {_one_line(done_when)[:MAX_TITLE_CHARS]}",
         f"blocker: {_one_line(blocker)[:MAX_TITLE_CHARS]}",
         f"after: {_one_line(', '.join(after or []))}",
@@ -746,7 +755,7 @@ def stranded_deletions(root: Path, base: Path) -> list[Path]:
 
 
 def _move(task: Task, state: str, owner: str = "", branch: str = "",
-          blocker: str | None = None) -> Task:
+          blocker: str | None = None, paused_by: str = "") -> Task:
     """A state transition is a rename in the working tree, and never an addition in git.
 
     Where git still tracks the card, `follow_in_git` takes it out of the index rather than
@@ -791,6 +800,9 @@ def _move(task: Task, state: str, owner: str = "", branch: str = "",
         _ids(meta.get("after", "")),
         _ids(meta.get("with", "")),
         opened_by=meta.get(OPENED_BY, ""),
+        # Written by a pause and by nothing else: any other move takes the card out of
+        # `paused`, and with it the claim that some session's turn ended by setting it down.
+        paused_by=paused_by,
     )
     store.atomic_write(target, updated, mode=0o644)
     if target != task.path:
@@ -910,8 +922,28 @@ def sweep_queue(ctx: GitContext, days: float = QUEUE_STALE_DAYS) -> list[Task]:
 def _rewrite_body(task: Task) -> None:
     """Persist an amended body in place, leaving the frontmatter as it stands."""
     meta, _ = _frontmatter(task.path.read_text(encoding="utf-8", errors="replace"))
+    _write_as_it_stands(task.path, meta, task.body)
+
+
+def _write_as_it_stands(path: Path, meta: dict[str, str], body: str) -> None:
+    """A card written back with exactly this front matter: no field re-rendered, no time
+    moved."""
     head = "\n".join(f"{k}: {v}" for k, v in meta.items())
-    store.atomic_write(task.path, f"---\n{head}\n---\n\n{task.body}\n", mode=0o644)
+    store.atomic_write(path, f"---\n{head}\n---\n\n{body}\n", mode=0o644)
+
+
+def name_the_pauser(ctx: GitContext, task_id: str, session_id: str) -> int:
+    """Write who paused a card onto every copy of it that names nobody, and nothing else: its
+    time is the moment of the pause, which the Stop gate measures writes against. How many
+    copies it wrote."""
+    written = 0
+    for copy in copies(ctx, task_id):
+        if copy.paused_by:
+            continue
+        meta, body = _frontmatter(copy.path.read_text(encoding="utf-8", errors="replace"))
+        _write_as_it_stands(copy.path, {**meta, PAUSED_BY: _one_line(session_id)}, body)
+        written += 1
+    return written
 
 
 def blockers(ctx: GitContext, task: Task) -> list[str]:
@@ -983,6 +1015,10 @@ def pause(ctx: GitContext, task_id: str, blocker: str,
     The blocker is required. "Paused" without one is indistinguishable from abandoned, and
     the next session has no way to tell whether it is waiting on a decision, a credential,
     somebody else's merge, or nothing at all.
+
+    The session asking is written on the card as the one that paused it (`paused_by`), and
+    stays there while the card is paused: the Stop gate reads it to tell a turn that ended
+    on a pause from one that walked away from its card (#264).
     """
     if len(blocker.strip()) < MIN_BLOCKER_CHARS:
         return None, (
@@ -998,7 +1034,8 @@ def pause(ctx: GitContext, task_id: str, blocker: str,
         refused = _not_theirs(ctx, task, session_id)
         if refused:
             return None, refused
-        return _move_every(ctx, task_id, PAUSED, blocker=blocker.strip()) or task, ""
+        moved = _move_every(ctx, task_id, PAUSED, blocker=blocker.strip(), paused_by=session_id)
+        return moved or task, ""
 
 
 def _not_theirs(ctx: GitContext, task: Task, session_id: str) -> str:
@@ -1074,6 +1111,7 @@ def _amended(task: Task, note: str, paths: list[str] | None, done_when: str, tit
         task.after,
         task.together,
         opened_by=meta.get(OPENED_BY, ""),
+        paused_by=task.paused_by,
     )
 
 
@@ -1301,12 +1339,31 @@ def closed_by(ctx: GitContext, session_id: str) -> list[Task]:
     return _owned(ctx, session_id, DONE)
 
 
+def paused_by(ctx: GitContext, session_id: str) -> list[Task]:
+    """The cards this session paused that are paused still, under any id it has had. A
+    pause hands the work back and clears the owner, so it is asked by who paused (#264)."""
+    from . import sessions
+
+    pausers = sessions.identities(ctx, session_id)
+    return [task for task in load_all(ctx, PAUSED) if task.paused_by in pausers]
+
+
 def _owned(ctx: GitContext, session_id: str, state: str) -> list[Task]:
     """The cards in `state` whose owner is this session by any of its ids."""
     from . import sessions
 
     owners = sessions.identities(ctx, session_id)
     return [task for task in load_all(ctx, state) if task.owner in owners]
+
+
+def moved_at(task: Task) -> float:
+    """When this card last moved or was amended, in seconds since the epoch, to the second
+    its front matter keeps; 0.0 where that cannot be read."""
+    try:
+        stamp = time.strptime(task.updated_at or task.created_at, "%Y-%m-%dT%H:%M:%SZ")
+    except (ValueError, TypeError):
+        return 0.0
+    return float(calendar.timegm(stamp))
 
 
 def closure_demand(tasks: list[Task]) -> str:

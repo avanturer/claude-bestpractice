@@ -4,8 +4,8 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-2.1.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-2445%20passing-2ea44f)](#verified)
+[![version](https://img.shields.io/badge/version-2.2.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-2471%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
@@ -245,6 +245,12 @@ It also escalates rather than wedging: after four blocked attempts it records an
 unverified finish and lets the turn end, because a gate that blocks a founder's workflow
 forever is a gate that gets uninstalled.
 
+**A pause is not a finish.** Tell a session to stop before the work is done and it pauses its
+card with your words as the blocker; the turn ends there, with no suite run, nothing filed as
+unverified, and no demand for a card. The paused card says what the work is and what it waits
+on. The suite is asked for again when the card is claimed and the work finished, and a merge
+still needs a green run.
+
 ### A pull request is an obligation, not a notification
 
 The failure this closes is a session that agrees the change, opens the pull request, and
@@ -475,7 +481,7 @@ roughly 0.1 % of a 200k window.
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2445 tests · 36 doctor checks · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2471 tests · 36 doctor checks · budget
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration

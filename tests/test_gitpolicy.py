@@ -1837,6 +1837,20 @@ class TestASessionDoesNotBlockItself(PolicyCase):
         self.assertEqual("deny", decision, reason)
 
 
+class TestAnUnreadableRegistryIsSomebody(PolicyCase):
+    """The occupancy check fails CLOSED: a registry it cannot read is no permission to write
+    into another tree, and none to remove it either."""
+
+    def test_the_tree_is_still_somebody_elses(self):
+        from unittest import mock
+
+        from claude_bestpractice import gitpolicy, sessions
+
+        tree = self.worktree("feat/nobody-known", occupant="").resolve()
+        with mock.patch.object(sessions, "live_sessions", side_effect=OSError("unreadable")):
+            self.assertEqual(tree, gitpolicy.foreign_tree(self.ctx(), tree / "a.py"))
+
+
 class TestTheStandingInstructionNamesTheTree(RepoCase):
     """The line said "use `EnterWorktree` with the path" and named no path.
 

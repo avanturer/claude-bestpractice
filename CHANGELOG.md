@@ -1,5 +1,63 @@
 # Changelog
 
+## v2.2.0
+
+A session can remove the worktree it finished in where no pid names a process, and a refusal
+no longer tells a session that it works there as somebody else. A turn that ends on a pause is
+no longer judged as a finish.
+
+### What broke
+
+**A session was refused the removal of its own finished tree, and told it worked there (#263).**
+It made a tree by hand, finished in it, went on in a second one, and ran `git -C <main
+checkout> worktree remove ../proj-a`. The guard refused it as another session's worktree, and
+said "fuddy-71 (44d9e3a4) works there" to fuddy-71 itself. Seen in three trees from two
+sessions in two days, and nine finished trees were removed by hand. Without /proc, macOS among
+such machines, no pid names a process, so the rule that let a session past its own earlier
+record (#89) never applied, and a tree made by hand is in no registry for the tree link to read.
+
+**A pause the founder asked for was refused like a finish (#264).** Told to stop until tomorrow
+over tests left red on purpose, with everything committed, the session was refused twice for
+the red suite. It paused its card with the founder's words as the blocker and was refused a
+third time, now also with "nothing on the board says this session is working: 58 file(s)
+changed" and `add` and `claim` named to take the card back.
+
+### What changed
+
+- `git worktree remove` without `--force` goes through on a tree where every live session
+  carries this session's harness id, unless both pids were resolved and name two processes
+  (decision 0032). git refuses that removal while anything in the tree is modified or
+  untracked. `--force`, `reset`, `clean`, `stash`, a checkout and a write there are refused as
+  before, since on that evidence the record may be a `claude -p` this chat started.
+- A refusal never names this chat as somebody else. Its own record reads `[this chat]`, another
+  process of it ``[another process of this chat, such as a `claude -p` it started]``, and a tree
+  only this chat is in is called that, with the removal that is allowed named as the way out.
+- A removal's path is read where git reads it, after every `-C`. Read from the shell, `../proj-a`
+  given to `git -C <main checkout>` from a tree two levels deeper named a path inside the main
+  checkout: another chat's tree went unguarded, and a session's own tree named that way was
+  removed by the shell standing in it rather than from the main checkout (decision 0022).
+- A turn that ends on a pause is not asked for what only a finish owes (decision 0033). It ends
+  on one when the session holds nothing in `doing`, has closed no card since its last turn
+  ended, and wrote nothing in the diff after the pause. No suite runs, unfinished work is not
+  refused, nothing is filed UNVERIFIED even past the fourth block, and the board is not asked
+  for a card. Drift, a question from another session, the dependency comparison and a refusal
+  nothing answered still hold, with the paused card's files counted as declared.
+- `claude-bp-plan pause` writes who paused the card (`paused_by`), since a pause clears the
+  owner. A refusal only a finish owes, for a red suite, unfinished work or a tree green only in
+  the working directory, names the pause with the card's id.
+
+Repair 0040 names who paused a card an older version paused: the one live session on the card's
+branch. Where there is none, or more than one, the card goes on naming nobody, and pausing it
+again names whoever does. The card's time is left as it was, since it is the moment of the pause.
+
+26 new tests. 22 fail on 2.1.0: sixteen on what they assert, six on a name this version adds
+(`paused_by`, `plan.moved_at`, repair 0040). The other four pin what the old code already kept
+and the new code must not lose: another chat's record keeps the tree, a registry that cannot be
+read counts as somebody, and a card still in flight, or one closed in the same turn, keeps the
+turn a finish. Each of 49 parts of the change, taken out on its own, turns a test red. Claude
+Code 2.1.295 is still `latest` on npm, and both manifests pass `claude plugin validate
+--strict` on it.
+
 ## v2.1.0
 
 The test report the Stop gate asks for can no longer be what refuses the merge: the gate says
