@@ -4,8 +4,8 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-2.1.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-2445%20passing-2ea44f)](#已验证)
+[![version](https://img.shields.io/badge/version-2.2.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-2471%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#运行要求)
@@ -201,6 +201,10 @@ Stop gate **丢弃智能体的自述文字**，自己去运行你的测试套件
 它也会升级而不是把人卡死：连续四次被拦截之后，它记录一次"未经验证的完成"并放行该轮，
 因为一个永远挡住创始人工作流的 gate，就是一个会被卸载的 gate。
 
+**暂停不是完成。** 在工作完成之前让会话停下，它会把自己的卡片暂停，并以你的原话作为阻塞原因；
+这一轮就此结束：不运行测试套件，不记录"未经验证的完成"，也不要求再领一张卡片。暂停的卡片写明
+这是什么工作、在等什么。卡片被重新领取、工作完成时，才会再次要求测试套件；合并仍然需要一次绿色的运行。
+
 ### 三件需要你亲口许可的事
 
 有些操作无法通过重跑来撤销，而且再多的绿色也不能说明那正是你想要的。每一件都在等待**你
@@ -339,7 +343,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 ## 已验证
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2445 个测试 · 36 项 doctor 检查 · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2471 个测试 · 36 项 doctor 检查 · budget
 ```
 
 doctor 通过**真的去做那件坏事**来证明 gate 有效，而不是把配置读回来对一遍——

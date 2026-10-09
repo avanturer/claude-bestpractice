@@ -1,7 +1,5 @@
 # Decisions
 
-- [0021] A gate refuses only where the refusal reaches the model — `decisions/0021-a-gate-refuses-where-the-refusal-reaches-the-model.md`
-- [0022] A removal carries its own cleanup, and happens where the session survives it — `decisions/0022-a-removal-carries-its-own-cleanup.md`
 - [0023] One `+merge` accepts every pull request its chat has open — `decisions/0023-one-merge-accepts-the-chats-pool.md`
 - [0024] A draft is paused work, and a missing pull request is asked of GitHub before it is claimed — `decisions/0024-a-draft-is-paused-work.md`
 - [0025] A command writes the index of the tree it runs in, and no other — `decisions/0025-a-command-writes-its-own-trees-index.md`
@@ -11,4 +9,6 @@
 - [0029] The plugin is named so the CLI accepts it, and the old id moves by the marketplace's map — `decisions/0029-the-plugin-is-named-so-the-cli-accepts-it.md`
 - [0030] A session's work is what no remote branch but its own already carries — `decisions/0030-work-no-other-branch-carries-is-the-sessions-own.md`
 - [0031] The gate names where the report it reads is written, and git never sees it — `decisions/0031-the-gate-names-where-its-report-goes.md`
-- ... 18 older, see `decisions/`
+- [0032] A tree only this chat is in is its own to remove, where no pid can tell — `decisions/0032-a-tree-only-this-chat-is-in-is-its-own-to-remove.md`
+- [0033] A pause is not a finish — `decisions/0033-a-pause-is-not-a-finish.md`
+- ... 20 older, see `decisions/`

@@ -4,8 +4,8 @@
 
 **Память, координация и принуждение для разработки продукта в нескольких параллельных сессиях Claude Code.**
 
-[![version](https://img.shields.io/badge/version-2.1.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-2445%20passing-2ea44f)](#проверено)
+[![version](https://img.shields.io/badge/version-2.2.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-2471%20passing-2ea44f)](#проверено)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#проверено)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#требования)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#требования)
@@ -226,6 +226,12 @@ Stop-гейт **выбрасывает прозу агента** и сам за�
 записывает неподтверждённое завершение и отпускает ход, потому что гейт, который вечно
 блокирует работу основателя, — это гейт, который сносят.
 
+**Пауза — не завершение.** Скажите сессии остановиться до конца работы, и она ставит свою
+карточку на паузу с вашими словами в блокере; на этом ход и заканчивается: набор не
+запускается, ничего не записывается как неподтверждённое, карточку не требуют. Карточка на
+паузе говорит, что это за работа и чего она ждёт. Набор снова спросят, когда карточку
+возьмут и работу закончат, а для merge по-прежнему нужен зелёный прогон.
+
 ### Закрыть работу, а не только сделать её
 
 Изоляция — та половина, которая работает: одно дерево на сессию, и за шестьдесят дней при
@@ -408,7 +414,7 @@ claude-bp-ci off        # снять pre-push хук
 ## Проверено
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2445 тестов · 36 проверок доктора · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2471 тестов · 36 проверок доктора · budget
 ```
 
 Доктор доказывает гейты **попыткой сделать плохое**, а не чтением конфигурации обратно —
