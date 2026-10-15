@@ -237,14 +237,61 @@ def _budget(seconds: float | None) -> float:
 def _spawn(ctx: GitContext, argv: list[str], env: dict[str, str] | None,
            where: Path | None, limit: float) -> subprocess.CompletedProcess | None:
     try:
-        return run_bounded(argv, where or ctx.worktree_root, {**os.environ, **(env or {})}, limit)
+        return run_bounded(argv, where or ctx.worktree_root, {**os.environ, **(env or {})}, limit,
+                           cpus_for(ctx))
     except OSError:
         return None
 
 
+def cpus_for(ctx: GitContext) -> int:
+    """How many CPUs a suite this gate starts may use: `witness_cpus`, 0 for all of them."""
+    from . import config
+
+    try:
+        return max(int(config.load(ctx).witness_cpus), 0)
+    except (AttributeError, TypeError, ValueError):
+        return 0
+
+
+@contextlib.contextmanager
+def _at_most(cpus: int):
+    """Start processes inside this on at most `cpus` of the CPUs this one may use.
+
+    A suite's runner sizes its pool by the CPUs it is allowed, not by the machine: jest takes
+    `os.availableParallelism()` less one, which reads the affinity mask, and so does Go's
+    GOMAXPROCS. Unbounded, one Stop on a 24-thread machine started 23 jest workers of up to
+    0.9 GB each while the session itself ran nothing, and six to twelve sessions finishing on
+    one WSL machine took its memory to 4 GB of 47 (#267). The mask bounds every runner at
+    once, where a `--maxWorkers` would have to be known, and accepted, by each.
+
+    Which CPUs turns on this process's id, so the gates of several sessions spread over the
+    machine instead of all queueing on its first few. Where the mask cannot be read or set —
+    macOS and Windows have no such call — the run is started as it always was.
+    """
+    getter = getattr(os, "sched_getaffinity", None)
+    setter = getattr(os, "sched_setaffinity", None)
+    allowed: list[int] = []
+    if cpus > 0 and getter is not None and setter is not None:
+        with contextlib.suppress(OSError):
+            allowed = sorted(getter(0))
+    pinned = False
+    if len(allowed) > cpus:
+        start = os.getpid() % len(allowed)
+        with contextlib.suppress(OSError):
+            setter(0, {allowed[(start + step) % len(allowed)] for step in range(cpus)})
+            pinned = True
+    try:
+        yield
+    finally:
+        if pinned:
+            with contextlib.suppress(OSError):
+                setter(0, allowed)
+
+
 def run_bounded(argv: list[str], where: Path, env: dict[str, str],
-                limit: float) -> subprocess.CompletedProcess:
-    """Run a suite this gate started, for at most `limit` seconds, and leave none of it running.
+                limit: float, cpus: int = 0) -> subprocess.CompletedProcess:
+    """Run a suite this gate started, for at most `limit` seconds, on at most `cpus` CPUs, and
+    leave none of it running.
 
     Every run the Stop gate makes goes through here, because every one of them had the same
     two holes. A timeout killed only the process the gate started, never what IT started:
@@ -257,11 +304,12 @@ def run_bounded(argv: list[str], where: Path, env: dict[str, str],
     So the run gets a session of its own, its output goes to files nothing else can hold
     open, and when it ends — finished or killed at the limit — whatever is left of its
     process group is killed with it. Raises `RanOutOfTime` at the limit and OSError when the
-    program cannot be started.
+    program cannot be started. `cpus` is `witness_cpus`; see `_at_most`.
     """
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
-        proc = subprocess.Popen(argv, cwd=str(where), stdout=out, stderr=err, env=env,
-                                start_new_session=True)
+        with _at_most(cpus):
+            proc = subprocess.Popen(argv, cwd=str(where), stdout=out, stderr=err, env=env,
+                                    start_new_session=True)
         try:
             proc.wait(timeout=limit)
         except subprocess.TimeoutExpired:

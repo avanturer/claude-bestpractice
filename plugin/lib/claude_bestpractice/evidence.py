@@ -405,7 +405,8 @@ def run_suite(ctx: GitContext, command: list[str], where: Path | None = None,
     env[VERIFYING_ENV] = _issue_nonce(ctx)
     limit = witness.timeout_for() if seconds is None else max(1.0, seconds)
     try:
-        proc = witness.run_bounded(command, where or ctx.worktree_root, env, limit)
+        proc = witness.run_bounded(command, where or ctx.worktree_root, env, limit,
+                                   witness.cpus_for(ctx))
     except FileNotFoundError:
         return -1, f"test command not found: {command[0]}"
     except OSError as exc:
@@ -1539,7 +1540,7 @@ def _rerun_committed(ctx: GitContext, command: list[str], where: Path, until: fl
     env = dict(os.environ)
     env[VERIFYING_ENV] = _issue_nonce(ctx)
     try:
-        proc = witness.run_bounded(command, where, env, left)
+        proc = witness.run_bounded(command, where, env, left, witness.cpus_for(ctx))
     finally:
         _retire_nonce(ctx, env[VERIFYING_ENV])
     if proc.returncode == 0:

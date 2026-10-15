@@ -100,6 +100,11 @@ class Config:
     # to the session by `pre-tool`, so the list is the founder's, while `addopts` in a
     # runner config is one line the gated party can write (#158).
     witness_exclude: list[str] = field(default_factory=list)
+    # How many CPUs a suite the Stop gate starts may use, 0 for all of them. A runner sizes its
+    # pool by the CPUs it is allowed, so on a 24-thread machine one Stop started 23 jest
+    # workers of up to 0.9 GB each, beside six to twelve other sessions doing the same (#267).
+    # Four is a gate's share of a machine several sessions finish on at once, not a build's.
+    witness_cpus: int = 4
     # No two live sessions on one database. Worktrees isolate files and nothing else, so
     # one session's open transaction blocks every sibling's tests on its locks (#164).
     isolate_databases: bool = True
@@ -203,6 +208,7 @@ class Config:
             "detect_suites": self.detect_suites,
             "artifact_globs": self.artifact_globs,
             "witness_exclude": self.witness_exclude,
+            "witness_cpus": self.witness_cpus,
             "isolate_databases": self.isolate_databases,
             "worktree_setup": self.worktree_setup,
             "clean_rerun": self.clean_rerun,
@@ -311,6 +317,7 @@ _EXPECTED: dict[str, type] = {
     "detect_suites": bool,
     "artifact_globs": list,
     "witness_exclude": list,
+    "witness_cpus": int,
     "isolate_databases": bool,
     "worktree_setup": list,
     "clean_rerun": bool,
