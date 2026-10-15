@@ -4,8 +4,8 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-2.2.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-2471%20passing-2ea44f)](#verified)
+[![version](https://img.shields.io/badge/version-2.3.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-2508%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
@@ -239,7 +239,16 @@ gate drives pytest itself, each test runs under the configuration pytest would r
 `backend/pyproject.toml` as `cd backend && pytest` reads it — and never under a file from
 outside the repository. A failure
 already observed on exactly this tree is then re-asserted rather than re-run: the same refusal
-costs a second instead of another full run of the suite.
+costs a second instead of another full run of the suite. A report of the suite passing written
+since sends it back to be run instead; the report itself clears nothing.
+
+**A busy machine is not broken code.** Tests that ERROR in the gate's own pytest run, in
+setup, teardown or collection with nothing failing an assertion, are run once more on their
+own; those that pass then are named and not counted as the code failing. A failed assertion
+is never asked twice. A red run names its first broken test and keeps its report under
+`.claude/claude-bestpractice/test-reports/`, out of git. Every suite the gate starts runs on
+at most `witness_cpus` CPUs, four unless you say otherwise (`0` is all of them), so one Stop
+does not start a jest worker per core while the other sessions on the machine run theirs.
 
 It also escalates rather than wedging: after four blocked attempts it records an
 unverified finish and lets the turn end, because a gate that blocks a founder's workflow
@@ -481,7 +490,7 @@ roughly 0.1 % of a 200k window.
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2471 tests · 36 doctor checks · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2508 tests · 36 doctor checks · budget
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration

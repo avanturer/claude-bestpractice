@@ -48,7 +48,7 @@ import signal
 import subprocess
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from . import hookio, testcount
@@ -125,10 +125,34 @@ class Witnessed:
     failed: int
     tail: str
     runner: str
+    # How many of `failed` are ERRORs (setup, teardown, collection) rather than failed
+    # assertions, and the first broken test with its message, from the run's own report.
+    errors: int = 0
+    first: str = ""
+    # ERRORs this run had that did not happen again when the gate ran those tests once more,
+    # with the first of them as it was. Already taken out of `failed` (#266).
+    recovered: int = 0
+    # ERRORs that did happen again, so the second run is no excuse for them.
+    reproduced: bool = False
+    # Where the report of a run that broke was kept, from the top of the tree. The gate's
+    # reports were written to a temp directory deleted with the run, so the one thing that
+    # could tell a database under load from a broken fixture was gone before anybody read it.
+    kept: str = ""
 
     @property
     def passed(self) -> bool:
         return self.returncode == 0 and self.failed == 0 and self.executed > 0
+
+    @property
+    def errors_only(self) -> bool:
+        """Every test that broke broke in setup, teardown or collection, and pytest ran the rest.
+
+        Exit status 1, never 2: pytest stops the whole session at a collection error unless told
+        otherwise, so a run interrupted there executed nothing past it, and a second run of the
+        file that errored could not answer for the suite it never reached.
+        """
+        return (self.runner == "pytest" and self.returncode == 1
+                and 0 < self.errors == self.failed)
 
     @property
     def ran_nothing(self) -> bool:
@@ -218,11 +242,48 @@ def run(ctx: GitContext, env: dict[str, str] | None = None,
     # write the file before we ever run — which is the attack this exists to end.
     with tempfile.TemporaryDirectory(prefix="claude-bestpractice-witness-") as scratch:
         try:
-            if runner == "pytest":
-                return _run_pytest(ctx, Path(scratch), env, root, seconds)
-            return _run_go(ctx, env, root, seconds)
+            if runner != "pytest":
+                return _run_go(ctx, env, root, seconds)
+            seen = _run_pytest(ctx, Path(scratch), env, root, seconds)
         except RanOutOfTime as killed:
             raise RanOutOfTime(killed.seconds, runner) from None
+        return _keep(ctx, root, Path(scratch), seen)
+
+
+# Where the reports of the gate's own run are kept once it is over, beside the report the gate
+# names for a suite (`evidence.report_path`) and out of git with it. Not `junit.xml`, which is
+# the one the gate READS: a report of its own read back as the project's would be a second
+# opinion from the same run.
+KEPT_DIR = "gate-run"
+
+
+def _keep(ctx: GitContext, root: Path, scratch: Path, seen: Witnessed | None) -> Witnessed | None:
+    """`seen`, with the reports of a run that broke copied where they outlive it.
+
+    Every run clears what the previous one kept, so a report there is always the latest run
+    of that suite, and a suite that passes leaves none to be mistaken for its state.
+
+    Scrubbed on the way, like everything else this gate keeps of a failing run: a report
+    holds each failure's message and traceback, and a suite that cannot connect prints the
+    DSN it was given, password and all, into a directory under the tree.
+    """
+    from . import evidence, redact, store, worktree
+
+    rel = root.relative_to(ctx.worktree_root).parts if ctx.worktree_root in root.parents else ()
+    home = store.tier_a(ctx, evidence.REPORTS_DIR, *rel, KEPT_DIR)
+    shutil.rmtree(home, ignore_errors=True)
+    reports = sorted(scratch.glob("*.xml"))
+    if seen is None or seen.passed or seen.ran_nothing or not reports:
+        return seen
+    worktree.hide(ctx)
+    try:
+        for report in reports:
+            text = report.read_text(encoding="utf-8", errors="replace")
+            store.atomic_write(home / report.name, redact.scrub(text), mode=0o644)
+    except OSError:
+        return seen
+    named = home / reports[0].name if len(reports) == 1 else home
+    return replace(seen, kept=named.relative_to(ctx.worktree_root).as_posix())
 
 
 def _budget(seconds: float | None) -> float:
@@ -237,14 +298,61 @@ def _budget(seconds: float | None) -> float:
 def _spawn(ctx: GitContext, argv: list[str], env: dict[str, str] | None,
            where: Path | None, limit: float) -> subprocess.CompletedProcess | None:
     try:
-        return run_bounded(argv, where or ctx.worktree_root, {**os.environ, **(env or {})}, limit)
+        return run_bounded(argv, where or ctx.worktree_root, {**os.environ, **(env or {})}, limit,
+                           cpus_for(ctx))
     except OSError:
         return None
 
 
+def cpus_for(ctx: GitContext) -> int:
+    """How many CPUs a suite this gate starts may use: `witness_cpus`, 0 for all of them."""
+    from . import config
+
+    try:
+        return max(int(config.load(ctx).witness_cpus), 0)
+    except (AttributeError, TypeError, ValueError):
+        return 0
+
+
+@contextlib.contextmanager
+def _at_most(cpus: int):
+    """Start processes inside this on at most `cpus` of the CPUs this one may use.
+
+    A suite's runner sizes its pool by the CPUs it is allowed, not by the machine: jest takes
+    `os.availableParallelism()` less one, which reads the affinity mask, and so does Go's
+    GOMAXPROCS. Unbounded, one Stop on a 24-thread machine started 23 jest workers of up to
+    0.9 GB each while the session itself ran nothing, and six to twelve sessions finishing on
+    one WSL machine took its memory to 4 GB of 47 (#267). The mask bounds every runner at
+    once, where a `--maxWorkers` would have to be known, and accepted, by each.
+
+    Which CPUs turns on this process's id, so the gates of several sessions spread over the
+    machine instead of all queueing on its first few. Where the mask cannot be read or set —
+    macOS and Windows have no such call — the run is started as it always was.
+    """
+    getter = getattr(os, "sched_getaffinity", None)
+    setter = getattr(os, "sched_setaffinity", None)
+    allowed: list[int] = []
+    if cpus > 0 and getter is not None and setter is not None:
+        with contextlib.suppress(OSError):
+            allowed = sorted(getter(0))
+    pinned = False
+    if len(allowed) > cpus:
+        start = os.getpid() % len(allowed)
+        with contextlib.suppress(OSError):
+            setter(0, {allowed[(start + step) % len(allowed)] for step in range(cpus)})
+            pinned = True
+    try:
+        yield
+    finally:
+        if pinned:
+            with contextlib.suppress(OSError):
+                setter(0, allowed)
+
+
 def run_bounded(argv: list[str], where: Path, env: dict[str, str],
-                limit: float) -> subprocess.CompletedProcess:
-    """Run a suite this gate started, for at most `limit` seconds, and leave none of it running.
+                limit: float, cpus: int = 0) -> subprocess.CompletedProcess:
+    """Run a suite this gate started, for at most `limit` seconds, on at most `cpus` CPUs, and
+    leave none of it running.
 
     Every run the Stop gate makes goes through here, because every one of them had the same
     two holes. A timeout killed only the process the gate started, never what IT started:
@@ -257,11 +365,12 @@ def run_bounded(argv: list[str], where: Path, env: dict[str, str],
     So the run gets a session of its own, its output goes to files nothing else can hold
     open, and when it ends — finished or killed at the limit — whatever is left of its
     process group is killed with it. Raises `RanOutOfTime` at the limit and OSError when the
-    program cannot be started.
+    program cannot be started. `cpus` is `witness_cpus`; see `_at_most`.
     """
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
-        proc = subprocess.Popen(argv, cwd=str(where), stdout=out, stderr=err, env=env,
-                                start_new_session=True)
+        with _at_most(cpus):
+            proc = subprocess.Popen(argv, cwd=str(where), stdout=out, stderr=err, env=env,
+                                    start_new_session=True)
         try:
             proc.wait(timeout=limit)
         except subprocess.TimeoutExpired:
@@ -484,19 +593,54 @@ def _run_pytest(ctx: GitContext, scratch: Path, env: dict[str, str] | None,
         left = until - time.monotonic() if runs else budget
         if left <= 0:
             raise RanOutOfTime(budget)
-        argv = _pytest_argv(_pytest_config(home, scratch, ctx.worktree_root), report, ignored)
+        pinned = _pytest_config(home, scratch, ctx.worktree_root)
+        cache = scratch / f"cache-{len(runs)}"
+        env_of_run = {**(env or {}), "PYTEST_ADDOPTS": ""}
         try:
-            proc = _spawn(ctx, argv, {**(env or {}), "PYTEST_ADDOPTS": ""}, home, left)
+            proc = _spawn(ctx, _pytest_argv(pinned, report, ignored, cache), env_of_run, home, left)
         except RanOutOfTime:
             raise RanOutOfTime(budget) from None
         seen = _reported(proc, report)
         if seen is None:
             return None
-        runs.append((home, seen))
+        again = report.with_name(f"again-{report.name}")
+        runs.append((home, _once_more(ctx, _pytest_argv(pinned, again, ignored, cache), again,
+                                      env_of_run, home, until - time.monotonic(), seen)))
     return _together(ctx.worktree_root, runs)
 
 
-def _pytest_argv(config: Path, report: Path, ignored: list[Path]) -> list[str]:
+def _once_more(ctx: GitContext, argv: list[str], report: Path, env: dict[str, str], home: Path,
+               left: float, seen: Witnessed) -> Witnessed:
+    """`seen`, after running the tests that errored in it a second time, and those alone, when
+    every test that broke in it errored (`Witnessed.errors_only`).
+
+    An ERROR is a test that could not be set up, torn down or collected, and on a machine
+    where several sessions run their suites at once it is as often the machine as the code.
+    37 tests errored in the gate's run, in three files the branch did not touch; the same
+    three files run straight after it passed 41 of 41, and `make check` on the same commit
+    in the same minute passed all 7419 (#266). A FAILED assertion is never run again: that is
+    the code answering, and asking it twice is asking for a different answer.
+
+    pytest picks the tests itself, from the cache of the run it just made: `--lf` runs what
+    broke there, by node id, from a cache directory this gate gave both runs, outside the tree.
+    Errors that did not come back are taken out of the count and named; any that did, or a
+    second run that could not finish in the time left, leaves `seen` as it was, a failure.
+    `argv` is the first run's, writing `report`; `--lfnf=none` makes a cache pytest cannot
+    read run nothing rather than everything, which is no second run at all.
+    """
+    if not seen.errors_only or left <= 0:
+        return seen
+    try:
+        proc = _spawn(ctx, [*argv, "--lf", "--lfnf=none"], env, home, left)
+    except RanOutOfTime:
+        return seen
+    rerun = _reported(proc, report)
+    if rerun is None or not rerun.passed or rerun.executed < seen.errors:
+        return replace(seen, reproduced=rerun is not None and rerun.failed > 0)
+    return replace(seen, returncode=0, failed=0, errors=0, recovered=seen.errors)
+
+
+def _pytest_argv(config: Path, report: Path, ignored: list[Path], cache: Path) -> list[str]:
     """One pytest run as this gate drives it, pinned to `config`, leaving `ignored` alone.
 
     `-o addopts=` and an empty PYTEST_ADDOPTS neutralise the one-line attack: a single
@@ -507,11 +651,16 @@ def _pytest_argv(config: Path, report: Path, ignored: list[Path]) -> list[str]:
 
     `ignored` is absolute, because a relative `--ignore` is read from wherever pytest starts,
     and a suite configured per project starts it in more than one place.
+
+    `cache` is where pytest keeps what broke, the gate's own and outside the tree, so that a
+    second run of the tests that errored (`_once_more`) reads the list this run wrote and
+    nothing a session could have written there first.
     """
     return [
         "python3", "-m", "pytest", "-q",
         "-c", str(config),
         "-o", "addopts=",
+        "-o", f"cache_dir={cache}",
         f"--junitxml={report}",
         *(f"--ignore={path}" for path in ignored),
     ]
@@ -528,7 +677,8 @@ def _reported(proc: subprocess.CompletedProcess | None, report: Path) -> Witness
     if artifact is None:
         return None
     executed = max(artifact.total - artifact.skipped, 0)
-    return Witnessed(proc.returncode, executed, artifact.failed, _tail(proc), "pytest")
+    return Witnessed(proc.returncode, executed, artifact.failed, _tail(proc), "pytest",
+                     errors=artifact.errors, first=artifact.first)
 
 
 def _together(base: Path, runs: list[tuple[Path, Witnessed]]) -> Witnessed:
@@ -547,7 +697,20 @@ def _together(base: Path, runs: list[tuple[Path, Witnessed]]) -> Witnessed:
     shown = sorted(spoke or runs, key=lambda run: not run[1].passed)
     tail = "\n".join(f"pytest in {_label(base, home)}:\n{one.tail}" for home, one in shown)
     return Witnessed(_status(seen), sum(one.executed for one in seen),
-                     sum(one.failed for one in seen), hookio.tail_of(tail), "pytest")
+                     sum(one.failed for one in seen), hookio.tail_of(tail), "pytest",
+                     **_what_broke_together(seen))
+
+
+def _what_broke_together(seen: list[Witnessed]) -> dict:
+    """The ERRORs of several runs as one: counted together, and the first test that broke
+    taken from a run still broken before one that recovered."""
+    broken = [one for one in seen if not one.passed]
+    return {
+        "errors": sum(one.errors for one in seen),
+        "first": next((one.first for one in [*broken, *seen] if one.first), ""),
+        "recovered": sum(one.recovered for one in seen),
+        "reproduced": any(one.reproduced for one in seen),
+    }
 
 
 def _status(seen: list[Witnessed]) -> int:

@@ -782,7 +782,7 @@ def main() -> None:
             founder.catch_up(ctx, event.session_id, event.transcript_path)
         if waiting is not None:
             blocking = pullrequest.blockers(ctx, str(waiting.get("base") or "main"))
-            pullrequest.hand_off(ctx, waiting, blocking)
+            pullrequest.hand_off(ctx, waiting, blocking, event.session_id)
             board.add_open_item(
                 ctx,
                 item_id=f"pr-{ctx.branch}-{int(time.time())}",

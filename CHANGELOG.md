@@ -1,5 +1,70 @@
 # Changelog
 
+## v2.3.0
+
+The Stop gate no longer calls ERRORs that a second run does not see a failure of the code, and
+it keeps the report that says which they were. A suite it starts gets four CPUs, not the
+machine. The founder's `+merge` decides an UNVERIFIED finish however it reached the gate, and
+their own `test_command` passing clears the record of the gate's `pytest`.
+
+### What broke
+
+**ERRORs on a busy machine were reported as the code failing (#266).** "The suite FAILS on the
+code as it stands — 37 failing of 7419 run by the gate itself with pytest." All 37 were ERRORs at
+setup, in three files the branch did not touch, while neighbouring sessions ran their suites. The
+same three files run straight after passed 41 of 41, and `make check` on the commit passed 7419.
+The gate's report was deleted with its temp directory, so the text of the error was gone. In a
+second repository, 166 `psycopg.OperationalError`s were then repeated from the record at every
+Stop, "not run again", while the project's own `make test` wrote a report of 8228 passed.
+
+**One Stop started a jest worker per CPU (#267).** `npm test` in `mobile/` ran 23 workers of up to
+0.9 GB on a 24-thread WSL machine, for a session that was running nothing. Six to twelve sessions
+finishing on that machine took free memory to 4.2 GB of 47, and WSL went down twice that evening.
+
+**`+merge` again did not take an UNVERIFIED finish off a merge (#268).** Refused, shown to the
+founder, `+merge`, and the same refusal with the same items, by `gh` and by the GitHub tool alike.
+Three ways in: a word sent while the session worked reached no hook, and the word already on
+record covered the merge, so the transcript was never read for the new one; a finish first filed
+on the commit the founder was shown, by the Stop that ended that turn, counted as filed after the
+showing; and a pull request the chat did not open was never decided by its word at all. The same
+merge was refused over "recorded for `pytest`", a run of the gate made while the pre-push hook's
+`make ci` ran beside it, after `make test`, the founder's `test_command`, had passed 7488.
+
+### What changed
+
+- Tests that ERROR in the gate's own pytest run, with nothing failing an assertion and the run not
+  stopped at collection, are run once more on their own. pytest picks them from the run's cache,
+  which the gate now keeps in its temp directory rather than in the tree. Those that pass then are
+  named in the verdict and not counted as a failure. A failed assertion is never run twice
+  (decision 0034).
+- A red run of the gate's names its first broken test and where its report was kept:
+  `.claude/claude-bestpractice/test-reports/<suite>/gate-run/`, scrubbed of credentials, out of
+  git, and cleared by the suite's next run.
+- A report of the suite passing, written after a remembered failure, sends the suite back to be
+  run. It clears nothing and passes nothing (decision 0013 holds).
+- `witness_cpus`, four by default, bounds every suite the gate starts by the CPU affinity mask it
+  inherits. jest (29.7 and 30.5) and Go size their pools by that mask. `witness_cpus 0` is every
+  CPU, and `claude-bp set` sets it on the founder's word. Where no mask can be set, on macOS and
+  Windows, a run starts as before (decision 0037).
+- The founder's own `test_command`, or a `test_commands` entry for the suite, passing clears the
+  red record of the gate's `pytest` or `go` run of it, under the same count guards. A command
+  only detected does not. The merge refusal names it (decision 0035).
+- A merge refused over an UNVERIFIED finish reads the transcript, once, and judges again. A
+  refusal or hand-off that lists the finish records the commit and the chat, and the founder's
+  next `+merge` decides a finish on that commit and one shown in that chat (decision 0036). A
+  word said before the showing, or a commit at which no finish was listed, decides nothing, as
+  before.
+
+No `migrate._REPAIRS` step: no state an older version wrote changes meaning. A pull request record
+without the new fields reads as shown at no commit, which is how 2.2.0 read every record, and a
+2.2.0 red record of `pytest` is cleared by the founder's command like any other.
+
+37 new tests. 27 fail on 2.2.0; the other ten pin what must not move: a failed assertion and a run
+stopped at collection are never re-run into a pass, a failing or older report re-asserts the
+failure, a commit nobody was shown a finish at is not decided, another chat's word decides
+nothing, and a detected command, another recipe or a smaller suite clears nothing. Each of 16
+parts of the change, taken out on its own, turns a test red.
+
 ## v2.2.0
 
 A session can remove the worktree it finished in where no pid names a process, and a refusal

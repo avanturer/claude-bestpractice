@@ -1577,12 +1577,19 @@ def main() -> None:
                 pullrequest.spend(ctx, named, cover)
             else:
                 base = str(gated.get("base") or "") or gitpolicy.default_branch(here) or "main"
+                pr_branch = str(gated.get("branch") or "")
                 # The pull request's own head, not the tree this session is standing in.
-                problems = pullrequest.blockers(here, base, str(gated.get("branch") or ""))
+                problems = pullrequest.blockers(here, base, pr_branch)
+                if pullrequest.awaits_the_founder(problems):
+                    # Their word on the finish may be in the transcript and nowhere else: sent
+                    # while the session worked, it reached no hook, and the word already on
+                    # record covered this merge, so `covered` never read it back (#268).
+                    founder.catch_up(ctx, event.session_id, event.transcript_path)
+                    problems = pullrequest.blockers(here, base, pr_branch)
                 if problems:
                     # Put to the founder by this refusal, so that their next word is a word
-                    # about what it lists (#243).
-                    pullrequest.note_refusal(ctx, str(gated.get("branch") or ""))
+                    # about what it lists (#243), at this commit and in this chat (#268).
+                    pullrequest.note_refusal(ctx, pr_branch, here.head, problems, event.session_id)
                     deny_for_founder(ctx, rec, pullrequest.merge_refusal(gated, problems))
                 # Spent once the merge goes ahead, and never before its blockers are judged:
                 # the refusal above promises the merge "as soon as the list is empty", and
