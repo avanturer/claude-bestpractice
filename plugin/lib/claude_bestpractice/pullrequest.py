@@ -543,15 +543,20 @@ def handed_off(ctx: GitContext, branch: str) -> bool:
     return bool(record.get("handed_off_at"))
 
 
-def hand_off(ctx: GitContext, record: dict[str, Any], blockers: list[str]) -> None:
+def hand_off(ctx: GitContext, record: dict[str, Any], blockers: list[str],
+             session_id: str = "") -> None:
     """Mark the obligation as surfaced, so it is raised once and then carried.
 
     Called BEFORE the block that raises it, not after. A session that ignores the block,
     crashes, or hits the escalation ceiling must not meet the same block on its next Stop
     — one unignorable interruption per pull request is the whole budget, and past that the
     board is what keeps it from being forgotten.
+
+    `ctx` is the branch's own tree, where the Stop gate read `blockers`, and `session_id` the
+    session they were shown to; see `_shown`.
     """
-    _write(ctx, {**record, "handed_off_at": time.time(), "blockers": blockers[:8]})
+    _write(ctx, {**record, "handed_off_at": time.time(), "blockers": blockers[:8],
+                 **_shown(ctx.head, blockers, session_id)})
 
 
 def blockers(ctx: GitContext, base: str, head: str = "") -> list[str]:
@@ -614,6 +619,11 @@ FINISH_ACCEPTED_ON = "unverified_accepted_head"
 # told the session to take to the founder.
 REFUSED = "refused_at"
 
+# The commit of the branch at which its UNVERIFIED finish was last put to the founder, and the
+# session it was put to: the chat the founder's next word is said in.
+SHOWN_ON = "unverified_shown_head"
+SHOWN_TO = "shown_to"
+
 
 def _finish_accepted(ctx: GitContext, branch: str, record: dict[str, Any]) -> bool:
     """Has the founder accepted this branch's unverified finish, as the branch stands now?
@@ -660,8 +670,19 @@ def _accept_its_finish(ctx: GitContext, record: dict[str, Any], said: float) -> 
     same = [row for row in finishes if str(row.get("head") or "") == head]
     first = min(delivery.stamp(row.get("recorded_at")) for row in same)
     shown = max(delivery.stamp(record.get("handed_off_at")), delivery.stamp(record.get(REFUSED)))
-    if shown > 0 and first <= shown <= said:
+    if 0 < shown <= said and (first <= shown or _shown_on(record, head)):
         _write(ctx, {**record, FINISH_ACCEPTED: said, FINISH_ACCEPTED_ON: head})
+
+
+def _shown_on(record: dict[str, Any], head: str) -> bool:
+    """Whether `head` is the commit the founder was last shown "carries an UNVERIFIED finish" at.
+
+    A finish first filed there after the showing is still the one they were shown. The refusal
+    says their word decides it "for the branch at this commit", and the Stop that ended the
+    turn which showed it filed the finish on that commit for the first time: the row the
+    refusal read was on the commit before (#268).
+    """
+    return bool(head) and head == str(record.get(SHOWN_ON) or "")
 
 
 def _past_the_word(ctx: GitContext, branch: str, record: dict[str, Any]) -> str:
@@ -683,11 +704,27 @@ def _past_the_word(ctx: GitContext, branch: str, record: dict[str, Any]) -> str:
     )
 
 
-def note_refusal(ctx: GitContext, branch: str) -> None:
-    """Record that this branch's blockers were just put to the founder by a refused merge."""
+def note_refusal(ctx: GitContext, branch: str, head: str = "", problems: list[str] | None = None,
+                 session_id: str = "") -> None:
+    """Record that this branch's blockers, `problems`, were just put to the founder by a refused
+    merge, read at `head` of the branch, in the chat `session_id` is."""
     record = _records(ctx).get(branch)
     if record and record.get("state") == OPEN:
-        _write(ctx, {**record, REFUSED: time.time()})
+        _write(ctx, {**record, REFUSED: time.time(), **_shown(head, problems or [], session_id)})
+
+
+def _shown(head: str, problems: list[str], session_id: str) -> dict[str, str]:
+    """What a refusal or a hand-off put to the founder: the commit, when it listed an UNVERIFIED
+    finish, and the session it reached."""
+    return {SHOWN_ON: head if awaits_the_founder(problems) else "", SHOWN_TO: session_id}
+
+
+def awaits_the_founder(problems: list[str]) -> bool:
+    """Whether a merge's list still carries an UNVERIFIED finish, which only the founder's word
+    takes off it: `blockers` leaves off the one they have accepted."""
+    from . import delivery
+
+    return any(delivery.UNVERIFIED in problem for problem in problems)
 
 
 def _findings(ctx: GitContext, base: str, branch: str) -> list[str]:
@@ -1412,7 +1449,9 @@ def accept_merges(ctx: GitContext, approvals: dict[str, str],
 
     A pull request whose UNVERIFIED finish was put to the founder before this word is
     recorded as accepted with it, on the commit it was filed on, so that `blockers` stops
-    listing what they have decided.
+    listing what they have decided. So is one put to them in this chat that the word does not
+    name: a merge of a pull request the chat did not open is refused over its finish where the
+    founder reads it, and the word they answer with is the one merge it allows (#268).
 
     `at` is when the word was said, for one read back from the transcript after the fact
     (`founder.catch_up`): it names what was open then, never a pull request opened since,
@@ -1422,20 +1461,21 @@ def accept_merges(ctx: GitContext, approvals: dict[str, str],
         return approvals
     said = time.time() if at is None else at
     still_open = {_entry(record): record for record in outstanding(ctx)}
-    named = _open_when_said(ctx, session_id, still_open, said)
+    ours = _the_chats(ctx, session_id)
+    named = _open_when_said(ours, still_open, said)
+    shown_here = {entry for entry, record in still_open.items() if ours(record.get(SHOWN_TO))}
+    for entry in sorted(named | shown_here):
+        _accept_its_finish(ctx, still_open[entry], said)
     if not named:
         return approvals
-    for entry in sorted(named):
-        _accept_its_finish(ctx, still_open[entry], said)
     kept = {entry for entry in _pool(ctx) if entry in still_open}
     rest = {key: value for key, value in approvals.items() if key != config.APPROVE_MERGE}
     return {**rest, config.MERGE_POOL: " ".join(sorted(kept | named))}
 
 
-def _open_when_said(ctx: GitContext, session_id: str, still_open: dict[str, dict[str, Any]],
+def _open_when_said(ours: Callable[[Any], bool], still_open: dict[str, dict[str, Any]],
                     said: float) -> set[str]:
     """The chat's finished pull requests, of those still open, that were open at `said`."""
-    ours = _the_chats(ctx, session_id)
     return {entry for entry, record in still_open.items()
             if ours(record.get("session_id")) and not record.get("draft")
             and float(record.get("opened_at") or 0) <= said}

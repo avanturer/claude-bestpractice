@@ -761,6 +761,18 @@ _NAMES = {bool: "true or false", float: "a number", int: "a whole number", list:
           str: "text", dict: "a map of path to test command"}
 
 
+def founders_test_command(ctx: GitContext) -> list[str]:
+    """`test_command` as the founder wrote it in config.json, or [] where they wrote none.
+
+    Never the detected one `load` fills in for an absent key: that is this plugin's guess
+    about the repository, and only the founder's own line speaks for the whole suite.
+    """
+    raw, _ = _read_config(config_path(ctx))
+    value = raw.get("test_command") if isinstance(raw, dict) else None
+    coerced, complaint = coerce("test_command", value) if value is not None else (None, "")
+    return list(coerced) if coerced and not complaint else []
+
+
 def load(ctx: GitContext) -> Config:
     """Read the config, repairing what can be repaired and ignoring what cannot.
 

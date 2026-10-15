@@ -2605,14 +2605,8 @@ class TestAPullRequestIsFiledOnTheBranchItIsFor(PRCase):
         self.assertNotIn("merge", self.reason(proc).lower(), self.reason(proc))
 
 
-class TestTheWordIsReadWhereTheHarnessWroteIt(PRCase):
-    """Issue #251. The founder sent `+merge` from the phone while the session was working,
-    three times in a row, and every merge after it was refused: a message sent that way is
-    folded into the running turn at the next tool result, and no hook fires for it. The
-    harness writes it into the transcript all the same, so a gate reads it back from there
-    before it says the founder said nothing."""
-
-    POOL = ((61, "feat/a"), (62, "feat/b"), (63, "feat/c"))
+class TranscriptCase(PRCase):
+    """A chat whose transcript the gates are handed, as the harness hands it."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -2629,6 +2623,16 @@ class TestTheWordIsReadWhereTheHarnessWroteIt(PRCase):
         entry = (while_working if queued else turn)(text, at or time.time(), **extra)
         with self.transcript.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+class TestTheWordIsReadWhereTheHarnessWroteIt(TranscriptCase):
+    """Issue #251. The founder sent `+merge` from the phone while the session was working,
+    three times in a row, and every merge after it was refused: a message sent that way is
+    folded into the running turn at the next tool result, and no hook fires for it. The
+    harness writes it into the transcript all the same, so a gate reads it back from there
+    before it says the founder said nothing."""
+
+    POOL = ((61, "feat/a"), (62, "feat/b"), (63, "feat/c"))
 
     def merge(self, number: int):
         return self.tool("mcp__github__merge_pull_request",

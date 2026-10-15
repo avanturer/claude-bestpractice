@@ -2513,9 +2513,11 @@ def clear_red(
     entry = red(ctx)
     if not entry:
         return False
-    if str(entry.get("path") or "") != ("" if suite is None else suite.path):
+    path = str(entry.get("path") or "")
+    if path != ("" if suite is None else suite.path):
         return False
-    if command is not None and not _same_command(list(entry.get("command") or []), list(command)):
+    if command is not None and not _same_command(list(entry.get("command") or []), list(command),
+                                                 _founders_command(ctx, path)):
         return False
 
     # Matching the command's NAME is not enough, and this is where the first fix fell
@@ -2540,24 +2542,45 @@ def clear_red(
 _WITNESSED_RUNNERS = ("pytest", "go")
 
 
-def _same_command(recorded: list, passed: list) -> bool:
+def _same_command(recorded: list, passed: list, founders: list | None = None) -> bool:
     """Whether a green of `passed` is the command that went red as `recorded`.
 
-    Byte for byte, with one exception, and it runs in one direction only: a run the gate
-    WITNESSED — the runner itself, its configuration neutralised, its count floored against
-    the tree — answers for a recorded command that started that same runner over the same
-    suite. Without it, a suite recorded red as `python3 -m pytest -q`, back when the gate's
-    interpreter could not import pytest, stayed red on every board and in every merge gate
-    after the gate had watched the same suite pass: from then on the gate drove pytest
-    itself, recorded the run as `pytest`, and the declared command never ran again to match.
+    Byte for byte, with two exceptions. A run the gate WITNESSED — the runner itself, its
+    configuration neutralised, its count floored against the tree — answers for a recorded
+    command that started that same runner over the same suite. Without it, a suite recorded
+    red as `python3 -m pytest -q`, back when the gate's interpreter could not import pytest,
+    stayed red on every board and in every merge gate after the gate had watched the same
+    suite pass: from then on the gate drove pytest itself, recorded the run as `pytest`, and
+    the declared command never ran again to match.
 
-    Never the other way. A recipe — `make check`, `npm test` — is not the runner it wraps,
-    and neither is a narrower command line: `pytest tests/test_new.py` is not `pytest`.
+    And `founders`, the command the founder declared for this suite in config.json, answers
+    for the gate's own run of it. It is their word on what the suite is, in a file no session
+    can write, so its passing is that suite passing. Without it, a `pytest` the gate ran while
+    the pre-push hook's `make ci` ran beside it went red, `make test` — their `test_command` —
+    then passed 7488, and the merge was refused over the record of the first (#268).
+
+    A recipe is not the runner it wraps otherwise: `make check` does not answer for `pytest`
+    unless the founder named it as the suite, and a narrower command line never does —
+    `pytest tests/test_new.py` is not `pytest`.
     """
     if recorded == passed:
         return True
     runner = passed[0] if len(passed) == 1 and passed[0] in _WITNESSED_RUNNERS else ""
-    return bool(runner) and _invokes(recorded, runner)
+    if runner:
+        return _invokes(recorded, runner)
+    witnessed = len(recorded) == 1 and recorded[0] in _WITNESSED_RUNNERS
+    return witnessed and bool(founders) and passed == list(founders)
+
+
+def _founders_command(ctx: GitContext, path: str) -> list[str]:
+    """The command the founder declared for the suite at `path`, "" being the repository's.
+    [] where they declared none."""
+    from . import config
+
+    if not path:
+        return config.founders_test_command(ctx)
+    named = suites.declared(config.load(ctx).test_commands)
+    return next((list(suite.command) for suite in named if suite.path == path), [])
 
 
 def _invokes(command: list, runner: str) -> bool:
@@ -2595,7 +2618,19 @@ def red_problem(ctx: GitContext, branch: str = "") -> str:
     # tell whether it is about the code in front of them.
     scoped = f" for {entry['path']}" if entry.get("path") else ""
     return (f"the test suite is red{scoped} — recorded for `{ran}`{_ago(entry)}{where}; "
-            "that same command passing clears it")
+            f"that same command passing clears it{_also_cleared_by(ctx, entry)}")
+
+
+def _also_cleared_by(ctx: GitContext, entry: dict) -> str:
+    """The founder's own command for the suite, where it clears this record too. "" otherwise.
+
+    The line named only the gate's `pytest`, which no command a session runs can be (#268).
+    """
+    recorded = list(entry.get("command") or [])
+    founders = _founders_command(ctx, str(entry.get("path") or ""))
+    if founders == recorded or not _same_command(recorded, founders, founders):
+        return ""
+    return f", and so does `{' '.join(founders)}`, this suite's command in config.json"
 
 
 def _ago(entry: dict) -> str:
