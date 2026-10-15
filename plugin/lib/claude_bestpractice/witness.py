@@ -48,7 +48,7 @@ import signal
 import subprocess
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from . import hookio, testcount
@@ -125,10 +125,34 @@ class Witnessed:
     failed: int
     tail: str
     runner: str
+    # How many of `failed` are ERRORs (setup, teardown, collection) rather than failed
+    # assertions, and the first broken test with its message, from the run's own report.
+    errors: int = 0
+    first: str = ""
+    # ERRORs this run had that did not happen again when the gate ran those tests once more,
+    # with the first of them as it was. Already taken out of `failed` (#266).
+    recovered: int = 0
+    # ERRORs that did happen again, so the second run is no excuse for them.
+    reproduced: bool = False
+    # Where the report of a run that broke was kept, from the top of the tree. The gate's
+    # reports were written to a temp directory deleted with the run, so the one thing that
+    # could tell a database under load from a broken fixture was gone before anybody read it.
+    kept: str = ""
 
     @property
     def passed(self) -> bool:
         return self.returncode == 0 and self.failed == 0 and self.executed > 0
+
+    @property
+    def errors_only(self) -> bool:
+        """Every test that broke broke in setup, teardown or collection, and pytest ran the rest.
+
+        Exit status 1, never 2: pytest stops the whole session at a collection error unless told
+        otherwise, so a run interrupted there executed nothing past it, and a second run of the
+        file that errored could not answer for the suite it never reached.
+        """
+        return (self.runner == "pytest" and self.returncode == 1
+                and 0 < self.errors == self.failed)
 
     @property
     def ran_nothing(self) -> bool:
@@ -218,11 +242,48 @@ def run(ctx: GitContext, env: dict[str, str] | None = None,
     # write the file before we ever run — which is the attack this exists to end.
     with tempfile.TemporaryDirectory(prefix="claude-bestpractice-witness-") as scratch:
         try:
-            if runner == "pytest":
-                return _run_pytest(ctx, Path(scratch), env, root, seconds)
-            return _run_go(ctx, env, root, seconds)
+            if runner != "pytest":
+                return _run_go(ctx, env, root, seconds)
+            seen = _run_pytest(ctx, Path(scratch), env, root, seconds)
         except RanOutOfTime as killed:
             raise RanOutOfTime(killed.seconds, runner) from None
+        return _keep(ctx, root, Path(scratch), seen)
+
+
+# Where the reports of the gate's own run are kept once it is over, beside the report the gate
+# names for a suite (`evidence.report_path`) and out of git with it. Not `junit.xml`, which is
+# the one the gate READS: a report of its own read back as the project's would be a second
+# opinion from the same run.
+KEPT_DIR = "gate-run"
+
+
+def _keep(ctx: GitContext, root: Path, scratch: Path, seen: Witnessed | None) -> Witnessed | None:
+    """`seen`, with the reports of a run that broke copied where they outlive it.
+
+    Every run clears what the previous one kept, so a report there is always the latest run
+    of that suite, and a suite that passes leaves none to be mistaken for its state.
+
+    Scrubbed on the way, like everything else this gate keeps of a failing run: a report
+    holds each failure's message and traceback, and a suite that cannot connect prints the
+    DSN it was given, password and all, into a directory under the tree.
+    """
+    from . import evidence, redact, store, worktree
+
+    rel = root.relative_to(ctx.worktree_root).parts if ctx.worktree_root in root.parents else ()
+    home = store.tier_a(ctx, evidence.REPORTS_DIR, *rel, KEPT_DIR)
+    shutil.rmtree(home, ignore_errors=True)
+    reports = sorted(scratch.glob("*.xml"))
+    if seen is None or seen.passed or seen.ran_nothing or not reports:
+        return seen
+    worktree.hide(ctx)
+    try:
+        for report in reports:
+            text = report.read_text(encoding="utf-8", errors="replace")
+            store.atomic_write(home / report.name, redact.scrub(text), mode=0o644)
+    except OSError:
+        return seen
+    named = home / reports[0].name if len(reports) == 1 else home
+    return replace(seen, kept=named.relative_to(ctx.worktree_root).as_posix())
 
 
 def _budget(seconds: float | None) -> float:
@@ -532,19 +593,54 @@ def _run_pytest(ctx: GitContext, scratch: Path, env: dict[str, str] | None,
         left = until - time.monotonic() if runs else budget
         if left <= 0:
             raise RanOutOfTime(budget)
-        argv = _pytest_argv(_pytest_config(home, scratch, ctx.worktree_root), report, ignored)
+        pinned = _pytest_config(home, scratch, ctx.worktree_root)
+        cache = scratch / f"cache-{len(runs)}"
+        env_of_run = {**(env or {}), "PYTEST_ADDOPTS": ""}
         try:
-            proc = _spawn(ctx, argv, {**(env or {}), "PYTEST_ADDOPTS": ""}, home, left)
+            proc = _spawn(ctx, _pytest_argv(pinned, report, ignored, cache), env_of_run, home, left)
         except RanOutOfTime:
             raise RanOutOfTime(budget) from None
         seen = _reported(proc, report)
         if seen is None:
             return None
-        runs.append((home, seen))
+        again = report.with_name(f"again-{report.name}")
+        runs.append((home, _once_more(ctx, _pytest_argv(pinned, again, ignored, cache), again,
+                                      env_of_run, home, until - time.monotonic(), seen)))
     return _together(ctx.worktree_root, runs)
 
 
-def _pytest_argv(config: Path, report: Path, ignored: list[Path]) -> list[str]:
+def _once_more(ctx: GitContext, argv: list[str], report: Path, env: dict[str, str], home: Path,
+               left: float, seen: Witnessed) -> Witnessed:
+    """`seen`, after running the tests that errored in it a second time, and those alone, when
+    every test that broke in it errored (`Witnessed.errors_only`).
+
+    An ERROR is a test that could not be set up, torn down or collected, and on a machine
+    where several sessions run their suites at once it is as often the machine as the code.
+    37 tests errored in the gate's run, in three files the branch did not touch; the same
+    three files run straight after it passed 41 of 41, and `make check` on the same commit
+    in the same minute passed all 7419 (#266). A FAILED assertion is never run again: that is
+    the code answering, and asking it twice is asking for a different answer.
+
+    pytest picks the tests itself, from the cache of the run it just made: `--lf` runs what
+    broke there, by node id, from a cache directory this gate gave both runs, outside the tree.
+    Errors that did not come back are taken out of the count and named; any that did, or a
+    second run that could not finish in the time left, leaves `seen` as it was, a failure.
+    `argv` is the first run's, writing `report`; `--lfnf=none` makes a cache pytest cannot
+    read run nothing rather than everything, which is no second run at all.
+    """
+    if not seen.errors_only or left <= 0:
+        return seen
+    try:
+        proc = _spawn(ctx, [*argv, "--lf", "--lfnf=none"], env, home, left)
+    except RanOutOfTime:
+        return seen
+    rerun = _reported(proc, report)
+    if rerun is None or not rerun.passed or rerun.executed < seen.errors:
+        return replace(seen, reproduced=rerun is not None and rerun.failed > 0)
+    return replace(seen, returncode=0, failed=0, errors=0, recovered=seen.errors)
+
+
+def _pytest_argv(config: Path, report: Path, ignored: list[Path], cache: Path) -> list[str]:
     """One pytest run as this gate drives it, pinned to `config`, leaving `ignored` alone.
 
     `-o addopts=` and an empty PYTEST_ADDOPTS neutralise the one-line attack: a single
@@ -555,11 +651,16 @@ def _pytest_argv(config: Path, report: Path, ignored: list[Path]) -> list[str]:
 
     `ignored` is absolute, because a relative `--ignore` is read from wherever pytest starts,
     and a suite configured per project starts it in more than one place.
+
+    `cache` is where pytest keeps what broke, the gate's own and outside the tree, so that a
+    second run of the tests that errored (`_once_more`) reads the list this run wrote and
+    nothing a session could have written there first.
     """
     return [
         "python3", "-m", "pytest", "-q",
         "-c", str(config),
         "-o", "addopts=",
+        "-o", f"cache_dir={cache}",
         f"--junitxml={report}",
         *(f"--ignore={path}" for path in ignored),
     ]
@@ -576,7 +677,8 @@ def _reported(proc: subprocess.CompletedProcess | None, report: Path) -> Witness
     if artifact is None:
         return None
     executed = max(artifact.total - artifact.skipped, 0)
-    return Witnessed(proc.returncode, executed, artifact.failed, _tail(proc), "pytest")
+    return Witnessed(proc.returncode, executed, artifact.failed, _tail(proc), "pytest",
+                     errors=artifact.errors, first=artifact.first)
 
 
 def _together(base: Path, runs: list[tuple[Path, Witnessed]]) -> Witnessed:
@@ -595,7 +697,20 @@ def _together(base: Path, runs: list[tuple[Path, Witnessed]]) -> Witnessed:
     shown = sorted(spoke or runs, key=lambda run: not run[1].passed)
     tail = "\n".join(f"pytest in {_label(base, home)}:\n{one.tail}" for home, one in shown)
     return Witnessed(_status(seen), sum(one.executed for one in seen),
-                     sum(one.failed for one in seen), hookio.tail_of(tail), "pytest")
+                     sum(one.failed for one in seen), hookio.tail_of(tail), "pytest",
+                     **_what_broke_together(seen))
+
+
+def _what_broke_together(seen: list[Witnessed]) -> dict:
+    """The ERRORs of several runs as one: counted together, and the first test that broke
+    taken from a run still broken before one that recovered."""
+    broken = [one for one in seen if not one.passed]
+    return {
+        "errors": sum(one.errors for one in seen),
+        "first": next((one.first for one in [*broken, *seen] if one.first), ""),
+        "recovered": sum(one.recovered for one in seen),
+        "reproduced": any(one.reproduced for one in seen),
+    }
 
 
 def _status(seen: list[Witnessed]) -> int:

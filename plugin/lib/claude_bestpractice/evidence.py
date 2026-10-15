@@ -71,6 +71,12 @@ class Artifact:
     # "is it red"; this answers "red about what", which is what decides whether the
     # failure is the session's change or the tree it is standing in (#220).
     failures: tuple[str, ...] = ()
+    # How many of `failed` are ERRORs — a test's setup, teardown or collection broke — rather
+    # than assertions that failed, and the first broken test with its message. A count of 37
+    # "failing" that were all `psycopg.OperationalError` at setup said nothing about which it
+    # was, and the report that did was deleted with the gate's temp directory (#266).
+    errors: int = 0
+    first: str = ""
 
 
 @dataclass
@@ -116,10 +122,12 @@ def _parse_junit(path: Path, mtime: float) -> Artifact | None:
     if not suites and root.tag != "testsuites":
         return None
 
-    total = failed = skipped = 0
+    total = failed = skipped = errors = 0
     for suite in suites or [root]:
+        errored = int(suite.get("errors", 0) or 0)
+        errors += errored
         total += int(suite.get("tests", 0) or 0)
-        failed += int(suite.get("failures", 0) or 0) + int(suite.get("errors", 0) or 0)
+        failed += int(suite.get("failures", 0) or 0) + errored
         skipped += int(suite.get("skipped", 0) or 0)
 
     # Zero EXECUTED tests is not a pass. Collected-minus-skipped, not collected: one
@@ -129,7 +137,7 @@ def _parse_junit(path: Path, mtime: float) -> Artifact | None:
     passed = executed > 0 and failed == 0
     detail = _detail(executed, failed, skipped)
     return Artifact(path, mtime, passed, total, failed, detail, skipped,
-                    failures=_junit_failures(root))
+                    failures=_junit_failures(root), errors=errors, first=_junit_first(root))
 
 
 def _junit_failures(root: "ET.Element") -> tuple[str, ...]:
@@ -153,6 +161,29 @@ def _junit_failures(root: "ET.Element") -> tuple[str, ...]:
     return tuple(out[:8])
 
 
+# How much of the first broken test's message a verdict carries: enough for the exception and
+# what it said, never a traceback.
+FIRST_CHARS = 300
+
+
+def _junit_first(root: "ET.Element") -> str:
+    """The first broken test case and what broke it, as `classname::name — message`. "" when
+    every case passed.
+
+    The message attribute, not the element's text: pytest puts the one line that says what
+    happened there ("failed on setup with ...") and the traceback in the text.
+    """
+    for case in root.iter("testcase"):
+        broke = case.find("failure")
+        broke = case.find("error") if broke is None else broke
+        if broke is None:
+            continue
+        name = "::".join(part for part in (case.get("classname"), case.get("name")) if part)
+        said = " ".join((broke.get("message") or broke.text or "").split())
+        return f"{name} — {said}"[:FIRST_CHARS] if said else name[:FIRST_CHARS]
+    return ""
+
+
 def _detail(executed: int, failed: int, skipped: int) -> str:
     if not executed:
         return f"no tests executed ({skipped} skipped)" if skipped else "no tests collected"
@@ -171,12 +202,13 @@ def _parse_pytest_json(path: Path, mtime: float) -> Artifact | None:
     if not isinstance(summary, dict):
         return None
     total = int(summary.get("total") or summary.get("collected") or 0)
-    failed = int(summary.get("failed", 0)) + int(summary.get("error", 0))
+    errors = int(summary.get("error", 0))
+    failed = int(summary.get("failed", 0)) + errors
     skipped = int(summary.get("skipped", 0)) + int(summary.get("deselected", 0))
     executed = max(total - skipped, 0)
     passed = executed > 0 and failed == 0 and data.get("exitcode", 0) == 0
     return Artifact(path, mtime, passed, total, failed, _detail(executed, failed, skipped), skipped,
-                    failures=_json_failures(data))
+                    failures=_json_failures(data), errors=errors)
 
 
 def _json_failures(data: dict) -> tuple[str, ...]:
@@ -569,7 +601,7 @@ def _verify_one(ctx: GitContext, globs: list[str], changed: list[str], suite,
         return None
 
     tree = tree_hash(ctx)
-    standing = _standing_failure(ctx, suite, tree)
+    standing = _standing_failure(ctx, suite, tree, globs)
     if standing is not None:
         return standing
 
@@ -766,7 +798,8 @@ def behind_the_trunk(ctx: GitContext) -> str:
 REASSERT_SECONDS = 3600.0
 
 
-def _standing_failure(ctx: GitContext, suite, tree: str) -> Verdict | None:
+def _standing_failure(ctx: GitContext, suite, tree: str,
+                      globs: list[str] | None = None) -> Verdict | None:
     """The failure already observed for this suite on exactly this tree. None otherwise.
 
     Remembering a FAILURE is not the cache this module refuses to have. A cached pass
@@ -789,9 +822,15 @@ def _standing_failure(ctx: GitContext, suite, tree: str) -> Verdict | None:
     tree judged by the same gate, and an upgrade changes the gate: v1.69.2 fixed a run that
     reported 226 failures over a green suite, and the upgraded gate went on repeating that
     verdict on the tree it was reached on, word for word, at every Stop (#234).
+
+    And no report of this suite may have passed since. A report is not a run this gate
+    witnessed, so it clears nothing and passes nothing: it only sends the suite back to be
+    run, which is the one thing this shortcut exists to save, and a forged one buys a run.
+    Without it, 166 ERRORs of a database under load were repeated at every Stop while the
+    project's own `make test` on the same commit wrote a report of 8228 passed (#266).
     """
     entry = red(ctx)
-    if not _the_same_run(entry, suite, tree):
+    if not _the_same_run(entry, suite, tree) or _passed_since(ctx, globs, suite, entry):
         return None
     ran = " ".join(entry.get("command") or ["?"])
     where = "" if not suite.path else f" in {suite.path}"
@@ -818,6 +857,22 @@ def _the_same_run(entry: dict | None, suite, tree: str) -> bool:
     except (TypeError, ValueError):
         return False
     return time.time() - seen_at <= REASSERT_SECONDS
+
+
+def _passed_since(ctx: GitContext, globs: list[str] | None, suite, entry: dict) -> bool:
+    """Whether a report this gate reads for `suite`, written after `entry` was last seen,
+    says the suite passed."""
+    try:
+        seen_at = float(entry.get("last_seen") or 0)
+    except (TypeError, ValueError):
+        return False
+    for path in _reports(ctx, list(globs or []), suite):
+        if _mtime(path) <= seen_at:
+            return False
+        artifact = parse_artifact(path)
+        if artifact is not None:
+            return artifact.passed
+    return False
 
 
 def _counted_by_this_gate(entry: dict) -> bool:
@@ -1050,8 +1105,8 @@ def _judge_witnessed(ctx: GitContext, seen: witness.Witnessed, suite=None, tree:
         return Verdict(
             False,
             f"The suite FAILS on the code as it stands — {seen.failed} failing of "
-            f"{seen.executed} run by the gate itself with {seen.runner}.\n{seen.tail}"
-            + behind_the_trunk(ctx),
+            f"{seen.executed} run by the gate itself with {seen.runner}."
+            f"{_what_broke(seen)}\n{seen.tail}" + behind_the_trunk(ctx),
         )
     if seen.executed == 0:
         return Verdict(
@@ -1088,7 +1143,35 @@ def _judge_witnessed(ctx: GitContext, seen: witness.Witnessed, suite=None, tree:
 
     if clear_red(ctx, command, seen.executed, suite) or red(ctx) is None:
         record_green(ctx, command, suite)
-    return Verdict(True, f"{seen.executed} test(s) run by the gate itself via {seen.runner}")
+    return Verdict(True, f"{seen.executed} test(s) run by the gate itself via {seen.runner}"
+                         + _recovered(seen))
+
+
+def _recovered(seen: witness.Witnessed) -> str:
+    """What a passing verdict says about the ERRORs its run had and a second run did not."""
+    if not seen.recovered:
+        return ""
+    return (f". {seen.recovered} of them ERRORed in its first run and passed when it ran them "
+            f"again on their own, so they are not counted as the code failing. First: {seen.first}")
+
+
+def _what_broke(seen: witness.Witnessed) -> str:
+    """The lines a red verdict of the gate's own run adds before the output: the first test
+    that broke, what the errors did when run again, and where the run's report was kept.
+
+    The output's tail was all a refusal carried, and 37 ERRORs in three files the branch never
+    touched read there exactly like 37 failed assertions — while the one file that said which
+    it was had been deleted with the gate's temp directory (#266).
+    """
+    lines = [f"  first: {seen.first}"] if seen.first else []
+    if seen.errors and seen.errors == seen.failed:
+        again = (", and they broke again when the gate ran them a second time on their own"
+                 if seen.reproduced else "")
+        lines.append(f"  All {seen.failed} are ERRORs — a test's setup, teardown or collection "
+                     f"broke — not failed assertions{again}.")
+    if seen.kept:
+        lines.append(f"  the gate's report: {seen.kept}")
+    return "".join(f"\n{line}" for line in lines)
 
 
 def _root_of(ctx: GitContext, suite=None) -> Path:
