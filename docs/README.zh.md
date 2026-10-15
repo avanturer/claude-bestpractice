@@ -4,8 +4,8 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-2.2.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-2471%20passing-2ea44f)](#已验证)
+[![version](https://img.shields.io/badge/version-2.3.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-2508%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#运行要求)
@@ -196,7 +196,15 @@ Stop gate **丢弃智能体的自述文字**，自己去运行你的测试套件
 `detect_suites off` 可以把这种推断整个关掉。当 gate 亲自驱动 pytest 时，每个测试都在 pytest
 自己会为它读取的那份配置下运行——`backend/pyproject.toml` 的读法与 `cd backend && pytest`
 相同——而绝不会读取仓库之外的文件。随后，在完全相同的这棵树上已经观察到的失败会
-被重新援引而不是重新运行：同一次拒绝只花一秒，而不是再跑一遍整个套件。
+被重新援引而不是重新运行：同一次拒绝只花一秒，而不是再跑一遍整个套件。此后写下的一份
+套件通过的报告会让它重新运行；报告本身什么也不清除。
+
+**机器繁忙不等于代码坏了。** 在 gate 自己的 pytest 运行中以 ERROR 结束的测试——坏在
+setup、teardown 或收集阶段，且没有任何断言失败——会被单独再跑一次；届时通过的会被点名，
+不算作代码失败。失败的断言绝不会被问第二次。红色的运行会点名第一个出错的测试，并把报告
+保存在 `.claude/claude-bestpractice/test-reports/` 下，不进入 git。gate 启动的每个套件最多
+使用 `witness_cpus` 个 CPU——除非你另有指定，默认为四个（`0` 表示全部）——这样一次 Stop
+就不会在机器上其他会话跑各自套件时，为每个核心启动一个 jest worker。
 
 它也会升级而不是把人卡死：连续四次被拦截之后，它记录一次"未经验证的完成"并放行该轮，
 因为一个永远挡住创始人工作流的 gate，就是一个会被卸载的 gate。
@@ -343,7 +351,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 ## 已验证
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2471 个测试 · 36 项 doctor 检查 · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2508 个测试 · 36 项 doctor 检查 · budget
 ```
 
 doctor 通过**真的去做那件坏事**来证明 gate 有效，而不是把配置读回来对一遍——
