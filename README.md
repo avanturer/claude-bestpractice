@@ -4,8 +4,8 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-2.3.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-2508%20passing-2ea44f)](#verified)
+[![version](https://img.shields.io/badge/version-2.4.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-2541%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
@@ -487,11 +487,11 @@ In a session: `/bestpractice:status` · `/bestpractice:plan` · `/bestpractice:r
 | `subagent-brief` | SubagentStart | fails open | Non-goals, entities and a query-biased map to agents that inherit no rules |
 | `checkpoint` | PreCompact | fails open | Extractive checkpoint, zero model calls, secrets scrubbed. **Never refuses a compaction** — a refusal there reaches the founder, never the model (decision 0021) |
 | `evidence-gate` | Stop | **fails closed** | Scope drift, test evidence, clean re-run, a turn ending on an unanswered block; harvests decision drafts; asks once for what only this window knows; puts a finished worktree away |
-| `pr-opened` | PostToolUse `.*(create\|update)_pull_request`, and `Bash` if it runs `gh pr create` | fails open | Files the pull request just opened and learns its number, so the merge gate can tell its own from somebody else's; settles one closed through the tool |
+| `pr-opened` | PostToolUse `.*(create\|update\|merge)_pull_request`, and `Bash` if it runs `gh pr` | fails open | Files the pull request just opened and learns its number, so the merge gate can tell its own from somebody else's; settles one closed through the tool; finishes a merge once it has run |
 | `permission-denied` | PermissionDenied | fails open | Records what auto mode refused, so a repeated prompt can be traced to its rule; never overturns one |
 
-Eleven entries — `pre-tool` and `review-commit` share the PreToolUse event — against a
-self-imposed budget of twelve. Always-on context **~332 tokens** against a cap of 400 —
+Twelve entries — `pre-tool` and `review-commit` share the PreToolUse event, and `pr-opened`
+is two — against a self-imposed budget of twelve. Always-on context **~332 tokens** against a cap of 400 —
 roughly 0.1 % of a 200k window.
 
 ---
@@ -499,7 +499,7 @@ roughly 0.1 % of a 200k window.
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2508 tests · 36 doctor checks · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2541 tests · 36 doctor checks · budget
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration
