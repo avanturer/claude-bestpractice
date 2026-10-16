@@ -1619,11 +1619,12 @@ def complete(ctx: GitContext, session_id: str, merge: dict[str, Any]) -> None:
     if not branch or merge.get("queued"):
         return
     settle(ctx, branch, MERGED)
+    sender = str(merge.get("session", session_id))
     if config.load(ctx).require_task:
-        plan.settle_delivered(ctx, session_id, list(merge.get("delivered", [])),
+        plan.settle_delivered(ctx, sender, list(merge.get("delivered", [])),
                               f"the merge of {merge.get('head', branch)}")
     inbox.broadcast(
-        ctx, session_id,
+        ctx, sender,
         f"{branch} was merged. Your baseline is behind — take the base branch in before you "
         "finish, or your diff is measured from the wrong commit.",
     )

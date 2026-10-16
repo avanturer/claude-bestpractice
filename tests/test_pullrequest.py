@@ -1789,6 +1789,25 @@ class TestAMergeIsFinishedByItsResult(PRCase):
         self.assertEqual(plan.DONE, plan.find(self.ctx(), task.id).state)
         self.assertEqual([], pullrequest.outstanding(self.ctx()))
 
+    def test_the_cards_closed_are_the_sending_sessions_wherever_the_result_arrives(self):
+        """`cd <tree> && gh pr merge` leaves the shell in that tree, so the result arrives from
+        there, under the identity this chat has in a tree it never started in (#248)."""
+        from claude_bestpractice import plan
+
+        self.start()
+        task = self.claim_a_task("s1", "src/app.py")
+        self.open_a_pr()
+        self.accept()
+        elsewhere = self.add_worktree("elsewhere")
+        call = {"session_id": "s1", "tool_name": "mcp__github__merge_pull_request",
+                "tool_use_id": "toolu_moved", "tool_input": self.MERGE}
+        self.assertNotEqual("deny", self.decision(
+            self.gate("pre-tool", {**call, "hook_event_name": "PreToolUse"})))
+        self.gate("pr-opened", {**call, "hook_event_name": "PostToolUse", "cwd": str(elsewhere),
+                                "tool_response": {}})
+
+        self.assertEqual(plan.DONE, plan.find(self.ctx(), task.id).state)
+
     def test_a_result_for_a_merge_nobody_held_changes_nothing(self):
         self.start()
         self.open_a_pr()

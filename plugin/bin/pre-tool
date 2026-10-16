@@ -1638,7 +1638,9 @@ def main() -> None:
             # for a call that succeeded. Spent, settled and delivered here, a merge that then
             # failed had taken the founder's word, called the pull request merged and closed
             # its cards, and they were asked for `+merge` again (#232, #243, #268).
-            merge: dict = {"named": named}
+            # The session that sends it, as it is here: the result can arrive from the tree a
+            # `cd` left the shell in, under an identity this chat never started a session as.
+            merge: dict = {"named": named, "session": event.session_id}
             if gated is None:
                 # Somebody else's pull request: nothing checked here is about it (#135).
                 # Still taken off what the word covers, once it has merged.
