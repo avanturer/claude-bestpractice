@@ -706,6 +706,38 @@ class TestGitItselfReachesIntoOtherTrees(PolicyCase):
             decision, reason = self.bash(mine, command)
             self.assertEqual(decision, "deny", f"{command} -> {reason}")
 
+    def provisioned_for_another(self) -> Path:
+        """A tree this plugin provisioned for a live sibling: inside the main checkout, under
+        `.claude/worktrees/`, which `.git/info/exclude` hides there."""
+        from claude_bestpractice import sessions, worktree
+
+        from helpers import session_record_for
+
+        worktree.hide(self.ctx())
+        tree = self.repo / ".claude" / "worktrees" / "work-theirs"
+        git(["worktree", "add", "-q", "-b", "feat/theirs", str(tree)], self.repo)
+        sessions.register(self.ctx(), session_record_for(self.ctx(tree), "other-session"))
+        return tree
+
+    def test_a_siblings_provisioned_tree_is_theirs_too(self):
+        """Walked from the main checkout first, every path in a tree this plugin provisions is
+        an ignored file of the main checkout, so the guard stood down for exactly the trees it
+        makes: a reset, a clean, a write and a forced removal of a live sibling's tree all went
+        through. Measured against 2.3.0."""
+        mine = self.worktree("feat/mine", occupant="")
+        theirs = self.provisioned_for_another()
+        for command in (f"git -C {theirs} reset --hard HEAD", f"git -C {theirs} clean -fdx",
+                        f"git -C {self.repo} worktree remove --force {theirs}"):
+            decision, reason = self.bash(mine, command)
+            self.assertEqual("deny", decision, f"{command} -> {reason}")
+            self.assertIn("another session", reason, command)
+        decision, reason = _verdict(self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Write",
+            "tool_input": {"file_path": str(theirs / "a.py"), "content": "x = 1\n"},
+            "cwd": str(mine),
+        }, cwd=mine))
+        self.assertEqual("deny", decision, reason)
+
     def test_asking_where_the_other_sessions_are_is_not_reaching_into_them(self):
         """`git worktree list` is `git status` for worktrees: it reads and returns.
 

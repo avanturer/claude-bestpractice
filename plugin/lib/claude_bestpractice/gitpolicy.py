@@ -263,10 +263,16 @@ def foreign_tree(ctx: GitContext, target: Path, session_id: str = "") -> Path | 
     merge it — does not exist for a file git never tracks: it is absent from the other tree
     and no merge can move a change to it. Both exits led back to each other, and a session
     that had just rotated a production SSH key could not delete the retired one (#68).
+
+    The innermost tree holding the path is the one it is in. A tree this plugin provisions
+    lies inside the main checkout, which ignores `.claude/worktrees/`, so asked main checkout
+    first, every path in a sibling's provisioned tree was the main checkout's ignored file:
+    a reset, a clean, a write and a forced removal of a tree a live session worked in all
+    went through.
     """
     if _ours(ctx, target):
         return None
-    for tree in working_trees(ctx):
+    for tree in sorted(working_trees(ctx), key=lambda tree: len(tree.parts), reverse=True):
         if tree == ctx.worktree_root.resolve() or not _within(target, tree):
             continue
         if not _occupied(ctx, tree, session_id):
