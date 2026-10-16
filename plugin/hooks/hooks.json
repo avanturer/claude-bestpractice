@@ -102,9 +102,13 @@
           "merge gate could not tell its own pull request from somebody else's (#135).",
           "",
           "`update_pull_request` because closing one without merging is `state: closed` on",
-          "it, and nothing else sees that call: `gh pr close` is read by pre-tool instead."
+          "it, and nothing else sees that call: `gh pr close` is read by pre-tool instead.",
+          "",
+          "`merge_pull_request` because only this event says the merge RAN. pre-tool judges",
+          "it and holds it; spent and settled there, a merge that then failed had taken the",
+          "founder's word and closed its cards (#232, #243, #268)."
         ],
-        "matcher": ".*(create|update)_pull_request",
+        "matcher": ".*(create|update|merge)_pull_request",
         "hooks": [
           {
             "type": "command",
@@ -121,15 +125,19 @@
           "made it a refusal instead: `gh pr merge 48` could not be matched to the pull",
           "request the word covered, and was refused four times over (#241).",
           "",
+          "`gh pr merge` for the same reason the tool's merge is above: only this event",
+          "says it ran.",
+          "",
           "`if` (Claude Code 2.1.85, compound commands from 2.1.89) spawns the process only",
-          "for a shell line that runs `gh pr create`. Where it is not honoured the hook runs",
-          "on every shell call, and it exits before touching git."
+          "for a shell line that runs `gh pr`; `if` holds one rule, so not one per verb.",
+          "Where it is not honoured the hook runs on every shell call, and it exits before",
+          "touching git."
         ],
         "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
-            "if": "Bash(gh pr create *)",
+            "if": "Bash(gh pr *)",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/pr-opened\"",
             "timeout": 15
           }

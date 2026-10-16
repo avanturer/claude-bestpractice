@@ -1545,6 +1545,90 @@ def spend(ctx: GitContext, record: dict[str, Any] | None, cover: str) -> None:
         config.clear_switch(ctx, config.MERGE_POOL)
 
 
+# A merge this gate allowed, waiting on the result that only PostToolUse sees. Spent, settled
+# and delivered before the call, a merge that then failed — a conflict, a branch behind its
+# base, a check GitHub still waited on — had already taken the founder's word, called the pull
+# request merged and closed its cards, and the founder was asked for `+merge` again over the
+# same pull request (#232, #241, #243, #246, #268). PreToolUse and PostToolUse carry the same
+# `tool_use_id`, and PostToolUse fires only for a call that succeeded: measured on 2.1.301.
+PENDING = "merges-pending.json"
+# A merge whose result never came, a failed one among them, is forgotten after a day.
+_PENDING_SECONDS = 24 * 3600.0
+
+
+def bind(ctx: GitContext, record: dict[str, Any] | None, cover: str) -> str:
+    """Put the founder's word on the pull request it is being used for. The cover it is now.
+
+    Held until the merge is known to have run, the single merge a word allows when it named
+    nothing would cover any other merge in the meantime. Moved onto this pull request, its
+    own retry is still covered and nothing else is.
+    """
+    if cover != ONCE or record is None:
+        return cover
+    pooled = " ".join(sorted({*_pool(ctx), _entry(record)}))
+    config.record_switches(ctx, {config.MERGE_POOL: pooled})
+    config.clear_switch(ctx, config.APPROVE_MERGE)
+    return POOLED
+
+
+def hold(ctx: GitContext, call: str, merge: dict[str, Any]) -> None:
+    """File a merge this gate allowed under its tool call, for the PostToolUse that sees it run."""
+    now = time.time()
+    held = {key: row for key, row in _held(ctx).items()
+            if isinstance(row, dict) and now - float(row.get("at") or 0) < _PENDING_SECONDS}
+    held[call] = {**merge, "at": now}
+    store.write_json(store.tier_b(ctx, PENDING), held)
+
+
+def _held(ctx: GitContext) -> dict[str, Any]:
+    found = store.read_json(store.tier_b(ctx, PENDING), default={})
+    return found if isinstance(found, dict) else {}
+
+
+def ran(ctx: GitContext, call: str) -> dict[str, Any] | None:
+    """The merge `call` was allowed as, taken off the file now that it has run. None if none."""
+    held = _held(ctx)
+    merge = held.pop(call, None)
+    if merge is None:
+        return None
+    store.write_json(store.tier_b(ctx, PENDING), held)
+    return merge if isinstance(merge, dict) else None
+
+
+def queues(tool_name: str, command: str) -> bool:
+    """Does this merge only ask GitHub to merge later, once what it requires is met?"""
+    if _MERGES_TOOL.search(tool_name):
+        return False
+    found = _gh_subcommand(command, "merge", _MERGES_SHELL)
+    if isinstance(found, list):
+        return "--auto" in found
+    return bool(found) and bool(re.search(r"(?:^|\s)--auto\b", command))
+
+
+def complete(ctx: GitContext, session_id: str, merge: dict[str, Any]) -> None:
+    """Finish a merge that ran: the word spent, the pull request settled, the cards the merge
+    carried closed, and every other session told its baseline moved.
+
+    An auto-merge has only been asked for. The word is spent on it, and the pull request stays
+    open until its work is on the trunk, where `reconcile` settles it.
+    """
+    from . import inbox, plan
+
+    spend(ctx, merge.get("named"), str(merge.get("cover", "")))
+    branch = str(merge.get("branch", ""))
+    if not branch or merge.get("queued"):
+        return
+    settle(ctx, branch, MERGED)
+    if config.load(ctx).require_task:
+        plan.settle_delivered(ctx, session_id, list(merge.get("delivered", [])),
+                              f"the merge of {merge.get('head', branch)}")
+    inbox.broadcast(
+        ctx, session_id,
+        f"{branch} was merged. Your baseline is behind — take the base branch in before you "
+        "finish, or your diff is measured from the wrong commit.",
+    )
+
+
 def gated_by(ctx: GitContext, number: int, current: bool = False) -> dict[str, Any] | None:
     """The obligation this merge is judged against, or None to let it through.
 

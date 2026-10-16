@@ -1571,10 +1571,15 @@ def main() -> None:
                     "can stand in for it."
                 )
             gated = pullrequest.gated_by(here, number, current)
+            # Held, and finished by `pr-opened` once the merge has run: PostToolUse fires only
+            # for a call that succeeded. Spent, settled and delivered here, a merge that then
+            # failed had taken the founder's word, called the pull request merged and closed
+            # its cards, and they were asked for `+merge` again (#232, #243, #268).
+            merge: dict = {"named": named}
             if gated is None:
                 # Somebody else's pull request: nothing checked here is about it (#135).
-                # Still taken off what the word covers.
-                pullrequest.spend(ctx, named, cover)
+                # Still taken off what the word covers, once it has merged.
+                merge["cover"] = pullrequest.bind(ctx, named, cover)
             else:
                 base = str(gated.get("base") or "") or gitpolicy.default_branch(here) or "main"
                 pr_branch = str(gated.get("branch") or "")
@@ -1591,59 +1596,30 @@ def main() -> None:
                     # about what it lists (#243), at this commit and in this chat (#268).
                     pullrequest.note_refusal(ctx, pr_branch, here.head, problems, event.session_id)
                     deny_for_founder(ctx, rec, pullrequest.merge_refusal(gated, problems))
-                # Spent once the merge goes ahead, and never before its blockers are judged:
-                # the refusal above promises the merge "as soon as the list is empty", and
-                # spending the word first turned that into asking the founder a second time.
-                # Still before the call rather than after it, because a PreToolUse hook
-                # never sees the result: a merge that then fails is re-authorised by the
-                # founder rather than by its own retry.
-                pullrequest.spend(ctx, named, cover)
+                # Bound to this pull request once its blockers are judged, and never before:
+                # the refusal above promises the merge "as soon as the list is empty", so a
+                # merge refused over them keeps the word exactly as it was.
+                merge["cover"] = pullrequest.bind(ctx, named, cover)
                 # Judged, and nothing found. Carried to the vouch at the end of this file
                 # rather than allowed here, because `allow_tool` ends the permission
                 # pipeline and every gate below this line still has its say.
                 if pullrequest.about_this_repository(ctx, event.tool_name, ti, command):
                     pr_vouch = vouch.MERGE
-                # Recorded on the way through: a PreToolUse hook never sees the result,
-                # and an obligation the founder has already watched be merged is worse
-                # than useless on the board.
+                # `here.branch` is the obligation's: `gated_by` resolves it by the branch
+                # checked out where the merge runs, so a merge that reaches this line is
+                # always that branch's, and somebody else's never arrives (#135). What the
+                # result is measured against is read now, because `gh pr merge
+                # --delete-branch` leaves neither the branch nor its checkout behind.
                 #
-                # `here.branch` is right here and not an oversight: `gated_by` resolves the
-                # obligation by the branch checked out where the merge runs, so a merge that
-                # reaches this line is always that branch's. A merge of somebody else's is
-                # not gated at all and never arrives (#135) — which is what makes settling
-                # here safe.
-                pullrequest.settle(here, here.branch, pullrequest.MERGED)
-                # And the cards that claimed this work are closed by the delivery of it,
-                # here, without anybody being asked. The founder's account of the failure
-                # is the specification: having given the word to merge, they were then
-                # asked a second question about closing the cards, or the session waited
-                # for a command, or it simply forgot and the row sat in `doing` for days.
-                # Decision 0010 already settles who decides — `+merge` is their word on the
-                # work and the session does the rest without asking again — and the card
-                # that claimed that work is part of the rest.
-                #
-                # Recorded on the way through for the same reason the obligation above is:
-                # a PreToolUse hook never sees the result. A merge that then failed leaves
-                # a card closed early, and the cost of that is one `claude-bp-plan add`
-                # against a board that was wrong about everything it ever delivered.
-                if cfg.require_task:
-                    from claude_bestpractice import plan
-
-                    head = str(gated.get("branch") or "") or here.branch
-                    plan.settle_delivered(
-                        ctx, event.session_id,
-                        pullrequest.delivered_paths(here, base, head),
-                        f"the merge of {head}",
-                    )
-                # Every other session's baseline just went stale. They measure their diff
-                # from a commit that is no longer where the branch begins, so drift and
-                # scope both read wrong until they take the merge in.
-                inbox.broadcast(
-                    ctx, event.session_id,
-                    f"{here.branch} was merged. Your baseline is behind — take the base "
-                    "branch in before you finish, or your diff is measured from the "
-                    "wrong commit.",
-                )
+                # The cards that claimed this work are then closed by its delivery, without
+                # anybody being asked: having given the word to merge, the founder was asked
+                # a second question about closing them, or the row sat in `doing` for days
+                # (decision 0011).
+                head = pr_branch or here.branch
+                merge.update(branch=here.branch, head=head, base=base,
+                             delivered=pullrequest.delivered_paths(here, base, head),
+                             queued=pullrequest.queues(event.tool_name, command))
+            pullrequest.hold(ctx, str(event.raw.get("tool_use_id") or event.session_id), merge)
         elif pullrequest.opens_a_pull_request(event.tool_name, command):
             # No number: a PreToolUse hook sees the request, never the response, and the
             # number only exists in the response. The branch identifies the obligation,

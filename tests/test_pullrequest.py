@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import subprocess
@@ -18,6 +19,10 @@ from claude_bestpractice import board, evidence, pullrequest, store
 # Code that genuinely trips `sql-interpolation`. Findings are re-asked of the file before
 # they are counted, so a fixture asserting on a clean file asserts on nothing.
 TRIGGER = 'def q(cur, x):\n    cur.execute(f"SELECT {x}")\n' 
+
+# One id per tool call, as the harness gives each: the merge pre-tool holds is finished by the
+# PostToolUse carrying the same one.
+_CALLS = itertools.count(1)
 
 
 class PRCase(RepoCase):
@@ -39,6 +44,21 @@ class PRCase(RepoCase):
             "session_id": session_id, "hook_event_name": "PreToolUse",
             "tool_name": name, "tool_input": tool_input,
         })
+
+    def ran(self, name: str, tool_input: dict, session_id: str = "s1", **where):
+        """A call the way the harness runs one: the request, and the response when it ran.
+
+        The response only for a call that was allowed, because PostToolUse fires for a call
+        that succeeded and for nothing else, and a merge is finished there. Every merge here
+        used to be the request alone: a merge that never ran, treated as done.
+        """
+        event = {"session_id": session_id, "tool_name": name, "tool_input": tool_input,
+                 "tool_use_id": f"toolu_{next(_CALLS)}", **where}
+        proc = self.gate("pre-tool", {**event, "hook_event_name": "PreToolUse"})
+        if self.decision(proc) != "deny":
+            self.gate("pr-opened", {**event, "hook_event_name": "PostToolUse",
+                                    "tool_response": {"stdout": "", "stderr": ""}})
+        return proc
 
     def decision(self, proc) -> str:
         """Kept under the name this file already reads by; the reader is shared."""
@@ -149,7 +169,7 @@ class TestTheMergeIsJudged(PRCase):
     def merge(self, session_id: str = "s1", accepted: bool = True):
         if accepted:
             self.accept(session_id)
-        return self.tool(
+        return self.ran(
             "mcp__github__merge_pull_request",
             {"owner": "o", "repo": "r", "pullNumber": PRCase.PR_NUMBER}, session_id,
         )
@@ -537,7 +557,7 @@ class TestAPullRequestIsNeverLeftHanging(PRCase):
         # Accepted first, because an unaccepted merge is refused now and the obligation
         # would still be open — which would make this pass for the wrong reason.
         self.accept()
-        self.tool("mcp__github__merge_pull_request", {"owner": "o", "repo": "r", "pullNumber": PRCase.PR_NUMBER})
+        self.ran("mcp__github__merge_pull_request", {"owner": "o", "repo": "r", "pullNumber": PRCase.PR_NUMBER})
 
         self.assertEqual("", pullrequest.line(self.ctx()))
         self.assertEqual(0, self.stop().returncode)
@@ -697,8 +717,8 @@ class TestAMergeWaitsForTheFoundersWord(PRCase):
         evidence.record_green(self.ctx(), ["pytest"])
 
     def merging(self):
-        return self.tool("mcp__github__merge_pull_request",
-                         {"owner": "o", "repo": "r", "pullNumber": PRCase.PR_NUMBER})
+        return self.ran("mcp__github__merge_pull_request",
+                        {"owner": "o", "repo": "r", "pullNumber": PRCase.PR_NUMBER})
 
     def test_an_unaccepted_merge_is_refused_however_green_it_is(self):
         self.green()
@@ -1245,7 +1265,7 @@ class TestMergingSomebodyElsesPullRequest(PRCase):
     def test_one_word_is_still_one_merge_of_somebody_elses(self):
         self.start()
         self.accept()
-        self.assertNotEqual("deny", self.decision(self.tool("Bash", {"command": "gh pr merge 501"})))
+        self.assertNotEqual("deny", self.decision(self.ran("Bash", {"command": "gh pr merge 501"})))
         self.assertEqual("deny", self.decision(self.tool("Bash", {"command": "gh pr merge 502"})))
 
     def test_the_branch_this_session_is_on_is_still_judged_when_it_is_the_one_merging(self):
@@ -1273,8 +1293,8 @@ class TestOneWordCoversTheChatsPool(PRCase):
     POOL = ((61, "feat/a"), (62, "feat/b"), (63, "feat/c"))
 
     def merge(self, number: int, session_id: str = "s1"):
-        return self.tool("mcp__github__merge_pull_request",
-                         {"owner": "o", "repo": "r", "pullNumber": number}, session_id)
+        return self.ran("mcp__github__merge_pull_request",
+                        {"owner": "o", "repo": "r", "pullNumber": number}, session_id)
 
     def with_the_pool_open(self) -> None:
         self.start()
@@ -1350,8 +1370,8 @@ class TestASecondPullRequestIsNotTheFirst(PRCase):
         self.start()
         self.open_a_pr(number=48)
         self.accept()
-        self.tool("mcp__github__merge_pull_request",
-                  {"owner": "o", "repo": "r", "pullNumber": 48})
+        self.ran("mcp__github__merge_pull_request",
+                 {"owner": "o", "repo": "r", "pullNumber": 48})
         self.assertEqual([], pullrequest.outstanding(self.ctx()), "precondition: #48 merged")
         self.write("src/app.py", "x = 2\n")
         self.commit("the branch carries on")
@@ -1416,8 +1436,8 @@ class TestAStaleLocalTrunkDoesNotWidenTheMerge(PRCase):
         self.open_a_pr()
         self.accept()
 
-        merged = self.tool("mcp__github__merge_pull_request",
-                           {"owner": "o", "repo": "r", "pullNumber": PRCase.PR_NUMBER})
+        merged = self.ran("mcp__github__merge_pull_request",
+                          {"owner": "o", "repo": "r", "pullNumber": PRCase.PR_NUMBER})
 
         self.assertNotEqual("deny", self.decision(merged), self.reason(merged))
         self.assertEqual(plan.DONE, plan.find(ctx, ours.id).state)
@@ -1590,7 +1610,7 @@ class TestTheMergeClosesTheCardItDelivered(PRCase):
 
     def merge(self, session_id: str = "s1"):
         self.accept(session_id)
-        return self.tool(
+        return self.ran(
             "mcp__github__merge_pull_request",
             {"owner": "o", "repo": "r", "pullNumber": PRCase.PR_NUMBER}, session_id,
         )
@@ -1641,6 +1661,132 @@ class TestTheMergeClosesTheCardItDelivered(PRCase):
         self.merge()
 
         self.assertEqual(plan.DOING, plan.find(self.ctx(), task.id).state)
+
+
+class TestAMergeIsFinishedByItsResult(PRCase):
+    """The merge gate spent the founder's word, called the pull request merged and closed its
+    cards on the way in, because a PreToolUse hook never sees the result. A merge that then
+    failed — a conflict, a branch behind its base, a check GitHub still waited on — left the
+    word gone, and the founder was asked for `+merge` again over the same pull request (#232,
+    #241, #243, #246, #268). It is held now, and finished by the PostToolUse that says it ran.
+    """
+
+    MERGE = {"owner": "o", "repo": "r", "pullNumber": PRCase.PR_NUMBER}
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+
+    def failed(self, tool_input: dict | None = None, name: str = "mcp__github__merge_pull_request"):
+        """The request alone: allowed, and then the call failed, so no PostToolUse came."""
+        return self.tool(name, tool_input or self.MERGE)
+
+    def test_a_merge_that_failed_keeps_the_word_the_pull_request_and_the_card(self):
+        from claude_bestpractice import plan
+
+        self.start()
+        task = self.claim_a_task("s1", "src/app.py")
+        self.open_a_pr()
+        self.accept()
+        first = self.failed()
+        self.assertNotEqual("deny", self.decision(first), self.reason(first))
+
+        self.assertEqual([PRCase.PR_NUMBER], [r["number"] for r in pullrequest.outstanding(self.ctx())])
+        self.assertEqual(plan.DOING, plan.find(self.ctx(), task.id).state)
+        again = self.ran("mcp__github__merge_pull_request", self.MERGE)
+        self.assertNotEqual("deny", self.decision(again), "the retry asked for the word again")
+        self.assertEqual([], pullrequest.outstanding(self.ctx()))
+        self.assertEqual(plan.DONE, plan.find(self.ctx(), task.id).state)
+
+    def test_the_one_merge_a_word_allows_is_held_for_the_pull_request_it_was_used_on(self):
+        """Said with nothing open, the word is one merge. Kept for a retry, it must not also
+        reach another pull request while the first one has not merged."""
+        self.start()
+        self.accept()
+        self.open_a_pr()
+        self.assertNotEqual("deny", self.decision(self.failed()))
+
+        self.open_pr(49, "feat/y")
+        other = self.tool("mcp__github__merge_pull_request",
+                          {"owner": "o", "repo": "r", "pullNumber": 49})
+        self.assertEqual("deny", self.decision(other), "one word merged two pull requests")
+        self.assertNotEqual("deny", self.decision(self.ran("mcp__github__merge_pull_request",
+                                                           self.MERGE)))
+
+    def test_each_pull_request_still_merges_once(self):
+        self.start()
+        self.open_a_pr()
+        self.accept()
+        self.assertNotEqual("deny", self.decision(self.ran("mcp__github__merge_pull_request",
+                                                           self.MERGE)))
+        self.open_a_pr()
+        self.assertEqual("deny", self.decision(self.failed()))
+
+    def test_an_auto_merge_spends_the_word_and_leaves_the_pull_request_open(self):
+        """`--auto` asks GitHub to merge later. It was recorded as merged, and the board lost a
+        pull request that was still waiting on its checks."""
+        from claude_bestpractice import plan
+
+        self.start()
+        task = self.claim_a_task("s1", "src/app.py")
+        self.open_a_pr()
+        self.accept()
+        queued = self.ran("Bash", {"command": "gh pr merge --auto --squash"})
+        self.assertNotEqual("deny", self.decision(queued), self.reason(queued))
+
+        self.assertEqual([PRCase.PR_NUMBER], [r["number"] for r in pullrequest.outstanding(self.ctx())])
+        self.assertEqual(plan.DOING, plan.find(self.ctx(), task.id).state)
+        self.assertEqual("deny", self.decision(self.failed({"command": "gh pr merge --squash"}, "Bash")),
+                         "the word outlived the merge it was spent on")
+
+    def test_the_cards_close_though_the_merge_took_its_branch_away(self):
+        """`gh pr merge --delete-branch` switches the tree to its base and deletes the branch,
+        so what the merge delivered is read before the call and not after it."""
+        from claude_bestpractice import plan
+
+        self.start()
+        task = self.claim_a_task("s1", "src/app.py")
+        self.open_a_pr()
+        self.accept()
+        call = {"session_id": "s1", "tool_name": "Bash", "tool_use_id": "toolu_gone",
+                "tool_input": {"command": "gh pr merge --squash --delete-branch"}}
+        self.assertNotEqual("deny", self.decision(
+            self.gate("pre-tool", {**call, "hook_event_name": "PreToolUse"})))
+        git(["checkout", "-q", "main"], self.repo)
+        git(["branch", "-q", "-D", "feat/x"], self.repo)
+        self.gate("pr-opened", {**call, "hook_event_name": "PostToolUse",
+                                "tool_response": {"stdout": "", "stderr": ""}})
+
+        self.assertEqual(plan.DONE, plan.find(self.ctx(), task.id).state)
+        self.assertEqual([], pullrequest.outstanding(self.ctx()))
+
+    def test_a_result_for_a_merge_nobody_held_changes_nothing(self):
+        self.start()
+        self.open_a_pr()
+        self.accept()
+        self.gate("pr-opened", {"session_id": "s1", "hook_event_name": "PostToolUse",
+                                "tool_name": "mcp__github__merge_pull_request",
+                                "tool_input": self.MERGE, "tool_use_id": "toolu_unknown",
+                                "tool_response": {}})
+
+        self.assertEqual([PRCase.PR_NUMBER], [r["number"] for r in pullrequest.outstanding(self.ctx())])
+        self.assertNotEqual("deny", self.decision(self.failed()), "the word was spent unused")
+
+    def test_the_other_sessions_hear_of_a_merge_only_once_it_ran(self):
+        from claude_bestpractice import inbox
+
+        self.start()
+        self.start("s2")
+        self.open_a_pr()
+        self.accept()
+        self.failed()
+        self.assertEqual([], inbox.pending(self.ctx(), sid(self.repo, "s2")))
+
+        self.ran("mcp__github__merge_pull_request", self.MERGE)
+        notes = [n.get("text", "") for n in inbox.pending(self.ctx(), sid(self.repo, "s2"))]
+        self.assertTrue(any("feat/x was merged" in text for text in notes), notes)
 
 
 class TestAMergedPullRequestIsNotAnOpenOne(PRCase):
@@ -2154,13 +2300,14 @@ class TestAPullRequestOpenedInAShellIsMergedByItsNumber(PRCase):
         proc = self.tool("Bash", {"command": self.MERGE})
         self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
 
-    def test_the_hook_is_sent_the_shell_line_that_opens_one(self):
-        """By `if`, so every other shell call is spared the process."""
+    def test_the_hook_is_sent_the_shell_lines_that_open_and_merge_one(self):
+        """By `if`, so most other shell calls are spared the process. One rule, because `if`
+        holds one: `gh pr create` for the number, `gh pr merge` for the merge that ran."""
         hooks = json.loads((BIN.parent / "hooks" / "hooks.json").read_text(encoding="utf-8"))
         sent = [handler.get("if") for entry in hooks["hooks"]["PostToolUse"]
                 if harness_matches(entry.get("matcher", ""), "Bash")
                 for handler in entry["hooks"] if handler["command"].endswith('/pr-opened"')]
-        self.assertEqual(["Bash(gh pr create *)"], sent)
+        self.assertEqual(["Bash(gh pr *)"], sent)
 
     def test_any_other_shell_line_is_left_before_git_is_asked(self):
         """Where `if` is not honoured every shell call starts this hook, and it may cost the
@@ -2517,8 +2664,8 @@ class TestAPullRequestIsFiledOnTheBranchItIsFor(PRCase):
             self.in_a("prompt-capture", {"hook_event_name": "UserPromptSubmit", "prompt": "+merge"})
 
     def bash(self, command: str):
-        return self.in_a("pre-tool", {"hook_event_name": "PreToolUse", "tool_name": "Bash",
-                                      "tool_input": {"command": command}})
+        """The merge and, when it was allowed to run, its result: PostToolUse finishes it."""
+        return self.ran("Bash", {"command": command}, cwd=str(self.here))
 
     def test_its_own_tree_is_the_branch_it_is_for(self):
         self.open_both(word=False)
