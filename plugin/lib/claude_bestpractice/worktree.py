@@ -687,10 +687,15 @@ _LEDGER_EXCLUDE = "/.claude/claude-bestpractice/plan/"
 # to every check that asks git, and the merge was refused over one (#261).
 _REPORTS_EXCLUDE = "/.claude/claude-bestpractice/test-reports/"
 
+# The commit review's reports, read once by the session a finding woke. Visible, the next
+# `git add -A` took one into the founder's history.
+_REVIEWS_EXCLUDE = "/.claude/claude-bestpractice/reviews/"
+
 _EXCLUDED = (
     (_EXCLUDE_LINE, "worktrees this plugin provisions"),
     (_LEDGER_EXCLUDE, "the task ledger, written by every session and committed by none"),
     (_REPORTS_EXCLUDE, "the test reports the Stop gate asks for and reads"),
+    (_REVIEWS_EXCLUDE, "the commit review's reports, read once by the session they woke"),
 )
 
 
