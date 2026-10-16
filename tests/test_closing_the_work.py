@@ -63,6 +63,31 @@ class TreeCase(RepoCase):
         plan.claim(self.ctx(), task.id, self.session, "feat/the-work")
         plan.complete(self.ctx(), task.id)
 
+    def left_alone(self, tree) -> None:
+        """Backdate everything that says a tree was touched, past the board's quiet window.
+
+        The board names a tree as nobody's only once nothing has touched it for a while — a
+        branch cut from the trunk a second ago is in the trunk too, and somebody is in it.
+        """
+        import os
+        import time
+
+        long_ago = time.time() - worktree._QUIET_SECONDS - 60
+        meta = worktree._gitdir_of(tree)
+        for path in (tree, *((meta / "HEAD", meta / "index", meta / "logs" / "HEAD") if meta else ())):
+            if path.exists():
+                os.utime(path, (long_ago, long_ago))
+
+    def an_ignored_export(self, tree, rel: str = "data/photos/1.jpg") -> None:
+        """Data nothing else has, in a path the clone ignores — what the founder lost."""
+        exclude = self.repo / ".git" / "info" / "exclude"
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        with exclude.open("a", encoding="utf-8") as handle:
+            handle.write("data/\n__pycache__/\nnode_modules/\n.env\n")
+        path = tree / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"\xff\xd8 a photo for the store listing")
+
 
 class TestAFinishedTreeRemovesItself(TreeCase):
     def test_merged_work_and_a_clear_board_takes_the_tree_and_the_branch(self):
@@ -178,6 +203,61 @@ class TestWhatKeepsATreeStanding(TreeCase):
         self.assertIsNone(worktree.release_mine(self.ctx(), self.session))
         self.assertTrue(tree.is_dir())
         self.assertTrue((tree / "notes.txt").is_file(), "it deleted somebody's file")
+
+    def test_an_ignored_file_nothing_else_has_keeps_it(self):
+        """git's refusal covers modified and untracked files and nothing it ignores: measured
+        on a founder's repository, a tree that read clean went with 75 exported photos in it.
+        So the ignored files are asked too, and only what comes back by itself may go."""
+        tree, branch = self.a_tree()
+        self.work_in(tree)
+        self.merge(branch)
+        self.a_closed_card()
+        self.an_ignored_export(tree)
+
+        self.assertIsNone(worktree.release_mine(self.ctx(), self.session))
+        self.assertTrue((tree / "data" / "photos" / "1.jpg").is_file(), "it deleted the export")
+
+    def test_what_any_tree_grows_back_does_not_keep_it(self):
+        """Caches, bytecode, a dependency tree, and a `.env` the main checkout holds byte for
+        byte: all of it comes back on its own, and keeping the tree for it is the pile."""
+        tree, branch = self.a_tree()
+        self.work_in(tree)
+        self.merge(branch)
+        self.a_closed_card()
+        self.an_ignored_export(self.repo)
+        for rel, body in (("src/__pycache__/app.cpython-313.pyc", b"\x00"),
+                          ("node_modules/left-pad/index.js", b"module.exports = 1\n"),
+                          (".env", b"API=1\n")):
+            (tree / rel).parent.mkdir(parents=True, exist_ok=True)
+            (tree / rel).write_bytes(body)
+        (self.repo / ".env").write_bytes(b"API=1\n")
+        (tree / "data" / "photos").mkdir(parents=True, exist_ok=True)
+        (tree / "data" / "photos" / "1.jpg").write_bytes(
+            (self.repo / "data" / "photos" / "1.jpg").read_bytes())
+
+        self.assertIsNotNone(worktree.release_mine(self.ctx(), self.session))
+        self.assertFalse(tree.is_dir())
+
+    def test_the_env_this_plugin_wrote_does_not_keep_it_and_one_edited_since_does(self):
+        """`isolate_databases` writes the main checkout's `.env` on the tree's own database.
+        That copy is the plugin's to make again; a line a session added to it is not."""
+        self.an_ignored_export(self.repo, "data/kept-in-the-main-checkout.txt")
+        (self.repo / ".env").write_text(
+            "DATABASE_URL=postgresql://dev:dev@localhost:5432/shop\nAPI=1\n", encoding="utf-8")
+        self.configure(isolate_databases=True)
+        tree, branch = self.a_tree()
+        self.assertIn(worktree.derive_db_name(self.repo.name, branch.split("/", 1)[-1]),
+                      (tree / ".env").read_text(encoding="utf-8"),
+                      "precondition: the plugin seeded the tree's .env on its own database")
+        self.work_in(tree)
+        self.merge(branch)
+        self.a_closed_card()
+
+        self.assertEqual([], worktree.lost_with(self.ctx(), tree))
+        with (tree / ".env").open("a", encoding="utf-8") as handle:
+            handle.write("STRIPE_KEY=set-by-hand-in-this-tree\n")
+        self.assertEqual([".env"], worktree.lost_with(self.ctx(), tree))
+        self.assertIsNone(worktree.release_mine(self.ctx(), self.session))
 
     def test_an_uncommitted_change_keeps_it(self):
         tree, branch = self.a_tree()
@@ -337,6 +417,7 @@ class TestTheBoardNamesWhatNobodyWillComeBackTo(TreeCase):
         git(["commit", "-qm", "by hand"], tree)
         git(["merge", "--no-ff", "-q", "-m", f"merge {name}", name], self.repo)
         self.trunk()
+        self.left_alone(tree)
         return tree
 
     def test_a_merged_tree_that_is_not_ours_is_named(self):
@@ -348,7 +429,29 @@ class TestTheBoardNamesWhatNobodyWillComeBackTo(TreeCase):
         """Its commits are on no branch, so the directory is the only thing holding them."""
         tree = self.add_worktree("was-a-branch")
         git(["checkout", "-q", "--detach"], tree)
+        self.left_alone(tree)
         self.assertEqual([(str(tree), "", "")], worktree.needs_a_decision(self.ctx()))
+
+    def test_a_tree_made_a_moment_ago_is_not_named(self):
+        """Measured live: a branch cut from the trunk one second before is "already in the
+        trunk", and the board told a second session that removing the first one's tree lost
+        nothing while that session was writing into it."""
+        self.add_worktree("feat-just-started")
+        self.assertEqual([], worktree.needs_a_decision(self.ctx()))
+
+    def test_a_tree_with_uncommitted_work_is_not_called_nobodys(self):
+        tree = self.a_tree_nobody_made_for_us("half-done")
+        (tree / "src" / "hand.py").write_text("z = 4  # not committed\n", encoding="utf-8")
+        self.left_alone(tree)
+        self.assertEqual([], worktree.needs_a_decision(self.ctx()))
+
+    def test_a_tree_holding_ignored_data_is_named_as_holding_it(self):
+        """`worktree remove` takes them without a word, so "lose nothing" would be false."""
+        tree = self.a_tree_nobody_made_for_us("with-an-export")
+        self.an_ignored_export(tree)
+        self.left_alone(tree)
+        self.assertEqual([(str(tree), "with-an-export", worktree.IGNORED)],
+                         worktree.needs_a_decision(self.ctx()))
 
     def test_an_unmerged_tree_is_not(self):
         tree = self.add_worktree("still-working")
@@ -455,6 +558,7 @@ class TestTheBoardSaysIt(TreeCase):
         tree = self.add_worktree("left-behind")
         git(["merge", "--no-ff", "-q", "-m", "merge", "left-behind"], self.repo)
         self.trunk()
+        self.left_alone(tree)
         body = self.board()
         self.assertIn("TREES NOBODY IS IN", body)
         self.assertIn("left-behind", body)
@@ -505,6 +609,7 @@ class TestTheBoardSaysIt(TreeCase):
         git(["commit", "-qm", "vendor the library"], tree)
         git(["merge", "--no-ff", "-q", "-m", "merge", "with-a-submodule"], self.repo)
         self.trunk()
+        self.left_alone(tree)
 
         found = worktree.needs_a_decision(self.ctx())
 
@@ -528,6 +633,17 @@ class TestTheSweepFinishesTheJobToo(TreeCase):
 
         self.assertEqual([str(tree)], worktree.reap_unused(self.ctx(), live=set()))
         self.assertNotIn(branch, git(["branch", "--format=%(refname:short)"], self.repo))
+
+    def test_a_dead_sessions_tree_holding_ignored_data_stays_and_is_named(self):
+        tree = worktree.provision(self.ctx(), "work that shipped", "dead-session")
+        branch = git(["rev-parse", "--abbrev-ref", "HEAD"], tree)
+        self.work_in(tree)
+        self.merge(branch, squash=True)
+        self.an_ignored_export(tree)
+
+        self.assertEqual([], worktree.reap_unused(self.ctx(), live=set()))
+        self.assertTrue((tree / "data" / "photos" / "1.jpg").is_file(), "it deleted the export")
+        self.assertEqual([str(tree)], worktree.stranded(self.ctx()))
 
     def test_an_unmerged_branch_still_survives_its_session(self):
         tree = worktree.provision(self.ctx(), "work nobody merged", "dead-session")
