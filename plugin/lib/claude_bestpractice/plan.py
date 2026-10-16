@@ -343,7 +343,7 @@ MAX_SLUG_CHARS = 60
 
 
 def slug(text: str) -> str:
-    words = re.findall(r"[a-z0-9]+", text.lower())[:6]
+    words = store.ascii_words(text)[:6]
     return "-".join(words)[:MAX_SLUG_CHARS].rstrip("-") or "task"
 
 

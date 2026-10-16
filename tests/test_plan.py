@@ -1541,3 +1541,21 @@ class TestOneCardInAnotherEncodingStopsNothing(PlanCase):
         _claimed, error = plan.claim(self.ctx(), "0002", "s1", "main")
         self.assertEqual("", error)
         self.assertEqual(plan.DOING, plan.find(self.ctx(), "0002").state)
+
+
+class TestARussianTitleNamesItsFile(unittest.TestCase):
+    """A card's file name kept only the digits and Latin words of its title: 39 of one
+    board's 148 cards were `0037-task.md` or `0092-20-5-95-42-9-588.md`, because the founder
+    writes Russian. Transliterated, as branch names already were."""
+
+    def test_every_name_this_plugin_writes_transliterates_the_same_way(self):
+        from claude_bestpractice import attempts, options, worktree
+
+        title = "Почини вход через Яндекс ID"
+        self.assertEqual("pochini-vkhod-cherez-yandeks-id", plan.slug(title))
+        self.assertEqual("pochini-vkhod-cherez-yandeks-id", attempts._slug(title))
+        self.assertEqual("pochini-vkhod-cherez-yandeks-id", options._slug(title))
+        self.assertEqual("pochini-vkhod-cherez-yandeks-id", worktree.slugify(title))
+
+    def test_nothing_left_still_falls_back(self):
+        self.assertEqual("task", plan.slug("¿¡ — …"))

@@ -97,7 +97,7 @@ def options_dir(ctx: GitContext) -> Path:
 
 
 def _slug(text: str) -> str:
-    return "-".join(re.findall(r"[a-z0-9]+", text.lower())[:6]) or "comparison"
+    return "-".join(store.ascii_words(text)[:6]) or "comparison"
 
 
 def load_all(ctx: GitContext) -> list[Comparison]:

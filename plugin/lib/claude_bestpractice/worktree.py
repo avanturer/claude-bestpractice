@@ -385,35 +385,11 @@ def shared_database(ctx: GitContext) -> tuple[Path, str] | None:
     return None
 
 
-# `str.isalnum()` is true for Cyrillic, so a Russian prompt produced a Cyrillic directory
-# AND a Cyrillic branch. Git accepts both and then: the branch goes to the remote on the
-# first push, `git worktree list` prints it octal-escaped (\320\277\320\276…), and macOS
-# normalises the directory name differently from Linux, so the same repository on two
-# machines disagrees about whether the tree exists. Reported from a real run.
-#
-# Transliterated rather than dropped, because the founder writes Russian prompts and a
-# branch called `work` says nothing. Anything with no ASCII left after this falls back.
-_TRANSLIT = {
-    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh",
-    "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o",
-    "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f", "х": "kh", "ц": "ts",
-    "ч": "ch", "ш": "sh", "щ": "shch", "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu",
-    "я": "ya",
-}
-
-
 def slugify(text: str, fallback: str = "work") -> str:
-    """An ASCII, git-safe, filesystem-safe slug — or the fallback when nothing survives."""
-    out = []
-    for char in text.lower():
-        if char in _TRANSLIT:
-            out.append(_TRANSLIT[char])
-        elif char.isascii() and char.isalnum():
-            out.append(char)
-        else:
-            out.append(" ")
-    words = "".join(out).split()[:5]
-    return "-".join(words)[:60].strip("-") or fallback
+    """An ASCII, git-safe, filesystem-safe slug — or the fallback when nothing survives.
+
+    Transliterated (`store.ascii_words`), because a branch called `work` says nothing."""
+    return "-".join(store.ascii_words(text)[:5])[:60].strip("-") or fallback
 
 
 # Beside the founder's `~/.claude.json` and named as ours, so it can never be mistaken for a
