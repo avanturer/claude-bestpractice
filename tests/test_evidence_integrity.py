@@ -1194,6 +1194,21 @@ class TestTheReportTheGateAsksForIsTheOneItReads(RepoCase):
         self.assertTrue(verdict.ok, verdict.reason)
         self.assertIn("backend/junit.xml", verdict.reason)
 
+    def test_a_report_the_repository_tracks_is_no_run(self):
+        """A checkout gives a tracked file a fresh mtime. One founder's repository commits a
+        `backend/test-results.xml` from two months back, one failure in it, under a name the
+        default globs read; a passing one would read as a run nobody made."""
+        self.write("backend/test-results.xml", PASSING_REPORT)
+        self.commit("a report somebody committed")
+        verdict = self.verdict()
+        self.assertFalse(verdict.ok, verdict.reason)
+        self.assertNotIn("test-results.xml", verdict.reason)
+
+        self.write("backend/junit.xml", PASSING_REPORT)
+        verdict = self.verdict()
+        self.assertTrue(verdict.ok, verdict.reason)
+        self.assertIn("backend/junit.xml", verdict.reason)
+
     def test_one_suites_report_never_answers_for_another(self):
         from claude_bestpractice import config, evidence
 

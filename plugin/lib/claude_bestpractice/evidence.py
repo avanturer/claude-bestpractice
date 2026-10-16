@@ -928,7 +928,29 @@ def _reports(ctx: GitContext, globs: list[str], suite=None) -> list[Path]:
     found = [named.resolve()] if named.is_file() else []
     for root in dict.fromkeys((_root_of(ctx, suite), ctx.worktree_root)):
         found += find_artifacts(root, globs)
-    return sorted(dict.fromkeys(found), key=_mtime, reverse=True)
+    return sorted(_untracked(ctx, list(dict.fromkeys(found))), key=_mtime, reverse=True)
+
+
+def _untracked(ctx: GitContext, paths: list[Path]) -> list[Path]:
+    """`paths` less the files git tracks: a tracked report is the repository's, not a run's.
+
+    A checkout gives a tracked file a fresh mtime, so a `backend/test-results.xml` committed
+    two months earlier, holding one failure, read as the newest report on the suite it was
+    about, and a passing one would have read as a run nobody made.
+    """
+    from .gitctx import _run
+
+    root = ctx.worktree_root.resolve()
+    inside: dict[Path, str] = {}
+    for path in paths:
+        with contextlib.suppress(ValueError):
+            inside[path] = path.relative_to(root).as_posix()
+    if not inside:
+        return paths
+    listed = _run(["--literal-pathspecs", "ls-files", "-z", "--", *inside.values()], root,
+                  check=False)
+    tracked = set(listed.split("\0"))
+    return [path for path in paths if inside.get(path) not in tracked]
 
 
 def _mtime(path: Path) -> float:
