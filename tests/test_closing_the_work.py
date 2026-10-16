@@ -115,6 +115,27 @@ class TestAFinishedTreeRemovesItself(TreeCase):
                          worktree.release_mine(self.ctx(), self.session)[:2])
         self.assertNotIn(branch, git(["branch", "--format=%(refname:short)"], self.repo))
 
+    def test_a_branch_whose_follow_up_undoes_part_of_what_landed_stays(self):
+        """Squash-merged, then a commit on the same branch puts one of its files back. That
+        file no longer differs from where the branch began, so the net diff did not name it,
+        every file it did name was in the trunk, and the sweep any sibling's release runs
+        took the only commit holding the revert with `-D`. Measured against 2.3.0."""
+        beside = self.repo.parent / "wt-pricing"
+        git(["worktree", "add", "-q", "-b", "fix/pricing", str(beside)], self.repo)
+        (beside / "src" / "app.py").write_text("x = 2\n", encoding="utf-8")
+        (beside / "src" / "rounding.py").write_text("MODE = 'up'\n", encoding="utf-8")
+        git(["add", "-A"], beside)
+        git(["commit", "-qm", "price and round"], beside)
+        self.merge("fix/pricing", squash=True)
+        (beside / "src" / "app.py").write_text("x = 1\n", encoding="utf-8")
+        git(["commit", "-qam", "put the price back"], beside)
+        git(["worktree", "remove", str(beside)], self.repo)
+
+        worktree.reap_merged_branches(self.ctx())
+
+        self.assertIn("fix/pricing", git(["branch", "--format=%(refname:short)"], self.repo),
+                      "a commit no trunk holds went with the branch")
+
     def test_a_tree_a_live_session_stands_in_is_kept_though_its_maker_is_gone(self):
         """`/clear` gives the conversation a new id, and the tree's record still names the one
         that made it. The sweep asked only whether THAT session was live, so the first sibling

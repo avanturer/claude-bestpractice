@@ -1069,8 +1069,15 @@ def _delivers_the_same_bytes(where: Path, branch: str, trunk: str) -> bool:
 
     A branch that delivers no file proves nothing and is never claimed: that is a branch
     with commits git can still see and this cannot read.
+
+    Every file any of its commits touched, not only what its tip changed. Squash-merged and
+    then given a commit putting one of its files back, a branch no longer changed that file,
+    so the net diff did not name it, and `-D` took the only commit holding the revert.
     """
-    delivered = _git_lines(where, ["diff", "--no-renames", "--name-only", f"{trunk}...{branch}"])
+    delivered = set(_git_lines(where, ["diff", "--no-renames", "--name-only",
+                                       f"{trunk}...{branch}"]))
+    delivered |= {line for line in _git_lines(where, ["log", "--no-renames", "--name-only",
+                                                      "--format=", f"{trunk}..{branch}"]) if line}
     if not delivered:
         return False
     differs = subprocess.run(
