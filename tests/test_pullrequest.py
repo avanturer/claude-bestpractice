@@ -2656,7 +2656,9 @@ class TestAPullRequestOpenedInAShellIsMergedByItsNumber(PRCase):
         self.accept()
         proc = self.tool("Bash", {"command": "gh pr merge 99 --squash"})
         said = self.reason(proc)
-        self.assertIn("no `+merge` from the founder is on record", said)
+        self.assertEqual("deny", self.decision(proc))
+        self.assertIn(f"the founder's `+merge` on record names #{PRCase.PR_NUMBER}, and not this "
+                      "merge: no open pull request on record here is this one", said)
         self.assertNotIn("is not a pull request this clone knows by number", said)
 
     def test_a_number_another_session_learned_is_not_explained_away(self):
@@ -2675,8 +2677,58 @@ class TestAPullRequestOpenedInAShellIsMergedByItsNumber(PRCase):
         })
         self.accept()
         said = self.reason(self.tool("Bash", {"command": "gh pr merge 77 --squash"}))
-        self.assertIn("no `+merge` from the founder is on record", said)
+        self.assertIn("names feat/x, and not this merge: it was opened by", said)
+        self.assertIn("not this chat", said)
         self.assertNotIn("is not a pull request this clone knows by number", said)
+
+
+class TestARefusalSaysWhatTheWordOnRecordNames(PRCase):
+    """#272. #967 was refused with "no `+merge` from the founder is on record" after every
+    `+merge` the founder sent, beside a word that named the chat's other pull requests. The
+    refusal says what the word names now, and why this merge is not among it."""
+
+    def green(self) -> None:
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+
+    def merging(self, number: int) -> str:
+        proc = self.tool("Bash", {"command": f"gh pr merge {number} --squash"})
+        self.assertEqual("deny", self.decision(proc))
+        return self.reason(proc)
+
+    def test_one_opened_after_the_word(self):
+        self.green()
+        self.open_a_pr()
+        self.accept()
+        self.open_pr(49, "feat/y")
+        said = self.merging(49)
+        self.assertIn(f"names #{self.PR_NUMBER}, and not this merge: it was opened, or marked "
+                      "ready, after the founder said it", said)
+        self.assertNotIn("no `+merge` from the founder is on record", said)
+
+    def test_one_that_was_a_draft_when_they_spoke(self):
+        self.green()
+        self.open_a_pr()
+        tool_input = {"owner": "o", "repo": "r", "title": "t", "head": "feat/y", "base": "main",
+                      "draft": True}
+        self.tool("mcp__github__create_pull_request", tool_input)
+        self.gate("pr-opened", {
+            "session_id": "s1", "hook_event_name": "PostToolUse",
+            "tool_name": "mcp__github__create_pull_request", "tool_input": tool_input,
+            "tool_response": {"url": "https://github.com/o/r/pull/49"},
+        })
+        self.accept()
+        self.assertIn("it is recorded as a draft", self.merging(49))
+
+    def test_one_the_record_calls_merged(self):
+        self.green()
+        self.open_a_pr()
+        self.open_pr(50, "feat/z")
+        pullrequest.settle(self.ctx(), "feat/z", pullrequest.MERGED)
+        self.accept()
+        self.assertIn("#50 is recorded here as merged on feat/z", self.merging(50))
 
 
 class TestTheWordReachesWhatTheChatOpenedBeforeARestart(PRCase):

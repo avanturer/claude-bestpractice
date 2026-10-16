@@ -1710,6 +1710,53 @@ def unplaced(ctx: GitContext, number: int, session_id: str) -> str:
     )
 
 
+def uncovered(ctx: GitContext, record: dict[str, Any] | None, number: int,
+              session_id: str) -> str:
+    """What the founder's word on record names, and why this merge is not among it. "" when no
+    word naming pull requests is on record.
+
+    The refusal said "no `+merge` from the founder is on record" for any merge the word did not
+    cover, beside a word naming three other pull requests. #967 was refused that way after
+    every `+merge` sent, and nothing said what the word did name, or why #967 was not in it
+    (#272).
+    """
+    pooled = _pool(ctx)
+    if not pooled:
+        return ""
+    open_now = {_entry(row): row for row in outstanding(ctx)}
+    names = [_called(open_now.get(entry), entry) for entry in pooled]
+    shown = ", ".join(names[:4]) + (f" and {len(names) - 4} more" if len(names) > 4 else "")
+    return (f"the founder's `+merge` on record names {shown}, and not this merge: "
+            f"{_why_not_named(ctx, record, number, session_id)}.")
+
+
+def _called(record: dict[str, Any] | None, entry: str) -> str:
+    """A pull request the word names, by number where this clone learned it."""
+    number = _as_number((record or {}).get("number"))
+    return f"#{number}" if number else entry.rsplit("@", 1)[0]
+
+
+def _why_not_named(ctx: GitContext, record: dict[str, Any] | None, number: int,
+                   session_id: str) -> str:
+    """Why a `+merge` naming the chat's open pull requests did not name this one."""
+    if record is None:
+        settled = next((row for row in _records(ctx).values()
+                        if number and _as_number(row.get("number")) == number), None)
+        if settled is not None:
+            return (f"#{number} is recorded here as {settled.get('state')} on "
+                    f"{settled.get('branch')}, so nothing open carried it")
+        return "no open pull request on record here is this one"
+    if record.get("draft"):
+        return "it is recorded as a draft, and a `+merge` names no paused work"
+    if not _the_chats(ctx, session_id)(record.get("session_id")):
+        from . import sessions
+
+        opener = str(record.get("session_id") or "")
+        return (f"it was opened by {sessions.called(ctx, opener)}, not this chat"
+                if opener else "it was found on GitHub, opened by no session here")
+    return "it was opened, or marked ready, after the founder said it"
+
+
 def acceptance(ctx: GitContext, record: dict[str, Any] | None) -> str:
     """How the founder's word covers merging `record`: `POOLED`, `ONCE`, or "" when it does not."""
     if record is not None and _entry(record) in _pool(ctx):

@@ -1622,11 +1622,17 @@ def main() -> None:
                 unplaced = pullrequest.unplaced(ctx, number, event.session_id)
                 if unplaced:
                     deny(ctx, rec, unplaced)
+                # And it may name other pull requests and not this one, which the refusal
+                # called no word at all: #967 was refused that way after every `+merge` (#272).
+                why = pullrequest.uncovered(ctx, named, number, event.session_id)
+                waited = f"{config.acceptance_grace():.0f} seconds this gate waited for one"
                 deny_for_founder(
                     ctx, rec,
-                    "claude-bestpractice: no `+merge` from the founder is on record for this "
-                    f"merge, and none arrived in the {config.acceptance_grace():.0f} seconds this "
-                    "gate waited for one. Passing checks mean the code works, not that the "
+                    "claude-bestpractice: "
+                    + (f"{why} No word that covers it arrived in the {waited}." if why else
+                       "no `+merge` from the founder is on record for this merge, and none "
+                       f"arrived in the {waited}.")
+                    + " Passing checks mean the code works, not that the "
                     "work is wanted — and main deploys, so merging is a step towards "
                     "shipping it.\n"
                     "  If their last message already says `+merge`, do not ask them for it "
