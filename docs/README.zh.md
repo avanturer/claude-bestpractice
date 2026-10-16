@@ -4,7 +4,7 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-2.4.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.4.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-2541%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
@@ -232,7 +232,7 @@ setup、teardown 或收集阶段，且没有任何断言失败——会被单独
 +merge
 ```
 
-因冲突或检查而失败的合并会为重试保留你的这句话：只有在合并真正完成之后，它才会被用掉，PR 和它的卡片才会关闭；`--auto` 会用掉这句话，但 PR 保持打开，直到它进入主干。
+因冲突或检查而失败的合并会为重试保留你的这句话：只有在合并真正完成之后，它才会被用掉，PR 和它的卡片才会关闭；`--auto` 会用掉这句话，但 PR 保持打开，直到它进入主干，通过 GitHub 工具开启的自动合并也一样。执行合并的那一行只合并一个 PR——按编号、按链接或不写——其余命令只能用 `&&` 连接：一行里两次合并、写在循环里或 `sh -c` 后面的合并、管道接到 `tail` 的合并都会被拒绝，并把这次合并单独写成一条命令。你的这句话没有覆盖的合并，闸门会列出它覆盖了哪些 PR，以及这一个为什么不在其中。一个分支若没有任何自己的东西——每个提交都已在主干里（按补丁或按内容），或在另一个 PR 的分支上，比如集成分支——就不会被要求开 PR。
 
 发布是根据一行命令实际运行的程序来识别的：`vercel --prod`、`fly deploy`、`eas update --channel production`，或名字里带 deploy 且指明生产环境的脚本。项目自己的发布方式两者都不提，所以请在 `config.json` 里按该行运行它时的名字声明它，即 make 目标或脚本：`"release_commands": ["mobile-ota", "deploy_standalone.sh"]`。这样它也会等待 `+release`。
 

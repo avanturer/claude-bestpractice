@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-2.4.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.4.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-2541%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -281,7 +281,11 @@ the word or another chat's. Each is judged as itself, from whichever tree the me
 `cd <tree> && gh pr merge` is that tree's pull request, not the one the session stands on.
 A merge that fails on a conflict or a check keeps your word for its retry: it is spent, and
 the pull request and its cards are closed, only once the merge has run; `--auto` spends it
-and leaves the pull request open until it lands.
+and leaves the pull request open until it lands, and so does auto-merge through the GitHub
+tool. A line that merges runs one merge, named by number, URL or nothing and joined to the
+rest with `&&` only: two merges on one line, a merge in a loop or behind `sh -c`, or one piped
+into `tail` is refused with the merge written out to run on its own. A merge your word does
+not cover is told which pull requests it does cover, and why this one is not among them.
 Say it from the terminal or the phone, between turns or in the middle of one: a message sent
 while the session works reaches no hook, so the gate reads it back from the conversation's
 transcript before it refuses — and a session may not write that transcript.
@@ -310,7 +314,9 @@ crashing, or hitting the escalation ceiling cannot turn a reminder into a wedge.
 is on the board, it is not asked for, and a `+merge` said about the finished ones does not
 reach it. Nor is a pull request opened where no hook here saw it — from a terminal, the
 website or another clone — taken for none: before the Stop gate says a branch has no pull
-request, it asks GitHub once through `gh`, and records the one it finds.
+request, it asks GitHub once through `gh`, and records the one it finds. A branch that carries
+nothing of its own — every commit already in the trunk, by patch or by content, or on another
+pull request's branch, as an integration branch is — is asked for none.
 
 ### Closing the work, not just doing it
 
@@ -334,9 +340,11 @@ it when no other working tree points at it, and the local branches beside it who
 already in the trunk — the `fix/` and `docs/` ones a session opens over an afternoon, which
 belong to no tree and so survived every tree-shaped sweep. And `git worktree remove` on the
 tree a session is standing in is performed by the gate from the main checkout instead of by
-the shell: run in the shell it deletes that shell's own directory, after which Claude Code
-refuses every git call in the session as isolated in a worktree that no longer exists, and
-none of the cleanup above can happen.
+the shell, whoever made the tree: run in the shell it deletes that shell's own directory, and
+none of the cleanup above can happen. A session that entered the tree with `EnterWorktree` is
+then still held there by Claude Code, which refuses every git call aimed anywhere else, so the
+gate names the way out — `ExitWorktree` with `keep` — and the Stop gate that removes the tree a
+shell stands in asks for it before the turn ends.
 
 A tree another tool created is never removed, because that is not a plugin's call. It is
 **named** instead, with the command — as is a branch carrying commits that no pull request
