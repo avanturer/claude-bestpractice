@@ -1429,6 +1429,32 @@ class TestEvidenceGate(GateCase):
         proc = self.stop()
         self.assertNotIn("Nothing on the board", proc.stderr)
 
+    def test_a_branch_squash_merged_on_the_remote_is_not_demanded(self):
+        """A squash rewrites the commits, so the branch is an ancestor of nothing, and the merge
+        happens on GitHub, so the clone's own `main` has not moved. Asked of both, finished work
+        was "commits the trunk does not have": measured live, a session that claimed, merged on
+        the founder's `+merge` and closed its card was refused for having no card, and filed
+        UNVERIFIED over work already on the trunk. Settled by the repository's one definition
+        of landed work, against the remote trunk, by ancestry or by content."""
+        from helpers import add_origin, another_clone
+
+        self.start()
+        self.write("base.py", "x = 0\n")
+        self.commit("shared history")
+        origin = add_origin(self.repo, self.tmp)
+        git(["switch", "-qc", "feat/squashed"], self.repo)
+        self.write("feature.py", "x = 1\n")
+        self.write("junit.xml", JUNIT_PASS)
+        self.commit("work only this branch has")
+        git(["push", "-q", "origin", "feat/squashed"], self.repo)
+        other = another_clone(origin, self.tmp / "github")
+        git(["merge", "--squash", "-q", "origin/feat/squashed"], other)
+        git(["commit", "-qm", "the work (#1)"], other)
+        git(["push", "-q", "origin", "HEAD:main"], other)
+        git(["fetch", "-q", "origin"], self.repo)
+
+        self.assertNotIn("Nothing on the board", self.stop().stderr)
+
     def test_uncommitted_work_is_still_demanded(self):
         """The narrowing must not let a session edit files invisibly — which is the whole
         reason the demand exists."""

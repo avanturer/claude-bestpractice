@@ -450,13 +450,22 @@ def _work_the_siblings_cannot_see(ctx) -> bool:
     Fails LOUD, not quiet: if the base cannot be determined the demand stands, because a
     gate that stands down whenever it is unsure is one that stands down in every unusual
     repository.
+
+    Commits the clone's own trunk lacks are asked once more, of `pullrequest.landed`: a squash
+    leaves the branch an ancestor of nothing, and a merge on GitHub leaves the clone's `main`
+    where it was. Measured live, a session that claimed, merged on the founder's word and
+    closed its card was refused here over work the remote trunk already held, byte for byte.
     """
     from claude_bestpractice import delivery, gitpolicy
 
     base = gitpolicy.default_branch(ctx)
     if not base:
         return True
-    return bool(delivery.commits_since(ctx, base)) or delivery.dirty(ctx)
+    if delivery.dirty(ctx):
+        return True
+    if not delivery.commits_since(ctx, base):
+        return False
+    return not pullrequest.landed(ctx, {"branch": ctx.branch, "base": base})
 
 
 def _card_commands(ctx, event, paths: list[str]) -> str:
