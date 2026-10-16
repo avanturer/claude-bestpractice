@@ -514,15 +514,46 @@ def _landed(ctx, absolute: list[Path]) -> list[tuple[Path, str]]:
     home = worktree.HOME.parts
     inside = len(home) + 1
     out: list[tuple[Path, str]] = []
+    elsewhere: list[Path] = []
     for path in absolute:
         try:
             parts = path.relative_to(root).parts
         except ValueError:
+            elsewhere.append(path)
             continue
         if parts[:len(home)] == home and len(parts) > inside:
             out.append((root.joinpath(*parts[:inside]), "/".join(parts[inside:])))
         else:
             out.append((root, "/".join(parts)))
+    return out + _in_other_trees(ctx, root, elsewhere)
+
+
+def _lands_beside(ctx, absolute: list[Path]) -> bool:
+    """Does any of these writes land in another working tree of this repository?"""
+    root = ctx.worktree_root.resolve()
+    return any(tree != root for tree, _rel in _landed(ctx, absolute))
+
+
+def _in_other_trees(ctx, root: Path, paths: list[Path]) -> list[tuple[Path, str]]:
+    """The writes among `paths` that land in another working tree of this repository.
+
+    A tree beside the checkout, `git worktree add ../shop-x`, is outside it, so a write
+    there from the checkout was no write at all to the card demand: a session made one,
+    wrote a feature into it with `cd ../shop-x && cat > …` and never had a card asked of it.
+    The innermost tree holding a path is the one it lands in.
+    """
+    if not paths:
+        return []
+    trees = sorted((tree for tree in gitpolicy.working_trees(ctx) if tree != root),
+                   key=lambda tree: len(tree.parts), reverse=True)
+    out: list[tuple[Path, str]] = []
+    for path in paths:
+        for tree in trees:
+            try:
+                out.append((tree, "/".join(path.relative_to(tree).parts)))
+            except ValueError:
+                continue
+            break
     return out
 
 
@@ -2101,7 +2132,9 @@ def main() -> None:
         # of a case that could not be reproduced. The half of #141 that IS proven is the
         # shell one above; a session whose first prompt was a paste still gets the Stop
         # demand, and is the narrow case left open deliberately.
-        if cfg.require_task and rec.task_statement and writing_now:
+        # `writing_now` holds only this tree's paths, so a write into a tree beside the
+        # checkout is asked of `_landed` as well.
+        if cfg.require_task and rec.task_statement and (writing_now or _lands_beside(ctx, absolute)):
             unlisted = _unlisted(ctx, event.session_id, absolute)
             if unlisted:
                 deny(

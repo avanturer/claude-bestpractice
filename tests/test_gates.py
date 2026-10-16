@@ -1922,6 +1922,29 @@ class TestTheBoardIsDemandedBeforeAShellWrite(RepoCase):
         self.assertEqual("deny", self.decision(self.writing("D=src; sed -i 's/a/b/' $D/billing.js")),
                          "a variable naming a file of the repository hid it from the board")
 
+    def test_a_write_into_a_tree_beside_the_checkout_is_owed_its_card(self):
+        """Measured live: a session made `../shop-x` with `git worktree add`, wrote a feature
+        into it from the checkout with `cd ../shop-x && cat > …`, and was never asked for a
+        card. The tree is outside the checkout, so its writes were no writes at all."""
+        beside = self.tmp / "shop-x"
+        git(["worktree", "add", "-q", "-b", "feat/x", str(beside)], self.repo)
+        self.working_on()
+        calls = {
+            "a heredoc after a cd": ("Bash", {"command": f"cd {beside} && cat > src/billing.js "
+                                                         "<<'EOF'\nx = 1\nEOF"}),
+            "a sed by path": ("Bash", {"command": f"sed -i 's/a/b/' {beside}/src/billing.js"}),
+            "the Write tool": ("Write", {"file_path": f"{beside}/src/billing.js", "content": "x"}),
+        }
+        for what, (tool, tool_input) in calls.items():
+            proc = self.run_hook("pre-tool", {"session_id": "s1", "hook_event_name": "PreToolUse",
+                                              "tool_name": tool, "tool_input": tool_input})
+            self.assertEqual("deny", self.decision(proc), what)
+            self.assertIn("working on src/billing.js", proc.stdout, what)
+
+        self.claim_a_task("s1", "src/billing.js")
+        self.assertNotEqual("deny", self.decision(
+            self.writing(f"sed -i 's/a/b/' {beside}/src/billing.js")))
+
 
 if __name__ == "__main__":
     unittest.main()
