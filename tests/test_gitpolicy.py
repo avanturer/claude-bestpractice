@@ -1365,6 +1365,23 @@ class TestCommitMessages(PolicyCase):
         self.assertEqual(decision, "deny")
         self.assertIn("conventional commit", reason)
 
+    def test_the_subject_git_writes_for_a_merge_or_a_revert_is_its_own_convention(self):
+        """Measured live: a session that took the trunk in, as this plugin orders, resolved
+        the conflict and committed git's own `Merge origin/main into feat/…` — and was refused
+        for it, then rewrote a merge commit as `chore(pricing): merge main …`. These subjects
+        are the ones git and GitHub write; commitlint leaves them alone for the same reason,
+        and `conventional()` already reads the log with `--no-merges`."""
+        self.a_conventional_history()
+        for subject in ("Merge origin/main into feat/apply-discount",
+                        "Merge branch 'main' into feat/apply-discount",
+                        "Merge remote-tracking branch 'origin/main' into feat/x",
+                        "Merge pull request #12 from founder/feat-x",
+                        'Revert "feat(api): add the parser"'):
+            with self.subTest(subject=subject):
+                self.assertEqual(self.commit(f"git commit -m {shlex.quote(subject)}")[0], "allow")
+        self.assertEqual(self.commit('git commit -m "Merge some stuff together"')[0], "deny",
+                         "only git's own shape, not any subject that starts with Merge")
+
     def test_a_repository_with_no_convention_is_not_given_one(self):
         """#215. A scratch repository with one prose commit was refused `git commit -m "add
         the parser"` over a convention nobody in it had ever used and nobody had asked for.

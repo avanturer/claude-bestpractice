@@ -658,6 +658,17 @@ CONVENTIONAL = re.compile(
     r"^(?:build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(?:\([\w./-]+\))?!?: .{6,}"
 )
 
+# The subjects git and GitHub write themselves, which commitlint ignores for the same reason
+# `conventional()` reads the log with `--no-merges`: a session concluding the merge of the
+# trunk this plugin ordered was refused for git's own `Merge origin/main into feat/…`.
+# The shapes exactly, so that "Merge some stuff" is still a prose subject.
+GENERATED = re.compile(
+    r"^(?:Merge (?:branch|remote-tracking branch|tag|commit) '[^']+'(?: of \S+)?(?: into \S+)?"
+    r"|Merge \S+ into \S+"
+    r"|Merge pull request #\d+ from \S+"
+    r'|Revert ".+")$'
+)
+
 MIN_SUBJECT_CHARS = 15
 MAX_SUBJECT_CHARS = 72
 
@@ -1036,7 +1047,7 @@ def message_complaint(message: str, conventional: bool = True) -> str:
             f"the subject is {len(subject)} characters. Keep it under {MAX_SUBJECT_CHARS} "
             "and put the detail in a body after a blank line."
         )
-    if conventional and not CONVENTIONAL.match(subject):
+    if conventional and not CONVENTIONAL.match(subject) and not GENERATED.match(subject):
         return (
             f"{subject!r} is not a conventional commit. Use `type(scope): summary` — "
             "feat, fix, docs, refactor, perf, test, build, ci, chore. It is machine-readable, "
