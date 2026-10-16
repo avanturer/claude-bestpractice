@@ -115,6 +115,22 @@ class TestAFinishedTreeRemovesItself(TreeCase):
                          worktree.release_mine(self.ctx(), self.session)[:2])
         self.assertNotIn(branch, git(["branch", "--format=%(refname:short)"], self.repo))
 
+    def test_a_tree_a_live_session_stands_in_is_kept_though_its_maker_is_gone(self):
+        """`/clear` gives the conversation a new id, and the tree's record still names the one
+        that made it. The sweep asked only whether THAT session was live, so the first sibling
+        to start removed the tree the conversation was working in. Measured against 2.3.0."""
+        from claude_bestpractice import sessions
+        from claude_bestpractice.gitctx import resolve
+
+        from helpers import session_record_for
+
+        tree, _branch = self.a_tree()
+        self.work_in(tree)
+        sessions.register(self.ctx(), session_record_for(resolve(tree), "after-clear"))
+
+        self.assertEqual([], worktree.reap_unused(self.ctx(), {sid(self.repo, "a-sibling")}))
+        self.assertTrue(tree.is_dir(), "the tree a live session stood in was removed")
+
     def test_the_registry_entry_goes_with_it(self):
         tree, branch = self.a_tree()
         self.work_in(tree)

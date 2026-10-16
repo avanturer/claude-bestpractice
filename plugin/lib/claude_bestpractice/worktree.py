@@ -998,6 +998,13 @@ def _abandoned(ctx: GitContext, body: dict, live: set) -> tuple | None:
     tree = str(body.get("path") or "")
     if not tree or Path(tree).resolve() == ctx.worktree_root.resolve():
         return None
+    # The record names the session that made the tree, and `/clear` gives the conversation
+    # standing in it a new id: asked only about its maker, the first sibling to start
+    # removed the tree a conversation was working in.
+    from . import gitpolicy
+
+    if gitpolicy.stood_in(ctx, Path(tree).resolve()):
+        return None
     return tree, str(body.get("branch") or "")
 
 

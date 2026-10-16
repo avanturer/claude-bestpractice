@@ -331,6 +331,12 @@ def _occupants(ctx: GitContext, tree: Path, session_id: str = "") -> list | None
     return found
 
 
+def stood_in(ctx: GitContext, tree: Path) -> bool:
+    """Is a live session standing in `tree`? True where the registry cannot say."""
+    occupants = _occupants(ctx, tree)
+    return occupants is None or bool(occupants)
+
+
 def only_this_chat_in(ctx: GitContext, tree: Path, session_id: str) -> bool:
     """Is everybody standing in `tree` this session's own chat, as far as anything can tell?
 
