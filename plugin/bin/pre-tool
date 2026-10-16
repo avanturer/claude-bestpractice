@@ -1414,6 +1414,11 @@ def main() -> None:
         # in this file switch off for any session whose record went missing, so the
         # secret scan and the leases could be disabled with `rm`.
         rec = sessions.adopt(ctx, event.session_id)
+    else:
+        # And a record whose stamp is a process from before a restart is this session's
+        # all the same: its own hook is running. Left as it was, every sibling read the
+        # live chat as dead and its card as theirs to take.
+        rec = sessions.restamped(ctx, rec)
 
     # What another session needed this one to know, delivered into this session's own
     # inbox before the call it is about to make. The board is injected once at session

@@ -492,6 +492,31 @@ class TestTheWatchedProcessIsTheRightOne(RepoCase):
         self.assertEqual(0, out.returncode, f"the `claude` shim did not run: {out.stderr}")
         return out.stdout.strip()
 
+    def test_a_hook_under_the_cli_stamps_a_record_its_last_process_left(self):
+        """Driven the way the harness spawns a hook. A resumed chat whose SessionStart ran
+        outside this clone kept its previous boot's stamp, and read as dead to every sibling
+        while its own hooks kept running."""
+        ctx = self.ctx()
+        me = sid(self.repo, "resumed")
+        sessions.register(ctx, record(ctx, me))
+        stale = sessions.get(ctx, me)
+        if not (stale.boot_id and stale.pid_fingerprint):
+            self.skipTest("the kernel names neither the boot nor a start time here")
+        stale.boot_id, stale.pid_fingerprint = "a-boot-that-is-over", "1"
+        store.write_json(store.tier_b(ctx, sessions.SESSIONS_DIR, f"{sessions.safe_id(me)}.json"),
+                         stale.to_dict())
+        # Handed over in a file: the shim runs its body through `sh -c` in single quotes.
+        given = self.tmp / "event.json"
+        given.write_text(json.dumps({"session_id": "resumed", "hook_event_name": "PreToolUse",
+                                     "tool_name": "Bash", "tool_input": {"command": "git status"},
+                                     "cwd": str(self.repo)}), encoding="utf-8")
+        self._shim(f'import subprocess,sys;subprocess.run([sys.executable,"{BIN / "pre-tool"}"],'
+                   f'stdin=open("{given}"),capture_output=True,cwd="{self.repo}")')
+        after = sessions.get(ctx, me)
+        self.assertEqual(sessions.current_boot(), after.boot_id)
+        self.assertEqual(sessions.PID_TRUST_OWNER, after.pid_trust)
+        self.assertNotEqual("1", after.pid_fingerprint)
+
     def test_the_owner_is_found_through_the_shell_that_spawned_the_hook(self):
         probe = (
             "import os,sys;from claude_bestpractice import sessions;"
@@ -852,6 +877,56 @@ def backdate(ctx, session_id: str, seconds: float) -> None:
     raw = store.read_json(path)
     raw["heartbeat_at"] = time.time() - seconds
     store.write_json(path, raw)
+
+
+class TestAHookStampsTheSessionItRunsFor(RepoCase):
+    """A chat resumed after its machine restarted kept the record its previous process had
+    stamped: the boot that was over, that CLI's start time. Its SessionStart ran in the home
+    directory, outside the clone, so nothing stamped it again, and every sibling read the live
+    chat as dead: its card on the board "held by …, which is gone — reclaimable". Found on this
+    repository's own session, under 2.3.0."""
+
+    def stale(self) -> sessions.SessionRecord:
+        """This process's record, as the process before a restart left it."""
+        ctx = self.ctx()
+        sessions.register(ctx, record(ctx, "resumed"))
+        rec = sessions.get(ctx, "resumed")
+        if not (rec.boot_id and rec.pid_fingerprint):
+            self.skipTest("the kernel names neither the boot nor a start time here")
+        rec.boot_id, rec.pid_fingerprint = "a-boot-that-is-over", "1"
+        store.write_json(store.tier_b(ctx, sessions.SESSIONS_DIR, "resumed.json"), rec.to_dict())
+        self.assertFalse(sessions.is_live(ctx, rec), "precondition: it reads as dead")
+        return rec
+
+    def owner(self, pid: int, trust: str = sessions.PID_TRUST_OWNER):
+        return mock.patch.object(sessions, "resolve_owner", return_value=(pid, trust))
+
+    def test_its_own_hook_stamps_it_alive(self):
+        rec = self.stale()
+        with self.owner(os.getpid()):
+            sessions.restamped(self.ctx(), rec)
+        after = sessions.get(self.ctx(), "resumed")
+        self.assertEqual((os.getpid(), sessions.current_boot()), (after.pid, after.boot_id))
+        self.assertTrue(sessions.is_live(self.ctx(), after))
+
+    def test_a_hook_that_cannot_name_its_cli_changes_nothing(self):
+        """A parent pid is the hook's own shell, and proves nothing about who is alive."""
+        rec = self.stale()
+        with self.owner(os.getppid(), sessions.PID_TRUST_PARENT):
+            sessions.restamped(self.ctx(), rec)
+        self.assertEqual("a-boot-that-is-over", sessions.get(self.ctx(), "resumed").boot_id)
+
+    def test_a_record_its_own_process_still_holds_is_not_taken_over(self):
+        """A `claude -p` the chat started carries the same id: its hooks must not pull the
+        record away from the CLI that registered it, and back again on the next call."""
+        ctx = self.ctx()
+        sessions.register(ctx, record(ctx, "held"))
+        held = sessions.get(ctx, "held")
+        child = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(child.kill)
+        with self.owner(child.pid):
+            sessions.restamped(ctx, held)
+        self.assertEqual(os.getpid(), sessions.get(ctx, "held").pid)
 
 
 class TestAWeekendAwayIsNotADeath(RepoCase):
