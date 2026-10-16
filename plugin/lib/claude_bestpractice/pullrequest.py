@@ -1031,12 +1031,13 @@ def missing(ctx: GitContext) -> tuple[str, bool] | None:
     whether GitHub was asked). None when nothing is missing.
 
     Nothing is when one is on record, when it was already demanded, when the branch is not
-    ready to open one — or when GitHub has one open, which is then recorded here so the
-    board carries it and the Stop gate treats it as any other. The record only knows the
-    pull requests a hook in this clone saw opened, and one opened in a terminal, on the
-    website or from another clone was answered with "no pull request against main" and an
-    order to open a second one (#239). Asked once per branch, and only here, where the
-    alternative is a demand.
+    ready to open one, when everything it carries the trunk or another branch already holds
+    (#274) — or when GitHub has one open, which is then recorded here so the board carries
+    it and the Stop gate treats it as any other. The record only knows the pull requests a
+    hook in this clone saw opened, and one opened in a terminal, on the website or from
+    another clone was answered with "no pull request against main" and an order to open a
+    second one (#239). Asked once per branch, and only here, where the alternative is a
+    demand.
     """
     branch = ctx.branch
     if known(ctx, branch) or demanded(ctx, branch):
@@ -1044,7 +1045,7 @@ def missing(ctx: GitContext) -> tuple[str, bool] | None:
     from . import delivery, gitpolicy
 
     base = gitpolicy.default_branch(ctx) or "main"
-    if delivery.ready(ctx, base):
+    if delivery.ready(ctx, base) or not delivery.carries_its_own(ctx, base):
         return None
     listed = on_github(ctx, branch)
     if not listed:

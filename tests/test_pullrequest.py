@@ -11,8 +11,8 @@ import time
 import unittest
 from unittest import mock
 
-from helpers import (BIN, RepoCase, a_gate_underway, answer_of, git, harness_matches,
-                     real_acceptance_grace, session_record_for, sid)
+from helpers import (BIN, RepoCase, a_gate_underway, add_origin, another_clone, answer_of,
+                     git, harness_matches, real_acceptance_grace, session_record_for, sid)
 
 from claude_bestpractice import board, evidence, pullrequest, store
 
@@ -450,6 +450,92 @@ class TestFinishedWorkWithNoPullRequestIsDemanded(PRCase):
         pullrequest.settle(self.ctx(), "feat/x", pullrequest.MERGED)
         proc = self.stop()
         self.assertNotIn("Open it now", proc.stderr)
+
+
+class TestWorkOtherPullRequestsCarryIsNotDemandedAgain(PRCase):
+    """#274. An integration branch: two pull requests squash-merged on the remote trunk, a third
+    still open, all three merged together to look at them in one build. Every commit on it was
+    already in the trunk or in an open pull request, and the Stop gate ordered a pull request
+    for it, which opened as told is a duplicate of all three."""
+
+    def stop(self):
+        return self.gate("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                           "stop_hook_active": False})
+
+    # Where every branch here is cut: the trunk before any of them landed.
+    SEED = "seed-of-the-branches"
+
+    def branch(self, name: str, *writes: tuple[str, str]) -> None:
+        """`name` cut from the seed, one commit per write."""
+        git(["checkout", "-q", "-b", name, self.SEED], self.repo)
+        for rel, text in writes:
+            self.write(rel, text)
+            self.commit(f"{name}: write {rel}")
+
+    def integrated(self) -> None:
+        """feat/x merging A (two commits, squashed), B (one, squashed) and C (open).
+
+        Squashed where GitHub squashes, in another clone, with the merged branches deleted and
+        this clone's `main` left where it was. The trunk then changes B's file again, so B's
+        commit is known to be in the trunk by its patch alone: the content no longer matches.
+        """
+        origin = add_origin(self.repo, self.tmp)
+        git(["tag", self.SEED, "main"], self.repo)
+        self.branch("a", ("src/a.py", "a = 1\n"), ("src/a.py", "a = 2\n"))
+        self.branch("b", ("src/b.py", "b = 1\n"))
+        self.branch("c", ("src/c.py", "c = 1\n"))
+        git(["push", "-q", "origin", "a", "b", "c"], self.repo)
+        github = another_clone(origin, self.tmp / "github")
+        for name in ("a", "b"):
+            git(["merge", "-q", "--squash", f"origin/{name}"], github)
+            git(["commit", "-qm", f"land {name} as one squash"], github)
+        (github / "src" / "b.py").write_text("b = 2\n", encoding="utf-8")
+        git(["commit", "-qam", "move the trunk on past both squashes"], github)
+        git(["push", "-q", "origin", "main", ":a", ":b"], github)
+        git(["fetch", "-q", "--prune", "origin"], self.repo)
+        git(["checkout", "-q", "feat/x"], self.repo)
+        for name in ("a", "b", "c"):
+            git(["merge", "-q", "--no-edit", name], self.repo)
+        evidence.record_green(self.ctx(), ["pytest"])
+
+    def test_a_branch_of_merged_and_open_work_is_not_asked_for_a_pull_request(self):
+        self.integrated()
+        self.start()
+        self.assertNotIn("Open it now", self.stop().stderr)
+
+    def test_a_commit_of_its_own_on_top_still_is(self):
+        """The control: what only this branch has is still owed a pull request."""
+        self.integrated()
+        self.write("src/mine.py", "mine = 1\n")
+        self.commit("add the module only this branch has")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+        self.assertIn("Open it now", self.stop().stderr)
+
+    def test_a_merge_that_changes_something_of_its_own_is_owed_one(self):
+        """A merge carries nothing but the change no parent has, and that change is work.
+        What it merges is another pull request's, so the change is all that is its own."""
+        self.integrated()
+        self.branch("d", ("src/d.py", "d = 1\n"))
+        git(["push", "-q", "origin", "d"], self.repo)
+        git(["checkout", "-q", "feat/x"], self.repo)
+        git(["merge", "-q", "--no-commit", "d"], self.repo)
+        self.write("src/b.py", "b = 'changed in the merge'\n")
+        self.commit("merge d, changing b on the way")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+        self.assertIn("Open it now", self.stop().stderr)
+
+    def test_work_pushed_under_this_branchs_own_name_is_still_its_own(self):
+        """Decision 0030: the branch's own remote copy is where its work goes, not another
+        pull request's branch."""
+        self.integrated()
+        self.write("src/mine.py", "mine = 1\n")
+        self.commit("add the module only this branch has")
+        git(["push", "-q", "origin", "feat/x"], self.repo)
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+        self.assertIn("Open it now", self.stop().stderr)
 
 
 class TestAPullRequestIsNeverLeftHanging(PRCase):
