@@ -353,6 +353,17 @@ def only_this_chat_in(ctx: GitContext, tree: Path, session_id: str) -> bool:
     return bool(occupants) and all(sessions.of_this_chat(me, record) for record in occupants)
 
 
+def nobody_else_in(ctx: GitContext, tree: Path, session_id: str) -> bool:
+    """Is `tree` free of every live session but this chat's? False where the registry cannot
+    say, or where this session has no record to tell its own chat by."""
+    from . import sessions
+
+    me = sessions.get(ctx, session_id) if session_id else None
+    occupants = _occupants(ctx, tree, session_id) if me is not None else None
+    return occupants is not None and all(sessions.of_this_chat(me, record)
+                                         for record in occupants)
+
+
 def ignored_by_git(tree: Path, target: Path) -> bool:
     """Is `target` a path no other working tree could ever hold?
 

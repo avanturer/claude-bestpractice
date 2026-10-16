@@ -1902,22 +1902,28 @@ def main() -> None:
     # What comes back to the session is the same outcome it asked for, plus the cleanup it
     # could not have reached.
     if event.tool_name == "Bash":
-        own = worktree.mine(ctx, rec.session_id)
-        removals = worktree_removals(str(ti.get("command", "")), session_cwd) if own else []
-        if own and any(path == own.resolve() for path in removals if path is not None):
+        # The tree this plugin made for the session, or the one it made by hand and stands in
+        # alone: removed from inside, either strands it there (#271). Asked only of a tree
+        # the line removes, because who stands where is a read of every session's record.
+        removals = worktree_removals(str(ti.get("command", "")), session_cwd)
+        own = next((path.resolve() for path in removals
+                    if worktree.removable_by(ctx, rec.session_id, path)), None)
+        if own is not None:
             released = None
             # Before the removal, never after: when the session stands in the tree it is
             # removing, that tree IS `ctx`, and every git call takes it as a working
             # directory — asked afterwards, the success message itself raised
             # FileNotFoundError, and this gate fails closed. The Stop gate learned the same.
-            where = shlex.quote(str(worktree.main_checkout(ctx)))
+            main = worktree.main_checkout(ctx)
+            where = shlex.quote(str(main))
+            stranded = own.resolve() == ctx.worktree_root.resolve()
             kept: list[str] = []
             try:
                 # `--force` only where the session typed it: it is the session's own act
                 # being carried out somewhere it survives, not a judgement this gate makes
                 # about whose work may be discarded.
                 forced = bool(_WORKTREE_FORCE.search(str(ti.get("command", ""))))
-                released = worktree.release_now(ctx, rec.session_id, force=forced, kept=kept)
+                released = worktree.release_now(ctx, own, force=forced, kept=kept)
             except Exception:  # noqa: BLE001 - a refusal is better than a crashing gate
                 released = None
             if released is not None:
@@ -1931,15 +1937,16 @@ def main() -> None:
                     "founder before deleting it." if kept else
                     f"{path} is removed" + (f" and so is {branch}." if branch else ".")
                 )
+                # Where the shell stood in it, the way out is not `cd`: a session that entered
+                # with `EnterWorktree` is held there by Claude Code until it leaves (#271).
                 deny(
                     ctx, rec,
                     f"claude-bestpractice: done — {what}"
                     f"{carried}\n"
-                    "  Run from the main checkout rather than from inside the tree, because "
-                    "removing the directory this shell stands in leaves Claude Code refusing "
-                    "every later git call as isolated in a worktree that no longer exists.\n"
-                    f"  The shell is now in a directory that is gone — `cd {where}`."
-                    + ("" if kept else " There is nothing else to clean up.")
+                    "  It ran from the main checkout rather than from inside the tree: removing "
+                    "the directory a shell stands in strands the session in it.\n"
+                    + (f"  {worktree.way_out_of(main)}\n" if stranded else "")
+                    + ("" if kept else "  There is nothing else to clean up.")
                 )
             deny(
                 ctx, rec,
