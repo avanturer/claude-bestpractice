@@ -20,7 +20,6 @@ Tier A, one file per attempt, so five worktrees produce five clean adds.
 
 from __future__ import annotations
 
-import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -74,7 +73,7 @@ def _one_line(text: str) -> str:
 
 
 def _slug(text: str) -> str:
-    return "-".join(re.findall(r"[a-z0-9]+", text.lower())[:6]) or "attempt"
+    return "-".join(store.ascii_words(text)[:6]) or "attempt"
 
 
 def _split_frontmatter(text: str) -> tuple[dict[str, str], str]:

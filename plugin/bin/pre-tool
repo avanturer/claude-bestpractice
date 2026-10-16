@@ -315,15 +315,46 @@ def _what_runs(argv: list[str]) -> tuple[str, list[str]]:
         rest = rest[1:]
     elif name not in _RUNS_A_SCRIPT and not _INTERPRETER.match(name):
         return name, rest
+    if name == "make":
+        target = _make_target(rest)
+        if target is None:
+            return name, rest
+        return rest[target], rest[:target] + rest[target + 1:]
     for index, word in enumerate(rest):
         if not word.startswith("-"):
             return word.rsplit("/", 1)[-1], rest[index + 1:]
     return name, rest
 
 
-def promotes(argv: list[str]) -> bool:
-    """Does this one command promote something to production?"""
+# make's options that take the next word as their value.
+_MAKE_VALUES = {"-C", "-f", "-I", "-o", "-W", "--directory", "--file", "--makefile",
+                "--include-dir", "--old-file", "--assume-old", "--new-file", "--assume-new",
+                "--what-if"}
+
+
+def _make_target(args: list[str]) -> int | None:
+    """Where make's target is, past its options, their values and its variable assignments.
+
+    `make -C mobile ota` and `make MSG=x ota` run `ota`; the first word that was not a flag
+    was `mobile` and `MSG=x`, so neither was read as the target it is.
+    """
+    skip = False
+    for index, word in enumerate(args):
+        if skip:
+            skip = False
+        elif word in _MAKE_VALUES:
+            skip = True
+        elif not (word.startswith("-") or "=" in word or word.isdigit()):
+            return index
+    return None
+
+
+def promotes(argv: list[str], declared: frozenset = frozenset()) -> bool:
+    """Does this one command promote something to production? `declared` is the project's
+    own `release_commands`."""
     name, args = _what_runs(argv)
+    if name in declared:
+        return True
     judge = _PROMOTES.get(name)
     if judge is not None:
         return judge(args)
@@ -334,7 +365,7 @@ def promotes(argv: list[str]) -> bool:
 _WORD = re.compile(r"[^\s'\"`$();|&<>]+")
 
 
-def promotes_to_production(command: str, cwd: Path) -> bool:
+def promotes_to_production(command: str, cwd: Path, declared: frozenset = frozenset()) -> bool:
     """Does anything this line runs promote to production — its text about one never counts.
 
     Read per segment, so `(cd web && vercel --prod)` is read at all. A segment the tokeniser
@@ -345,11 +376,12 @@ def promotes_to_production(command: str, cwd: Path) -> bool:
         commands = _commands_in(literal)
         if not commands:
             words = _WORD.findall(literal)
+            known = {*_PROMOTES, *declared}
             commands = [words[at:] for at, word in enumerate(words)
-                        if word.rsplit("/", 1)[-1] in _PROMOTES]
+                        if word.rsplit("/", 1)[-1] in known]
         for argv in commands:
             code = _shell_code(argv)
-            if promotes(argv) or (code and promotes_to_production(code, cwd)):
+            if promotes(argv, declared) or (code and promotes_to_production(code, cwd, declared)):
                 return True
     return False
 
@@ -514,15 +546,46 @@ def _landed(ctx, absolute: list[Path]) -> list[tuple[Path, str]]:
     home = worktree.HOME.parts
     inside = len(home) + 1
     out: list[tuple[Path, str]] = []
+    elsewhere: list[Path] = []
     for path in absolute:
         try:
             parts = path.relative_to(root).parts
         except ValueError:
+            elsewhere.append(path)
             continue
         if parts[:len(home)] == home and len(parts) > inside:
             out.append((root.joinpath(*parts[:inside]), "/".join(parts[inside:])))
         else:
             out.append((root, "/".join(parts)))
+    return out + _in_other_trees(ctx, root, elsewhere)
+
+
+def _lands_beside(ctx, absolute: list[Path]) -> bool:
+    """Does any of these writes land in another working tree of this repository?"""
+    root = ctx.worktree_root.resolve()
+    return any(tree != root for tree, _rel in _landed(ctx, absolute))
+
+
+def _in_other_trees(ctx, root: Path, paths: list[Path]) -> list[tuple[Path, str]]:
+    """The writes among `paths` that land in another working tree of this repository.
+
+    A tree beside the checkout, `git worktree add ../shop-x`, is outside it, so a write
+    there from the checkout was no write at all to the card demand: a session made one,
+    wrote a feature into it with `cd ../shop-x && cat > …` and never had a card asked of it.
+    The innermost tree holding a path is the one it lands in.
+    """
+    if not paths:
+        return []
+    trees = sorted((tree for tree in gitpolicy.working_trees(ctx) if tree != root),
+                   key=lambda tree: len(tree.parts), reverse=True)
+    out: list[tuple[Path, str]] = []
+    for path in paths:
+        for tree in trees:
+            try:
+                out.append((tree, "/".join(path.relative_to(tree).parts)))
+            except ValueError:
+                continue
+            break
     return out
 
 
@@ -1571,10 +1634,17 @@ def main() -> None:
                     "can stand in for it."
                 )
             gated = pullrequest.gated_by(here, number, current)
+            # Held, and finished by `pr-opened` once the merge has run: PostToolUse fires only
+            # for a call that succeeded. Spent, settled and delivered here, a merge that then
+            # failed had taken the founder's word, called the pull request merged and closed
+            # its cards, and they were asked for `+merge` again (#232, #243, #268).
+            # The session that sends it, as it is here: the result can arrive from the tree a
+            # `cd` left the shell in, under an identity this chat never started a session as.
+            merge: dict = {"named": named, "session": event.session_id}
             if gated is None:
                 # Somebody else's pull request: nothing checked here is about it (#135).
-                # Still taken off what the word covers.
-                pullrequest.spend(ctx, named, cover)
+                # Still taken off what the word covers, once it has merged.
+                merge["cover"] = pullrequest.bind(ctx, named, cover)
             else:
                 base = str(gated.get("base") or "") or gitpolicy.default_branch(here) or "main"
                 pr_branch = str(gated.get("branch") or "")
@@ -1591,59 +1661,30 @@ def main() -> None:
                     # about what it lists (#243), at this commit and in this chat (#268).
                     pullrequest.note_refusal(ctx, pr_branch, here.head, problems, event.session_id)
                     deny_for_founder(ctx, rec, pullrequest.merge_refusal(gated, problems))
-                # Spent once the merge goes ahead, and never before its blockers are judged:
-                # the refusal above promises the merge "as soon as the list is empty", and
-                # spending the word first turned that into asking the founder a second time.
-                # Still before the call rather than after it, because a PreToolUse hook
-                # never sees the result: a merge that then fails is re-authorised by the
-                # founder rather than by its own retry.
-                pullrequest.spend(ctx, named, cover)
+                # Bound to this pull request once its blockers are judged, and never before:
+                # the refusal above promises the merge "as soon as the list is empty", so a
+                # merge refused over them keeps the word exactly as it was.
+                merge["cover"] = pullrequest.bind(ctx, named, cover)
                 # Judged, and nothing found. Carried to the vouch at the end of this file
                 # rather than allowed here, because `allow_tool` ends the permission
                 # pipeline and every gate below this line still has its say.
                 if pullrequest.about_this_repository(ctx, event.tool_name, ti, command):
                     pr_vouch = vouch.MERGE
-                # Recorded on the way through: a PreToolUse hook never sees the result,
-                # and an obligation the founder has already watched be merged is worse
-                # than useless on the board.
+                # `here.branch` is the obligation's: `gated_by` resolves it by the branch
+                # checked out where the merge runs, so a merge that reaches this line is
+                # always that branch's, and somebody else's never arrives (#135). What the
+                # result is measured against is read now, because `gh pr merge
+                # --delete-branch` leaves neither the branch nor its checkout behind.
                 #
-                # `here.branch` is right here and not an oversight: `gated_by` resolves the
-                # obligation by the branch checked out where the merge runs, so a merge that
-                # reaches this line is always that branch's. A merge of somebody else's is
-                # not gated at all and never arrives (#135) — which is what makes settling
-                # here safe.
-                pullrequest.settle(here, here.branch, pullrequest.MERGED)
-                # And the cards that claimed this work are closed by the delivery of it,
-                # here, without anybody being asked. The founder's account of the failure
-                # is the specification: having given the word to merge, they were then
-                # asked a second question about closing the cards, or the session waited
-                # for a command, or it simply forgot and the row sat in `doing` for days.
-                # Decision 0010 already settles who decides — `+merge` is their word on the
-                # work and the session does the rest without asking again — and the card
-                # that claimed that work is part of the rest.
-                #
-                # Recorded on the way through for the same reason the obligation above is:
-                # a PreToolUse hook never sees the result. A merge that then failed leaves
-                # a card closed early, and the cost of that is one `claude-bp-plan add`
-                # against a board that was wrong about everything it ever delivered.
-                if cfg.require_task:
-                    from claude_bestpractice import plan
-
-                    head = str(gated.get("branch") or "") or here.branch
-                    plan.settle_delivered(
-                        ctx, event.session_id,
-                        pullrequest.delivered_paths(here, base, head),
-                        f"the merge of {head}",
-                    )
-                # Every other session's baseline just went stale. They measure their diff
-                # from a commit that is no longer where the branch begins, so drift and
-                # scope both read wrong until they take the merge in.
-                inbox.broadcast(
-                    ctx, event.session_id,
-                    f"{here.branch} was merged. Your baseline is behind — take the base "
-                    "branch in before you finish, or your diff is measured from the "
-                    "wrong commit.",
-                )
+                # The cards that claimed this work are then closed by its delivery, without
+                # anybody being asked: having given the word to merge, the founder was asked
+                # a second question about closing them, or the row sat in `doing` for days
+                # (decision 0011).
+                head = pr_branch or here.branch
+                merge.update(branch=here.branch, head=head, base=base,
+                             delivered=pullrequest.delivered_paths(here, base, head),
+                             queued=pullrequest.queues(event.tool_name, command))
+            pullrequest.hold(ctx, str(event.raw.get("tool_use_id") or event.session_id), merge)
         elif pullrequest.opens_a_pull_request(event.tool_name, command):
             # No number: a PreToolUse hook sees the request, never the response, and the
             # number only exists in the response. The branch identifies the obligation,
@@ -1752,7 +1793,8 @@ def main() -> None:
             # --prod"` is text about a deploy, and refusing it is the defect #76 reported one
             # gate over; so is the same flag handed to an installer, a search or a commit.
             # And spent only on a real promotion, since the founder's word allows one.
-            deploying = promotes_to_production(str(ti.get("command", "")), session_cwd)
+            deploying = promotes_to_production(str(ti.get("command", "")), session_cwd,
+                                               frozenset(cfg.release_commands))
             if deploying and not founder.awaited(ctx, config.APPROVE_RELEASE, event.session_id,
                                                  event.transcript_path):
                 # The literal used to be a token IN THE COMMAND, which the session writes
@@ -2125,7 +2167,9 @@ def main() -> None:
         # of a case that could not be reproduced. The half of #141 that IS proven is the
         # shell one above; a session whose first prompt was a paste still gets the Stop
         # demand, and is the narrow case left open deliberately.
-        if cfg.require_task and rec.task_statement and writing_now:
+        # `writing_now` holds only this tree's paths, so a write into a tree beside the
+        # checkout is asked of `_landed` as well.
+        if cfg.require_task and rec.task_statement and (writing_now or _lands_beside(ctx, absolute)):
             unlisted = _unlisted(ctx, event.session_id, absolute)
             if unlisted:
                 deny(

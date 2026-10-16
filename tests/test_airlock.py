@@ -8,7 +8,7 @@ import sys
 import time
 import unittest
 
-from helpers import BIN, RepoCase, a_gate_underway, answer_of, real_acceptance_grace
+from helpers import BIN, RepoCase, a_gate_underway, answer_of, git, real_acceptance_grace
 
 
 class TestIngest(RepoCase):
@@ -429,6 +429,84 @@ class TestReviewCommit(GateCase):
         from claude_bestpractice import board
 
         self.assertTrue(any("review finding" in i.get("text", "") for i in board.open_items(self.ctx())))
+
+    def test_a_credential_the_file_already_held_is_not_this_turns(self):
+        """Every line of a touched file was searched, and its detectors compared with the whole
+        baseline's: a test file holding two kinds of fixture secret had its old password charged
+        to the session that added a test below it. Measured in this repository's own suite."""
+        fixtures = ('DB_PASSWORD = "hunter2hunter2"\n'
+                    'DSN = "postgres://admin:Wq9zLp2Vx7Rt@db.example.com/app"\n')
+        self.write("tests/test_fixtures.py", fixtures)
+        self.commit("the fixtures")
+        self.start()
+        self.write("tests/test_fixtures.py", fixtures + "\n\ndef test_more():\n    assert True\n")
+        self.assertEqual(0, self.review().returncode, "a pre-existing credential was blamed")
+
+        self.write("tests/test_fixtures.py",
+                   fixtures + '\n\nAPI_TOKEN = "Zr8Kq2Wm5Np7Tx3Lv9Bc"\n')
+        found = self.review()
+        self.assertEqual(2, found.returncode, "a credential this turn wrote went unseen")
+        self.assertIn("secret at tests/test_fixtures.py:5", self.context(found))
+
+    def test_a_credential_moved_within_its_file_is_not_written(self):
+        """A line the diff shows as added is not new when the baseline held it: moving a
+        fixture into a class re-indents it, and nothing was written."""
+        self.write("tests/test_fixtures.py", 'DB_PASSWORD = "hunter2hunter2"\n')
+        self.commit("the fixture")
+        self.start()
+        self.write("tests/test_fixtures.py",
+                   'class Fixtures:\n    DB_PASSWORD = "hunter2hunter2"\n')
+        self.assertEqual(0, self.review().returncode, "a moved credential was blamed")
+
+    def test_a_command_that_commits_nothing_is_not_reviewed(self):
+        """The `if` filter runs the hook on any command it cannot parse, a heredoc among
+        them, and the review woke the model over a script that committed nothing."""
+        self.start()
+        self.write("bad.py", "def f():\n    try:\n        go()\n    except Exception:\n        pass\n")
+        proc = self.gate("review-commit", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+            "tool_input": {"command": "python3 - <<'EOF'\nprint('no commit here')\nEOF"},
+        })
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertFalse((self.repo / ".claude" / "claude-bestpractice" / "reviews").exists())
+        self.assertEqual(2, self.review().returncode, "the fixture proves nothing")
+
+    def test_a_report_is_nothing_git_can_take(self):
+        """Visible to git, a report was swept into the next `git add -A`: one sits committed
+        in the founder's repository."""
+        self.start()
+        self.write("bad.py", "def f():\n    try:\n        go()\n    except Exception:\n        pass\n")
+        self.assertEqual(2, self.review().returncode)
+        status = git(["status", "--porcelain", "--untracked-files=all"], self.repo)
+        self.assertNotIn("reviews/", status)
+        self.assertIn("bad.py", status, "the fixture proves nothing")
+
+    def test_only_the_newest_reports_are_kept(self):
+        reviews = self.repo / ".claude" / "claude-bestpractice" / "reviews"
+        reviews.mkdir(parents=True)
+        for day in range(1, 31):
+            (reviews / f"202609{day:02d}-120000.md").write_text("old\n", encoding="utf-8")
+        self.start()
+        self.write("bad.py", "def f():\n    try:\n        go()\n    except Exception:\n        pass\n")
+        self.assertEqual(2, self.review().returncode)
+        kept = sorted(p.name for p in reviews.glob("*.md"))
+        self.assertEqual(20, len(kept))
+        self.assertNotIn("20260901-120000.md", kept)
+        self.assertIn("20260930-120000.md", kept)
+
+    def test_a_report_git_already_tracks_is_left_where_it_is(self):
+        reviews = self.repo / ".claude" / "claude-bestpractice" / "reviews"
+        reviews.mkdir(parents=True)
+        (reviews / "20200101-000000.md").write_text("committed by an older version\n",
+                                                    encoding="utf-8")
+        self.commit("an old report")
+        for day in range(1, 31):
+            (reviews / f"202609{day:02d}-120000.md").write_text("old\n", encoding="utf-8")
+        self.start()
+        self.write("bad.py", "def f():\n    try:\n        go()\n    except Exception:\n        pass\n")
+        self.assertEqual(2, self.review().returncode)
+        self.assertTrue((reviews / "20200101-000000.md").exists())
+        self.assertNotIn("reviews/", git(["status", "--porcelain"], self.repo))
 
 
 if __name__ == "__main__":

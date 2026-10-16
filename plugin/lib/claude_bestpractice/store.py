@@ -44,6 +44,38 @@ class LockTimeout(RuntimeError):
     """Raised when a lock could not be acquired within the timeout."""
 
 
+# `str.isalnum()` is true for Cyrillic, so a Russian prompt produced a Cyrillic directory
+# AND a Cyrillic branch. Git accepts both and then: the branch goes to the remote on the
+# first push, `git worktree list` prints it octal-escaped (\320\277\320\276…), and macOS
+# normalises the directory name differently from Linux, so the same repository on two
+# machines disagrees about whether the tree exists. Reported from a real run.
+#
+# Transliterated rather than dropped, because the founder writes Russian. Dropped, a card's
+# file name kept only its digits and Latin words: 39 of one board's 148 cards were named
+# `0037-task.md` or `0092-20-5-95-42-9-588.md`.
+TRANSLITERATION = {
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh",
+    "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o",
+    "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f", "х": "kh", "ц": "ts",
+    "ч": "ch", "ш": "sh", "щ": "shch", "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu",
+    "я": "ya",
+}
+
+
+def ascii_words(text: str) -> list[str]:
+    """The words of `text` a file or branch name can carry: ASCII, lower case, Cyrillic
+    transliterated, everything else a separator."""
+    out = []
+    for char in text.lower():
+        if char in TRANSLITERATION:
+            out.append(TRANSLITERATION[char])
+        elif char.isascii() and char.isalnum():
+            out.append(char)
+        else:
+            out.append(" ")
+    return "".join(out).split()
+
+
 def tier_a(ctx: GitContext, *parts: str) -> Path:
     return ctx.worktree_root.joinpath(TIER_A_DIRNAME, *parts)
 

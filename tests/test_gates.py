@@ -1429,6 +1429,32 @@ class TestEvidenceGate(GateCase):
         proc = self.stop()
         self.assertNotIn("Nothing on the board", proc.stderr)
 
+    def test_a_branch_squash_merged_on_the_remote_is_not_demanded(self):
+        """A squash rewrites the commits, so the branch is an ancestor of nothing, and the merge
+        happens on GitHub, so the clone's own `main` has not moved. Asked of both, finished work
+        was "commits the trunk does not have": measured live, a session that claimed, merged on
+        the founder's `+merge` and closed its card was refused for having no card, and filed
+        UNVERIFIED over work already on the trunk. Settled by the repository's one definition
+        of landed work, against the remote trunk, by ancestry or by content."""
+        from helpers import add_origin, another_clone
+
+        self.start()
+        self.write("base.py", "x = 0\n")
+        self.commit("shared history")
+        origin = add_origin(self.repo, self.tmp)
+        git(["switch", "-qc", "feat/squashed"], self.repo)
+        self.write("feature.py", "x = 1\n")
+        self.write("junit.xml", JUNIT_PASS)
+        self.commit("work only this branch has")
+        git(["push", "-q", "origin", "feat/squashed"], self.repo)
+        other = another_clone(origin, self.tmp / "github")
+        git(["merge", "--squash", "-q", "origin/feat/squashed"], other)
+        git(["commit", "-qm", "the work (#1)"], other)
+        git(["push", "-q", "origin", "HEAD:main"], other)
+        git(["fetch", "-q", "origin"], self.repo)
+
+        self.assertNotIn("Nothing on the board", self.stop().stderr)
+
     def test_uncommitted_work_is_still_demanded(self):
         """The narrowing must not let a session edit files invisibly — which is the whole
         reason the demand exists."""
@@ -1895,6 +1921,29 @@ class TestTheBoardIsDemandedBeforeAShellWrite(RepoCase):
         self.assertNotEqual("deny", self.decision(proc), proc.stdout)
         self.assertEqual("deny", self.decision(self.writing("D=src; sed -i 's/a/b/' $D/billing.js")),
                          "a variable naming a file of the repository hid it from the board")
+
+    def test_a_write_into_a_tree_beside_the_checkout_is_owed_its_card(self):
+        """Measured live: a session made `../shop-x` with `git worktree add`, wrote a feature
+        into it from the checkout with `cd ../shop-x && cat > …`, and was never asked for a
+        card. The tree is outside the checkout, so its writes were no writes at all."""
+        beside = self.tmp / "shop-x"
+        git(["worktree", "add", "-q", "-b", "feat/x", str(beside)], self.repo)
+        self.working_on()
+        calls = {
+            "a heredoc after a cd": ("Bash", {"command": f"cd {beside} && cat > src/billing.js "
+                                                         "<<'EOF'\nx = 1\nEOF"}),
+            "a sed by path": ("Bash", {"command": f"sed -i 's/a/b/' {beside}/src/billing.js"}),
+            "the Write tool": ("Write", {"file_path": f"{beside}/src/billing.js", "content": "x"}),
+        }
+        for what, (tool, tool_input) in calls.items():
+            proc = self.run_hook("pre-tool", {"session_id": "s1", "hook_event_name": "PreToolUse",
+                                              "tool_name": tool, "tool_input": tool_input})
+            self.assertEqual("deny", self.decision(proc), what)
+            self.assertIn("working on src/billing.js", proc.stdout, what)
+
+        self.claim_a_task("s1", "src/billing.js")
+        self.assertNotEqual("deny", self.decision(
+            self.writing(f"sed -i 's/a/b/' {beside}/src/billing.js")))
 
 
 if __name__ == "__main__":

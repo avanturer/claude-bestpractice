@@ -26,6 +26,7 @@ until sessions froze, and reverted with the post-mortem in its source.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import re
@@ -36,11 +37,21 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import board, hookio, redact, reviewrules, sessions, store  # noqa: E402
+from claude_bestpractice import (  # noqa: E402
+    board,
+    gitpolicy,
+    hookio,
+    redact,
+    reviewrules,
+    sessions,
+    store,
+    worktree,
+)
 from claude_bestpractice.gitctx import resolve, stash_baseline  # noqa: E402
 
 MAX_FINDINGS_SHOWN = 6
 REPORT_DIR = "reviews"
+KEPT_REPORTS = 20
 
 CHECKS = reviewrules.CHECKS
 
@@ -114,10 +125,13 @@ def review(root: Path, baseline: str) -> list[tuple[str, str, int, str]]:
     # worth catching span lines — a swallowed exception is `except ...:` on one line and
     # `pass` on the next — and a multi-line pattern applied to a single line can never
     # match. Precision comes from subtracting the baseline instead of from line slicing.
-    touched = sorted({path for path, _, _ in added if path})
+    written: dict[str, list[tuple[int, str]]] = {}
+    for path, lineno, text in added:
+        if path:
+            written.setdefault(path, []).append((lineno, text))
     findings: list[tuple[str, str, int, str]] = []
 
-    for path in touched:
+    for path in sorted(written):
         try:
             current = (root / path).read_text(encoding="utf-8", errors="replace")
         except OSError:
@@ -132,21 +146,42 @@ def review(root: Path, baseline: str) -> list[tuple[str, str, int, str]]:
             # same issue re-accumulate as new every turn as diff context drifts.
             findings.append((name, path, current.count("\n", 0, match.start()) + 1, message))
 
-        base_hits = redact.find(base)
-        for lineno, text in enumerate(current.splitlines(), start=1):
-            hits = redact.find(text)
-            if hits and hits != base_hits:
-                findings.append(
-                    ("secret", path, lineno, f"possible credential ({', '.join(hits)})")
-                )
-                break
+        credential = _new_credential(written[path], base)
+        if credential:
+            findings.append(("secret", path, *credential))
 
     return findings
 
 
+def _new_credential(written: list[tuple[int, str]], base: str) -> tuple[int, str] | None:
+    """The first line this turn wrote that holds a credential the baseline did not.
+
+    Only the lines written, and not one the baseline already held. Every line of the file
+    was read before, and its detectors compared with the whole baseline's: a test file
+    holding two kinds of fixture secret had its old `DB_PASSWORD = "…"` charged to the
+    session that added a test below it.
+    """
+    before = {line.strip() for line in base.splitlines()}
+    for lineno, text in written:
+        if text.strip() in before:
+            continue  # moved or re-indented, not written
+        hits = redact.find(text)
+        if hits:
+            return lineno, f"possible credential ({', '.join(hits)})"
+    return None
+
+
 def write_report(ctx, findings: list[tuple[str, str, int, str]], baseline: str) -> Path:
+    """Write the report where git does not look, keeping only the newest few.
+
+    Tracked, a report was swept into the next `git add -A` and committed into the founder's
+    repository. A report is read once, by the session its finding woke, and one is written
+    for every commit that finds something new, so the directory only grew.
+    """
     stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
     path = store.tier_a(ctx, REPORT_DIR, f"{stamp}.md")
+    worktree.hide(ctx)
+    _prune(ctx, path.parent, KEPT_REPORTS - 1)
     lines = [
         "---",
         "kind: review",
@@ -160,6 +195,24 @@ def write_report(ctx, findings: list[tuple[str, str, int, str]], baseline: str) 
         lines.append(f"- **{name}** `{file_path}:{lineno}` — {message}")
     store.atomic_write(path, "\n".join(lines) + "\n", mode=0o644)
     return path
+
+
+def _prune(ctx, directory: Path, keep: int) -> None:
+    """Remove all but the `keep` newest reports, and never one git tracks.
+
+    A report an earlier version let a commit take is the repository's file now: deleting it
+    would leave a tracked deletion in the tree.
+    """
+    tracked = set(git(["ls-files", "-z", "--", str(directory)], ctx.worktree_root).split("\0"))
+    try:
+        reports = sorted(directory.glob("*.md"), reverse=True)
+    except OSError:
+        return
+    for report in reports[keep:]:
+        if report.relative_to(ctx.worktree_root).as_posix() in tracked:
+            continue
+        with contextlib.suppress(OSError):
+            report.unlink()
 
 
 RAISED = "review-raised.json"
@@ -211,6 +264,11 @@ def unseen(ctx, root: Path, findings: list) -> list:
 
 def main() -> None:
     event = hookio.read_event()
+    # The `if: Bash(git commit:*)` filter runs this hook on every command it cannot parse,
+    # and a heredoc is enough: a `python3 - <<EOF` that committed nothing was reviewed, and
+    # woke the model over a line nobody had written.
+    if not gitpolicy.commits(str(event.tool_input.get("command") or "")):
+        hookio.emit_silent()
     ctx = hookio.repo(event.cwd or os.getcwd())
     rec = sessions.get(ctx, event.session_id)
     baseline = rec.baseline_commit if rec else stash_baseline(ctx)

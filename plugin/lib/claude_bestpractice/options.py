@@ -97,7 +97,7 @@ def options_dir(ctx: GitContext) -> Path:
 
 
 def _slug(text: str) -> str:
-    return "-".join(re.findall(r"[a-z0-9]+", text.lower())[:6]) or "comparison"
+    return "-".join(store.ascii_words(text)[:6]) or "comparison"
 
 
 def load_all(ctx: GitContext) -> list[Comparison]:
@@ -201,12 +201,32 @@ def _already_there(ctx: GitContext, rel: str, baseline: str, floor: str) -> set[
     Never HEAD. A dependency this session added and then committed is in HEAD, and
     including it here would make committing the way to be let off the comparison — the
     gate would go quiet at exactly the moment the decision became permanent.
+
+    And what is arriving (`_arriving`): until a merge of the trunk is committed, the branch
+    point is the old one, so the trunk's own new packages read as this session's (#270).
     """
     before: set[str] = set()
-    for ref in (baseline, floor):
+    for ref in (baseline, floor, *_arriving(ctx)):
         if ref:
             before |= _dependency_names(_show(ctx, ref, rel))
     return before
+
+
+def _arriving(ctx: GitContext) -> tuple[str, ...]:
+    """The refs a branch is taking in rather than adding: a merge in progress, and the trunk.
+
+    The trunk as it stands, not only where this branch left it — "anything the trunk already
+    carried is not new" — except on the trunk itself, where its tip is HEAD.
+    """
+    from .gitpolicy import default_branch
+
+    try:
+        trunk = default_branch(ctx)
+    except Exception:  # noqa: BLE001 - an unaskable repository has no trunk, which is an answer
+        trunk = ""
+    if not trunk or ctx.branch == trunk:
+        return ("MERGE_HEAD",)
+    return ("MERGE_HEAD", f"origin/{trunk}", trunk)
 
 
 def _branch_point(ctx: GitContext) -> str:

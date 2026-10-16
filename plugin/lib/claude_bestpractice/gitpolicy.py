@@ -263,10 +263,16 @@ def foreign_tree(ctx: GitContext, target: Path, session_id: str = "") -> Path | 
     merge it — does not exist for a file git never tracks: it is absent from the other tree
     and no merge can move a change to it. Both exits led back to each other, and a session
     that had just rotated a production SSH key could not delete the retired one (#68).
+
+    The innermost tree holding the path is the one it is in. A tree this plugin provisions
+    lies inside the main checkout, which ignores `.claude/worktrees/`, so asked main checkout
+    first, every path in a sibling's provisioned tree was the main checkout's ignored file:
+    a reset, a clean, a write and a forced removal of a tree a live session worked in all
+    went through.
     """
     if _ours(ctx, target):
         return None
-    for tree in working_trees(ctx):
+    for tree in sorted(working_trees(ctx), key=lambda tree: len(tree.parts), reverse=True):
         if tree == ctx.worktree_root.resolve() or not _within(target, tree):
             continue
         if not _occupied(ctx, tree, session_id):
@@ -323,6 +329,12 @@ def _occupants(ctx: GitContext, tree: Path, session_id: str = "") -> list | None
         except OSError:
             return None
     return found
+
+
+def stood_in(ctx: GitContext, tree: Path) -> bool:
+    """Is a live session standing in `tree`? True where the registry cannot say."""
+    occupants = _occupants(ctx, tree)
+    return occupants is None or bool(occupants)
 
 
 def only_this_chat_in(ctx: GitContext, tree: Path, session_id: str) -> bool:
@@ -656,6 +668,17 @@ _EMPTY_MESSAGES = {
 # subsystem a future session needs to find.
 CONVENTIONAL = re.compile(
     r"^(?:build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(?:\([\w./-]+\))?!?: .{6,}"
+)
+
+# The subjects git and GitHub write themselves, which commitlint ignores for the same reason
+# `conventional()` reads the log with `--no-merges`: a session concluding the merge of the
+# trunk this plugin ordered was refused for git's own `Merge origin/main into feat/…`.
+# The shapes exactly, so that "Merge some stuff" is still a prose subject.
+GENERATED = re.compile(
+    r"^(?:Merge (?:branch|remote-tracking branch|tag|commit) '[^']+'(?: of \S+)?(?: into \S+)?"
+    r"|Merge \S+ into \S+"
+    r"|Merge pull request #\d+ from \S+"
+    r'|Revert ".+")$'
 )
 
 MIN_SUBJECT_CHARS = 15
@@ -1036,7 +1059,7 @@ def message_complaint(message: str, conventional: bool = True) -> str:
             f"the subject is {len(subject)} characters. Keep it under {MAX_SUBJECT_CHARS} "
             "and put the detail in a body after a blank line."
         )
-    if conventional and not CONVENTIONAL.match(subject):
+    if conventional and not CONVENTIONAL.match(subject) and not GENERATED.match(subject):
         return (
             f"{subject!r} is not a conventional commit. Use `type(scope): summary` — "
             "feat, fix, docs, refactor, perf, test, build, ci, chore. It is machine-readable, "

@@ -385,35 +385,11 @@ def shared_database(ctx: GitContext) -> tuple[Path, str] | None:
     return None
 
 
-# `str.isalnum()` is true for Cyrillic, so a Russian prompt produced a Cyrillic directory
-# AND a Cyrillic branch. Git accepts both and then: the branch goes to the remote on the
-# first push, `git worktree list` prints it octal-escaped (\320\277\320\276…), and macOS
-# normalises the directory name differently from Linux, so the same repository on two
-# machines disagrees about whether the tree exists. Reported from a real run.
-#
-# Transliterated rather than dropped, because the founder writes Russian prompts and a
-# branch called `work` says nothing. Anything with no ASCII left after this falls back.
-_TRANSLIT = {
-    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh",
-    "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o",
-    "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f", "х": "kh", "ц": "ts",
-    "ч": "ch", "ш": "sh", "щ": "shch", "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu",
-    "я": "ya",
-}
-
-
 def slugify(text: str, fallback: str = "work") -> str:
-    """An ASCII, git-safe, filesystem-safe slug — or the fallback when nothing survives."""
-    out = []
-    for char in text.lower():
-        if char in _TRANSLIT:
-            out.append(_TRANSLIT[char])
-        elif char.isascii() and char.isalnum():
-            out.append(char)
-        else:
-            out.append(" ")
-    words = "".join(out).split()[:5]
-    return "-".join(words)[:60].strip("-") or fallback
+    """An ASCII, git-safe, filesystem-safe slug — or the fallback when nothing survives.
+
+    Transliterated (`store.ascii_words`), because a branch called `work` says nothing."""
+    return "-".join(store.ascii_words(text)[:5])[:60].strip("-") or fallback
 
 
 # Beside the founder's `~/.claude.json` and named as ours, so it can never be mistaken for a
@@ -711,10 +687,15 @@ _LEDGER_EXCLUDE = "/.claude/claude-bestpractice/plan/"
 # to every check that asks git, and the merge was refused over one (#261).
 _REPORTS_EXCLUDE = "/.claude/claude-bestpractice/test-reports/"
 
+# The commit review's reports, read once by the session a finding woke. Visible, the next
+# `git add -A` took one into the founder's history.
+_REVIEWS_EXCLUDE = "/.claude/claude-bestpractice/reviews/"
+
 _EXCLUDED = (
     (_EXCLUDE_LINE, "worktrees this plugin provisions"),
     (_LEDGER_EXCLUDE, "the task ledger, written by every session and committed by none"),
     (_REPORTS_EXCLUDE, "the test reports the Stop gate asks for and reads"),
+    (_REVIEWS_EXCLUDE, "the commit review's reports, read once by the session they woke"),
 )
 
 
@@ -771,6 +752,10 @@ def reap_unused(ctx: GitContext, live: set) -> list[str]:
         tree = _abandoned(ctx, store.read_json(path, default={}) or {}, live)
         if not tree:
             continue
+        # The one thing git's refusal does not cover: it takes every ignored file. A tree
+        # holding data no other tree has stays, and `stranded` names it.
+        if lost_with(ctx, Path(tree[0])) != []:
+            continue
         # The branch is proven by `_release` itself, never handed a proof from here. This
         # passed one along — computed for the branch the tree stood on NOW — and the branch
         # it was applied to was the RECORDED one: a session that had switched to a small
@@ -808,15 +793,24 @@ def stranded(ctx: GitContext) -> list[str]:
         if not found:
             continue
         path = Path(found[0])
-        if path.is_dir() and _holds_work(path):
+        if path.is_dir() and (_holds_work(path) or lost_with(ctx, path) != []):
             out.append(found[0])
     return out
 
 
 # What git will say to `git worktree remove <path>` before it says anything about the work
-# in it, which decides the command a tree can be named with (decision 0020).
+# in it, which decides the command a tree can be named with (decision 0020). IGNORED is what
+# git will NOT say: the removal goes through and takes data that exists nowhere else.
 GONE = "gone"
 SUBMODULES = "submodules"
+IGNORED = "ignored"
+
+# How long a tree has to have been left alone before the board calls it nobody's. A branch
+# cut from the trunk a second ago is "already in the trunk" too: measured live, the board
+# told one session that `worktree remove` and `branch -D` lost nothing in a tree another
+# session had made one second before and was writing into. The founder's own sweep waits
+# two hours for the same reason.
+_QUIET_SECONDS = 2 * 3600.0
 
 
 def needs_a_decision(ctx: GitContext) -> list[tuple[str, str, str]]:
@@ -875,7 +869,54 @@ def _what_git_says(ctx: GitContext, listed: tuple, trunk: str, skip: set) -> str
         return GONE
     if branch and not is_ancestor(ctx, branch, trunk):
         return None
-    return SUBMODULES if _holds_submodules(tree) else ""
+    # Somebody's, whatever the branch says: touched lately, or holding work git would refuse
+    # to remove. Neither is a tree "nobody is in", and the line says removing it loses nothing.
+    if not (_left_alone(tree) and _nothing_but_ledger_copies(ctx, tree)):
+        return None
+    return _what_removal_takes(ctx, tree)
+
+
+def _what_removal_takes(ctx: GitContext, tree: Path) -> str:
+    """What `git worktree remove` does to a finished tree: refuses it for a submodule, takes
+    data nothing else has without a word, or takes nothing that is not already elsewhere."""
+    if _holds_submodules(tree):
+        return SUBMODULES
+    return IGNORED if lost_with(ctx, tree) != [] else ""
+
+
+def _left_alone(tree: Path) -> bool:
+    """Has nothing — a checkout, a commit, a new entry at its top — touched this tree for
+    `_QUIET_SECONDS`?
+
+    Not the index: `git status` refreshes it, and so does this plugin's own upkeep of every
+    tree at session start, so it says only that somebody looked. The reflog moves when work
+    does, and a tree cut a second ago has one a second old.
+    """
+    import time
+
+    meta = _gitdir_of(tree)
+    newest = 0.0
+    for path in (tree, *((meta / "HEAD", meta / "logs" / "HEAD") if meta else ())):
+        with contextlib.suppress(OSError):
+            newest = max(newest, path.stat().st_mtime)
+    return time.time() - newest > _QUIET_SECONDS
+
+
+def _gitdir_of(tree: Path) -> Path | None:
+    """The directory git keeps this linked tree's HEAD and index in, read from its `.git`."""
+    try:
+        pointer = (tree / ".git").read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return None
+    if not pointer.startswith("gitdir:"):
+        return None
+    found = Path(pointer.split(":", 1)[1].strip())
+    return found if found.is_absolute() else (tree / found).resolve()
+
+
+def _nothing_but_ledger_copies(ctx: GitContext, tree: Path) -> bool:
+    entries = _status_of(tree)
+    return entries is not None and len(_copies_of_the_ledger(ctx, entries)) == len(entries)
 
 
 _LOCKED = "locked"
@@ -957,6 +998,13 @@ def _abandoned(ctx: GitContext, body: dict, live: set) -> tuple | None:
     tree = str(body.get("path") or "")
     if not tree or Path(tree).resolve() == ctx.worktree_root.resolve():
         return None
+    # The record names the session that made the tree, and `/clear` gives the conversation
+    # standing in it a new id: asked only about its maker, the first sibling to start
+    # removed the tree a conversation was working in.
+    from . import gitpolicy
+
+    if gitpolicy.stood_in(ctx, Path(tree).resolve()):
+        return None
     return tree, str(body.get("branch") or "")
 
 
@@ -1021,8 +1069,15 @@ def _delivers_the_same_bytes(where: Path, branch: str, trunk: str) -> bool:
 
     A branch that delivers no file proves nothing and is never claimed: that is a branch
     with commits git can still see and this cannot read.
+
+    Every file any of its commits touched, not only what its tip changed. Squash-merged and
+    then given a commit putting one of its files back, a branch no longer changed that file,
+    so the net diff did not name it, and `-D` took the only commit holding the revert.
     """
-    delivered = _git_lines(where, ["diff", "--no-renames", "--name-only", f"{trunk}...{branch}"])
+    delivered = set(_git_lines(where, ["diff", "--no-renames", "--name-only",
+                                       f"{trunk}...{branch}"]))
+    delivered |= {line for line in _git_lines(where, ["log", "--no-renames", "--name-only",
+                                                      "--format=", f"{trunk}..{branch}"]) if line}
     if not delivered:
         return False
     differs = subprocess.run(
@@ -1241,11 +1296,81 @@ def _nothing_left_in(ctx: GitContext, tree: Path) -> bool:
     Less the ledger copies a trunk that still tracks the cards gave this tree
     (`_copies_of_the_ledger`): every one is a card the main checkout holds, and a
     transition run from another tree moves it here on disk and nowhere in git (#254).
+
+    And the ignored files are asked separately (`lost_with`), because git does not ask: a
+    removal without `--force` deletes everything it ignores.
     """
-    entries = _status_of(tree)
-    if entries is None:
+    return _nothing_but_ledger_copies(ctx, tree) and lost_with(ctx, tree) == []
+
+
+# What a removal this plugin decides on may take with a tree, because any tree grows it back:
+# dependency trees, bytecode and tool caches, matched as a whole path component.
+_REGROWS = frozenset({
+    "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".venv",
+    "venv", ".tox", ".nox", ".expo", ".gradle", ".next", ".turbo", ".parcel-cache",
+})
+_REGROWS_SUFFIXES = (".pyc", ".pyo", ".egg-info")
+
+# A wholly ignored directory counts as a copy only where every file in it is byte-identical
+# in the main checkout, compared up to this many files. Past that it is kept rather than read.
+_COMPARED_AT_MOST = 2_000
+
+
+def lost_with(ctx: GitContext, tree: Path) -> list[str] | None:
+    """The gitignored entries in `tree` that removing it would destroy for good, or None
+    when git will not list them — which every caller reads as "keep the tree".
+
+    `git worktree remove` without `--force` refuses a modified or untracked file and takes
+    every ignored one without a word: measured on a founder's repository, a tree that read
+    clean in `git status` went with 75 exported product photos in it that existed nowhere
+    else. What may go is what comes back by itself — the caches in `_REGROWS`, this plugin's
+    own reports, a file the main checkout holds byte for byte (what `.worktreeinclude`
+    copied in), and the `.env` this plugin seeded. Anything else is somebody's data.
+    """
+    listed = _ignored_listing(tree)
+    if listed is None:
+        return None
+    main = main_checkout(ctx)
+    seeded = _seeded_envs(ctx, main, tree)
+    return [rel for rel in listed
+            if not _regrows(rel) and not rel.startswith(f"{store.TIER_A_DIRNAME}/")
+            and not _held_in(main, tree, rel) and not _seeded_here(tree, rel, seeded)]
+
+
+def _regrows(rel: str) -> bool:
+    parts = [part for part in rel.split("/") if part]
+    return any(part in _REGROWS or part.endswith(_REGROWS_SUFFIXES) for part in parts)
+
+
+def _held_in(main: Path, tree: Path, rel: str) -> bool:
+    """Does the main checkout hold this ignored entry of the tree, byte for byte?"""
+    import filecmp
+    import itertools
+
+    name = rel.rstrip("/")
+    files = ([name] if (tree / name).is_file()
+             else list(itertools.islice(_walk_files(tree, name), _COMPARED_AT_MOST + 1)))
+    if not files or len(files) > _COMPARED_AT_MOST or main.resolve() == tree.resolve():
         return False
-    return len(_copies_of_the_ledger(ctx, entries)) == len(entries)
+    try:
+        return all((main / name).is_file() and filecmp.cmp(tree / name, main / name, shallow=False)
+                   for name in files)
+    except OSError:
+        return False
+
+
+def _seeded_envs(ctx: GitContext, main: Path, tree: Path) -> set[str]:
+    """Every `.env` body `isolate_database` could have written into this tree."""
+    _record, body = record_for(ctx, tree)
+    database = str(body.get("database") or "") if isinstance(body, dict) else ""
+    url = dsn_for(ctx, database) if database else ""
+    seeds = [_read(main / ENV_FILE), *(_read(tree / name) for name in ENV_EXAMPLE)]
+    return {text for seed in seeds if seed.strip()
+            for text in (seed, _with_database(seed, url) if url else seed)}
+
+
+def _seeded_here(tree: Path, rel: str, seeded: set[str]) -> bool:
+    return rel == ENV_FILE and _read(tree / ENV_FILE) in seeded
 
 
 def _status_of(tree: Path) -> list[tuple[str, str]] | None:
@@ -1830,11 +1955,22 @@ def _ignored_entries(root: Path) -> list[str]:
     `--directory`, so a wholly ignored directory is one entry rather than every file in
     it — `node_modules/` is not walked to find out that nobody asked for it.
     """
-    listed = subprocess.run(
-        ["git", "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"],
-        cwd=str(root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=60,
-    )
-    return [entry for entry in listed.stdout.split("\0") if entry] if listed.returncode == 0 else []
+    return _ignored_listing(root) or []
+
+
+def _ignored_listing(root: Path) -> list[str] | None:
+    """`_ignored_entries`, with None where git would not answer rather than nothing found."""
+    try:
+        listed = subprocess.run(
+            ["git", "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"],
+            cwd=str(root), capture_output=True, encoding="utf-8", errors="surrogateescape",
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if listed.returncode != 0:
+        return None
+    return [entry for entry in listed.stdout.split("\0") if entry]
 
 
 def _included_under(root: Path, rules: list[tuple], directory: str) -> list[str]:
@@ -1847,11 +1983,15 @@ def _included_under(root: Path, rules: list[tuple], directory: str) -> list[str]
 
 def _files_under(root: Path, directory: str) -> list[str]:
     """Every file below a directory, as paths relative to `root`."""
-    out = []
+    return list(_walk_files(root, directory))
+
+
+def _walk_files(root: Path, directory: str):
+    """The files below a directory, relative to `root`, as they are found — so a caller that
+    needs only the first few never walks the rest."""
     for where, _dirs, files in os.walk(root / directory):
         base = Path(where).relative_to(root).as_posix()
-        out.extend(f"{base}/{name}" for name in files)
-    return out
+        yield from (f"{base}/{name}" for name in files)
 
 
 def _copy_new(source: Path, target: Path) -> bool:

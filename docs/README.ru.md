@@ -4,8 +4,8 @@
 
 **Память, координация и принуждение для разработки продукта в нескольких параллельных сессиях Claude Code.**
 
-[![version](https://img.shields.io/badge/version-2.3.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-2508%20passing-2ea44f)](#проверено)
+[![version](https://img.shields.io/badge/version-2.4.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-2541%20passing-2ea44f)](#проверено)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#проверено)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#требования)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#требования)
@@ -294,6 +294,16 @@ HEAD. Вторая половина — убрать за собой, и за н
 +merge
 ```
 
+Мерж, упавший на конфликте или проверке, сохраняет ваше слово для повтора: оно тратится, а PR
+и его карточки закрываются только после того, как мерж прошёл; `--auto` тратит слово и
+оставляет PR открытым, пока тот не попадёт в транк.
+
+Выкат гейт узнаёт по программе, которую запускает строка: `vercel --prod`, `fly deploy`,
+`eas update --channel production`, скрипт с «deploy» в имени, который называет прод. Свой
+способ проекта выкатывать не называет ни того, ни другого, поэтому объявите его в
+`config.json` под тем именем, под которым его запускает строка, — цель make или скрипт:
+`"release_commands": ["mobile-ota", "deploy_standalone.sh"]`. Тогда и он ждёт `+release`.
+
 Токен, стоящий в одной строке с текстом, невозможно отличить от токена, о котором говорят,
 и этот зазор работал не в ту сторону: «я не говорил `+merge`» — отказ — выдавал разрешение
 на мерж, и два неодобренных PR уехали в транк, из которого идёт деплой. Префикс — символ, а
@@ -412,11 +422,11 @@ claude-bp-ci off        # снять pre-push хук
 | `subagent-brief` | SubagentStart | fails open | Non-goals, сущности и карта под запрос — агентам, которые не наследуют правил |
 | `checkpoint` | PreCompact | fails open | Экстрактивный чекпойнт, ноль вызовов модели, секреты вычищены. **Компактизацию не отменяет** — отказ на этом событии читает фаундер, а не модель (решение 0021) |
 | `evidence-gate` | Stop | **fails closed** | Дрейф скоупа, тестовое доказательство, чистый повторный прогон, ход, заканчивающийся неотвеченным отказом; собирает черновики решений; один раз просит записать то, что знает только это окно; убирает законченное дерево |
-| `pr-opened` | PostToolUse `.*(create\|update)_pull_request`, и `Bash`, если там `gh pr create` | fails open | Заносит только что открытый пул-реквест и узнаёт его номер, чтобы гейт мерджа отличал свой от чужого; снимает закрытый через инструмент |
+| `pr-opened` | PostToolUse `.*(create\|update\|merge)_pull_request`, и `Bash`, если там `gh pr` | fails open | Заносит только что открытый пул-реквест и узнаёт его номер, чтобы гейт мерджа отличал свой от чужого; снимает закрытый через инструмент; завершает мерж, когда тот прошёл |
 | `permission-denied` | PermissionDenied | fails open | Записывает, что отклонил auto mode, чтобы повторный запрос можно было связать с правилом; ничего не отменяет |
 
-Одиннадцать записей — `pre-tool` и `review-commit` делят событие PreToolUse — против
-самоограничения в двенадцать. Постоянный контекст **~332 токена** против потолка в 400 —
+Двенадцать записей — `pre-tool` и `review-commit` делят событие PreToolUse, а у `pr-opened`
+их две — против самоограничения в двенадцать. Постоянный контекст **~332 токена** против потолка в 400 —
 примерно 0.1 % окна на 200k.
 
 ---
@@ -424,7 +434,7 @@ claude-bp-ci off        # снять pre-push хук
 ## Проверено
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2508 тестов · 36 проверок доктора · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2541 тест · 36 проверок доктора · budget
 ```
 
 Доктор доказывает гейты **попыткой сделать плохое**, а не чтением конфигурации обратно —

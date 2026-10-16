@@ -285,9 +285,10 @@ def _stranded_line(ctx: GitContext) -> str:
     more = f" (+{len(left) - 3} more)" if len(left) > 3 else ""
     return (
         f"\nABANDONED WORKTREES: {len(left)} tree(s) nobody is in are holding uncommitted "
-        f"work — {shown}{more}. The sweep will not delete work, so they stay until someone "
-        "decides: finish and merge, or `git worktree remove --force`. Ask the founder "
-        "before discarding anything."
+        f"work or gitignored files no other tree has — {shown}{more}. The sweep will not "
+        "delete work, so they stay until someone decides: finish and merge, or `git worktree "
+        "remove --force`, which takes the ignored files too. Ask the founder before discarding "
+        "anything."
     )
 
 
@@ -339,7 +340,14 @@ def _held_by_git(main: Path, left: list) -> str:
     """
     gone = [Path(path).name for path, _branch, held in left if held == worktree.GONE]
     tied = [Path(path).name for path, _branch, held in left if held == worktree.SUBMODULES]
+    kept = [Path(path).name for path, _branch, held in left if held == worktree.IGNORED]
     said = ""
+    if kept:
+        # The one case where git says nothing at all: the removal succeeds, and takes them.
+        said += (f" {len(kept)} holding gitignored files no other tree has ({', '.join(kept[:3])})"
+                 " — `worktree remove` deletes those without a word, so `git -C <path> "
+                 "ls-files --others --ignored --exclude-standard --directory` first, and copy "
+                 "out what is wanted.")
     if gone:
         said += (f" {len(gone)} whose directory is already gone ({', '.join(gone[:3])}) — "
                  f"`git -C {main} worktree prune` forgets them, and their branches stay.")

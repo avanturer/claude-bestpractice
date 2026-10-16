@@ -1636,6 +1636,15 @@ def check_a_pull_request_is_merged_or_reported(repo: Path) -> Result:
         "hook_event_name": "UserPromptSubmit", "prompt": "looked at it\n+merge",
     }, repo)
     merged = not call("mcp__github__merge_pull_request", {"pullNumber": 1})
+    # The result, which is where a merge is finished: the word spent and the record settled
+    # only once the harness says the merge ran (decision 0038).
+    run_gate("pr-opened", {
+        "session_id": "doctor-pr", "cwd": str(repo),
+        "hook_event_name": "PostToolUse",
+        "tool_name": "mcp__github__merge_pull_request",
+        "tool_input": {"pullNumber": 1},
+        "tool_response": {"merged": True},
+    }, repo)
     settled = pullrequest.outstanding(resolve(repo)) == []
 
     ok = recorded and refused and unaccepted and merged and settled

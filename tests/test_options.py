@@ -281,6 +281,29 @@ class TestOnlyWhatTheBranchAdded(RepoCase):
             options.new_dependencies(self.ctx(), ["api/package.json"], "3281711"),
         )
 
+    def test_what_a_merge_of_the_trunk_brings_in_is_not_this_branchs(self):
+        """#270: `git merge origin/main` into a branch with its own addition, stopped on the
+        conflict in the manifest. Until the merge commit exists the branch point is the old
+        one, and the trunk's own new packages read as this session's. What the trunk carries
+        now, and what the merge is bringing in, are not new here, whoever added them."""
+        baseline = self.repo_with_trunk_dependency()
+        self.commit("the branch adds babel-preset-expo")
+        git(["switch", "-q", "main"], self.repo)
+        self.write("mobile/package.json", json.dumps(
+            {"name": "app", "dependencies": {
+                "react-native-view-shot": "4.0.3", "expo": "51.0.0", "expo-network": "8.0.0"}}))
+        self.commit("the trunk adds expo-network")
+        git(["switch", "-q", "feat/thumbnails"], self.repo)
+        merged = subprocess.run(["git", "merge", "main"], cwd=self.repo, capture_output=True,
+                                text=True)
+        self.assertNotEqual(0, merged.returncode, "precondition: the merge stops on the manifest")
+        self.write("mobile/package.json", json.dumps(
+            {"name": "app", "dependencies": {
+                "react-native-view-shot": "4.0.3", "expo": "51.0.0",
+                "babel-preset-expo": "11.0.0", "expo-network": "8.0.0"}}))
+
+        self.assertEqual(["babel-preset-expo"], self.added(baseline))
+
     def test_committing_the_addition_does_not_buy_silence(self):
         """HEAD is deliberately not one of the refs consulted. A dependency this session
         added and then committed is in HEAD, and reading it there would make committing

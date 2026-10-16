@@ -1,5 +1,84 @@
 # Changelog
 
+## v2.4.0
+
+A merge is finished when it has run, not when it was sent, so a merge that fails keeps the
+founder's word. Removals of trees and branches stop taking what nothing else holds: a sibling's
+provisioned tree is guarded like any other, a tree somebody stands in is never reaped, a branch
+loses `-D` unless every commit's work is in the trunk, and ignored data keeps its tree. A project
+can name its own ways to ship, and each then waits for `+release`.
+
+Found by a checkup that ran the plugin live under Claude Code 2.1.301, beside the founder's own
+repository, with scripted reproductions against 2.3.0.
+
+### What broke
+
+**A merge that failed had already spent `+merge`.** The gate spent the word, settled the pull
+request as merged, closed its cards and told every other session at PreToolUse, which never sees
+the result. A merge refused by GitHub on a conflict left the word gone and a card closed over
+work that had not landed, and the founder was asked for `+merge` again over the same pull
+request: the root #232, #241, #243, #246 and #268 each patched one way into. `gh pr merge --auto`
+was recorded as merged while GitHub still waited on its checks.
+
+**One session could destroy another's provisioned tree.** With a process per session, as in
+production, a write, `git -C <tree> reset --hard`, `clean -fdx` and `git worktree remove --force`
+of a tree a live sibling worked in all went through: provisioned trees lie inside the main
+checkout, which ignores `.claude/worktrees/`, and the guard asked the main checkout first.
+
+**A sibling's start removed the tree a conversation stood in.** `/clear` gives the conversation a
+new id, and the reaper asked only whether the session that MADE the tree was live.
+
+**The branch sweep deleted a commit no ref held.** A branch squash-merged and then given a commit
+putting one of its files back no longer changed that file, so the proof by its net diff held and
+`-D` took the revert.
+
+**Removing a finished tree deleted ignored data nothing else had,** a founder's export of store
+photos among it, and the board called a tree a sibling had just made one that "loses nothing".
+
+**Production went out with no word asked.** `make mobile-ota` and `deploy_standalone.sh`, one
+repository's only over-the-air publish and its production deploy, name neither a deploy tool nor
+production. `make -C web release ENV=production` read `web` as the target.
+
+**Other gates read the wrong thing.** A committed `test-results.xml`, one failure in it, was read
+as the newest report. The commit review compared every line of a touched file with the whole
+baseline and charged a pre-existing fixture password to the session; it also ran on a heredoc
+that committed nothing, and its reports were swept into a founder's commit. A write into a tree
+beside the checkout (`git worktree add ../shop-x`) owed no card. A resumed chat lost the card it
+had claimed in another tree; a branch squash-merged on the remote trunk was demanded as unfinished
+work; a trunk merge's dependencies were charged to the branch (#270); git's own merge and revert
+subjects were refused as unconventional; and a Russian card title named its file `task`.
+
+### What changed
+
+- A merge is judged at PreToolUse as before and held under its `tool_use_id`; the PostToolUse of
+  the same call, which fires only for a call that succeeded, spends the word, settles the pull
+  request, closes the cards it carried and tells the other sessions. The single merge a word
+  allows when it named nothing is moved onto the pull request it was used on, so its retry is
+  covered and nothing else is. `--auto` spends the word and leaves the pull request open until it
+  lands. `pr-opened` now also runs for `merge_pull_request` and `gh pr *`, within the twelve hook
+  entries (decision 0038).
+- The innermost working tree holding a path is the one it is in, for every cross-tree rule.
+- A provisioned tree any live session stands in is never reaped.
+- `-D` needs every file any of the branch's commits touched to be identical in the trunk.
+- A tree's ignored files keep it unless they regrow, match the main checkout, are the `.env` this
+  plugin wrote, or are its own state; the board names the rest. A tree touched in the last two
+  hours is not called nobody's (decision 0039).
+- `release_commands` in config.json names a project's own ways to ship by the name a line runs
+  them under, a make target or a script, and each waits for `+release`. make's target is read
+  past its options and variable assignments.
+- A report git tracks is never read as a run.
+- The commit review judges only the lines a commit wrote, runs only on a command that commits,
+  writes its reports where git does not look, and keeps the twenty newest.
+- A write into another working tree of the repository owes its card there.
+- A resumed chat reclaims its card from any tree it worked in; squash-merged work on the remote
+  trunk counts as delivered; dependency changes a trunk merge brings in are not the branch's;
+  git's generated merge and revert subjects pass the convention check; Cyrillic is transliterated
+  in every file name the plugin writes.
+
+No `migrate._REPAIRS` step: no state an older version wrote changes meaning. A review report an
+earlier version let a commit take stays tracked where it is; `git rm --cached -r
+.claude/claude-bestpractice/reviews` takes it out of the index.
+
 ## v2.3.0
 
 The Stop gate no longer calls ERRORs that a second run does not see a failure of the code, and
