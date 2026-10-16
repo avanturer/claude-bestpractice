@@ -1450,12 +1450,21 @@ def reclaim(ctx: GitContext, session_id: str) -> list[str]:
 
     Each memory is spent whether or not it was used, so a task legitimately re-planned
     weeks later is never silently pulled back into a session that has moved on.
+
+    Matched by the chat, not by the (chat, tree) identity the release was filed under. A
+    session claims in its own tree, and the process that resumes it fires SessionStart from
+    the main checkout before Claude Code puts it back in the tree: the release named the tree
+    identity, the question named the main checkout's, and the card stayed in `next` while the
+    chat that held it did the work — then closed it ownerless, so no gate could see it had.
     """
+    from . import hookio
+
+    chat = hookio.harness_of(session_id, str(ctx.worktree_root))
     taken: list[str] = []
     with store.guarded_json(store.tier_b(ctx, RELEASED_FILE), default={}) as box:
         table = box[0] if isinstance(box[0], dict) else {}
         mine = [tid for tid, row in table.items()
-                if isinstance(row, dict) and row.get("session_id") == session_id]
+                if isinstance(row, dict) and _released_by(row.get("session_id"), session_id, chat)]
         for task_id in mine:
             task, _ = claim(ctx, task_id, session_id, ctx.branch)
             if task is not None:
@@ -1463,6 +1472,15 @@ def reclaim(ctx: GitContext, session_id: str) -> list[str]:
             table.pop(task_id, None)
         box[0] = table
     return taken
+
+
+def _released_by(holder: object, session_id: str, chat: str) -> bool:
+    """Was a released claim this chat's, in this tree or any other it has worked in?"""
+    from . import hookio
+
+    if not isinstance(holder, str) or not holder:
+        return False
+    return holder == session_id or (bool(chat) and hookio.composed_from(holder, chat))
 
 
 def _move_to(path: Path, target_dir: Path, task: Task) -> None:

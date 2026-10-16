@@ -113,5 +113,56 @@ class TestAClaimSurvivesARestart(RestartCase):
         self.assertEqual({}, store.read_json(store.tier_b(ctx, plan.RELEASED_FILE), default={}))
 
 
+class TestAClaimSurvivesAResumeFromAnotherTree(RestartCase):
+    """The claim was made in the session's own tree; the restart registers in the main checkout.
+
+    Measured in a live run: a session entered its tree, claimed its card there, and its process
+    ended. `claude -p --resume` started the next one, and SessionStart fired with the main
+    checkout as its working directory before Claude Code put the session back in the tree. The
+    reaper released the claim under the TREE identity, `reclaim` asked for the main checkout's,
+    and nothing came back. `done` then closed a card with no owner, the Stop gate found no card
+    this session had held or closed, and a merged, green change was filed UNVERIFIED with its
+    tree left standing.
+    """
+
+    def lost_in_a_tree(self):
+        """A card claimed under the tree identity, its process dead, released by a sibling."""
+        ctx = self.ctx()
+        tree = self.add_worktree("worker-tree")
+        in_tree = sid(tree, "worker")
+        self.run_hook("session-start", {"session_id": "worker", "hook_event_name": "SessionStart"},
+                      cwd=tree)
+        task = plan.add(ctx, "wire up the exporter", done_when="the exporter writes a csv",
+                        paths=["src/app.py"])
+        plan.claim(ctx, task.id, in_tree, "worker-tree")
+        sessions.touch(ctx, in_tree, pid=1, pid_fingerprint="not-the-process-that-was",
+                       pid_trust=sessions.PID_TRUST_OWNER)
+        self.assertFalse(sessions.is_live(ctx, sessions.get(ctx, in_tree)),
+                         "fixture failed to kill the session, so nothing below is about a restart")
+        sibling = sid(self.repo, "sibling")
+        sessions.register(ctx, session_record_for(ctx, sibling))
+        sessions.reap(ctx, exclude=sibling)
+        self.assertEqual(plan.NEXT, plan.find(ctx, task.id).state, "the reaper should free it")
+        return ctx, task
+
+    def test_the_card_comes_back_to_the_same_chat_in_another_tree(self):
+        ctx, task = self.lost_in_a_tree()
+
+        said = self.start("worker").stdout
+
+        back = plan.find(ctx, task.id)
+        self.assertEqual(plan.DOING, back.state, said)
+        self.assertEqual(sid(self.repo, "worker"), back.owner)
+        self.assertIn("reclaimed", said)
+
+    def test_another_chat_takes_nothing(self):
+        """The harness id is what makes it the same chat; a different one reclaims nothing."""
+        ctx, task = self.lost_in_a_tree()
+
+        self.start("stranger")
+
+        self.assertEqual(plan.NEXT, plan.find(ctx, task.id).state)
+
+
 if __name__ == "__main__":
     unittest.main()
