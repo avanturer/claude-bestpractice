@@ -363,6 +363,12 @@ looks good, ship it
 +merge
 ```
 
+A promotion is read off the program a line runs: `vercel --prod`, `fly deploy`,
+`eas update --channel production`, a script named for deploying that names production. A
+project's own way to ship names neither, so declare it in `config.json` by the name a line
+runs it under, a make target or a script: `"release_commands": ["mobile-ota",
+"deploy_standalone.sh"]`. Each then waits for `+release` like the rest.
+
 A token sharing a line with prose cannot be told from a token being talked about, and that
 gap ran the wrong way: *"I never said `+merge`"* — a refusal — authorised the merge, and
 two unapproved pull requests reached a deploying trunk before it was caught. The prefix is a

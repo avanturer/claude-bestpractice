@@ -1023,6 +1023,33 @@ class TestPromotingToProductionTakesTheFoundersWord(PRCase):
         self.deploying()
         self.assertEqual("deny", self.decision(self.deploying()))
 
+    def test_a_projects_own_way_to_ship_takes_the_word_once_it_is_declared(self):
+        """`make mobile-ota` and `deploy_standalone.sh` name neither a deploy tool nor
+        production, so one founder's two ways to ship reached every user with no word asked."""
+        self.configure(stage_override="traction",
+                       release_commands=["mobile-ota", "deploy_standalone.sh"])
+        self.start()
+        shipping = ('make mobile-ota MSG="fix the colour"', "make -C . mobile-ota MSG=x",
+                    "FUDDY_HOST=root@203.0.113.7 ./infra/scripts/deploy_standalone.sh")
+        for command in shipping:
+            proc = self.tool("Bash", {"command": command})
+            self.assertEqual("deny", self.decision(proc), command)
+            self.assertIn("+release", self.reason(proc), command)
+        for command in ('make mobile-ota-preview MSG="fix"', 'echo "then make mobile-ota"'):
+            self.assertNotEqual("deny", self.decision(self.tool("Bash", {"command": command})),
+                                command)
+        self.approve()
+        self.assertNotEqual("deny", self.decision(self.tool("Bash", {"command": shipping[0]})))
+        self.assertEqual("deny", self.decision(self.tool("Bash", {"command": shipping[0]})))
+
+    def test_a_make_target_is_read_past_makes_options_and_assignments(self):
+        """`make -C web release ENV=production` read `web` as the target, and
+        `make ENV=production release` read `ENV=production`: neither was a release."""
+        self.start()
+        for command in ("make -C web release ENV=production", "make ENV=production release"):
+            self.assertEqual("deny", self.decision(self.tool("Bash", {"command": command})),
+                             command)
+
 class TestTheFoundersWordIsWaitedFor(PRCase):
     """Issue #232. The founder sent `+merge` on its own, and the first merge after it was
     refused as unaccepted; the same merge seconds later went through, with nothing said in

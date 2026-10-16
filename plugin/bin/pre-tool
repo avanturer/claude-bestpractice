@@ -315,15 +315,46 @@ def _what_runs(argv: list[str]) -> tuple[str, list[str]]:
         rest = rest[1:]
     elif name not in _RUNS_A_SCRIPT and not _INTERPRETER.match(name):
         return name, rest
+    if name == "make":
+        target = _make_target(rest)
+        if target is None:
+            return name, rest
+        return rest[target], rest[:target] + rest[target + 1:]
     for index, word in enumerate(rest):
         if not word.startswith("-"):
             return word.rsplit("/", 1)[-1], rest[index + 1:]
     return name, rest
 
 
-def promotes(argv: list[str]) -> bool:
-    """Does this one command promote something to production?"""
+# make's options that take the next word as their value.
+_MAKE_VALUES = {"-C", "-f", "-I", "-o", "-W", "--directory", "--file", "--makefile",
+                "--include-dir", "--old-file", "--assume-old", "--new-file", "--assume-new",
+                "--what-if"}
+
+
+def _make_target(args: list[str]) -> int | None:
+    """Where make's target is, past its options, their values and its variable assignments.
+
+    `make -C mobile ota` and `make MSG=x ota` run `ota`; the first word that was not a flag
+    was `mobile` and `MSG=x`, so neither was read as the target it is.
+    """
+    skip = False
+    for index, word in enumerate(args):
+        if skip:
+            skip = False
+        elif word in _MAKE_VALUES:
+            skip = True
+        elif not (word.startswith("-") or "=" in word or word.isdigit()):
+            return index
+    return None
+
+
+def promotes(argv: list[str], declared: frozenset = frozenset()) -> bool:
+    """Does this one command promote something to production? `declared` is the project's
+    own `release_commands`."""
     name, args = _what_runs(argv)
+    if name in declared:
+        return True
     judge = _PROMOTES.get(name)
     if judge is not None:
         return judge(args)
@@ -334,7 +365,7 @@ def promotes(argv: list[str]) -> bool:
 _WORD = re.compile(r"[^\s'\"`$();|&<>]+")
 
 
-def promotes_to_production(command: str, cwd: Path) -> bool:
+def promotes_to_production(command: str, cwd: Path, declared: frozenset = frozenset()) -> bool:
     """Does anything this line runs promote to production — its text about one never counts.
 
     Read per segment, so `(cd web && vercel --prod)` is read at all. A segment the tokeniser
@@ -345,11 +376,12 @@ def promotes_to_production(command: str, cwd: Path) -> bool:
         commands = _commands_in(literal)
         if not commands:
             words = _WORD.findall(literal)
+            known = {*_PROMOTES, *declared}
             commands = [words[at:] for at, word in enumerate(words)
-                        if word.rsplit("/", 1)[-1] in _PROMOTES]
+                        if word.rsplit("/", 1)[-1] in known]
         for argv in commands:
             code = _shell_code(argv)
-            if promotes(argv) or (code and promotes_to_production(code, cwd)):
+            if promotes(argv, declared) or (code and promotes_to_production(code, cwd, declared)):
                 return True
     return False
 
@@ -1759,7 +1791,8 @@ def main() -> None:
             # --prod"` is text about a deploy, and refusing it is the defect #76 reported one
             # gate over; so is the same flag handed to an installer, a search or a commit.
             # And spent only on a real promotion, since the founder's word allows one.
-            deploying = promotes_to_production(str(ti.get("command", "")), session_cwd)
+            deploying = promotes_to_production(str(ti.get("command", "")), session_cwd,
+                                               frozenset(cfg.release_commands))
             if deploying and not founder.awaited(ctx, config.APPROVE_RELEASE, event.session_id,
                                                  event.transcript_path):
                 # The literal used to be a token IN THE COMMAND, which the session writes

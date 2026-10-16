@@ -199,6 +199,12 @@ class Config:
             "tests/", "test/", "spec/", "__tests__/",
         ]
     )
+    # This project's own ways to ship to production, by the name a line runs them under: a
+    # make target, a script, a package script. Each needs the founder's `+release` as
+    # `vercel --prod` does. A name is all a gate can read about a project's script, and
+    # `make mobile-ota` and `deploy_standalone.sh` name neither a deploy tool nor
+    # production, so both shipped to every user with no word asked.
+    release_commands: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -236,6 +242,7 @@ class Config:
             "report_defects": self.report_defects,
             "stage_override": self.stage_override,
             "exempt_paths": self.exempt_paths,
+            "release_commands": self.release_commands,
         }
 
 
@@ -345,6 +352,7 @@ _EXPECTED: dict[str, type] = {
     "report_defects": str,
     "stage_override": str,
     "exempt_paths": list,
+    "release_commands": list,
 }
 
 _BOOL_WORDS = {
