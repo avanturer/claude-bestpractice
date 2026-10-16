@@ -1567,6 +1567,12 @@ def main() -> None:
     pr_vouch = ""
     if cfg.manage_pull_requests:
         command = str(ti.get("command", "")) if event.tool_name == "Bash" else ""
+        # Everything below judges ONE merge, read off the line. The second of two merges went
+        # through on the first one's word and checks, vouched for, and a merge in a loop or
+        # behind `sh -c` was not read as one at all (decision 0040).
+        unjudged = pullrequest.merge_line(event.tool_name, command)
+        if unjudged:
+            deny(ctx, rec, unjudged)
         number = pullrequest.merge_target(event.tool_name, command, ti)
         if number is not None:
             # Green is not accepted. The checks say the code works; they say nothing about

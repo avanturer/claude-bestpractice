@@ -314,9 +314,165 @@ class TestAMergeHiddenInASubstitutionIsStillAMerge(PRCase):
         self.armed()
         for command in (f"echo 'gh pr merge {self.PR_NUMBER}'",
                         "grep -r 'gh pr merge' docs/",
-                        f"echo '$(gh pr merge {self.PR_NUMBER})'"):
+                        f"echo '$(gh pr merge {self.PR_NUMBER})'",
+                        'git commit --allow-empty -m "say why gh pr merge is gated"'):
             self.assertNotEqual("deny", self.decision(self.bash(command)),
                                 f"{command!r} was refused for writing about a merge")
+
+
+class TestALineMergesOnePullRequest(PRCase):
+    """#272. The gate judged the first `gh pr merge` on a line and nothing past it.
+
+    Measured against 2.4.0, armed, with the founder's word on #48 only: `gh pr merge 48 &&
+    gh pr merge 49` was approved by this plugin as "judged by this gate one step ago", so #49
+    merged on nobody's word and with no prompt. Ten more spellings were no merge at all to it:
+    a loop, a condition, a group, `!`, `xargs`, `bash -c`, `sh -c`, `eval`, `exec`, `sudo`,
+    and `"$(…)"` (decision 0040).
+    """
+
+    OTHER = 49
+
+    def armed(self, accepted: bool = True) -> None:
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+        self.open_a_pr()
+        if accepted:
+            self.accept()
+
+    def bash(self, command: str):
+        return self.tool("Bash", {"command": command}, "s1")
+
+    def test_a_second_merge_does_not_ride_the_first_ones_word(self):
+        self.armed()
+        self.open_pr(self.OTHER, "feat/y")
+        proc = self.bash(f"gh pr merge {self.PR_NUMBER} --squash && "
+                         f"gh pr merge {self.OTHER} --squash")
+        self.assertEqual("deny", self.decision(proc))
+        self.assertIn("runs 2 merges", self.reason(proc))
+
+    def test_each_merge_is_named_as_its_own_call(self):
+        """Refused even where the word covers both, and the way through runs as printed."""
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+        self.open_a_pr()
+        self.open_pr(self.OTHER, "feat/y")
+        self.accept()
+        proc = self.bash(f"gh pr merge {self.PR_NUMBER} --squash 2>&1 && "
+                         f"gh pr merge {self.OTHER} --squash")
+        self.assertEqual("deny", self.decision(proc))
+        for named in (f"  gh pr merge {self.PR_NUMBER} --squash\n",
+                      f"  gh pr merge {self.OTHER} --squash\n"):
+            self.assertIn(named, self.reason(proc))
+        self.assertNotEqual("deny", self.decision(self.bash(
+            f"gh pr merge {self.PR_NUMBER} --squash")))
+
+    def test_a_merge_it_cannot_read_is_refused_whatever_the_word(self):
+        self.armed()
+        n = self.PR_NUMBER
+        for command in (f"for n in {n}; do gh pr merge $n --squash; done",
+                        f"if true; then gh pr merge {n}; fi",
+                        f"{{ gh pr merge {n}; }}",
+                        f"! gh pr merge {n}",
+                        f"echo {n} | xargs gh pr merge",
+                        f"bash -c 'gh pr merge {n}'",
+                        f'sh -c "gh pr merge {n} --squash"',
+                        f"eval gh pr merge {n}",
+                        f"exec gh pr merge {n}",
+                        f"sudo gh pr merge {n}",
+                        f'echo "$(gh pr merge {n})"',
+                        f"gh api -X PUT repos/o/r/pulls/{n}/merge",
+                        "gh api graphql -f query='mutation { mergePullRequest(input: {}) "
+                        "{ clientMutationId } }'"):
+            with self.subTest(command=command):
+                proc = self.bash(command)
+                self.assertEqual("deny", self.decision(proc))
+                self.assertIn("cannot read which pull request it merges", self.reason(proc))
+
+    def test_a_line_that_hides_whether_it_merged_is_refused(self):
+        """The merge is finished on the call's result, and these report another command's."""
+        self.armed()
+        for joint, command in (("|", "gh pr merge {} --squash | tail -3"),
+                               (";", "gh pr merge {} --squash; echo done"),
+                               ("||", "gh pr merge {} --squash || true"),
+                               ("&", "gh pr merge {} --squash &")):
+            with self.subTest(command=command):
+                proc = self.bash(command.format(self.PR_NUMBER))
+                self.assertEqual("deny", self.decision(proc))
+                self.assertIn(f"shares this line with `{joint}`", self.reason(proc))
+
+    def test_what_follows_a_merge_with_and_and_still_goes_through(self):
+        self.armed()
+        proc = self.bash(f"gh pr merge {self.PR_NUMBER} --squash --delete-branch && git status")
+        self.assertNotEqual("deny", self.decision(proc))
+
+    def test_a_merge_named_by_branch_or_by_variable_is_refused(self):
+        self.armed()
+        for command, said in (("gh pr merge feat/x --squash", "by its branch"),
+                              ('gh pr merge "$PR" --squash', "which the shell expands")):
+            with self.subTest(command=command):
+                proc = self.bash(command)
+                self.assertEqual("deny", self.decision(proc))
+                self.assertIn(said, self.reason(proc))
+
+    def test_a_merge_by_url_is_its_number(self):
+        self.armed()
+        proc = self.bash(f"gh pr merge https://github.com/o/r/pull/{self.PR_NUMBER} --squash")
+        self.assertNotEqual("deny", self.decision(proc))
+
+    def test_where_its_errors_go_is_not_a_pull_request(self):
+        """`2>&1` named pull request #2, which no word covered, so this was refused."""
+        self.armed()
+        self.assertNotEqual("deny", self.decision(self.bash("gh pr merge --squash 2>&1")))
+
+    def test_a_flags_value_is_not_the_pull_request(self):
+        self.armed()
+        proc = self.bash(f"gh pr merge -t 5 {self.PR_NUMBER} --squash")
+        self.assertNotEqual("deny", self.decision(proc))
+
+    def test_help_and_switching_auto_merge_off_merge_nothing(self):
+        """Refused before for want of a `+merge`, which neither needs."""
+        self.armed(accepted=False)
+        for command in ("gh pr merge --help", f"gh pr merge {self.PR_NUMBER} --disable-auto"):
+            with self.subTest(command=command):
+                self.assertNotEqual("deny", self.decision(self.bash(command)))
+
+
+class TestAutoMergeThroughTheToolWaitsForTheWord(PRCase):
+    """`enable_pr_auto_merge` is `gh pr merge --auto` as a tool: the pull request merges when
+    its checks pass, with nobody there. The hook never saw it, so it went through unasked."""
+
+    AUTO = "mcp__github__enable_pr_auto_merge"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+        self.open_a_pr()
+
+    def auto(self):
+        return self.ran(self.AUTO, {"owner": "o", "repo": "r", "pullNumber": self.PR_NUMBER})
+
+    def test_it_needs_the_founders_word(self):
+        proc = self.auto()
+        self.assertEqual("deny", self.decision(proc))
+        self.assertIn("no `+merge` from the founder is on record", self.reason(proc))
+
+    def test_it_spends_the_word_and_leaves_the_pull_request_open(self):
+        self.accept()
+        self.assertNotEqual("deny", self.decision(self.auto()))
+        self.assertEqual(pullrequest.OPEN, pullrequest._records(self.ctx())["feat/x"]["state"])
+        self.assertEqual("deny", self.decision(self.auto()))
+
+    def test_the_harness_sends_it_to_both_hooks(self):
+        hooks = json.loads((BIN.parent / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+        self.assertTrue(harness_matches(hooks["hooks"]["PreToolUse"][0]["matcher"], self.AUTO))
+        self.assertTrue(harness_matches(hooks["hooks"]["PostToolUse"][0]["matcher"], self.AUTO))
 
 
 class TestOpeningOneIsNotAQuestion(PRCase):

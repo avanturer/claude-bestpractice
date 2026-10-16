@@ -389,3 +389,77 @@ def acting(line: str) -> list[list[str]]:
     failing towards the previous behaviour rather than towards permission.
     """
     return [argv for argv in commands(line) if argv[0].rsplit("/", 1)[-1] not in READERS]
+
+
+# Programs that run a command line handed to them as ONE string, which is read again here.
+_SCRIPT_RUNNERS = {"bash", "sh", "zsh", "dash", "ksh", "ash", "fish", "eval", "su", "ssh",
+                   "watch", "script"}
+
+# A command substitution bash runs: `$(` that is not `$((` arithmetic, or a backtick.
+_SUBSTITUTION = re.compile(r"\$\((?!\()|`")
+
+
+def hidden(line: str, program: str, *subcommand: str) -> bool:
+    """Does `line` run `program` with `subcommand` from somewhere `runs` does not report?
+
+    `runs` reads the first word of each command, so `gh pr merge` in a loop, a condition or a
+    group, behind `!`, handed to `xargs`, `sudo` or `exec`, in a string `sh -c`, `eval` or
+    `ssh` runs, or in a substitution bash expands, `"$(…)"` included, was no merge at all to
+    the gate that judges merges, and `for n in 1 2; do gh pr merge $n; done` went through on
+    nobody's word. Here a word that is not the program in front of it is no cover, a string a
+    shell runs is read as a line, and a reader's arguments are data, as everywhere else.
+    """
+    wanted = [program, *subcommand]
+    for argv in commands(line):
+        names = [word.rsplit("/", 1)[-1] for word in argv]
+        if names[0] in READERS:
+            continue
+        if any(names[at:at + len(wanted)] == wanted for at in range(1, len(names))):
+            return True
+        if names[0] in _SCRIPT_RUNNERS and any(_runs_text(word, wanted) for word in argv[1:]):
+            return True
+    return _substituted(line, wanted)
+
+
+def _runs_text(text: str, wanted: list[str]) -> bool:
+    """Does `text`, run as a shell line, run `wanted`? Matched as words where it cannot be read."""
+    if not commands(text):
+        return _words(wanted).search(text) is not None
+    return bool(runs(text, *wanted)) or hidden(text, *wanted)
+
+
+def _substituted(line: str, wanted: list[str]) -> bool:
+    """Does a command substitution in `line` run `wanted`?
+
+    Bash expands one unquoted and inside double quotes alike. Only single quotes keep it text,
+    which is why `echo '$(gh pr merge 1)'` is writing about a merge and `echo "$(gh pr merge
+    1)"` is one. Documents and comments are set aside first, as for every other reading here.
+    """
+    words = _words(wanted)
+    for piece in _PIECE.finditer(_one_line(_without_substituted_documents(line))):
+        text = piece.group()
+        if piece.lastgroup == "quoted" and text.startswith("'"):
+            continue
+        opened = _SUBSTITUTION.search(text)
+        if opened and words.search(text, opened.end()):
+            return True
+    return False
+
+
+def _words(wanted: list[str]) -> re.Pattern[str]:
+    return re.compile(r"\b" + r"\s+".join(map(re.escape, wanted)) + r"\b")
+
+
+def joints(line: str) -> list[str] | None:
+    """The operators joining `line`'s commands, in order. None when the line cannot be read.
+
+    What says whether the line's exit status is a given command's: only `&&` carries a failure
+    through to the end, and a command left running with `&` has no status here at all. A `;`
+    the line ends on joins nothing.
+    """
+    if not segments(line):
+        return None
+    tokens = _tokens(line)
+    last = max(at for at, token in enumerate(tokens) if token not in _SEPARATORS)
+    return [token for at, token in enumerate(tokens)
+            if token in _SEPARATORS and (at < last or token == "&")]
