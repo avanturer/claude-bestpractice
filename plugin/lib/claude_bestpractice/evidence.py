@@ -2444,7 +2444,7 @@ def record_run(ctx: GitContext, command: list[str], passed: bool, cut_short: boo
             "passed": bool(passed),
             "at": time.time(),
             "branch": ctx.branch,
-            **({"cut_short": True} if cut_short else {}),
+            **({"cut_short": True, "tree": tree_hash(ctx)} if cut_short else {}),
         },
     )
 
@@ -2460,11 +2460,41 @@ def record_cut_short(ctx: GitContext, command: list[str]) -> None:
     record_run(ctx, command or ["the Stop gate's run"], passed=False, cut_short=True)
 
 
-def _cut_short_since(seen: dict | None, green: dict | None) -> bool:
-    """Was the last run on the branch one stopped for the founder, after its last green?"""
+def cut_short(ctx: GitContext, branch: str = "") -> dict | None:
+    """The branch's last run, where it was stopped for the founder's message and still stands
+    for the work it was judging. None otherwise.
+
+    It does not stand once a run passes or fails after it, nor where a green of the repository's
+    suite covers the very tree it stopped on: the pre-push hook records one for what it pushes,
+    and the Stop after it runs the suite on that tree again, since no pass is remembered
+    (decision 0013). Stopped there, the run was judging what had passed already, and the push it
+    named as the way out skips a tree that is covered.
+    """
+    seen = last_run(ctx, branch)
     if not seen or not seen.get("cut_short"):
+        return None
+    if _passed_on(seen, last_green(ctx, branch)) or _failed_after(ctx, seen, branch):
+        return None
+    return seen
+
+
+def _passed_on(stopped: dict, green: dict | None) -> bool:
+    """Did the repository's suite pass after the stopped run, or on the very tree it stopped on?"""
+    if not green:
         return False
-    return float(seen.get("at") or 0) >= float((green or {}).get("at") or 0)
+    if float(green.get("at") or 0) > float(stopped.get("at") or 0):
+        return True
+    tree = str(stopped.get("tree") or "")
+    return bool(tree) and tree == str(green.get("tree") or "") and not green.get("path")
+
+
+def _failed_after(ctx: GitContext, stopped: dict, branch: str) -> bool:
+    """Was the suite seen failing on the branch after the stopped run? The red record says so
+    then, and the stopped run is no longer the latest word on it."""
+    failed = red(ctx)
+    if not failed or failed.get("branch") != (branch or ctx.branch):
+        return False
+    return float(failed.get("last_seen") or 0) >= float(stopped.get("at") or 0)
 
 
 def last_run(ctx: GitContext, branch: str = "") -> dict | None:
@@ -2488,19 +2518,19 @@ def unproven(ctx: GitContext, branch: str = "") -> str:
     One sentence for the three surfaces that used to compose their own, because they were
     composing the same false one: absence of a green was reported as absence of a run.
     """
-    green = last_green(ctx, branch)
-    seen = last_run(ctx, branch)
-    if green and not _cut_short_since(seen, green):
+    stopped = cut_short(ctx, branch)
+    if last_green(ctx, branch) and stopped is None:
         return ""
+    seen = last_run(ctx, branch)
     where = f" on {branch}" if branch else " on this branch"
-    if not seen:
-        return f"no test run has ever been observed{where}"
-    if seen.get("cut_short"):
+    if stopped is not None:
         return (f"the Stop gate's run of the suite{where} was stopped "
-                f"({_lasted(seen.get('at'))}) because the founder wrote while it ran, and "
+                f"({_lasted(stopped.get('at'))}) because the founder wrote while it ran, and "
                 "nothing has passed on that work since: it runs again at the session's next "
                 "finish, and on `git push` where the pre-push hook is installed "
                 "(`claude-bp-ci status`)")
+    if not seen:
+        return f"no test run has ever been observed{where}"
     ran = " ".join(seen.get("command") or ["?"])
     return (f"the last run observed{where} FAILED ({_lasted(seen.get('at'))}) — `{ran}`; "
             "nothing has passed since")

@@ -1450,15 +1450,15 @@ def merged_in(ctx: GitContext, command: str, cwd: str) -> GitContext | None:
     merged that tree's pull request as the session's own: judged by its blockers, its word
     spent, its record settled as merged (#248).
     """
-    return _tree_where(ctx, command, "merge", cwd)
+    return _tree_at(ctx, _moved_to(command, "merge"), cwd)
 
 
-def _tree_where(ctx: GitContext, command: str, verb: str, cwd: str) -> GitContext | None:
-    """The working tree of this clone this line runs `gh pr <verb>` in, or None for a place
-    this cannot name or another clone's."""
-    where = _where(command, verb, cwd)
-    if where is None:
+def _tree_at(ctx: GitContext, moved: str, cwd: str) -> GitContext | None:
+    """The working tree of this clone at `cwd` moved by the `cd`s `moved` joins, or None for a
+    place only the shell can name, as `cd $TREE` is, or another clone's."""
+    if "$" in moved or "`" in moved:
         return None
+    where = os.path.join(cwd, moved) if moved else cwd
     if where == cwd:
         return ctx
     from .gitctx import GitError, resolve
@@ -1535,7 +1535,9 @@ def _branch_of(directory: str) -> str:
 # `owner/repo` out of either URL spelling git writes. Anything else — a local path, a
 # host this does not recognise — leaves the set empty, and an empty set vouches for
 # nothing, which is the safe direction.
-_REMOTE = re.compile(r"[:/](?P<owner>[^/:]+)/(?P<repo>[^/]+?)(?:\.git)?/?$")
+_REMOTE = re.compile(
+    r"^(?:[a-z][a-z0-9+.-]*://(?:[^/@]+@)?[^/:]+(?::\d+)?/|(?:[^/@:\\]+@)?[^/:\\]+:)"
+    r"(?P<owner>[^/:]+)/(?P<repo>[^/]+?)(?:\.git)?/?$", re.I)
 
 
 def _remote_names(ctx: GitContext) -> set[str]:
@@ -1557,8 +1559,11 @@ def _remote_names(ctx: GitContext) -> set[str]:
     return names
 
 
-# A pull request's address, which `gh` takes in place of its number, and names its repository.
-_PULL_URL = re.compile(r"https?://[^/\s]+/(?P<owner>[^/\s]+)/(?P<repo>[^/\s]+)/pull/\d+/?")
+# A pull request's address, which `gh` takes in place of its number, and names its repository:
+# with whatever follows the number, as a link to its files, a comment or a commit carries it.
+# Read only to the number, `…/pull/7/files` of another repository was this one's #7.
+_PULL_URL = re.compile(
+    r"https?://[^/\s]+/(?P<owner>[^/\s]+)/(?P<repo>[^/\s]+)/pull/\d+(?:[/?#]\S*)?")
 
 
 def _as_repository(value: str) -> str:
@@ -1642,6 +1647,21 @@ def about_this_repository(ctx: GitContext, tool_name: str, tool_input: dict[str,
     """
     named = _repositories_named(tool_name, tool_input, command)
     return not named or named <= _remote_names(ctx)
+
+
+def elsewhere(ctx: GitContext, tool_name: str, tool_input: dict[str, Any],
+              command: str = "") -> bool:
+    """Does this call name a repository this clone's remotes say is not this one?
+
+    Asked before a merge is matched to this clone's records by its number. False where the call
+    names none, and where no remote of this clone names one: a clone whose remotes say nothing
+    cannot tell its own pull requests from another repository's, and is matched as it was.
+    """
+    named = _repositories_named(tool_name, tool_input, command)
+    if not named:
+        return False
+    here = _remote_names(ctx)
+    return bool(here) and not named <= here
 
 
 def about_current_branch(tool_name: str, command: str) -> bool:
@@ -1773,15 +1793,30 @@ def numbers_shown(ctx: GitContext, tool_name: str, command: str, tool_input: dic
             else []
     if tool_name != "Bash" or "gh" not in command:
         return []
+    return _shown_on_the_line(ctx, command, cwd)
+
+
+def _shown_on_the_line(ctx: GitContext, command: str, cwd: str) -> list[int]:
+    """This repository's pull requests a shell line shows by number, each `gh pr view|checks|
+    diff` placed where the `cd`s before it leave it."""
     from . import shellcmd
 
     found: list[int] = []
-    for verb in _SHOWING_VERBS:
-        for argv in shellcmd.runs(command, "gh", "pr", verb):
+    moved = ""
+    for argv in shellcmd.commands(command):
+        if argv[0] == "cd" and len(argv) > 1:
+            moved = os.path.join(moved, os.path.expanduser(argv[1]))
+        elif _shows(argv):
             numbers = _shown_by(shellcmd.without_redirections(argv[3:]))
-            if numbers and _about_here(ctx, argv, command, verb, cwd):
+            if numbers and _about_here(ctx, argv, command, moved, cwd):
                 found += numbers
     return found
+
+
+def _shows(argv: list[str]) -> bool:
+    """Is this command a `gh pr view|checks|diff`?"""
+    return argv[0].rsplit("/", 1)[-1] == "gh" and argv[1:2] == ["pr"] \
+        and argv[2:3] != [] and argv[2] in _SHOWING_VERBS
 
 
 def _shown_by(words: list[str]) -> list[int]:
@@ -1798,13 +1833,14 @@ def _shown_by(words: list[str]) -> list[int]:
     return [number for number in shown_here if number > 0]
 
 
-def _about_here(ctx: GitContext, argv: list[str], command: str, verb: str, cwd: str) -> bool:
-    """Is this `gh pr <verb>` about this clone's repository: naming it, or naming none and run
-    in one of its trees? `gh` resolves a call that names none to the remote of where it runs."""
+def _about_here(ctx: GitContext, argv: list[str], command: str, moved: str, cwd: str) -> bool:
+    """Is this `gh` call about this clone's repository: naming it, or naming none and run in one
+    of its trees, `cwd` moved by `moved`? `gh` resolves a call that names none to the remote of
+    where it runs."""
     named = _repositories_in(argv, command)
     if named:
         return named <= _remote_names(ctx)
-    return _tree_where(ctx, command, verb, cwd) is not None
+    return _tree_at(ctx, moved, cwd) is not None
 
 
 def put_to_the_founder(ctx: GitContext, session_id: str, tool_name: str, command: str,
@@ -1816,7 +1852,7 @@ def put_to_the_founder(ctx: GitContext, session_id: str, tool_name: str, command
     if tool_name == "Bash":
         from . import shellcmd
 
-        ours = any(_about_here(ctx, argv, command, "merge", cwd)
+        ours = any(_about_here(ctx, argv, command, _moved_to(command, "merge"), cwd)
                    for argv in shellcmd.runs(command, "gh", "pr", "merge"))
     else:
         ours = about_this_repository(ctx, tool_name, tool_input)

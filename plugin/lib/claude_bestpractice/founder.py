@@ -398,6 +398,11 @@ class Listener:
         except OSError:
             return False
         whole = fresh[:fresh.rfind(b"\n") + 1]
+        if not whole and len(fresh) == _MOST_PER_LOOK:
+            # A line longer than one look is not a queued message this reads. Waiting for its
+            # end would wait forever, and every message after it would go unheard.
+            self._offset += len(fresh)
+            return False
         self._offset += len(whole)
         self._heard = any(_queued_by_the_founder(line) for line in whole.splitlines()
                           if _QUEUED_BY_SOMEONE in line)

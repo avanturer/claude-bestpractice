@@ -1099,6 +1099,9 @@ def main() -> None:
         # which a merge reads as no green. With nothing else to say, the turn is theirs now.
         evidence.record_cut_short(ctx, list(cfg.test_command or ()))
         if not problems:
+            # A block the turn ended on with nothing done about it is still asked about, once
+            # (decision 0014): their message then reaches the session with its next call.
+            _refuse_to_end_on_an_unanswered_block(ctx, rec, pending_refusal)
             sys.stderr.write(
                 "claude-bestpractice: the founder wrote while the suite ran, so it was stopped "
                 "and the turn ends for their message. Nothing was verified: the suite runs at "

@@ -975,6 +975,11 @@ class TestAPullRequestClosedWithoutMergingIsDischarged(PRCase):
         self.open_a_pr()
         self.tool("Bash", {"command": f"gh pr close {PRCase.PR_NUMBER} --repo someone/else"})
         self.assertEqual({"feat/x": pullrequest.OPEN}, self.states())
+        for tail in ("", "/files", "#issuecomment-1", "?w=1"):
+            with self.subTest(tail=tail):
+                self.tool("Bash", {"command": "gh pr close https://github.com/someone/else/pull/"
+                                              f"{PRCase.PR_NUMBER}{tail}"})
+                self.assertEqual({"feat/x": pullrequest.OPEN}, self.states())
 
     def test_the_tool_that_closes_one_discharges_it_once_it_has_run(self):
         git(["remote", "add", "origin", "https://github.com/o/r.git"], self.repo)
@@ -2390,6 +2395,14 @@ class TestADraftIsPausedWork(PRCase):
                 self.tool("Bash", {"command": command})
                 self.assertFalse(self.record()["draft"])
 
+    def test_another_repositorys_url_leaves_it_as_it_is(self):
+        git(["remote", "add", "origin", "https://github.com/o/r.git"], self.repo)
+        self.start()
+        self.open_with_the_tool(PRCase.PR_NUMBER, "feat/x", draft=True)
+        self.tool("Bash", {"command": "gh pr ready https://github.com/someone/else/pull/"
+                                      f"{PRCase.PR_NUMBER}#discussion_r1"})
+        self.assertTrue(self.record()["draft"])
+
     def test_the_structured_tool_resumes_and_pauses_it_too(self):
         """`update_pull_request` with `draft`, seen by the hook after the call and the one
         before it. In this repository: the tool names `o/r`, and so does the remote."""
@@ -3503,13 +3516,41 @@ class TestTheWordNamesWhatTheChatShowed(PRCase):
         for line in ("gh pr view 5 -R someone/else", "gh pr view 5 -Rsomeone/else",
                      "gh pr view 5 --repo=someone/else", "gh pr view -wR someone/else 5",
                      "GH_REPO=someone/else gh pr view 5", "gh pr view "
-                     "https://github.com/someone/else/pull/5"):
+                     "https://github.com/someone/else/pull/5",
+                     "gh pr view https://github.com/someone/else/pull/5/files",
+                     "gh pr diff https://github.com/someone/else/pull/5/commits",
+                     "gh pr view 'https://github.com/someone/else/pull/5?w=1'",
+                     "gh pr view https://github.com/someone/else/pull/5#issuecomment-1"):
             with self.subTest(line=line):
                 self.assertEqual([], shown(line))
         self.assertEqual([5, 7], shown(
             "gh pr view 5 --json title -q .title && gh pr checks "
             "https://github.com/o/r/pull/7 > /dev/null"))
         self.assertEqual([5], shown("gh pr view -R github.com/O/R 5"), "this one, named")
+
+    def test_where_each_call_runs_is_where_the_cds_before_it_leave_it(self):
+        git(["remote", "add", "origin", "https://github.com/o/r.git"], self.repo)
+        elsewhere = self.tmp / "elsewhere"
+        elsewhere.mkdir()
+        git(["init", "-q", "-b", "main"], elsewhere)
+        here = str(self.repo)
+        for line in (f"gh pr view 941 && cd {elsewhere} && gh pr view 12",
+                     f"cd {elsewhere} && gh pr view 12 && cd {self.repo} && gh pr view 941"):
+            with self.subTest(line=line):
+                self.assertEqual([941], pullrequest.numbers_shown(self.ctx(), "Bash", line, {},
+                                                                  here))
+
+    def test_a_merge_of_another_repositorys_url_is_not_this_ones(self):
+        """Matched by its number to this clone's record, `gh pr merge <its URL>` was judged by
+        that record's blockers, covered by the word naming it, and settled it as merged."""
+        self.green()
+        self.open_a_pr()
+        self.accept()
+        merge = self.merge(self.PR_NUMBER, command="gh pr merge https://github.com/someone/else"
+                                                   f"/pull/{self.PR_NUMBER}/files --squash")
+        self.assertEqual("deny", self.decision(merge), "the word named this repository's #48")
+        self.assertEqual(pullrequest.OPEN, pullrequest.named_by(self.ctx(), self.PR_NUMBER)["state"])
+        self.assertNotEqual("deny", self.decision(self.merge(self.PR_NUMBER)))
 
     def test_another_repositorys_pull_requests_are_not_named(self):
         """Shown by number in another repository, a pull request has that repository's number,
