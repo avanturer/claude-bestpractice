@@ -3,9 +3,10 @@
 ## v2.5.0
 
 `+merge` answers what the chat put in front of the founder: each pull request it showed them by
-number since their previous message merges on the word, as its own open ones do. An unverified
-finish is filed under the work it was about, and a missing pytest in this repository is a suite
-that never ran, not a red one.
+number since their previous message merges on the word, as its own open ones do. What the
+founder types while the Stop gate runs the suite is no longer held behind the run: the run
+stops and the turn ends for their message. An unverified finish is filed under the work it was
+about, and a missing pytest in this repository is a suite that never ran, not a red one.
 
 ### What broke
 
@@ -14,6 +15,11 @@ pull requests, a session with none of its own open checked #936, #941 and #967 a
 them. The founder answered `+merge`; #936 merged, #941 was refused as having no word (#276).
 #967, opened by another chat, was refused after every `+merge` in the chat that had shown it
 (#272): the word named only the pull requests its own chat had opened.
+
+**The founder's message waited behind the gate's run.** The Stop gate runs the suite while the
+turn is still open, and in fuddy that was five minutes of pytest and a minute of jest at a
+finish. What the founder typed meanwhile, `+merge` included, reached the session only once the
+run ended, or after Esc (#277).
 
 **An unverified finish was titled with whatever the founder said last.** A finish after "pause
 for four hours" was committed under `attempts/` as a failed attempt by that name.
@@ -38,6 +44,13 @@ clear it, and the merge gate refused over a suite nothing had run.
   read as naming a repository called `pattern`, and asked git for the remotes. A pull
   request's URL names its repository too, so `gh pr ready`, `close` or `merge` of another
   repository's URL leaves this clone's record of the same number alone.
+- A suite the Stop gate runs stops, with what it started, as soon as the founder types into the
+  session: the gate reads the `queue-operation` entry the harness writes to the transcript the
+  moment a message is queued (measured on 2.1.302), and a task's notification is not the
+  founder. With nothing else to refuse, the turn ends for their message. The run is no verdict:
+  nothing red, green or UNVERIFIED is filed, and no note is asked for. It is recorded as cut
+  short, which the merge check and the ship report read as no green on the branch until a run
+  passes (decision 0044).
 - An unverified finish's attempt is titled by the cards the session holds, or "unverified
   finish on <branch>", and its reason is cut at a word.
 - This repository's `needs-pytest` guard says `pytest: not found`, which the gate reads as a
