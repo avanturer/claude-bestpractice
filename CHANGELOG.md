@@ -1,5 +1,45 @@
 # Changelog
 
+## v2.5.0
+
+`+merge` answers what the chat put in front of the founder: each pull request it showed them by
+number since their previous message merges on the word, as its own open ones do. An unverified
+finish is filed under the work it was about, and a missing pytest in this repository is a suite
+that never ran, not a red one.
+
+### What broke
+
+**One word, one merge, for pull requests the chat did not open.** Asked to close the hanging
+pull requests, a session with none of its own open checked #936, #941 and #967 and listed
+them. The founder answered `+merge`; #936 merged, #941 was refused as having no word (#276).
+#967, opened by another chat, was refused after every `+merge` in the chat that had shown it
+(#272): the word named only the pull requests its own chat had opened.
+
+**An unverified finish was titled with whatever the founder said last.** A finish after "pause
+for four hours" was committed under `attempts/` as a failed attempt by that name.
+
+**A missing pytest was a red suite nobody could clear.** `make test` stopped at its
+`needs-pytest` guard, in words the Stop gate did not read as a missing runner, so it was filed
+as `make test` failing. This repository's suite outlives the Stop hook, so no later run could
+clear it, and the merge gate refused over a suite nothing had run.
+
+### What changed
+
+- `+merge` also names each pull request the chat showed by number since the founder's previous
+  message: `gh pr view`, `checks` or `diff` of it, the GitHub tool reading it, or a merge of it
+  refused. A recorded one is named by its record, a draft not at all, any other as `#<number>`;
+  each merges once. A listing, another repository's numbers and another chat's pull request
+  this chat never showed name nothing. `pull_request_read` now reaches `pre-tool`
+  (decision 0043).
+- An unverified finish's attempt is titled by the cards the session holds, or "unverified
+  finish on <branch>", and its reason is cut at a word.
+- This repository's `needs-pytest` guard says `pytest: not found`, which the gate reads as a
+  runner missing rather than as code failing.
+
+No `migrate._REPAIRS` step: no state an older version wrote changes meaning. A red record a
+missing pytest left before this release is cleared by `make test` passing in the Stop gate, or
+by the founder removing `.claude/claude-bestpractice/failing-suite.json`.
+
 ## v2.4.1
 
 A line that merges is one merge the gate can read, so a second merge no longer rides the first
