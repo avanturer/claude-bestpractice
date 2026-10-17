@@ -271,6 +271,27 @@ def _allow(ctx, rec: sessions.SessionRecord, cfg, opener: str, shell: str) -> No
     hookio.emit_silent(said)
 
 
+def _the_work(ctx, rec: sessions.SessionRecord, branch: str) -> str:
+    """What an unverified finish was about, as the attempt is titled: the cards the session
+    holds, or the branch.
+
+    Not the founder's last message. That is whatever they said last, and a finish after "pause
+    for four hours" was filed as a failed attempt titled with the pause, in a directory that
+    is committed.
+    """
+    from claude_bestpractice import plan
+
+    held = [task.title for task in plan.held_by(ctx, rec.session_id) if task.title]
+    return ("; ".join(held) or f"unverified finish on {branch or 'this branch'}")[:120]
+
+
+def _cut(text: str, limit: int) -> str:
+    """`text` cut at most `limit` characters long, at the last word that fits."""
+    if len(text) <= limit:
+        return text
+    return text[:limit].rsplit(None, 1)[0] + " …"
+
+
 def _give_up(ctx, rec: sessions.SessionRecord, reason: str, changed: list) -> None:
     """Record an unverified finish so it survives the turn and surfaces next session.
 
@@ -300,8 +321,8 @@ def _give_up(ctx, rec: sessions.SessionRecord, reason: str, changed: list) -> No
     if changed:
         attempts.record(
             ctx,
-            title=(rec.task_statement or "unverified finish")[:120],
-            why=f"Finished without proof. {reason[:600]}",
+            title=_the_work(ctx, rec, branch),
+            why=f"Finished without proof. {_cut(reason, 600)}",
             paths=changed,
             outcome=attempts.FAILED,
             # The branch named above, for the same reason: a dead end filed against the
