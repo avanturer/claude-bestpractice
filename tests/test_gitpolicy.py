@@ -824,6 +824,23 @@ class TestGitItselfReachesIntoOtherTrees(PolicyCase):
         self.assertEqual(decision, "deny", reason)
         self.assertIn(str(self.repo), reason)
 
+    def test_a_tree_nested_in_the_checkout_is_not_the_checkout(self):
+        """Claude Code makes its worktrees in `.claude/worktrees/<name>`, inside the main
+        checkout's directory. The step into a sibling one was refused as the shared checkout,
+        and the harness runs the shell there (2.1.302); a directory of the checkout's own is
+        still the checkout."""
+        nested = self.repo / ".claude" / "worktrees"
+        nested.mkdir(parents=True, exist_ok=True)
+        mine, sibling = nested / "mine", nested / "sibling"
+        for tree, branch in ((mine, "feat/mine"), (sibling, "feat/sibling")):
+            git(["worktree", "add", "-q", "-b", branch, str(tree)], self.repo)
+        (self.repo / "src").mkdir(exist_ok=True)
+        for command, expected in ((f"cd {sibling}", "allow"), (f"cd {sibling}/src", "allow"),
+                                  (f"cd {self.repo}", "deny"), (f"cd {self.repo}/src", "deny")):
+            with self.subTest(command=command):
+                decision, reason = self.bash(mine, command)
+                self.assertEqual(expected, decision, reason)
+
     def test_a_cd_that_comes_back_is_not_stranding(self):
         """What is judged is where the shell ENDS UP, not that a `cd` appeared."""
         mine = self.worktree("feat/mine")

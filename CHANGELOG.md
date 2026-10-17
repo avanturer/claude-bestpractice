@@ -51,6 +51,10 @@ clear it, and the merge gate refused over a suite nothing had run.
   nothing red, green or UNVERIFIED is filed, and no note is asked for. It is recorded as cut
   short, which the merge check and the ship report read as no green on the branch until a run
   passes (decision 0044).
+- A `cd` into a sibling worktree nested in the main checkout's directory, where Claude Code
+  makes them (`.claude/worktrees/<name>`), is no longer refused as a step into the shared
+  checkout: the harness runs the shell there (measured on 2.1.302). A directory of the main
+  checkout's own is still refused.
 - An unverified finish's attempt is titled by the cards the session holds, or "unverified
   finish on <branch>", and its reason is cut at a word.
 - This repository's `needs-pytest` guard says `pytest: not found`, which the gate reads as a
