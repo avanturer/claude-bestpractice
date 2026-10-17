@@ -60,9 +60,10 @@ clear it, and the merge gate refused over a suite nothing had run.
 - This repository's `needs-pytest` guard says `pytest: not found`, which the gate reads as a
   runner missing rather than as code failing.
 
-No `migrate._REPAIRS` step: no state an older version wrote changes meaning. A red record a
-missing pytest left before this release is cleared by `make test` passing in the Stop gate, or
-by the founder removing `.claude/claude-bestpractice/failing-suite.json`.
+One `migrate._REPAIRS` step, 0041: the red `make test` record this repository's
+`needs-pytest` guard left before this release, with no test run, is dropped at the next session
+start. Nothing could clear it: the suite outlives the Stop hook, and the pre-push hook runs
+`make check`. A suite that ran and failed stays red; every other repository has no such guard.
 
 ## v2.4.1
 

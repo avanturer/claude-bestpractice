@@ -1621,6 +1621,44 @@ class TestARedSuiteThatNeverRanIsForgotten(RepoCase):
         self.assertIsNotNone(evidence.red(self.ctx()))
 
 
+class TestARedSuiteThePytestGuardLeftIsForgotten(RepoCase):
+    """Until 2.5.0 this repository's `needs-pytest` guard stopped `make test` in words the gate
+    did not read as a missing runner: a red `make test` with no test run, which neither the
+    Stop gate (the suite outlives it) nor the pre-push hook (it runs `make check`) could clear.
+    """
+
+    GUARD = ("make: the suite needs pytest, because the Stop gate it tests drives `python3 -m "
+             "pytest`.\n      python3 -m pip install pytest\nmake: *** [Makefile:68: "
+             "needs-pytest] Error 1")
+
+    def recorded(self, tail: str, executed: int = 0) -> None:
+        from claude_bestpractice import evidence
+
+        store.write_json(store.tier_a(self.ctx(), evidence.RED_SUITE_FILE),
+                         {"command": ["make", "test"], "tail": tail, "executed": executed,
+                          "declared": 2575, "branch": "main"})
+
+    def test_the_record_the_guard_left_is_dropped(self):
+        from claude_bestpractice import evidence
+
+        self.recorded(self.GUARD)
+        changed = migrate.repair(self.ctx())
+        self.assertIsNone(evidence.red(self.ctx()))
+        self.assertTrue([line for line in changed if "before any test ran" in line],
+                        "a repair that changes what the board says must say so")
+
+    def test_a_suite_that_ran_stays_red(self):
+        from claude_bestpractice import evidence
+
+        for tail, executed in ((self.GUARD, 3),
+                               ("FAILED tests/test_x.py::test_y\nmake: *** [Makefile:61: test] "
+                                "Error 1", 0)):
+            with self.subTest(tail=tail[:30], executed=executed):
+                self.recorded(tail, executed)
+                migrate._forget_a_red_suite_the_pytest_guard_left(self.ctx())
+                self.assertIsNotNone(evidence.red(self.ctx()))
+
+
 class TestCredentialsAFailingSuitePrintedAreScrubbed(RepoCase):
     """Until 1.69.0 the end of a failing run's output was kept unscrubbed: in the red-suite
     record, and through an unverified finish's reason in its attempt, the unverified marker
