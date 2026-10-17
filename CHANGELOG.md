@@ -1,5 +1,72 @@
 # Changelog
 
+## v2.4.1
+
+A line that merges is one merge the gate can read, so a second merge no longer rides the first
+one's word. A branch that carries nothing of its own is not asked for a pull request, a refusal
+says what the founder's word does cover, a session that removes the tree it stands in is told
+how to leave it, and a resumed chat's own hooks stamp it alive.
+
+Found working the three open issues, with reproductions against 2.4.0 and two measurements of
+Claude Code 2.1.301 itself. An independent review of the release then read its new shell reading
+against bash and found it wrong in places; every line below was checked against bash 5.2.
+
+### What broke
+
+**A second merge on a line merged on nobody's word.** The gate judged the first `gh pr merge` on
+a line and nothing past it. With the word on #48 only, `gh pr merge 48 && gh pr merge 49` was
+approved by the plugin itself, with no prompt. A merge in a loop, a condition or a group, behind
+`!`, `xargs`, `sudo`, `exec`, `eval` or `sh -c`, in a heredoc fed to a shell, inside `"$(…)"` or
+through `gh api` was no merge to it at all, and auto-merge through the GitHub tool went through
+unasked. Behind `| tail` a
+failed merge read as done, spending the word over a pull request still open; `--squash 2>&1`
+named pull request #2; and `gh pr merge --help` waited for `+merge` (#272).
+
+**The refusal said no word was on record when one was.** A merge the word did not cover was told
+"no `+merge` from the founder is on record", beside a word naming the chat's other pull
+requests; #967 was refused that way after every `+merge` sent (#272).
+
+**An integration branch was ordered to open a duplicate.** Two pull requests squash-merged and a
+third open, merged together for one build: every commit was in the trunk or in that open pull
+request, and the Stop gate demanded a pull request for the branch (#274).
+
+**A session that removed its tree was stranded in it.** Only a tree this plugin made was taken
+over, so `git worktree remove` of a tree made by hand ran in the shell standing in it. Claude
+Code then refuses every git command aimed outside a removed tree a session entered with
+`EnterWorktree`, reads included, and the gate's own advice was `cd`, which leads into the same
+refusal (#271).
+
+**A live chat read as dead after its machine restarted.** Its SessionStart ran outside the clone,
+so the record kept the previous boot's stamp, and every sibling saw its card as "held by …,
+which is gone — reclaimable", its record and leases theirs to reap.
+
+### What changed
+
+- A shell line that merges runs one merge, named by number, URL or nothing, on a line that
+  fails whenever it does; anything else is refused with the merge written out to run alone.
+  `enable_pr_auto_merge` waits for the word and spends it like `--auto`; `--help` and
+  `--disable-auto` need none (decision 0040).
+- A shell line is read as bash hands its words over, for every gate: a number written against
+  `<` or `>` is a descriptor, so `gh pr merge 5 >log` names #5 and `5>log` names nothing; a
+  quoted `;`, `|` or `>` is text, which also lets `find … \( … \)` be read at all; a heredoc a
+  shell reads is read as its script; and a substitution runs only its own text, so
+  `"Merged at $(date). Next: gh pr merge 6"` merges nothing.
+- Where a word naming pull requests is on record, a merge it does not cover is told which it
+  names and, where the records say, why this one is not among them: a draft, another chat's or
+  found on GitHub, recorded as merged or closed, not on record, or a word said in another chat.
+- The Stop gate asks for a pull request only for commits no other place delivers: not in the
+  trunk as a patch, not on another remote branch, and changing a file the trunk does not
+  already hold as they leave it. A merge counts for what `--cc` shows of it, and a root commit
+  for every file it holds (decision 0041).
+- `git worktree remove` of the tree a shell stands in is performed from the main checkout
+  whoever made the tree, where no other chat works in it. The refusal names `ExitWorktree` with
+  `keep`, which still works on a removed tree, and the Stop gate that removes the tree a shell
+  stands in asks for it before the turn ends (decision 0042).
+- A record whose stamp names a process no longer alive as recorded is stamped again by the
+  session's own next hook, under the CLI it resolves to.
+
+No `migrate._REPAIRS` step: no state an older version wrote changes meaning.
+
 ## v2.4.0
 
 A merge is finished when it has run, not when it was sent, so a merge that fails keeps the

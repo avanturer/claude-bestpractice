@@ -372,3 +372,170 @@ class TestADocumentReadInsideASubstitution(unittest.TestCase):
         proc = subprocess.run(["bash", "-c", self.line("printf '%s\\n'")],
                               capture_output=True, text=True, timeout=30)
         self.assertEqual(f"--body\n{self.BODY}\n", proc.stdout)
+
+
+class TestWhatAProgramIsHanded(unittest.TestCase):
+    """A redirection is not an argument, and only bash says which word belongs to which.
+
+    `shlex` read `5 >out` and `5>out` alike, as `5`, `>`, `out`, and the merge gate dropped any
+    one digit before a redirection as its descriptor: `gh pr merge 5 >log` was judged as the
+    current branch's merge while bash handed `gh` the `5`, and `10>log` as #10 while it handed
+    `gh` nothing (#272, found by this release's review). Every line below is checked against
+    bash, through a program that prints the words it was given.
+    """
+
+    LINES = (
+        "prog --squash 5 > /dev/null", "prog --squash 5>/dev/null", "prog 10>/dev/null",
+        "prog -b '> said' 48", "prog -b '>' 48", "prog --squash 2>&1", "prog '5'>/dev/null",
+        "prog \\5>/dev/null", "prog 5&>/dev/null", "prog 5 <<<y", "prog 5<<<y",
+        "prog {fd}>/dev/null", "prog 5<>/dev/null", "prog 5>|/dev/null", "prog 5>>/dev/null",
+        "prog 5>&2", "prog 5<&0", "prog 5&>>/dev/null", 'prog 5"">/dev/null', "prog 05>/dev/null",
+        "prog 5 2>/dev/null", "prog 2>/dev/null 5", "prog 5>/dev/null 6", "prog 2>&1 >/dev/null 7",
+        "prog x 2>&- y", "prog x5>/dev/null", "prog -5>/dev/null", "prog 5\\>x",
+    )
+
+    def handed(self, line: str) -> list[str]:
+        """The words bash hands `prog` on this line."""
+        with tempfile.TemporaryDirectory() as tmp:
+            prog = pathlib.Path(tmp) / "prog"
+            prog.write_text('#!/bin/sh\nfor word in "$@"; do printf "%s\\0" "$word"; done >&3\n',
+                            encoding="utf-8")
+            prog.chmod(0o755)
+            proc = subprocess.run(["bash", "-c", f"{line} 3>words", "bash"], cwd=tmp,
+                                  env={"PATH": f"{tmp}:/usr/bin:/bin"}, capture_output=True,
+                                  text=True, timeout=30)
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            return (pathlib.Path(tmp) / "words").read_text(encoding="utf-8").split("\0")[:-1]
+
+    def test_the_words_are_the_ones_bash_hands_over(self):
+        for line in self.LINES:
+            with self.subTest(line=line):
+                [argv] = shellcmd.commands(line)
+                self.assertEqual(self.handed(line), shellcmd.without_redirections(argv[1:]))
+
+    def test_the_merge_gate_names_what_bash_hands_gh(self):
+        for line, named in (("gh pr merge --squash 5 > merge.log", 5),
+                            ("gh pr merge 5>merge.log", 0), ("gh pr merge 10>merge.log", 0),
+                            ("gh pr merge --squash -b '> said' 48", 48)):
+            with self.subTest(line=line):
+                self.assertEqual(named, pullrequest.merge_target("Bash", line, {}))
+
+    def test_every_reader_still_reads_the_text_it_did(self):
+        """The kind rides on the word; the word is the str it was."""
+        self.assertEqual([["prog", "5", ">", "out", "a;b", ";"]],
+                         shellcmd.segments("prog 5>out 'a;b' ';'"))
+
+    def test_a_line_carrying_the_marks_is_not_read(self):
+        self.assertEqual([], shellcmd.segments("echo \ufdd0 && rm -rf src"))
+
+
+class TestAQuotedOperatorIsAWord(unittest.TestCase):
+    """`shlex` hands back `';'` as `;`, and every reading here took it for the operator: the
+    command went on past it, and a quoted or escaped paren declined the whole line."""
+
+    def test_it_joins_nothing(self):
+        for line, expected in (("echo ';' rm -rf src", [["echo", ";", "rm", "-rf", "src"]]),
+                               ("find . -name x -exec rm {} \\;",
+                                [["find", ".", "-name", "x", "-exec", "rm", "{}", ";"]]),
+                               ("find . \\( -name '*.py' \\) -print",
+                                [["find", ".", "(", "-name", "*.py", ")", "-print"]])):
+            with self.subTest(line=line):
+                self.assertEqual(expected, shellcmd.segments(line))
+
+    def test_bash_reads_it_as_one_command(self):
+        proc = subprocess.run(["bash", "-c", "printf '<%s>' ';' x '|' \\( && echo"],
+                              capture_output=True, text=True, timeout=30)
+        self.assertEqual("<;><x><|><(>\n", proc.stdout)
+
+
+class TestWhetherTheLineFailsWithTheCommand(unittest.TestCase):
+    """`shellcmd.masked_by`, checked against bash: a merge is finished on its call's result,
+    so the line has to fail whenever the merge did (decision 0038)."""
+
+    # A `gh` that fails, and the operator that lets the line succeed anyway, or "".
+    LINES = (
+        ("gh pr merge 5", ""), ("cd . ; gh pr merge 5", ""), ("true | gh pr merge 5", ""),
+        ("true && gh pr merge 5 && true | cat", ""), ("false || true && gh pr merge 5", ""),
+        ("gh pr merge 5;", ""), ("true & gh pr merge 5", ""),
+        ("gh pr merge 5 | cat", "|"), ("gh pr merge 5 |& cat", "|&"),
+        ("gh pr merge 5; true", ";"), ("gh pr merge 5 || true", "||"),
+        ("gh pr merge 5 && true; true", ";"), ("true || gh pr merge 5", "||"),
+        ("true || true | gh pr merge 5", "||"), ("gh pr merge 5 &", "&"),
+        ("gh pr merge 5 && true &", "&"),
+    )
+
+    def test_bash_agrees(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = pathlib.Path(tmp) / "gh"
+            fake.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+            fake.chmod(0o755)
+            for line, masked in self.LINES:
+                with self.subTest(line=line):
+                    proc = subprocess.run(["bash", "-c", line], cwd=tmp, timeout=30,
+                                          env={"PATH": f"{tmp}:/usr/bin:/bin"})
+                    self.assertEqual(bool(masked), proc.returncode == 0)
+                    [merge] = shellcmd.runs(line, "gh", "pr", "merge")
+                    self.assertEqual(masked, shellcmd.masked_by(line, merge))
+
+    def test_a_command_the_line_does_not_run_is_not_asked_about(self):
+        self.assertIsNone(shellcmd.masked_by("git status", ["gh", "pr", "merge"]))
+
+
+class TestWhatAShellRunsFromAString(unittest.TestCase):
+    """`shellcmd.hidden`: a heredoc a shell reads is a script, and a substitution runs only its
+    own text, where bash expands it."""
+
+    def hides_a_merge(self, line: str) -> bool:
+        return shellcmd.hidden(line, "gh", "pr", "merge")
+
+    def test_a_document_a_shell_reads_is_read(self):
+        for line in ("bash <<'EOF'\ngh pr merge 5\nEOF", "sh -s <<EOF\ngh pr merge 5\nEOF",
+                     "cat <<'EOF' | grep . | bash\ngh pr merge 5\nEOF",
+                     "ssh host <<'EOF'\ngh pr merge 5\nEOF", "cat <<< 'gh pr merge 5' | sh",
+                     "bash -c \"$(cat <<'EOF'\ngh pr merge 5\nEOF\n)\"",
+                     "cat <<'A' > /dev/null; bash <<'B'\nnot this one\nA\ngh pr merge 5\nB"):
+            with self.subTest(line=line):
+                self.assertTrue(self.hides_a_merge(line))
+
+    def test_a_document_nothing_runs_is_not(self):
+        for line in ("cat <<'EOF' > notes.md\ngh pr merge 5\nEOF",
+                     "bash <<'A'; cat <<'B' > /dev/null\necho one\nA\ngh pr merge 5\nB",
+                     "echo bash <<'EOF'\ngh pr merge 5\nEOF", "grep -c sh <<< 'gh pr merge 5'"):
+            with self.subTest(line=line):
+                self.assertFalse(self.hides_a_merge(line))
+
+    def test_a_substitution_runs_its_own_text(self):
+        for line, runs in (('echo "$(gh pr merge 5)"', True), ('echo "`gh pr merge 5`"', True),
+                           ('echo "$(gh pr "merge" 5)"', True),
+                           ('echo "$(echo hi)" gh pr merge 5', False),
+                           ('echo "Merged at $(date). Next: gh pr merge 6"', False),
+                           ('echo "run \\`gh pr merge 5\\` later"', False),
+                           ('echo "\\$(gh pr merge 5)"', False), ("echo '$(gh pr merge 5)'", False),
+                           ('echo "$((1 + 2)) gh pr merge 5"', False),
+                           ('echo "$(( $(gh pr merge 5) + 1 ))"', True),
+                           ('echo "$(case a in a) gh pr merge 5;; esac)"', True),
+                           ('echo "$( (echo x); gh pr merge 5)"', True),
+                           ("cat <<EOF\nit's $(gh pr merge 5)\nEOF", True),
+                           ("cat <<'EOF'\nit's $(gh pr merge 5)\nEOF", False),
+                           ("cat <<EOF\n\\$(gh pr merge 5)\nEOF", False)):
+            with self.subTest(line=line):
+                self.assertEqual(runs, self.hides_a_merge(line))
+
+    def test_bash_runs_what_the_reading_says(self):
+        """The same lines, run: a fake `gh` leaves a mark where bash really ran it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = pathlib.Path(tmp) / "gh"
+            fake.write_text('#!/bin/sh\necho ran >> "$MARK"\n', encoding="utf-8")
+            fake.chmod(0o755)
+            for line, ran in (('echo "$(gh pr "merge" 5)"', True),
+                              ('echo "run \\`gh pr merge 5\\` later"', False),
+                              ('echo "$(case a in a) gh pr merge 5;; esac)"', True),
+                              ('echo "$( (echo x); gh pr merge 5)"', True),
+                              ("echo bash <<'EOF'\ngh pr merge 5\nEOF", False),
+                              ("cat <<EOF\nit's $(gh pr merge 5)\nEOF", True),
+                              ("cat <<EOF\n\\$(gh pr merge 5)\nEOF", False)):
+                mark = pathlib.Path(tmp) / f"mark-{uuid.uuid4().hex}"
+                with self.subTest(line=line):
+                    subprocess.run(["bash", "-c", line], cwd=tmp, capture_output=True, timeout=30,
+                                   env={"PATH": f"{tmp}:/usr/bin:/bin", "MARK": str(mark)})
+                    self.assertEqual(ran, mark.exists())

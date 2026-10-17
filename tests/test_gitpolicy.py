@@ -1254,18 +1254,19 @@ class TestTheCommandARefusalNamesRunsAsWritten(PolicyCase):
 
         spaced = make_repo(self.tmp / "final space ü", "app")
 
-        def remove(tree):
+        def remove(tree, where=spaced):
             return _verdict(self.run_hook("pre-tool", {
                 "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
-                "tool_input": {"command": f"git worktree remove '{tree}'"}, "cwd": str(spaced),
-            }, cwd=spaced))[1]
+                "tool_input": {"command": f"git worktree remove '{tree}'"}, "cwd": str(where),
+            }, cwd=where))[1]
 
         tree = worktree.provision(resolve(spaced), "tidy up", sid(spaced, "s1"))
         (tree / "untracked.txt").write_text("x\n", encoding="utf-8")
         words = self.named(remove(tree), r"\n  (git -C [^\n]+)")
         self.assertEqual(["git", "-C", str(tree)], words[:3])
         (tree / "untracked.txt").unlink()
-        self.assertEqual(["cd", str(spaced)], self.named(remove(tree), r"`(cd [^`]+)`"))
+        # From inside the tree, where the shell is left with the way out to take (#271).
+        self.assertEqual(["cd", str(spaced)], self.named(remove(tree, tree), r"`(cd [^`]+)`"))
 
 
 class TestAdoptability(PolicyCase):

@@ -478,6 +478,12 @@ def load_all(ctx: GitContext) -> list[SessionRecord]:
 
 def register(ctx: GitContext, rec: SessionRecord) -> None:
     rec.heartbeat_at = time.time()
+    _stamp(rec)
+    store.write_json(_record_path(ctx, rec.session_id), rec.to_dict())
+
+
+def _stamp(rec: SessionRecord) -> None:
+    """Write down which process `rec.pid` is, as read now: its start time, where, which boot."""
     # Always re-stamp: a resume rewrites `pid` to the new CLI process, and keeping the
     # previous process's start time made is_live read its own record as a recycled pid —
     # positive evidence of death for a session that had just started.
@@ -485,7 +491,35 @@ def register(ctx: GitContext, rec: SessionRecord) -> None:
     # Where that pid was read, for the same reason: it is this process that resolved it.
     rec.pid_identity = store.lock_identity()
     rec.boot_id = current_boot()
-    store.write_json(_record_path(ctx, rec.session_id), rec.to_dict())
+
+
+def restamped(ctx: GitContext, rec: SessionRecord) -> SessionRecord:
+    """`rec`, stamped with the CLI this hook runs under where its own stamp names a process
+    that is not, or no longer, alive as recorded.
+
+    `register` re-stamps at session start, and not every session start is heard here. One
+    that ran with its working directory outside this clone — a session resumed in the home
+    directory that then `cd`-ed into the repository — left the record carrying the previous
+    boot's pid and start time. Every sibling read that as proof of death: the live chat's
+    card was shown to them as reclaimable, and its record and leases were theirs to reap at
+    their next start. A hook running for this session id, under a CLI it resolves, is the
+    proof that it lives.
+
+    Only a stale stamp is replaced. A record whose own process still runs is that process's
+    — a `claude -p` this chat started carries the same id — and taking it over would hand
+    the record back and forth on every call.
+    """
+    pid, trust = resolve_owner()
+    if trust != PID_TRUST_OWNER or (pid == rec.pid and rec.boot_id == current_boot()):
+        return rec
+    if rec.boot_id == current_boot() and not _pid_says_dead(rec):
+        return rec
+
+    def stamp(record: SessionRecord) -> None:
+        record.pid, record.pid_trust = pid, trust
+        _stamp(record)
+
+    return _rewrite(ctx, rec.session_id, stamp) or rec
 
 
 def branch_point(ctx: GitContext) -> str:

@@ -596,15 +596,20 @@ class TestTidyingUpIsNotAnIntrusion(RepoCase):
         self.mine = self.repo.parent / "repo-mine"
         git(["worktree", "add", "-q", "-b", "fix/mine", str(self.mine)], self.repo)
         self.addCleanup(
-            lambda: git(["worktree", "remove", "--force", str(self.mine)], self.repo)
+            lambda: self.mine.is_dir()
+            and git(["worktree", "remove", "--force", str(self.mine)], self.repo)
         )
 
     def test_removing_a_tree_from_the_main_checkout_is_not_an_operation_on_it(self):
-        """`-C <main checkout>` is where the command runs, not what it changes."""
+        """`-C <main checkout>` is where the command runs, not what it changes. The shell
+        stands in the tree it removes, so the gate performs it from the main checkout and
+        says so (#271), and never refuses it as an operation on the main checkout."""
         proc = self.git_call(
             f"git -C {self.repo} worktree remove --force {self.mine}", cwd=self.mine
         )
-        self.assertNotEqual("deny", self.hook_decision(proc))
+        self.assertFalse(self.mine.is_dir(), "the removal the session asked for did not happen")
+        self.assertIn(f"{self.mine} is removed", self.hook_reason(proc))
+        self.assertNotIn("main checkout", self.hook_reason(proc).split("\n")[0])
 
     def test_pruning_is_not_destructive_either(self):
         proc = self.git_call(f"git -C {self.repo} worktree prune", cwd=self.mine)

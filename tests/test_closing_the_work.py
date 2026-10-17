@@ -16,9 +16,10 @@ from __future__ import annotations
 import re
 import unittest
 
-from helpers import RepoCase, git, sid
+from helpers import RepoCase, git, session_record_for, sid
 
 from claude_bestpractice import plan, pullrequest, worktree
+from claude_bestpractice.gitctx import resolve
 
 
 class TreeCase(RepoCase):
@@ -207,9 +208,33 @@ class TestTheStopGateIsWhereItHappens(TreeCase):
         import json
 
         tree, _branch = self.a_finished_session()
-        said = json.loads(self.stop().stdout or "{}").get("systemMessage", "")
+        payload = json.loads(self.stop().stdout or "{}")
+        said = payload.get("systemMessage", "")
         self.assertIn(str(tree), said)
         self.assertIn(f"cd {self.repo}", said)
+        self.assertNotIn("hookSpecificOutput", payload,
+                         "a shell in the main checkout was held to leave a tree it is not in")
+
+    def test_a_shell_standing_in_the_tree_is_asked_to_leave_while_the_turn_is_open(self):
+        """#271. The hook runs in the tree the shell stands in, from 2.1.280. With the tree
+        gone the next command runs nowhere, and a session that entered with `EnterWorktree`
+        has every git command aimed elsewhere refused. Told at its next tool call, it was
+        never told: those hooks run outside every repository."""
+        import json
+
+        from claude_bestpractice import sessions
+
+        tree, _branch = self.a_finished_session()
+        for where in (self.repo, tree):
+            ctx = resolve(where)
+            sessions.register(ctx, session_record_for(ctx, sid(where, "s1")))
+        proc = self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                               "stop_hook_active": False}, cwd=tree)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertFalse(tree.is_dir(), f"the tree survived the Stop gate: {proc.stdout}")
+        asked = json.loads(proc.stdout or "{}").get("hookSpecificOutput", {})
+        self.assertIn('Call `ExitWorktree` with action "keep"', asked.get("additionalContext", ""))
+        self.assertIn(f"cd {self.repo}", asked.get("additionalContext", ""))
 
     def test_switched_off_it_leaves_the_tree(self):
         self.configure(remove_finished_trees=False)
@@ -407,7 +432,7 @@ class TestALedgerCopyIsNotWork(TreeCase):
         """Nothing is set aside for a removal git is going to refuse anyway."""
         tree, branch = self.a_finished_tree_holding_a_copy()
         (tree / "notes.txt").write_text("half an idea\n", encoding="utf-8")
-        worktree.release_now(self.ctx(), self.session)
+        worktree.release_now(self.ctx(), tree)
 
         copy = self.tracked.path.relative_to(self.repo).as_posix()
         self.assertTrue(git(["ls-files", "-v", "--", copy], tree).startswith("H "),

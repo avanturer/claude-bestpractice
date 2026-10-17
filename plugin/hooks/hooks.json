@@ -75,7 +75,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "^(Write|Edit|MultiEdit|NotebookEdit|Bash|EnterWorktree|Agent|Task)$|__(create|merge|update)_pull_request$",
+        "matcher": "^(Write|Edit|MultiEdit|NotebookEdit|Bash|EnterWorktree|Agent|Task)$|__((create|merge|update)_pull_request|enable_pr_auto_merge)$",
         "hooks": [
           {
             "type": "command",
@@ -106,9 +106,11 @@
           "",
           "`merge_pull_request` because only this event says the merge RAN. pre-tool judges",
           "it and holds it; spent and settled there, a merge that then failed had taken the",
-          "founder's word and closed its cards (#232, #243, #268)."
+          "founder's word and closed its cards (#232, #243, #268).",
+          "",
+          "`enable_pr_auto_merge` for the same reason: it is `gh pr merge --auto` as a tool."
         ],
-        "matcher": ".*(create|update|merge)_pull_request",
+        "matcher": ".*((create|update|merge)_pull_request|enable_pr_auto_merge)",
         "hooks": [
           {
             "type": "command",

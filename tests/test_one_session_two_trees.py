@@ -186,6 +186,42 @@ class TestItsCardComesWithIt(MovedSession):
         self.assertIn(f"cd {self.main}", self.hook_reason(proc))
         self.assertFalse(self.tree.is_dir(), "the gate did not remove the tree")
 
+    def test_the_way_out_of_the_removed_tree_is_named(self):
+        """#271, measured on 2.1.301: a session that entered with `EnterWorktree` has every
+        git command aimed anywhere else refused once its tree is gone, reads included, and
+        `ExitWorktree` with `keep` still works and ends it. `cd` alone leads nowhere."""
+        said = self.hook_reason(self.bash(f"git worktree remove {self.tree}"))
+        self.assertIn('Call `ExitWorktree` with action "keep"', said)
+        self.assertIn("nothing else to clean up", said)
+
+    def a_tree_made_by_hand(self, name: str = "proj-topic"):
+        """`git worktree add ../proj-topic`, the convention a project's own rules give."""
+        hand = self.tmp / name
+        git(["worktree", "add", "-q", "-b", f"feat/{name}", str(hand)], self.repo)
+        return hand
+
+    def test_a_tree_made_by_hand_and_stood_in_alone_is_removed_by_the_gate(self):
+        """Only a tree this plugin made was taken over, so a tree made by hand was removed by
+        the shell standing in it, and the cleanup after it was refused (#271)."""
+        hand = self.a_tree_made_by_hand()
+        self.pin(hand, "S", THIS_PROCESS)
+        proc = self.bash(f"git worktree remove {hand}", cwd=hand)
+        said = self.hook_reason(proc)
+        self.assertEqual("deny", self.hook_decision(proc), proc.stdout + proc.stderr)
+        self.assertFalse(hand.is_dir(), "the gate left the tree for the shell to remove")
+        self.assertIn(f"{hand} is removed and so is feat/proj-topic", said)
+        self.assertIn("ExitWorktree", said)
+        self.assertNotIn("feat/proj-topic", git(["branch", "--format=%(refname:short)"],
+                                                self.repo))
+
+    def test_a_tree_made_by_hand_another_chat_works_in_is_not_taken_over(self):
+        hand = self.a_tree_made_by_hand()
+        self.pin(hand, "S", THIS_PROCESS)
+        self.a_sibling(hand, "B")
+        proc = self.bash(f"git worktree remove {hand}", cwd=hand)
+        self.assertTrue(hand.is_dir(), "the gate removed a tree another chat stands in")
+        self.assertNotIn("is removed", self.hook_reason(proc))
+
     def test_its_own_tree_named_from_the_main_checkout_is_found_where_git_looks(self):
         """`git -C <main checkout> worktree remove .claude/worktrees/<it>` names the tree from
         where git runs. Read from the shell standing in the tree, it named nothing there, and

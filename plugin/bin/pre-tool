@@ -1414,6 +1414,11 @@ def main() -> None:
         # in this file switch off for any session whose record went missing, so the
         # secret scan and the leases could be disabled with `rm`.
         rec = sessions.adopt(ctx, event.session_id)
+    else:
+        # And a record whose stamp is a process from before a restart is this session's
+        # all the same: its own hook is running. Left as it was, every sibling read the
+        # live chat as dead and its card as theirs to take.
+        rec = sessions.restamped(ctx, rec)
 
     # What another session needed this one to know, delivered into this session's own
     # inbox before the call it is about to make. The board is injected once at session
@@ -1567,6 +1572,12 @@ def main() -> None:
     pr_vouch = ""
     if cfg.manage_pull_requests:
         command = str(ti.get("command", "")) if event.tool_name == "Bash" else ""
+        # Everything below judges ONE merge, read off the line. The second of two merges went
+        # through on the first one's word and checks, vouched for, and a merge in a loop or
+        # behind `sh -c` was not read as one at all (decision 0040).
+        unjudged = pullrequest.merge_line(event.tool_name, command)
+        if unjudged:
+            deny(ctx, rec, unjudged)
         number = pullrequest.merge_target(event.tool_name, command, ti)
         if number is not None:
             # Green is not accepted. The checks say the code works; they say nothing about
@@ -1616,11 +1627,17 @@ def main() -> None:
                 unplaced = pullrequest.unplaced(ctx, number, event.session_id)
                 if unplaced:
                     deny(ctx, rec, unplaced)
+                # And it may name other pull requests and not this one, which the refusal
+                # called no word at all: #967 was refused that way after every `+merge` (#272).
+                why = pullrequest.uncovered(ctx, named, number, event.session_id)
+                waited = f"{config.acceptance_grace():.0f} seconds this gate waited for one"
                 deny_for_founder(
                     ctx, rec,
-                    "claude-bestpractice: no `+merge` from the founder is on record for this "
-                    f"merge, and none arrived in the {config.acceptance_grace():.0f} seconds this "
-                    "gate waited for one. Passing checks mean the code works, not that the "
+                    "claude-bestpractice: "
+                    + (f"{why} No word that covers it arrived in the {waited}." if why else
+                       "no `+merge` from the founder is on record for this merge, and none "
+                       f"arrived in the {waited}.")
+                    + " Passing checks mean the code works, not that the "
                     "work is wanted — and main deploys, so merging is a step towards "
                     "shipping it.\n"
                     "  If their last message already says `+merge`, do not ask them for it "
@@ -1890,22 +1907,28 @@ def main() -> None:
     # What comes back to the session is the same outcome it asked for, plus the cleanup it
     # could not have reached.
     if event.tool_name == "Bash":
-        own = worktree.mine(ctx, rec.session_id)
-        removals = worktree_removals(str(ti.get("command", "")), session_cwd) if own else []
-        if own and any(path == own.resolve() for path in removals if path is not None):
+        # The tree this plugin made for the session, or the one it made by hand and stands in
+        # alone: removed from inside, either strands it there (#271). Asked only of a tree
+        # the line removes, because who stands where is a read of every session's record.
+        removals = worktree_removals(str(ti.get("command", "")), session_cwd)
+        own = next((path.resolve() for path in removals
+                    if worktree.removable_by(ctx, rec.session_id, path)), None)
+        if own is not None:
             released = None
             # Before the removal, never after: when the session stands in the tree it is
             # removing, that tree IS `ctx`, and every git call takes it as a working
             # directory — asked afterwards, the success message itself raised
             # FileNotFoundError, and this gate fails closed. The Stop gate learned the same.
-            where = shlex.quote(str(worktree.main_checkout(ctx)))
+            main = worktree.main_checkout(ctx)
+            where = shlex.quote(str(main))
+            stranded = own.resolve() == ctx.worktree_root.resolve()
             kept: list[str] = []
             try:
                 # `--force` only where the session typed it: it is the session's own act
                 # being carried out somewhere it survives, not a judgement this gate makes
                 # about whose work may be discarded.
                 forced = bool(_WORKTREE_FORCE.search(str(ti.get("command", ""))))
-                released = worktree.release_now(ctx, rec.session_id, force=forced, kept=kept)
+                released = worktree.release_now(ctx, own, force=forced, kept=kept)
             except Exception:  # noqa: BLE001 - a refusal is better than a crashing gate
                 released = None
             if released is not None:
@@ -1919,15 +1942,16 @@ def main() -> None:
                     "founder before deleting it." if kept else
                     f"{path} is removed" + (f" and so is {branch}." if branch else ".")
                 )
+                # Where the shell stood in it, the way out is not `cd`: a session that entered
+                # with `EnterWorktree` is held there by Claude Code until it leaves (#271).
                 deny(
                     ctx, rec,
                     f"claude-bestpractice: done — {what}"
                     f"{carried}\n"
-                    "  Run from the main checkout rather than from inside the tree, because "
-                    "removing the directory this shell stands in leaves Claude Code refusing "
-                    "every later git call as isolated in a worktree that no longer exists.\n"
-                    f"  The shell is now in a directory that is gone — `cd {where}`."
-                    + ("" if kept else " There is nothing else to clean up.")
+                    "  It ran from the main checkout rather than from inside the tree: removing "
+                    "the directory a shell stands in strands the session in it.\n"
+                    + (f"  {worktree.way_out_of(main)}\n" if stranded else "")
+                    + ("" if kept else "  There is nothing else to clean up.")
                 )
             deny(
                 ctx, rec,

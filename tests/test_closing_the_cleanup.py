@@ -185,14 +185,16 @@ class TestARemovalAskedForByHand(CleanupCase):
 
         self.assertNotIn(branch, self.branches())
 
-    def test_it_says_where_the_shell_is_now_and_that_nothing_is_left(self):
+    def test_it_says_that_nothing_is_left(self):
+        """Asked from the main checkout the shell stands where it was, so it is sent nowhere;
+        `test_one_session_two_trees` drives the removal from inside, which is told the way out."""
         tree, _branch = self.a_tree()
         self.a_live_session(tree)
 
         said = self.hook_reason(self.removing(tree))
 
-        self.assertIn(f"cd {self.repo}", said)
         self.assertIn("nothing else to clean up", said)
+        self.assertNotIn("ExitWorktree", said)
 
     def test_a_tree_holding_work_is_kept_and_the_refusal_is_runnable(self):
         """git's own refusal, reported rather than routed around — and the command it names

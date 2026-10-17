@@ -662,7 +662,7 @@ _INDENTED = re.compile(r"^ {2,}(\S[^\n]*)$", re.M)
 
 # Tools the session calls instead of a shell. An exit like any other — and the reason the
 # worktree refusal is not a dead end even though no shell command moves the harness.
-_HARNESS_TOOLS = ("EnterWorktree", "Task", "Agent")
+_HARNESS_TOOLS = ("EnterWorktree", "ExitWorktree", "Task", "Agent")
 
 
 def _runnable_in(text: str) -> list[str]:

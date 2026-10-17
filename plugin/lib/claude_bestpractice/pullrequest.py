@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import time
 from typing import Any, Callable
 
@@ -57,7 +58,10 @@ MAX_AGE_SECONDS = 30 * 24 * 3600
 # Tool names, whatever server they arrive from. Claude Code exposes the same GitHub tools
 # under differently-cased prefixes in one session, so the server segment is not matched.
 _OPENS_TOOL = re.compile(r"(?:^|__)create_pull_request$")
-_MERGES_TOOL = re.compile(r"(?:^|__)merge_pull_request$")
+# Turning auto-merge on is a merge the founder is not there for when it happens, the tool's
+# spelling of `gh pr merge --auto`, and it went through on nobody's word.
+_MERGES_TOOL = re.compile(r"(?:^|__)(?:merge_pull_request|enable_pr_auto_merge)$")
+_AUTO_MERGES_TOOL = re.compile(r"(?:^|__)enable_pr_auto_merge$")
 
 # The CLI spellings. `gh pr create` and `gh pr merge` reach exactly the same API, and a
 # gate that watches only the structured tool is one an agent walks past on its first
@@ -87,6 +91,17 @@ _FLAGS_WITH_VALUES = ("-c", "--comment", "-R", "--repo")
 
 # The short flags of `gh pr create` that take no value, and so can share one dash with `-d`.
 _CREATE_SWITCHES = frozenset("defw")
+
+# The flags of `gh pr merge` that take a value, as gh 2.89 documents them
+# (cli.github.com/manual/gh_pr_merge). Read as the pull request, `-t 5 48` merged #5.
+_MERGE_VALUE_FLAGS = frozenset({"-A", "--author-email", "-b", "--body", "-F", "--body-file",
+                                "--match-head-commit", "-t", "--subject", "-R", "--repo"})
+_MERGE_VALUE_LETTERS = "AbFtR"
+
+# `gh api` merging: the REST endpoint written to with PUT, or the GraphQL mutations.
+_API_MERGE_PATH = re.compile(r"(?:^|/)pulls/\d+/merge/?$")
+_API_MERGE_ENDPOINT = re.compile(r"\bpulls/\d+/merge\b")
+_API_MERGE_MUTATION = re.compile(r"\b(?:mergePullRequest|enablePullRequestAutoMerge)\b")
 
 
 def _gh_subcommand(command: str, verb: str, pattern: "re.Pattern[str]"):
@@ -1031,12 +1046,13 @@ def missing(ctx: GitContext) -> tuple[str, bool] | None:
     whether GitHub was asked). None when nothing is missing.
 
     Nothing is when one is on record, when it was already demanded, when the branch is not
-    ready to open one — or when GitHub has one open, which is then recorded here so the
-    board carries it and the Stop gate treats it as any other. The record only knows the
-    pull requests a hook in this clone saw opened, and one opened in a terminal, on the
-    website or from another clone was answered with "no pull request against main" and an
-    order to open a second one (#239). Asked once per branch, and only here, where the
-    alternative is a demand.
+    ready to open one, when everything it carries the trunk or another branch already holds
+    (#274) — or when GitHub has one open, which is then recorded here so the board carries
+    it and the Stop gate treats it as any other. The record only knows the pull requests a
+    hook in this clone saw opened, and one opened in a terminal, on the website or from
+    another clone was answered with "no pull request against main" and an order to open a
+    second one (#239). Asked once per branch, and only here, where the alternative is a
+    demand.
     """
     branch = ctx.branch
     if known(ctx, branch) or demanded(ctx, branch):
@@ -1044,7 +1060,7 @@ def missing(ctx: GitContext) -> tuple[str, bool] | None:
     from . import delivery, gitpolicy
 
     base = gitpolicy.default_branch(ctx) or "main"
-    if delivery.ready(ctx, base):
+    if delivery.ready(ctx, base) or not delivery.carries_its_own(ctx, base):
         return None
     listed = on_github(ctx, branch)
     if not listed:
@@ -1164,16 +1180,14 @@ def opens_a_pull_request(tool_name: str, command: str) -> bool:
 
 
 def _number(found) -> int:
-    """The pull request number out of either shape `_gh_subcommand` returns.
+    """The pull request number out of either shape `_merge_call` returns.
 
-    A list is argv, where the number is the first bare digit run after the verb; a match
+    A list is argv, where the number is what the merge names, by number or by URL; a match
     object is the fallback regex, which captured it by name.
     """
     if isinstance(found, list):
-        for token in found[3:]:
-            if token.isdigit():
-                return int(token)
-        return 0
+        selector = _merge_selector(found)
+        return int(selector) if selector.isdigit() else number_in(selector) if selector else 0
     return int(found.group("number") or 0)
 
 
@@ -1188,10 +1202,203 @@ def merge_target(tool_name: str, command: str, tool_input: dict[str, Any]) -> in
             return int(tool_input.get("pullNumber") or 0)
         except (TypeError, ValueError):
             return 0
-    found = _gh_subcommand(command, "merge", _MERGES_SHELL)
+    found = _merge_call(command)
     if not found:
         return None
     return _number(found)
+
+
+def _merge_call(command: str):
+    """The `gh pr merge` this line runs, as `_gh_subcommand` hands one back; None for none.
+
+    Asking for its help or switching auto-merge off merges nothing, and both were refused for
+    want of the founder's `+merge`.
+    """
+    from . import shellcmd
+
+    if not shellcmd.commands(command):
+        return _MERGES_SHELL.search(command)
+    merging = (argv for argv in shellcmd.runs(command, "gh", "pr", "merge") if _merges(argv))
+    return next(merging, None)
+
+
+def _merges(argv: list[str]) -> bool:
+    """Does this `gh pr merge` merge, rather than print its help or switch auto-merge off?
+
+    Asked of its flags, not its words: `--subject --help` is a subject, and that merge merges.
+    """
+    return not {"--help", "-h", "--disable-auto"}.intersection(_merge_arguments(argv)[0])
+
+
+def _merge_selector(argv: list[str]) -> str:
+    """What a `gh pr merge` names: a number, a URL or a branch, or "" for none."""
+    positional = _merge_arguments(argv)[1]
+    return positional[0] if positional else ""
+
+
+def _merge_arguments(argv: list[str]) -> tuple[list[str], list[str]]:
+    """The flags of a `gh pr merge`, and the words it names a pull request with.
+
+    Read as `gh` reads them, past the values its flags take and past redirections, which it is
+    never handed: `--squash 2>&1` named pull request #2, the `2` being where its errors went,
+    and `-t 5 48` merged #5.
+    """
+    from . import shellcmd
+
+    flags: list[str] = []
+    positional: list[str] = []
+    words = iter(shellcmd.without_redirections(argv[3:]))
+    for word in words:
+        if not word.startswith("-"):
+            positional.append(word)
+            continue
+        flags.append(word)
+        if _takes_value(word):
+            next(words, None)
+    return flags, positional
+
+
+def _takes_value(word: str) -> bool:
+    """Does this `gh pr merge` flag take the next word as its value? `-st` does, `-tb` holds
+    its own."""
+    if word in _MERGE_VALUE_FLAGS:
+        return True
+    if not word.startswith("-") or word.startswith("--"):
+        return False
+    first = next((at for at, letter in enumerate(word) if letter in _MERGE_VALUE_LETTERS), -1)
+    return first == len(word) - 1
+
+
+def merge_line(tool_name: str, command: str) -> str:
+    """Why this shell line's merge cannot be judged as it is written; "" when it can, or when
+    it merges nothing.
+
+    A merge is judged before it runs and finished on its own result (decision 0038), and the
+    judging read the first `gh pr merge` on a line and nothing else. So the second of two went
+    through on the first one's word and checks, with the plugin's own approval and no prompt,
+    and a merge in a loop or behind `sh -c` was no merge at all. A line that merges has to be
+    one merge, written so that what it merges and whether it merged can both be read
+    (decision 0040).
+    """
+    if tool_name != "Bash" or "merge" not in command.lower():
+        return ""
+    from . import shellcmd
+
+    if _merge_hidden(command):
+        return _UNREADABLE_MERGE
+    merges = [argv for argv in shellcmd.runs(command, "gh", "pr", "merge") if _merges(argv)]
+    if len(merges) > 1:
+        return _several_merges(merges)
+    return _as_written(merges[0], command) if merges else ""
+
+
+def _as_written(argv: list[str], command: str) -> str:
+    """Why the one merge on this line cannot be judged as it is written; "" when it can."""
+    from . import shellcmd
+
+    selector = _merge_selector(argv)
+    if selector and not selector.isdigit() and not number_in(selector):
+        return _nameless_merge(argv, selector)
+    masked = shellcmd.masked_by(command, argv)
+    return _masked_merge(argv, masked) if masked else ""
+
+
+def _merge_hidden(command: str) -> bool:
+    """Does this line merge somewhere a plain `gh pr merge` would not be read?"""
+    from . import shellcmd
+
+    if not shellcmd.commands(command):
+        return bool(_MERGES_SHELL.search(command)) or _api_merge_written(command)
+    if shellcmd.hidden(command, "gh", "pr", "merge"):
+        return True
+    if shellcmd.hidden(command, "gh", "api"):
+        return _api_merge_written(command)
+    calls = shellcmd.runs(command, "gh", "api")
+    return bool(calls) and (bool(_API_MERGE_MUTATION.search(command)) or
+                            any(_api_merges(argv) for argv in calls))
+
+
+def _api_merge_written(command: str) -> bool:
+    """Does this line call `gh api` and write a merge for it anywhere: a mutation that merges, or
+    a pull request's merge endpoint? Asked where the call itself cannot be read."""
+    return bool(re.search(r"\bgh\s+api\b", command)) and bool(
+        _API_MERGE_MUTATION.search(command) or _API_MERGE_ENDPOINT.search(command))
+
+
+def _api_merges(argv: list[str]) -> bool:
+    """Does this `gh api` call write to a pull request's merge endpoint? A GET of it only asks
+    whether one was merged, and a mutation is looked for in the whole line, where a document
+    or a substitution holds it as often as a word does."""
+    words = argv[2:]
+    put = any(word.upper() in ("-XPUT", "-X=PUT", "--METHOD=PUT") or
+              (word in ("-X", "--method") and nxt.upper() == "PUT")
+              for word, nxt in zip(words, [*words[1:], ""]))
+    return put and any(_API_MERGE_PATH.search(word) for word in words)
+
+
+_UNREADABLE_MERGE = (
+    "claude-bestpractice: this line merges where this gate cannot read which pull request it "
+    "merges, or whether it merged: in a loop, a condition or a group, through `xargs`, `eval`, "
+    "`exec`, `sudo` or a shell's `-c`, in a document or a here-string a shell runs, inside "
+    "`$(…)`, or through `gh api`. A merge is judged against the founder's word and its own "
+    "checks before it runs, and finished on its own result after, so it has to be a command "
+    "of its own, one pull request per call:\n"
+    "  gh pr merge <number> --squash\n"
+    "A `+merge` that covers several pull requests covers each of them this way."
+)
+
+
+def _as_a_call(argv: list[str]) -> str:
+    """A merge as it can be run on its own: its own words, redirections left off."""
+    from . import shellcmd
+
+    return shlex.join(argv[:3] + shellcmd.without_redirections(argv[3:]))
+
+
+def _several_merges(merges: list[list[str]]) -> str:
+    listed = "\n".join(f"  {_as_a_call(argv)}" for argv in merges[:6])
+    return (
+        f"claude-bestpractice: this line runs {len(merges)} merges, and this gate judges one: "
+        "each is checked against the founder's word and its own checks before it runs and "
+        "finished on its own result after, and one call has one result. Run each as its own "
+        f"call:\n{listed}\n"
+        "A `+merge` that covers them covers each of them this way."
+    )
+
+
+def _nameless_merge(argv: list[str], selector: str) -> str:
+    if "$" in selector:
+        name = (f"through `{selector}`, which the shell expands where this gate cannot see. "
+                "Write the number out:\n")
+    else:
+        name = (f"by its branch, `{selector}`. Ask for its number, then merge by it:\n"
+                f"  gh pr view {shlex.quote(selector)} --json number --jq .number\n")
+    return (
+        f"claude-bestpractice: `{_as_a_call(argv)}` names its pull request {name}"
+        "  gh pr merge <number> --squash\n"
+        "This gate knows a pull request by its number, or by the branch checked out where the "
+        "merge runs when it names none."
+    )
+
+
+# How each operator lets a line succeed when its merge did not.
+_MASKS = {
+    "|": "hands the line the status of the command the merge's output goes to",
+    "|&": "hands the line the status of the command the merge's output goes to",
+    ";": "runs what follows whatever the merge did",
+    "||": "lets the line succeed when the merge failed, or never ran",
+    "&": "leaves the merge running in the background, where it has no status",
+}
+
+
+def _masked_merge(argv: list[str], joint: str) -> str:
+    shown = _as_a_call(argv)
+    return (
+        f"claude-bestpractice: `{joint}` on this line {_MASKS[joint]}, so "
+        f"the call can succeed when `{shown}` did not, and a merge is finished on the call's "
+        "result: the founder's word spent, the pull request settled and its cards closed. Run "
+        f"it as a call of its own, or join the line around it with `&&`:\n  {shown}"
+    )
 
 
 def head_of(tool_name: str, command: str, tool_input: dict[str, Any], cwd: str = "") -> str:
@@ -1297,7 +1504,8 @@ def _moved_to(command: str, verb: str) -> str:
 
     moved = ""
     for argv in shellcmd.commands(command):
-        if argv[0].rsplit("/", 1)[-1] == "gh" and argv[1:3] == ["pr", verb]:
+        if argv[0].rsplit("/", 1)[-1] == "gh" and argv[1:3] == ["pr", verb] and \
+                (verb != "merge" or _merges(argv)):
             return moved
         if argv[0] == "cd" and len(argv) > 1:
             moved = os.path.join(moved, os.path.expanduser(argv[1]))
@@ -1389,7 +1597,7 @@ def about_current_branch(tool_name: str, command: str) -> bool:
     """
     if _MERGES_TOOL.search(tool_name):
         return False
-    found = _gh_subcommand(command, "merge", _MERGES_SHELL)
+    found = _merge_call(command)
     return bool(found is not None and not _number(found))
 
 
@@ -1524,6 +1732,82 @@ def unplaced(ctx: GitContext, number: int, session_id: str) -> str:
     )
 
 
+def uncovered(ctx: GitContext, record: dict[str, Any] | None, number: int,
+              session_id: str) -> str:
+    """What the founder's word on record names, and why this merge is not among it. "" when no
+    word naming pull requests is on record.
+
+    The refusal said "no `+merge` from the founder is on record" for any merge the word did not
+    cover, beside a word naming three other pull requests. #967 was refused that way after
+    every `+merge` sent, and nothing said what the word did name, or why #967 was not in it
+    (#272).
+    """
+    pooled = _pool(ctx)
+    if not pooled:
+        return ""
+    open_now = {_entry(row): row for row in outstanding(ctx)}
+    names = [_called(open_now.get(entry), entry) for entry in pooled]
+    shown = ", ".join(names[:4]) + (f" and {len(names) - 4} more" if len(names) > 4 else "")
+    why = _why_not_named(ctx, record, number, session_id)
+    return f"the founder's `+merge` on record names {shown}, and not this merge{why}."
+
+
+def _called(record: dict[str, Any] | None, entry: str) -> str:
+    """A pull request the word names, by number where this clone learned it."""
+    number = _as_number((record or {}).get("number"))
+    return f"#{number}" if number else entry.rsplit("@", 1)[0]
+
+
+def _why_not_named(ctx: GitContext, record: dict[str, Any] | None, number: int,
+                   session_id: str) -> str:
+    """Why a `+merge` naming a chat's open pull requests did not name this one, as `: why`, or
+    "" where the records do not say.
+
+    Only what the records hold: when the word was said, and which of its merges were already
+    used, they do not, and a reason guessed from neither was the false one (#272).
+    """
+    if record is None:
+        return _not_open(ctx, number)
+    if record.get("draft"):
+        return ": it is recorded as a draft, and a `+merge` names no paused work"
+    from . import sessions
+
+    ours = _the_chats(ctx, session_id)
+    opener = str(record.get("session_id") or "")
+    if not ours(opener):
+        return (f": it was opened by {sessions.called(ctx, opener)}, not this chat"
+                if opener else ": it was found on GitHub, opened by no session here")
+    elsewhere = _said_elsewhere(ctx, ours)
+    return (f": it was said to {elsewhere}, about the pull requests open there, not to this chat"
+            if elsewhere else "")
+
+
+def _said_elsewhere(ctx: GitContext, ours: Callable[[Any], bool]) -> str:
+    """The chats the word on record was said to, by name, where this chat is not one of them.
+    "" where it is, or the records do not say.
+
+    Read off the pull requests the word names: it names only those of the chat it was said
+    to, and the pool it is kept in is the clone's."""
+    from . import sessions
+
+    pooled = set(_pool(ctx))
+    speakers = {str(row["session_id"]) for row in _records(ctx).values()
+                if _entry(row) in pooled and row.get("session_id")}
+    if not speakers or any(ours(speaker) for speaker in speakers):
+        return ""
+    return ", ".join(sessions.called(ctx, speaker) for speaker in sorted(speakers))
+
+
+def _not_open(ctx: GitContext, number: int) -> str:
+    """Why no open pull request on record is the one a merge names, as `: why`."""
+    settled = next((row for row in _records(ctx).values()
+                    if number and _as_number(row.get("number")) == number), None)
+    if settled is None:
+        return ": no open pull request on record here is this one"
+    return (f": #{number} is recorded here as {settled.get('state')} on "
+            f"{settled.get('branch')}, so nothing open carried it")
+
+
 def acceptance(ctx: GitContext, record: dict[str, Any] | None) -> str:
     """How the founder's word covers merging `record`: `POOLED`, `ONCE`, or "" when it does not."""
     if record is not None and _entry(record) in _pool(ctx):
@@ -1598,10 +1882,10 @@ def ran(ctx: GitContext, call: str) -> dict[str, Any] | None:
 def queues(tool_name: str, command: str) -> bool:
     """Does this merge only ask GitHub to merge later, once what it requires is met?"""
     if _MERGES_TOOL.search(tool_name):
-        return False
-    found = _gh_subcommand(command, "merge", _MERGES_SHELL)
+        return bool(_AUTO_MERGES_TOOL.search(tool_name))
+    found = _merge_call(command)
     if isinstance(found, list):
-        return "--auto" in found
+        return "--auto" in _merge_arguments(found)[0]
     return bool(found) and bool(re.search(r"(?:^|\s)--auto\b", command))
 
 

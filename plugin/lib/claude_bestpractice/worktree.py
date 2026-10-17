@@ -24,6 +24,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1560,28 +1561,25 @@ def release_mine(ctx: GitContext, session_id: str) -> tuple[str, str, list[str]]
     return None
 
 
-def release_now(ctx: GitContext, session_id: str, force: bool = False,
+def release_now(ctx: GitContext, tree: Path, force: bool = False,
                 kept: list[str] | None = None) -> tuple[str, str, list[str]] | None:
-    """Remove this session's own tree because the session asked to, not because it is finished.
+    """Remove the session's own `tree` because the session asked to, not because it is finished.
 
-    The act is identical to `release_mine`'s and it is run from the main checkout, which is
-    the whole point: `git worktree remove` on your own tree succeeds and leaves the shell
-    standing in a directory that is gone, after which Claude Code refuses every git command
-    the cleanup still needs — the branch, the database, the siblings — because the session
-    is isolated in a worktree that no longer exists (#224).
+    `tree` is what `removable_by` answered. The act is identical to `release_mine`'s and it
+    is run from the main checkout, which is the whole point: `git worktree remove` on your own
+    tree succeeds and leaves the shell standing in a directory that is gone, after which Claude
+    Code refuses every git command the cleanup still needs — the branch, the database, the
+    siblings — because the session is isolated in a worktree that no longer exists (#224).
 
     So the removal the session asked for happens HERE, in a hook, where nothing is standing
-    in the tree and nothing is left to run afterwards. None when there is no such tree or
-    when git refused it — `git worktree remove` without `--force` refuses a tree with
-    anything in it, and that refusal is still the only thing deciding whether work is lost.
-    A tree removed over a branch whose work is not in the trunk leaves the branch, named in
-    `kept`, which is the only way the caller can say so.
+    in the tree and nothing is left to run afterwards. None when git refused it — `git
+    worktree remove` without `--force` refuses a tree with anything in it, and that refusal is
+    still the only thing deciding whether work is lost. A tree removed over a branch whose work
+    is not in the trunk leaves the branch, named in `kept`, which is the only way the caller
+    can say so.
     """
     from . import gitpolicy
 
-    tree = mine(ctx, session_id)
-    if tree is None:
-        return None
     # A tree switched onto the trunk has no branch of its own to take with it, and the
     # clone's `main` is not one to report as taken or as kept.
     branch = _branch_in(tree)
@@ -1591,6 +1589,43 @@ def release_now(ctx: GitContext, session_id: str, force: bool = False,
     if _release(ctx, (str(tree), branch), record_path, notes=notes, force=force, kept=kept):
         return str(tree), branch, notes
     return None
+
+
+def removable_by(ctx: GitContext, session_id: str, tree: Path) -> bool:
+    """Is `tree` this session's own to remove: the one this plugin made for it, or the linked
+    tree it stands in, where no other chat is working?
+
+    Only the first was ever taken over, so a tree made by hand — `git worktree add
+    ../proj-topic`, the convention a project's own instructions give — was removed by the
+    shell standing in it. Claude Code then held the session in a tree that no longer existed,
+    and refused the cleanup the project's rules required of it (#271).
+    """
+    from . import gitpolicy
+
+    target = tree.resolve()
+    made = mine(ctx, session_id)
+    if made is not None and made.resolve() == target:
+        return True
+    here = ctx.worktree_root.resolve()
+    if target != here or not ctx.is_worktree or here == main_checkout(ctx).resolve():
+        return False
+    return gitpolicy.nobody_else_in(ctx, here, session_id)
+
+
+def way_out_of(where: Path) -> str:
+    """What a session standing in a tree removed from under it does next.
+
+    Measured on Claude Code 2.1.301: once a tree a session entered with `EnterWorktree` is
+    gone, every git command aimed anywhere else is refused as "isolated in the worktree
+    <gone>", reads included, and `ExitWorktree` with `keep` still works and ends it (#271).
+    """
+    return (
+        "This session still stands in the removed tree. Call `ExitWorktree` with action "
+        "\"keep\": the tree is already gone, and it takes the session back to where it "
+        "started. Until it does, Claude Code refuses every git command aimed outside the "
+        "removed tree. A session that came in with `cd` rather than `EnterWorktree` gets a "
+        f"no-op from it and leaves with `cd {shlex.quote(str(where))}` instead."
+    )
 
 
 def finish_removals(ctx: GitContext) -> list[str]:

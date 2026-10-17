@@ -11,10 +11,10 @@ import time
 import unittest
 from unittest import mock
 
-from helpers import (BIN, RepoCase, a_gate_underway, answer_of, git, harness_matches,
-                     real_acceptance_grace, session_record_for, sid)
+from helpers import (BIN, RepoCase, a_gate_underway, add_origin, another_clone, answer_of,
+                     git, harness_matches, real_acceptance_grace, session_record_for, sid)
 
-from claude_bestpractice import board, evidence, pullrequest, store
+from claude_bestpractice import board, delivery, evidence, pullrequest, store
 
 # Code that genuinely trips `sql-interpolation`. Findings are re-asked of the file before
 # they are counted, so a fixture asserting on a clean file asserts on nothing.
@@ -314,9 +314,227 @@ class TestAMergeHiddenInASubstitutionIsStillAMerge(PRCase):
         self.armed()
         for command in (f"echo 'gh pr merge {self.PR_NUMBER}'",
                         "grep -r 'gh pr merge' docs/",
-                        f"echo '$(gh pr merge {self.PR_NUMBER})'"):
+                        f"echo '$(gh pr merge {self.PR_NUMBER})'",
+                        'git commit --allow-empty -m "say why gh pr merge is gated"'):
             self.assertNotEqual("deny", self.decision(self.bash(command)),
                                 f"{command!r} was refused for writing about a merge")
+
+
+class TestALineMergesOnePullRequest(PRCase):
+    """#272. The gate judged the first `gh pr merge` on a line and nothing past it.
+
+    Measured against 2.4.0, armed, with the founder's word on #48 only: `gh pr merge 48 &&
+    gh pr merge 49` was approved by this plugin as "judged by this gate one step ago", so #49
+    merged on nobody's word and with no prompt. Ten more spellings were no merge at all to it:
+    a loop, a condition, a group, `!`, `xargs`, `bash -c`, `sh -c`, `eval`, `exec`, `sudo`,
+    and `"$(…)"` (decision 0040).
+    """
+
+    OTHER = 49
+
+    def armed(self, accepted: bool = True) -> None:
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+        self.open_a_pr()
+        if accepted:
+            self.accept()
+
+    def bash(self, command: str):
+        return self.tool("Bash", {"command": command}, "s1")
+
+    def test_a_second_merge_does_not_ride_the_first_ones_word(self):
+        self.armed()
+        self.open_pr(self.OTHER, "feat/y")
+        proc = self.bash(f"gh pr merge {self.PR_NUMBER} --squash && "
+                         f"gh pr merge {self.OTHER} --squash")
+        self.assertEqual("deny", self.decision(proc))
+        self.assertIn("runs 2 merges", self.reason(proc))
+
+    def test_each_merge_is_named_as_its_own_call(self):
+        """Refused even where the word covers both, and the way through runs as printed."""
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+        self.open_a_pr()
+        self.open_pr(self.OTHER, "feat/y")
+        self.accept()
+        proc = self.bash(f"gh pr merge {self.PR_NUMBER} --squash 2>&1 && "
+                         f"gh pr merge {self.OTHER} --squash")
+        self.assertEqual("deny", self.decision(proc))
+        for named in (f"  gh pr merge {self.PR_NUMBER} --squash\n",
+                      f"  gh pr merge {self.OTHER} --squash\n"):
+            self.assertIn(named, self.reason(proc))
+        self.assertNotEqual("deny", self.decision(self.bash(
+            f"gh pr merge {self.PR_NUMBER} --squash")))
+
+    def test_a_merge_it_cannot_read_is_refused_whatever_the_word(self):
+        self.armed()
+        n = self.PR_NUMBER
+        for command in (f"for n in {n}; do gh pr merge $n --squash; done",
+                        f"if true; then gh pr merge {n}; fi",
+                        f"{{ gh pr merge {n}; }}",
+                        f"! gh pr merge {n}",
+                        f"echo {n} | xargs gh pr merge",
+                        f"bash -c 'gh pr merge {n}'",
+                        f'sh -c "gh pr merge {n} --squash"',
+                        f"eval gh pr merge {n}",
+                        f"exec gh pr merge {n}",
+                        f"sudo gh pr merge {n}",
+                        f'echo "$(gh pr merge {n})"',
+                        f"gh api -X PUT repos/o/r/pulls/{n}/merge",
+                        "gh api graphql -f query='mutation { mergePullRequest(input: {}) "
+                        "{ clientMutationId } }'"):
+            with self.subTest(command=command):
+                proc = self.bash(command)
+                self.assertEqual("deny", self.decision(proc))
+                self.assertIn("cannot read which pull request it merges", self.reason(proc))
+
+    def test_a_line_that_hides_whether_it_merged_is_refused(self):
+        """The merge is finished on the call's result, and these report another command's."""
+        self.armed()
+        for joint, command in (("|", "gh pr merge {} --squash | tail -3"),
+                               (";", "gh pr merge {} --squash; echo done"),
+                               ("||", "gh pr merge {} --squash || true"),
+                               ("&", "gh pr merge {} --squash &"),
+                               ("||", "git fetch || gh pr merge {} --squash"),
+                               (";", "gh pr merge {} --squash && git log -1 | cat; ls")):
+            with self.subTest(command=command):
+                proc = self.bash(command.format(self.PR_NUMBER))
+                self.assertEqual("deny", self.decision(proc))
+                self.assertIn(f"`{joint}` on this line", self.reason(proc))
+
+    def test_a_line_whose_status_is_the_merges_goes_through(self):
+        """Refused before for any joint but `&&`, which said these could succeed when the merge
+        did not, and none of them can (decision 0040)."""
+        self.armed()
+        for command in ("gh pr merge {} --squash --delete-branch && git status",
+                        "cd . ; gh pr merge {} --squash",
+                        "git fetch | cat && gh pr merge {} --squash",
+                        "gh pr merge {} --squash && git log --oneline -3 | cat",
+                        "gh pr merge {} --squash --body '|'"):
+            with self.subTest(command=command):
+                proc = self.bash(command.format(self.PR_NUMBER))
+                self.assertNotEqual("deny", self.decision(proc))
+
+    def test_where_its_output_goes_is_not_what_it_names(self):
+        """`5 >log` names #5 and `5>log` names nothing, as bash hands `gh` its words: read the
+        other way round, the word on #48 merged a pull request nobody named (decision 0040)."""
+        self.armed()
+        self.open_pr(5, "feat/y")
+        for command in ("gh pr merge --squash 5 > /dev/null", "gh pr merge 5 &> /dev/null",
+                        "gh pr merge 5 <<< y", "gh pr merge --squash -b '> said so' 5"):
+            with self.subTest(command=command):
+                proc = self.bash(command)
+                self.assertEqual("deny", self.decision(proc))
+                self.assertIn("names #48, and not this merge", self.reason(proc))
+        self.assertNotEqual("deny", self.decision(self.bash("gh pr merge --squash 5>/dev/null")))
+
+    def test_a_flags_value_is_not_what_it_does(self):
+        """`--subject --help` is a subject, and the merge merges: read as help, it went through
+        with no word at all."""
+        self.armed(accepted=False)
+        proc = self.bash(f"gh pr merge {self.PR_NUMBER} --squash --subject --help")
+        self.assertEqual("deny", self.decision(proc))
+        self.assertIn("no `+merge` from the founder is on record", self.reason(proc))
+
+    def test_a_merge_a_shell_reads_from_a_document_is_refused(self):
+        self.armed()
+        n = self.PR_NUMBER
+        for command in (f"bash <<'EOF'\ngh pr merge {n} --squash\nEOF",
+                        f"cat <<'EOF' | sh\nfor n in {n}; do gh pr merge $n; done\nEOF",
+                        f"ssh host <<EOF\ngh pr merge {n}\nEOF",
+                        f"bash -c \"$(cat <<'EOF'\ngh pr merge {n}\nEOF\n)\"",
+                        f"cat <<EOF\nmerged: $(gh pr merge {n})\nEOF",
+                        "gh api graphql -f query=\"$(cat <<'EOF'\nmutation { mergePullRequest("
+                        "input: {pullRequestId: \"x\"}) { clientMutationId } }\nEOF\n)\"",
+                        f"for r in r; do gh api -X PUT repos/o/$r/pulls/{n}/merge; done"):
+            with self.subTest(command=command):
+                proc = self.bash(command)
+                self.assertEqual("deny", self.decision(proc))
+                self.assertIn("cannot read which pull request it merges", self.reason(proc))
+
+    def test_writing_about_a_merge_is_not_one(self):
+        """Refused as merges while this release was written: a backtick escaped in double
+        quotes, text after a substitution's end, and a document `cat` only prints."""
+        self.armed(accepted=False)
+        for command in ('claude-bp-report defect "it refused \\`gh pr merge 5\\` in a comment"',
+                        'gh pr comment 5 --body "Will run \\`gh pr merge 5\\` after review"',
+                        'gh pr comment 5 --body "Merged at $(date). Next: gh pr merge 6"',
+                        'git commit -m "$(cat <<EOF\nnext: gh pr merge 5\nEOF\n)"',
+                        "cat <<'EOF' > /dev/null\ngh pr merge 5\nEOF",
+                        "gh api repos/o/r/pulls/5/merge"):
+            with self.subTest(command=command):
+                said = self.reason(self.bash(command))
+                self.assertNotIn("cannot read which pull request it merges", said)
+                self.assertNotIn("`+merge`", said)
+
+    def test_a_merge_named_by_branch_or_by_variable_is_refused(self):
+        self.armed()
+        for command, said in (("gh pr merge feat/x --squash", "by its branch"),
+                              ('gh pr merge "$PR" --squash', "which the shell expands")):
+            with self.subTest(command=command):
+                proc = self.bash(command)
+                self.assertEqual("deny", self.decision(proc))
+                self.assertIn(said, self.reason(proc))
+
+    def test_a_merge_by_url_is_its_number(self):
+        self.armed()
+        proc = self.bash(f"gh pr merge https://github.com/o/r/pull/{self.PR_NUMBER} --squash")
+        self.assertNotEqual("deny", self.decision(proc))
+
+    def test_where_its_errors_go_is_not_a_pull_request(self):
+        """`2>&1` named pull request #2, which no word covered, so this was refused."""
+        self.armed()
+        self.assertNotEqual("deny", self.decision(self.bash("gh pr merge --squash 2>&1")))
+
+    def test_a_flags_value_is_not_the_pull_request(self):
+        self.armed()
+        proc = self.bash(f"gh pr merge -t 5 {self.PR_NUMBER} --squash")
+        self.assertNotEqual("deny", self.decision(proc))
+
+    def test_help_and_switching_auto_merge_off_merge_nothing(self):
+        """Refused before for want of a `+merge`, which neither needs."""
+        self.armed(accepted=False)
+        for command in ("gh pr merge --help", f"gh pr merge {self.PR_NUMBER} --disable-auto"):
+            with self.subTest(command=command):
+                self.assertNotEqual("deny", self.decision(self.bash(command)))
+
+
+class TestAutoMergeThroughTheToolWaitsForTheWord(PRCase):
+    """`enable_pr_auto_merge` is `gh pr merge --auto` as a tool: the pull request merges when
+    its checks pass, with nobody there. The hook never saw it, so it went through unasked."""
+
+    AUTO = "mcp__github__enable_pr_auto_merge"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+        self.open_a_pr()
+
+    def auto(self):
+        return self.ran(self.AUTO, {"owner": "o", "repo": "r", "pullNumber": self.PR_NUMBER})
+
+    def test_it_needs_the_founders_word(self):
+        proc = self.auto()
+        self.assertEqual("deny", self.decision(proc))
+        self.assertIn("no `+merge` from the founder is on record", self.reason(proc))
+
+    def test_it_spends_the_word_and_leaves_the_pull_request_open(self):
+        self.accept()
+        self.assertNotEqual("deny", self.decision(self.auto()))
+        self.assertEqual(pullrequest.OPEN, pullrequest._records(self.ctx())["feat/x"]["state"])
+        self.assertEqual("deny", self.decision(self.auto()))
+
+    def test_the_harness_sends_it_to_both_hooks(self):
+        hooks = json.loads((BIN.parent / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+        self.assertTrue(harness_matches(hooks["hooks"]["PreToolUse"][0]["matcher"], self.AUTO))
+        self.assertTrue(harness_matches(hooks["hooks"]["PostToolUse"][0]["matcher"], self.AUTO))
 
 
 class TestOpeningOneIsNotAQuestion(PRCase):
@@ -450,6 +668,144 @@ class TestFinishedWorkWithNoPullRequestIsDemanded(PRCase):
         pullrequest.settle(self.ctx(), "feat/x", pullrequest.MERGED)
         proc = self.stop()
         self.assertNotIn("Open it now", proc.stderr)
+
+
+class TestWorkOtherPullRequestsCarryIsNotDemandedAgain(PRCase):
+    """#274. An integration branch: two pull requests squash-merged on the remote trunk, a third
+    still open, all three merged together to look at them in one build. Every commit on it was
+    already in the trunk or in an open pull request, and the Stop gate ordered a pull request
+    for it, which opened as told is a duplicate of all three."""
+
+    def stop(self):
+        return self.gate("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                           "stop_hook_active": False})
+
+    # Where every branch here is cut: the trunk before any of them landed.
+    SEED = "seed-of-the-branches"
+
+    def branch(self, name: str, *writes: tuple[str, str]) -> None:
+        """`name` cut from the seed, one commit per write."""
+        git(["checkout", "-q", "-b", name, self.SEED], self.repo)
+        for rel, text in writes:
+            self.write(rel, text)
+            self.commit(f"{name}: write {rel}")
+
+    def integrated(self) -> None:
+        """feat/x merging A (two commits, squashed), B (one, squashed) and C (open).
+
+        Squashed where GitHub squashes, in another clone, with the merged branches deleted and
+        this clone's `main` left where it was. The trunk then changes B's file again, so B's
+        commit is known to be in the trunk by its patch alone: the content no longer matches.
+        """
+        origin = add_origin(self.repo, self.tmp)
+        git(["tag", self.SEED, "main"], self.repo)
+        self.branch("a", ("src/a.py", "a = 1\n"), ("src/a.py", "a = 2\n"))
+        self.branch("b", ("src/b.py", "b = 1\n"))
+        self.branch("c", ("src/c.py", "c = 1\n"))
+        git(["push", "-q", "origin", "a", "b", "c"], self.repo)
+        github = another_clone(origin, self.tmp / "github")
+        for name in ("a", "b"):
+            git(["merge", "-q", "--squash", f"origin/{name}"], github)
+            git(["commit", "-qm", f"land {name} as one squash"], github)
+        (github / "src" / "b.py").write_text("b = 2\n", encoding="utf-8")
+        git(["commit", "-qam", "move the trunk on past both squashes"], github)
+        git(["push", "-q", "origin", "main", ":a", ":b"], github)
+        git(["fetch", "-q", "--prune", "origin"], self.repo)
+        git(["checkout", "-q", "feat/x"], self.repo)
+        for name in ("a", "b", "c"):
+            git(["merge", "-q", "--no-edit", name], self.repo)
+        evidence.record_green(self.ctx(), ["pytest"])
+
+    def test_a_branch_of_merged_and_open_work_is_not_asked_for_a_pull_request(self):
+        self.integrated()
+        self.start()
+        self.assertNotIn("Open it now", self.stop().stderr)
+
+    def test_a_commit_of_its_own_on_top_still_is(self):
+        """The control: what only this branch has is still owed a pull request."""
+        self.integrated()
+        self.write("src/mine.py", "mine = 1\n")
+        self.commit("add the module only this branch has")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+        self.assertIn("Open it now", self.stop().stderr)
+
+    def test_a_merge_that_changes_something_of_its_own_is_owed_one(self):
+        """A merge carries nothing but the change no parent has, and that change is work.
+        What it merges is another pull request's, so the change is all that is its own."""
+        self.integrated()
+        self.branch("d", ("src/d.py", "d = 1\n"))
+        git(["push", "-q", "origin", "d"], self.repo)
+        git(["checkout", "-q", "feat/x"], self.repo)
+        git(["merge", "-q", "--no-commit", "d"], self.repo)
+        self.write("src/b.py", "b = 'changed in the merge'\n")
+        self.commit("merge d, changing b on the way")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+        self.assertIn("Open it now", self.stop().stderr)
+
+    def test_work_pushed_under_this_branchs_own_name_is_still_its_own(self):
+        """Decision 0030: the branch's own remote copy is where its work goes, not another
+        pull request's branch."""
+        self.integrated()
+        self.write("src/mine.py", "mine = 1\n")
+        self.commit("add the module only this branch has")
+        git(["push", "-q", "origin", "feat/x"], self.repo)
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+        self.assertIn("Open it now", self.stop().stderr)
+
+    def shared(self, merged_by_hand: str = "") -> None:
+        """feat/x merging E, squashed, and F, still open, each editing one end of one file.
+
+        Merging F is a clean merge that writes nothing of its own, and its names alone list
+        that file, which differs from the trunk by F's edit. `merged_by_hand` is a file the
+        merge of F writes as well, the change a merge can make that no parent has.
+        """
+        git(["checkout", "-q", "main"], self.repo)
+        lines = "".join(f"line {n}\n" for n in range(1, 21))
+        self.write("CHANGELOG.md", lines)
+        self.commit("start the changelog")
+        origin = add_origin(self.repo, self.tmp)
+        git(["tag", self.SEED, "main"], self.repo)
+        self.branch("e", ("CHANGELOG.md", lines.replace("line 1\n", "line 1 by e\n")))
+        self.branch("f", ("CHANGELOG.md", lines.replace("line 20\n", "line 20 by f\n")))
+        git(["push", "-q", "origin", "e", "f"], self.repo)
+        github = another_clone(origin, self.tmp / "github")
+        git(["merge", "-q", "--squash", "origin/e"], github)
+        git(["commit", "-qm", "land e as one squash"], github)
+        git(["push", "-q", "origin", "main", ":e"], github)
+        git(["fetch", "-q", "--prune", "origin"], self.repo)
+        git(["checkout", "-q", "feat/x"], self.repo)
+        git(["merge", "-q", "--no-edit", "e"], self.repo)
+        git(["merge", "-q", "--no-commit", "f"], self.repo)
+        if merged_by_hand:
+            self.write(merged_by_hand, "written by the merge\n")
+        self.commit("merge f")
+        evidence.record_green(self.ctx(), ["pytest"])
+
+    def test_a_clean_merge_of_two_edits_to_one_file_writes_nothing_of_its_own(self):
+        """Reproduced by the reviewer of 2.4.1: `--cc` names listed the file both edits were in,
+        and the duplicate pull request was demanded again."""
+        self.shared()
+        self.start()
+        self.assertNotIn("Open it now", self.stop().stderr)
+
+    def test_what_a_merge_writes_by_hand_is_found_by_its_name_as_git_quotes_it(self):
+        """`--cc -p` names a file in C quotes when its name has a quote or a non-ASCII byte in
+        it; read unquoted, it is the file the trunk differs in."""
+        self.shared(merged_by_hand='notes/say "café".txt')
+        self.assertTrue(delivery.carries_its_own(self.ctx(), "main"))
+
+    def test_a_branch_with_no_history_in_common_is_its_own(self):
+        """A root commit is diffed against nothing; without `--root` it changed no file."""
+        add_origin(self.repo, self.tmp)
+        git(["checkout", "-q", "--orphan", "site"], self.repo)
+        git(["rm", "-rq", "--cached", "."], self.repo)
+        self.write("index.html", "<p>site</p>\n")
+        git(["add", "index.html"], self.repo)
+        git(["commit", "-qm", "start the site"], self.repo)
+        self.assertTrue(delivery.carries_its_own(self.ctx(), "main"))
 
 
 class TestAPullRequestIsNeverLeftHanging(PRCase):
@@ -2414,7 +2770,9 @@ class TestAPullRequestOpenedInAShellIsMergedByItsNumber(PRCase):
         self.accept()
         proc = self.tool("Bash", {"command": "gh pr merge 99 --squash"})
         said = self.reason(proc)
-        self.assertIn("no `+merge` from the founder is on record", said)
+        self.assertEqual("deny", self.decision(proc))
+        self.assertIn(f"the founder's `+merge` on record names #{PRCase.PR_NUMBER}, and not this "
+                      "merge: no open pull request on record here is this one", said)
         self.assertNotIn("is not a pull request this clone knows by number", said)
 
     def test_a_number_another_session_learned_is_not_explained_away(self):
@@ -2433,8 +2791,80 @@ class TestAPullRequestOpenedInAShellIsMergedByItsNumber(PRCase):
         })
         self.accept()
         said = self.reason(self.tool("Bash", {"command": "gh pr merge 77 --squash"}))
-        self.assertIn("no `+merge` from the founder is on record", said)
+        self.assertIn("names feat/x, and not this merge: it was opened by", said)
+        self.assertIn("not this chat", said)
         self.assertNotIn("is not a pull request this clone knows by number", said)
+
+
+class TestARefusalSaysWhatTheWordOnRecordNames(PRCase):
+    """#272. #967 was refused with "no `+merge` from the founder is on record" after every
+    `+merge` the founder sent, beside a word that named the chat's other pull requests. The
+    refusal says what the word names now, and why this merge is not among it."""
+
+    def green(self) -> None:
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+
+    def merging(self, number: int, session_id: str = "s1") -> str:
+        proc = self.tool("Bash", {"command": f"gh pr merge {number} --squash"}, session_id)
+        self.assertEqual("deny", self.decision(proc))
+        return self.reason(proc)
+
+    def test_one_the_records_say_nothing_of_is_given_no_reason(self):
+        """When the word was said is not on record, so "it was opened after the founder said
+        it" was a guess, and the reviewer of this release found it false twice."""
+        self.green()
+        self.open_a_pr()
+        self.accept()
+        self.open_pr(49, "feat/y")
+        said = self.merging(49)
+        self.assertIn(f"names #{self.PR_NUMBER}, and not this merge. No word", said)
+        self.assertNotIn("no `+merge` from the founder is on record", said)
+
+    def test_a_word_said_to_another_chat_is_named_as_that_chats(self):
+        self.green()
+        self.start("s2")
+        self.open_pr(49, "feat/y", session_id="s2")
+        self.open_a_pr()
+        self.accept()
+        said = self.merging(49, "s2")
+        self.assertIn(f"names #{self.PR_NUMBER}, and not this merge: it was said to ", said)
+        self.assertIn("about the pull requests open there, not to this chat", said)
+
+    def test_a_merge_its_word_was_spent_on_is_given_no_reason(self):
+        """`--auto` spends the word and leaves the pull request open (decision 0038)."""
+        self.green()
+        self.open_a_pr()
+        self.open_pr(49, "feat/y")
+        self.accept()
+        auto = self.ran("Bash", {"command": f"gh pr merge {self.PR_NUMBER} --auto --squash"})
+        self.assertNotEqual("deny", self.decision(auto))
+        said = self.merging(self.PR_NUMBER)
+        self.assertIn("names #49, and not this merge. No word", said)
+
+    def test_one_that_was_a_draft_when_they_spoke(self):
+        self.green()
+        self.open_a_pr()
+        tool_input = {"owner": "o", "repo": "r", "title": "t", "head": "feat/y", "base": "main",
+                      "draft": True}
+        self.tool("mcp__github__create_pull_request", tool_input)
+        self.gate("pr-opened", {
+            "session_id": "s1", "hook_event_name": "PostToolUse",
+            "tool_name": "mcp__github__create_pull_request", "tool_input": tool_input,
+            "tool_response": {"url": "https://github.com/o/r/pull/49"},
+        })
+        self.accept()
+        self.assertIn("it is recorded as a draft", self.merging(49))
+
+    def test_one_the_record_calls_merged(self):
+        self.green()
+        self.open_a_pr()
+        self.open_pr(50, "feat/z")
+        pullrequest.settle(self.ctx(), "feat/z", pullrequest.MERGED)
+        self.accept()
+        self.assertIn("#50 is recorded here as merged on feat/z", self.merging(50))
 
 
 class TestTheWordReachesWhatTheChatOpenedBeforeARestart(PRCase):

@@ -306,8 +306,11 @@ def block(reason: str) -> NoReturn:
     raise SystemExit(BLOCK)
 
 
-def ask(reason: str) -> NoReturn:
+def ask(reason: str, note: str = "") -> NoReturn:
     """Hold a turn open with an instruction, without calling the work wrong. Stop only.
+
+    `note` is an account for the human, as `emit_silent` gives one: `systemMessage`, a field
+    every event accepts beside its own.
 
     `block` is the refusal: it exits 2, the harness renders a hook ERROR, and this
     plugin's own escalation counts it — four in a streak end the turn UNVERIFIED and file
@@ -326,12 +329,14 @@ def ask(reason: str) -> NoReturn:
     for an action. Callers keep interpolated repository text short and bounded for the
     same reason.
     """
-    payload = {
+    payload: dict[str, Any] = {
         "hookSpecificOutput": {
             "hookEventName": "Stop",
             "additionalContext": reason.rstrip(),
         }
     }
+    if note:
+        payload["systemMessage"] = note
     sys.stdout.write(json.dumps(payload))
     sys.stdout.flush()
     raise SystemExit(OK)

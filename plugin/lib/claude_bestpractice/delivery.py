@@ -21,6 +21,7 @@ faces the other way.
 
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -314,6 +315,125 @@ def ready(ctx: GitContext, base: str) -> list[str]:
         more = f" (+{len(left) - SHOWN} more)" if len(left) > SHOWN else ""
         problems.append(f"there are uncommitted changes: {', '.join(left[:SHOWN])}{more}")
     return problems
+
+
+def carries_its_own(ctx: GitContext, base: str) -> bool:
+    """Does this branch carry work that neither the trunk nor another branch already holds?
+
+    A pull request is owed for what only this branch has. Counted against the trunk alone, an
+    integration branch was told to open one: two pull requests squash-merged, a third still
+    open, merged together to photograph on an emulator. Every commit on it was in the trunk or
+    in an open pull request, and opening the one demanded is a duplicate (#274).
+
+    So each commit is asked what decision 0030 asks of the diff: whether the trunk already has
+    its change as a patch git recognises, and whether another remote branch carries it. What
+    is left is asked of content, because a squash of several commits is no one commit's patch
+    while the files those commits wrote are the trunk's byte for byte. A merge counts for the
+    change it makes of its own and nothing else.
+
+    True wherever git cannot answer, as before this was asked: a demand that stands down
+    whenever it is unsure stands down in every unusual repository.
+    """
+    trunk = _trunk_ref(ctx, base)
+    own = _commits_only_here(ctx, trunk) if trunk else None
+    if own is None:
+        return True
+    if not own:
+        return False
+    touched = _touched_by(ctx, own)
+    differing = _git_lines(ctx, ["diff", "-z", "--name-only", "--no-renames", trunk, "HEAD"])
+    if touched is None or differing is None:
+        return True
+    return bool(touched & set(differing))
+
+
+# The header `--cc -p` writes over each file a merge changed of its own, and the escapes git
+# quotes a name with special characters in.
+_COMBINED = "diff --cc "
+_C_ESCAPES = {b"a": b"\a", b"b": b"\b", b"t": b"\t", b"n": b"\n", b"v": b"\v", b"f": b"\f",
+              b"r": b"\r"}
+
+
+def _touched_by(ctx: GitContext, commits: dict[str, bool]) -> set[str] | None:
+    """The files the commits changed, `commits` saying of each whether it is a merge. None when
+    git cannot say.
+
+    A merge is counted for the change it makes of its own: what `--cc` shows of it, the hunks
+    where it differs from every parent. Its names alone list every file that differs from all
+    of them, and a clean merge of two edits to one file is such a file, so an integration
+    branch merging a squashed pull request and an open one in the same `CHANGELOG` was owed a
+    third pull request for nothing it wrote. A root commit is diffed against nothing (#274).
+    """
+    plain = "".join(f"{sha}\n" for sha, merge in commits.items() if not merge)
+    merges = "".join(f"{sha}\n" for sha, merge in commits.items() if merge)
+    names = _git_lines(ctx, ["diff-tree", "--stdin", "--root", "-r", "-z", "--name-only",
+                             "--no-commit-id", "--no-renames"], plain) if plain else []
+    patch = _git_lines(ctx, ["-c", "core.quotePath=false", "diff-tree", "--stdin", "-r", "-p",
+                             "-U0", "--cc", "--no-commit-id", "--no-renames"],
+                       merges) if merges else []
+    if names is None or patch is None:
+        return None
+    combined = {_unquoted(line[len(_COMBINED):]) for line in patch if line.startswith(_COMBINED)}
+    return set(names) | combined
+
+
+def _unquoted(path: str) -> str:
+    """A path as git names it in a patch header, its C quoting taken off: `"a\\"b"` is `a"b`.
+
+    Read as `-z` names are, so that one file is one string however git printed it."""
+    if len(path) < 2 or not path.startswith('"') or not path.endswith('"'):
+        return path
+    raw = re.sub(rb"\\([0-7]{3}|.)",
+                 lambda found: bytes([int(found[1], 8)]) if len(found[1]) == 3
+                 else _C_ESCAPES.get(found[1], found[1]),
+                 path[1:-1].encode("utf-8", "surrogateescape"))
+    return raw.decode("utf-8", "surrogateescape")
+
+
+def _trunk_ref(ctx: GitContext, base: str) -> str:
+    """The trunk a pull request is measured against: `origin/<base>`, or `<base>` where the
+    clone has no remote copy of it. "" when neither resolves."""
+    for ref in (f"refs/remotes/origin/{base}", f"refs/heads/{base}"):
+        if _git_lines(ctx, ["rev-parse", "--verify", "--quiet", ref]):
+            return ref
+    return ""
+
+
+def _commits_only_here(ctx: GitContext, trunk: str) -> dict[str, bool] | None:
+    """The commits HEAD has that nothing else delivers, each True when it is a merge. None when
+    git cannot say.
+
+    Two walks: the commits whose change the trunk lacks as a patch, and the commits no other
+    remote branch carries (`gitctx._arrived_from`, which counts the trunk too). Their
+    intersection is this branch's own.
+    """
+    from .gitctx import _arrived_from
+
+    unpicked = _git_lines(ctx, ["rev-list", "--cherry-pick", "--right-only", f"{trunk}...HEAD"])
+    elsewhere = [trunk, *_arrived_from(ctx)]
+    alone = _git_lines(ctx, ["rev-list", "--parents", "--ignore-missing", "HEAD", "--stdin"],
+                       "".join(f"^{ref}\n" for ref in elsewhere))
+    if unpicked is None or alone is None:
+        return None
+    picked = set(unpicked)
+    return {line.split()[0]: len(line.split()) > 2 for line in alone
+            if line.split()[0] in picked}
+
+
+def _git_lines(ctx: GitContext, args: list[str], given: str = "") -> list[str] | None:
+    """What a git command printed, one entry per line or per NUL-separated name; None when it
+    failed, timed out or could not start."""
+    try:
+        proc = subprocess.run(
+            ["git", *args], cwd=str(ctx.worktree_root), input=given, capture_output=True,
+            encoding="utf-8", errors="surrogateescape", timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    separator = "\0" if "-z" in args else "\n"
+    return [line for line in proc.stdout.split(separator) if line.strip()]
 
 
 # The plugin's own bookkeeping is not the founder's unfinished work. It writes the stage
