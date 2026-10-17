@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
+import subprocess
+import sys
 import time
 import unittest
 
@@ -696,3 +699,19 @@ class TestATrackedFileIsTheTreesOwnContent(RepoCase):
         proc = self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
                                                "stop_hook_active": True})
         self.assertEqual(0, proc.returncode, proc.stderr)
+
+
+class TestThisRepositorysGuardIsReadAsAMissingRunner(unittest.TestCase):
+    """`make test` stops at `needs-pytest` where pytest cannot be imported. Said in its own
+    words, the Stop gate filed that as a red `make test`, and in this repository, whose suite
+    outlives the Stop hook, no later run could clear it: the merge gate refused every merge
+    over "the test suite is red" for a suite nothing had run."""
+
+    def test_the_gate_names_the_missing_tool(self):
+        root = pathlib.Path(__file__).resolve().parent.parent
+        proc = subprocess.run(["make", "-s", "needs-pytest", f"PY={sys.executable} -S"],
+                              cwd=root, capture_output=True, text=True, timeout=60)
+        self.assertNotEqual(0, proc.returncode, "precondition: pytest is hidden from -S")
+        said = evidence._missing_runner(proc.returncode, proc.stdout + proc.stderr,
+                                        ["make", "test"])
+        self.assertIn("`pytest` not found", said)

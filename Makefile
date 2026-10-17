@@ -63,10 +63,13 @@ test: needs-pytest
 # The plugin imports only the standard library; its SUITE does not. Several tests build a
 # throwaway project and require the Stop gate to drive `python3 -m pytest` over it, which is
 # what it does in a user's repository. Without pytest those fail on assertions about the
-# gate and never mention pytest, so the missing tool is named here, once, instead.
+# gate and never mention pytest, so the missing tool is named here, once, instead. Named the
+# way a shell names a missing program, `pytest: not found`, which is how the Stop gate tells
+# a suite that never ran from one that failed: said any other way, a missing pytest was filed
+# as a red `make test` that no later run in this repository could clear.
 needs-pytest:
 	@$(PY) -c "import pytest" 2>/dev/null || { \
-		echo "make: the suite needs pytest, because the Stop gate it tests drives \`$(PY) -m pytest\`." >&2; \
+		echo "pytest: not found — the suite needs it, because the Stop gate it tests drives \`$(PY) -m pytest\`." >&2; \
 		echo "      $(PY) -m pip install pytest" >&2; \
 		exit 1; }
 
