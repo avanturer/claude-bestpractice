@@ -48,6 +48,7 @@ import signal
 import subprocess
 import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -80,6 +81,40 @@ class RanOutOfTime(Exception):
         super().__init__(f"the run did not finish within {int(seconds)}s")
         self.seconds = seconds
         self.runner = runner
+
+
+class FounderSpoke(Exception):
+    """The founder typed while a run of this gate's was going, and the run was stopped for it.
+
+    The Stop hook holds the turn while it runs a suite, and what the founder types meanwhile
+    waits behind it: five minutes of pytest and a minute of jest before their `+merge` was read,
+    or Esc (#277). The run is no verdict either way, and its caller says so.
+    """
+
+
+# What stops a run for the founder, while `until_spoken` holds one, and how often it is asked.
+_LISTENERS: list[Callable[[], bool]] = []
+_LISTEN_EVERY = 0.5
+
+
+@contextlib.contextmanager
+def until_spoken(heard: Callable[[], bool]):
+    """Inside this, every run this gate starts ends with `FounderSpoke` once `heard()` is true,
+    and none starts after it is: `founder.Listener.heard`, for the Stop gate."""
+    _LISTENERS.append(heard)
+    try:
+        yield
+    finally:
+        _LISTENERS.remove(heard)
+
+
+def _spoken() -> bool:
+    """Has anything listening for the founder heard them? A listener that fails heard nothing."""
+    for heard in _LISTENERS:
+        with contextlib.suppress(Exception):
+            if heard():
+                return True
+    return False
 
 
 def timeout_for() -> float:
@@ -363,21 +398,37 @@ def run_bounded(argv: list[str], where: Path, env: dict[str, str],
     that outran the hook.
 
     So the run gets a session of its own, its output goes to files nothing else can hold
-    open, and when it ends — finished or killed at the limit — whatever is left of its
-    process group is killed with it. Raises `RanOutOfTime` at the limit and OSError when the
+    open, and when it ends — finished, killed at the limit, or stopped because the founder
+    typed — whatever is left of its process group is killed with it. Raises `RanOutOfTime`
+    at the limit, `FounderSpoke` for the founder (`until_spoken`), and OSError when the
     program cannot be started. `cpus` is `witness_cpus`; see `_at_most`.
     """
+    if _spoken():
+        raise FounderSpoke()
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
         with _at_most(cpus):
             proc = subprocess.Popen(argv, cwd=str(where), stdout=out, stderr=err, env=env,
                                     start_new_session=True)
         try:
-            proc.wait(timeout=limit)
-        except subprocess.TimeoutExpired:
-            raise RanOutOfTime(limit) from None
+            _wait(proc, limit)
         finally:
             _end(proc)
         return subprocess.CompletedProcess(argv, proc.returncode, _read(out), _read(err))
+
+
+def _wait(proc: subprocess.Popen, limit: float) -> None:
+    """Wait for a run to end, for at most `limit` seconds, and only while the founder is quiet."""
+    deadline = time.monotonic() + limit
+    while True:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise RanOutOfTime(limit)
+        try:
+            proc.wait(timeout=min(left, _LISTEN_EVERY))
+            return
+        except subprocess.TimeoutExpired:
+            if _spoken():
+                raise FounderSpoke() from None
 
 
 def _end(proc: subprocess.Popen) -> None:

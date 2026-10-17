@@ -1,6 +1,5 @@
 # Decisions
 
-- [0033] A pause is not a finish — `decisions/0033-a-pause-is-not-a-finish.md`
 - [0034] An ERROR a second run does not see is not the code's, and a passing report sends a remembered failure back — `decisions/0034-an-error-a-second-run-does-not-see-is-not-the-codes.md`
 - [0035] The founder's test command answers for the gate's own run of the suite — `decisions/0035-the-founders-test-command-answers-for-the-gates-run.md`
 - [0036] A finish is decided on the commit and in the chat it was shown in — `decisions/0036-a-finish-is-decided-where-and-when-it-was-shown.md`
@@ -11,4 +10,5 @@
 - [0041] A pull request is owed for what only the branch carries — `decisions/0041-a-pull-request-is-owed-for-what-only-the-branch-carries.md`
 - [0042] A session that removes the tree it stands in is told the way out — `decisions/0042-a-session-that-removes-the-tree-it-stands-in-is-told-the-way-out.md`
 - [0043] A word names what the chat showed, not only what it opened — `decisions/0043-a-word-names-what-the-chat-showed.md`
-- ... 30 older, see `decisions/`
+- [0044] A founder's message ends the gate's run of the suite — `decisions/0044-a-founders-message-ends-the-gates-run.md`
+- ... 31 older, see `decisions/`

@@ -356,6 +356,69 @@ def _moment(stamp: Any) -> float:
 
 
 # ---------------------------------------------------------------------------------------------
+# A message typed while a hook holds the turn.
+
+# The harness files what the founder types while the session is busy the moment it is typed: a
+# `queue-operation` entry, `enqueue`, carrying the text, which waits there until the turn is
+# free. Measured on 2.1.302: written while a Stop hook ran, read by that hook half a second
+# later, and delivered only once the hook returned (#277). A task's notification is queued the
+# same way, in an envelope.
+_QUEUED_BY_SOMEONE = b'"queue-operation"'
+# What one look at the transcript reads at most: a hook's own run never writes this much.
+_MOST_PER_LOOK = 4 * 1024 * 1024
+
+
+class Listener:
+    """Whether the founder has typed into this session since the listener was made.
+
+    Reads only what the harness appends after that moment, a line at a time and only once it
+    is complete, so a message half written is read on the next look. Never raises: a
+    transcript that cannot be read, or reads in a shape this does not know, has said nothing.
+    """
+
+    def __init__(self, transcript_path: str) -> None:
+        self._path = Path(transcript_path) if transcript_path else None
+        self._offset = self._size()
+        self._heard = False
+
+    def _size(self) -> int:
+        try:
+            return self._path.stat().st_size if self._path is not None else 0
+        except OSError:
+            return 0
+
+    def heard(self) -> bool:
+        """Has the founder typed a message since this listener was made?"""
+        if self._heard or self._path is None:
+            return self._heard
+        try:
+            with self._path.open("rb") as handle:
+                handle.seek(min(self._offset, self._size()))
+                fresh = handle.read(_MOST_PER_LOOK)
+        except OSError:
+            return False
+        whole = fresh[:fresh.rfind(b"\n") + 1]
+        self._offset += len(whole)
+        self._heard = any(_queued_by_the_founder(line) for line in whole.splitlines()
+                          if _QUEUED_BY_SOMEONE in line)
+        return self._heard
+
+
+def _queued_by_the_founder(raw: bytes) -> bool:
+    """Is this transcript line a message the founder typed while the session was busy? Not a
+    notification the harness queued, nor a message of this plugin's: neither leaves anything of
+    the founder's own once its envelope is set aside."""
+    try:
+        entry = json.loads(raw)
+    except ValueError:
+        return False
+    if not isinstance(entry, dict) or entry.get("type") != "queue-operation" \
+            or entry.get("operation") != "enqueue":
+        return False
+    return bool(founders_word(_text_of(entry.get("content"))).strip())
+
+
+# ---------------------------------------------------------------------------------------------
 # One road for the word.
 
 

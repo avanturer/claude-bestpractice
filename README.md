@@ -250,6 +250,12 @@ is never asked twice. A red run names its first broken test and keeps its report
 at most `witness_cpus` CPUs, four unless you say otherwise (`0` is all of them), so one Stop
 does not start a jest worker per core while the other sessions on the machine run theirs.
 
+**What you type is not held behind it.** The suite runs while the turn is still open, and a
+message you send meanwhile used to wait for the whole run. Now the run stops the moment you
+type, and the turn ends for your message. A run stopped that way proves nothing either way,
+so a merge waits until one finishes: at the session's next finish, or on `git push` where the
+pre-push hook is installed.
+
 It also escalates rather than wedging: after four blocked attempts it records an
 unverified finish and lets the turn end, because a gate that blocks a founder's workflow
 forever is a gate that gets uninstalled.

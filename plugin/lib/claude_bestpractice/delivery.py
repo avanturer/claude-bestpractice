@@ -163,12 +163,16 @@ def _test_health(ctx: GitContext) -> str:
     red = evidence.red_line(ctx)
     if red:
         return red
+    seen = evidence.last_run(ctx)
+    if seen and seen.get("cut_short"):
+        # A green from before it is not about the work it was stopped judging (#277).
+        return ("Tests: the gate's last run was stopped when the founder wrote, and nothing "
+                "has passed on the latest work since.")
     if evidence.last_green(ctx):
         return "Tests: green (observed by the gate)."
     # "NEVER RUN" was said of branches whose suite had just run, at length, inside this
     # plugin's own pre-push hook and failed. Absence of a green is not absence of a run
     # (#198), and this surface is the one built for a founder who reads no code.
-    seen = evidence.last_run(ctx)
     if seen:
         return (f"Tests: the last run FAILED — `{' '.join(seen.get('command') or ['?'])}`. "
                 "Nothing has passed here since.")

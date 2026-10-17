@@ -733,6 +733,9 @@ def _how_to_stop_here(ctx, rec: sessions.SessionRecord) -> str:
 
 def main() -> None:
     event = hookio.read_event()
+    # From the moment this hook starts: what the founder types now waits for it to return, and
+    # a suite run it starts below is stopped for them (#277).
+    listening = founder.Listener(event.transcript_path)
     # The tree this session works in, which is not always the directory the harness hands
     # us: Claude Code reports the tree once the session has `cd`-ed into it, but a session
     # can still stand in the main checkout with its work in its own tree. Judging a turn
@@ -1010,10 +1013,15 @@ def main() -> None:
     # bring its own, so their sum could pass the hook's budget, where the harness kills the
     # gate and nobody is told anything.
     deadline = time.time() + witness.timeout_for()
+    # Whether the founder typed while a suite ran, which stopped it: no verdict, either way.
+    cut_short = False
     if gates["evidence_gate"] and not let_go and paused is None:
         try:
-            verdict = evidence.verify(ctx, cfg.artifact_globs, changed, cfg.test_command, must_pass,
-                                      deadline)
+            with witness.until_spoken(listening.heard):
+                verdict = evidence.verify(ctx, cfg.artifact_globs, changed, cfg.test_command,
+                                          must_pass, deadline)
+        except witness.FounderSpoke:
+            verdict, cut_short = None, True
         except Exception as exc:  # noqa: BLE001 - deliberate: see below
             # A crash inside verification used to escape into hookio.guard, which blocks
             # WITHOUT touching the escalation counter — so one bad glob in config.json
@@ -1026,7 +1034,9 @@ def main() -> None:
                 "This is a fault in the gate or its configuration, not in your work. "
                 "Check .claude/claude-bestpractice/config.json.",
             )
-        if not verdict.ok:
+        if verdict is None:
+            pass
+        elif not verdict.ok:
             # Before blaming the session, ask whether the failure is even about its change:
             # a shared checkout three commits behind failed four tests that were green on
             # the trunk, and the gate called the suite red on work that was already merged
@@ -1070,11 +1080,30 @@ def main() -> None:
             for suite in must_pass or [suites.Suite("", tuple(cfg.test_command), True)]:
                 if not suite.declared:
                     continue
-                clean = evidence.clean_rerun(ctx, list(suite.command), suite.path, deadline)
+                try:
+                    with witness.until_spoken(listening.heard):
+                        clean = evidence.clean_rerun(ctx, list(suite.command), suite.path,
+                                                     deadline)
+                except witness.FounderSpoke:
+                    cut_short = True
+                    break
                 if not clean.ok:
                     problems.append(clean.reason)
                     owed_by_a_finish = True
                     break
+
+    if cut_short:
+        # The founder typed while the suite ran, and their message waited for this hook: five
+        # minutes of pytest and a minute of jest before `+merge` was read (#277). Stopped, the
+        # run says nothing about the work, so nothing is recorded but that it was cut short,
+        # which a merge reads as no green. With nothing else to say, the turn is theirs now.
+        evidence.record_cut_short(ctx, list(cfg.test_command or ()))
+        if not problems:
+            sys.stderr.write(
+                "claude-bestpractice: the founder wrote while the suite ran, so it was stopped "
+                "and the turn ends for their message. Nothing was verified: the suite runs at "
+                "the next finish, and a merge waits for it to pass.\n")
+            _allow(ctx, rec, cfg, opener, shell)
 
     if not problems:
         _refuse_to_end_on_an_unanswered_block(ctx, rec, pending_refusal)

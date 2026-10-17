@@ -2418,7 +2418,7 @@ def _lasted(stamp: object) -> str:
     return f"{days}d" if days else f"{hours}h" if hours else "just now"
 
 
-def record_run(ctx: GitContext, command: list[str], passed: bool) -> None:
+def record_run(ctx: GitContext, command: list[str], passed: bool, cut_short: bool = False) -> None:
     """Remember that a suite RAN, whatever it then said.
 
     Separate from the green record because they answer different questions, and the
@@ -2444,8 +2444,27 @@ def record_run(ctx: GitContext, command: list[str], passed: bool) -> None:
             "passed": bool(passed),
             "at": time.time(),
             "branch": ctx.branch,
+            **({"cut_short": True} if cut_short else {}),
         },
     )
+
+
+def record_cut_short(ctx: GitContext, command: list[str]) -> None:
+    """Remember that the Stop gate's run on this branch's latest work was stopped for the
+    founder's message: a run, and no verdict.
+
+    Recorded so that a green from before it does not stand for the work it never finished
+    judging. Typed during the run, `+merge` would otherwise have merged on that older green
+    the change nobody had run (#277).
+    """
+    record_run(ctx, command or ["the Stop gate's run"], passed=False, cut_short=True)
+
+
+def _cut_short_since(seen: dict | None, green: dict | None) -> bool:
+    """Was the last run on the branch one stopped for the founder, after its last green?"""
+    if not seen or not seen.get("cut_short"):
+        return False
+    return float(seen.get("at") or 0) >= float((green or {}).get("at") or 0)
 
 
 def last_run(ctx: GitContext, branch: str = "") -> dict | None:
@@ -2469,12 +2488,19 @@ def unproven(ctx: GitContext, branch: str = "") -> str:
     One sentence for the three surfaces that used to compose their own, because they were
     composing the same false one: absence of a green was reported as absence of a run.
     """
-    if last_green(ctx, branch):
-        return ""
+    green = last_green(ctx, branch)
     seen = last_run(ctx, branch)
+    if green and not _cut_short_since(seen, green):
+        return ""
     where = f" on {branch}" if branch else " on this branch"
     if not seen:
         return f"no test run has ever been observed{where}"
+    if seen.get("cut_short"):
+        return (f"the Stop gate's run of the suite{where} was stopped "
+                f"({_lasted(seen.get('at'))}) because the founder wrote while it ran, and "
+                "nothing has passed on that work since: it runs again at the session's next "
+                "finish, and on `git push` where the pre-push hook is installed "
+                "(`claude-bp-ci status`)")
     ran = " ".join(seen.get("command") or ["?"])
     return (f"the last run observed{where} FAILED ({_lasted(seen.get('at'))}) — `{ran}`; "
             "nothing has passed since")
