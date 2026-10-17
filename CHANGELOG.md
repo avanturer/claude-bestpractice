@@ -35,7 +35,9 @@ clear it, and the merge gate refused over a suite nothing had run.
   and with nothing named the word is still the one merge. `pull_request_read` now reaches
   `pre-tool`, which lets it through uncounted (decision 0043).
 - Which repository a `gh` line names is read off its `gh` calls alone: `grep -R pattern` was
-  read as naming a repository called `pattern`, and asked git for the remotes.
+  read as naming a repository called `pattern`, and asked git for the remotes. A pull
+  request's URL names its repository too, so `gh pr ready`, `close` or `merge` of another
+  repository's URL leaves this clone's record of the same number alone.
 - An unverified finish's attempt is titled by the cards the session holds, or "unverified
   finish on <branch>", and its reason is cut at a word.
 - This repository's `needs-pytest` guard says `pytest: not found`, which the gate reads as a

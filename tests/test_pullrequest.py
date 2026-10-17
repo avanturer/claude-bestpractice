@@ -2376,7 +2376,9 @@ class TestADraftIsPausedWork(PRCase):
         self.assertTrue(self.record()["draft"])
 
     def test_ready_names_its_pull_request_the_way_close_does(self):
-        """By number through the record that learned it, by URL, by branch, or by none."""
+        """By number through the record that learned it, by URL, by branch, or by none. The URL
+        of this repository's: one naming another repository is that repository's."""
+        git(["remote", "add", "origin", "https://github.com/o/r.git"], self.repo)
         self.start()
         self.open_with_the_tool(PRCase.PR_NUMBER, "feat/x", draft=True)
         for command in (f"gh pr ready {PRCase.PR_NUMBER}", "gh pr ready feat/x",
