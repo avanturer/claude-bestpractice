@@ -1548,10 +1548,14 @@ class TestTheHarnessSendsTheToolsMergeToTheGate(unittest.TestCase):
             with self.subTest(tool=tool):
                 self.assertTrue(harness_matches(self.matcher(), tool))
 
+    def test_reading_one_pull_request_reaches_it(self):
+        """What the chat reads by number is what the founder's next `+merge` answers (#276)."""
+        self.assertTrue(harness_matches(self.matcher(), "mcp__github__pull_request_read"))
+
     def test_nothing_it_does_not_judge_is_sent_to_it(self):
-        """Every call it matches costs a process start, and a read is never its business."""
+        """Every call it matches costs a process start, and other reads are not its business."""
         for tool in ("Read", "Glob", "Grep", "WebFetch", "TaskCreate", "NotebookRead",
-                     "mcp__github__pull_request_read", "mcp__github__get_pull_request"):
+                     "mcp__github__list_pull_requests", "mcp__github__get_pull_request"):
             with self.subTest(tool=tool):
                 self.assertFalse(harness_matches(self.matcher(), tool))
 
@@ -3397,3 +3401,85 @@ class TestTheWordIsReadWhereTheHarnessWroteIt(TranscriptCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheWordNamesWhatTheChatShowed(PRCase):
+    """#276 and #272. The word named only the chat's own open pull requests. Asked to close the
+    hanging ones, a session with none of its own checked #936, #941 and #967 and listed them;
+    `+merge` was the one merge it always was, and #941 was refused next. #967, another chat's,
+    was refused after every `+merge` in the chat that had shown it."""
+
+    def green(self) -> None:
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+
+    def say(self, prompt: str, session_id: str = "s1") -> None:
+        self.gate("prompt-capture", {"session_id": session_id,
+                                     "hook_event_name": "UserPromptSubmit", "prompt": prompt})
+
+    def view(self, number: int, session_id: str = "s1") -> None:
+        self.tool("Bash", {"command": f"gh pr view {number} --json title,mergeable"}, session_id)
+
+    def merge(self, number: int, session_id: str = "s1"):
+        return self.ran("Bash", {"command": f"gh pr merge {number} --squash"}, session_id)
+
+    def test_each_pull_request_shown_is_merged_on_one_word(self):
+        self.green()
+        self.say("закрой все висящие PR")
+        for number in (936, 941):
+            self.view(number)
+        self.ran("mcp__github__pull_request_read",
+                 {"method": "get", "owner": "o", "repo": "r", "pullNumber": 967})
+        self.accept()
+        for number in (936, 941, 967):
+            with self.subTest(number=number):
+                self.assertNotEqual("deny", self.decision(self.merge(number)))
+        self.assertEqual("deny", self.decision(self.merge(936)), "each merges once")
+        self.assertEqual("deny", self.decision(self.merge(777)), "a number nobody showed")
+
+    def test_another_chats_pull_request_shown_here_is_named(self):
+        self.green()
+        self.start("s2")
+        self.open_pr(967, "style/compact-notes", session_id="s2")
+        self.open_a_pr()
+        self.view(967)
+        self.accept()
+        self.assertNotEqual("deny", self.decision(self.merge(967)))
+        self.assertNotEqual("deny", self.decision(self.merge(self.PR_NUMBER)))
+
+    def test_a_refused_merge_is_named_by_the_next_word(self):
+        self.green()
+        self.say("влей 941 и 942")
+        for number in (941, 942):
+            self.assertEqual("deny", self.decision(self.merge(number)))
+        self.accept()
+        for number in (941, 942):
+            with self.subTest(number=number):
+                self.assertNotEqual("deny", self.decision(self.merge(number)))
+
+    def test_what_was_shown_before_the_message_before_is_not(self):
+        self.green()
+        self.say("что там висит?")
+        self.view(936)
+        self.say("а что с CI?")
+        self.view(941)
+        self.accept()
+        self.assertNotEqual("deny", self.decision(self.merge(941)))
+        self.assertEqual("deny", self.decision(self.merge(936)))
+
+    def test_what_another_chat_showed_is_not_named_here(self):
+        self.green()
+        self.view(936, session_id="s2")
+        self.accept()
+        self.assertNotEqual("deny", self.decision(self.merge(941)), "the one merge it always was")
+        self.assertEqual("deny", self.decision(self.merge(936)))
+
+    def test_a_listing_and_another_repository_show_nothing(self):
+        self.assertEqual([], pullrequest.numbers_shown("Bash", "gh pr list --state open", {}))
+        self.assertEqual([], pullrequest.numbers_shown(
+            "Bash", "gh pr view 5 -R someone/else", {}))
+        self.assertEqual([5, 7], pullrequest.numbers_shown(
+            "Bash", "gh pr view 5 --json title -q .title && gh pr checks "
+                    "https://github.com/o/r/pull/7 > /dev/null", {}))

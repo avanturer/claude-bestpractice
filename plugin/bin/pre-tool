@@ -1578,6 +1578,11 @@ def main() -> None:
         unjudged = pullrequest.merge_line(event.tool_name, command)
         if unjudged:
             deny(ctx, rec, unjudged)
+        # Looked at by number, it is in front of the founder, and their next `+merge` is an
+        # answer about it as well (#276).
+        if pullrequest.about_this_repository(ctx, event.tool_name, ti, command):
+            pullrequest.shown(ctx, event.session_id,
+                              pullrequest.numbers_shown(event.tool_name, command, ti))
         number = pullrequest.merge_target(event.tool_name, command, ti)
         if number is not None:
             # Green is not accepted. The checks say the code works; they say nothing about
@@ -1614,14 +1619,16 @@ def main() -> None:
             # while the session was working reached it with no hook at all, and every merge
             # after it was refused as if they had said nothing (#251).
             def covered() -> str:
-                found = pullrequest.acceptance(here, named)
+                found = pullrequest.acceptance(here, named, number)
                 if not found:
                     founder.catch_up(ctx, event.session_id, event.transcript_path)
-                    found = pullrequest.acceptance(here, named)
+                    found = pullrequest.acceptance(here, named, number)
                 return found
 
             cover = config.within_grace(covered)
             if not cover:
+                # Refused, it is put to the founder, and the word they answer with names it.
+                pullrequest.shown(ctx, event.session_id, [number])
                 # The word on record may cover it, under a number this clone never learned.
                 # That is not a word missing, and it is the session's to resolve (#241).
                 unplaced = pullrequest.unplaced(ctx, number, event.session_id)
@@ -1645,8 +1652,8 @@ def main() -> None:
                     "more first.\n"
                     "  Otherwise show them what changed and ask. When they are happy they "
                     "say `+merge` — copy it exactly — and this allows every pull request "
-                    "you have open when they say it, each once; with none open, the next "
-                    "merge.\n"
+                    "you have open, and every one you showed them by number since their "
+                    "last message, each once; with none of either, the next merge.\n"
                     "  Their word is read from their own message; nothing you write "
                     "can stand in for it."
                 )
@@ -1657,7 +1664,7 @@ def main() -> None:
             # its cards, and they were asked for `+merge` again (#232, #243, #268).
             # The session that sends it, as it is here: the result can arrive from the tree a
             # `cd` left the shell in, under an identity this chat never started a session as.
-            merge: dict = {"named": named, "session": event.session_id}
+            merge: dict = {"named": named, "number": number, "session": event.session_id}
             if gated is None:
                 # Somebody else's pull request: nothing checked here is about it (#135).
                 # Still taken off what the word covers, once it has merged.
@@ -1677,6 +1684,7 @@ def main() -> None:
                     # Put to the founder by this refusal, so that their next word is a word
                     # about what it lists (#243), at this commit and in this chat (#268).
                     pullrequest.note_refusal(ctx, pr_branch, here.head, problems, event.session_id)
+                    pullrequest.shown(ctx, event.session_id, [number])
                     deny_for_founder(ctx, rec, pullrequest.merge_refusal(gated, problems))
                 # Bound to this pull request once its blockers are judged, and never before:
                 # the refusal above promises the merge "as soon as the list is empty", so a

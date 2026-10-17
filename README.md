@@ -276,8 +276,11 @@ told it is waiting for you rather than the other way round.
 **Merged, by the session that opened it.** Once you say `+merge`, it opens, checks and
 merges on its own without asking again. One `+merge` covers every pull request that chat has
 open when you say it, so ten finished pull requests take one word, not ten — including the
-ones it opened before a `--resume`, which is the same chat. It never covers one opened after
-the word or another chat's. Each is judged as itself, from whichever tree the merge is run:
+ones it opened before a `--resume`, which is the same chat. It also covers each pull request
+the chat showed you by number since your previous message (looked at with `gh pr view`,
+`checks` or `diff`, or a merge of it refused), Dependabot's or another chat's included, so
+"close the hanging ones" takes one word too. It never covers one opened after the word, or
+another chat's it did not show you. Each is judged as itself, from whichever tree the merge is run:
 `cd <tree> && gh pr merge` is that tree's pull request, not the one the session stands on.
 A merge that fails on a conflict or a check keeps your word for its retry: it is spent, and
 the pull request and its cards are closed, only once the merge has run; `--auto` spends it
@@ -359,7 +362,7 @@ messages, and each is **spent when it is used**, never a standing grant.
 
 | You type | It allows | Once |
 | --- | --- | --- |
-| `+merge` | merging the pull requests this chat has open, drafts aside | each of them once; with none open, the next merge |
+| `+merge` | merging the pull requests this chat has open, and those it showed you by number since your last message, drafts aside | each of them once; with none of either, the next merge |
 | `+release` | promoting to production | one promotion |
 | `+migration` | destructive DDL in a migration | one migration |
 

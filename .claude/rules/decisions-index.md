@@ -1,6 +1,5 @@
 # Decisions
 
-- [0032] A tree only this chat is in is its own to remove, where no pid can tell — `decisions/0032-a-tree-only-this-chat-is-in-is-its-own-to-remove.md`
 - [0033] A pause is not a finish — `decisions/0033-a-pause-is-not-a-finish.md`
 - [0034] An ERROR a second run does not see is not the code's, and a passing report sends a remembered failure back — `decisions/0034-an-error-a-second-run-does-not-see-is-not-the-codes.md`
 - [0035] The founder's test command answers for the gate's own run of the suite — `decisions/0035-the-founders-test-command-answers-for-the-gates-run.md`
@@ -11,4 +10,5 @@
 - [0040] A line that merges is one merge, written so the gate can read it — `decisions/0040-a-line-that-merges-is-one-merge.md`
 - [0041] A pull request is owed for what only the branch carries — `decisions/0041-a-pull-request-is-owed-for-what-only-the-branch-carries.md`
 - [0042] A session that removes the tree it stands in is told the way out — `decisions/0042-a-session-that-removes-the-tree-it-stands-in-is-told-the-way-out.md`
-- ... 29 older, see `decisions/`
+- [0043] A word names what the chat showed, not only what it opened — `decisions/0043-a-word-names-what-the-chat-showed.md`
+- ... 30 older, see `decisions/`

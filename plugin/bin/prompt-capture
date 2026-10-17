@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import config, founder, hookio, redact, sessions  # noqa: E402
+from claude_bestpractice import config, founder, hookio, pullrequest, redact, sessions  # noqa: E402
 from claude_bestpractice.founder import ENVELOPES as _ENVELOPES  # noqa: E402
 from claude_bestpractice.founder import founders_word  # noqa: E402
 from claude_bestpractice.gitctx import resolve  # noqa: E402
@@ -154,8 +154,12 @@ def main() -> None:
         # Recorded the way a word read back from the transcript is, under the id the harness
         # gives this prompt, so that a gate reading the transcript later knows this one was
         # heard already (`founder.catch_up`).
-        founder.heard(ctx, config.approvals_in(typed), event.session_id, at=time.time(),
+        said = time.time()
+        founder.heard(ctx, config.approvals_in(typed), event.session_id, at=said,
                       ident=str(event.raw.get("prompt_id") or ""))
+        # After the word, so that the word names what the chat showed since the message
+        # before it: the pull requests it looked at by number or was refused (#276).
+        pullrequest.prompted(ctx, event.session_id, said)
 
     # The founder's word is recorded above, before this: a session whose record is missing
     # is registered here, which takes locks and git calls, and a gate that asked for the

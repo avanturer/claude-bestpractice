@@ -1674,11 +1674,123 @@ def accept_merges(ctx: GitContext, approvals: dict[str, str],
     shown_here = {entry for entry, record in still_open.items() if ours(record.get(SHOWN_TO))}
     for entry in sorted(named | shown_here):
         _accept_its_finish(ctx, still_open[entry], said)
+    named |= _shown_before(ctx, session_id, said, still_open)
     if not named:
         return approvals
     kept = {entry for entry in _pool(ctx) if entry in still_open}
     rest = {key: value for key, value in approvals.items() if key != config.APPROVE_MERGE}
     return {**rest, config.MERGE_POOL: " ".join(sorted(kept | named))}
+
+
+# The pull requests a chat put in front of the founder by number in the turn before they spoke:
+# looked at one by one, or refused a merge of. A session asked to close every hanging pull
+# request checked #936, #941 and #967, listed them, and was answered `+merge`; with none of its
+# own open the word was the one merge it always was, and #941 was refused next (#276). #967,
+# another chat's, was refused after every `+merge` in the chat that had shown it (#272).
+SHOWN = "pull-requests-shown.json"
+# How many of a chat's messages are kept, and what was shown since the oldest of them.
+_PROMPTS_KEPT = 4
+
+
+# The tool that reads one pull request, and the `gh pr` verbs that show one, with the flags of
+# theirs that take a value (gh 2.89, cli.github.com/manual). `-R` names another repository,
+# whose numbers are not this one's.
+_READS_TOOL = re.compile(r"(?:^|__)pull_request_read$")
+_SHOWING_VERBS = ("view", "checks", "diff")
+_SHOWING_VALUE_FLAGS = frozenset({"--json", "-q", "--jq", "-t", "--template", "-i",
+                                  "--interval", "--color"})
+
+
+def numbers_shown(tool_name: str, command: str, tool_input: dict[str, Any]) -> list[int]:
+    """The pull requests of this repository a call puts in front of the founder by number:
+    `gh pr view|checks|diff <n>`, or the GitHub tool reading one. A listing shows none."""
+    if _READS_TOOL.search(tool_name):
+        return [_as_number(tool_input.get("pullNumber"))]
+    if tool_name != "Bash" or "gh" not in command:
+        return []
+    from . import shellcmd
+
+    found: list[int] = []
+    for verb in _SHOWING_VERBS:
+        for argv in shellcmd.runs(command, "gh", "pr", verb):
+            found += _shown_by(shellcmd.without_redirections(argv[3:]))
+    return found
+
+
+def _shown_by(words: list[str]) -> list[int]:
+    """The pull request numbers among one `gh pr view|checks|diff`'s words; none for another
+    repository's."""
+    if any(word in ("-R", "--repo") or word.startswith("--repo=") for word in words):
+        return []
+    shown_here: list[int] = []
+    taken = False
+    for word in words:
+        if taken:
+            taken = False
+        elif word in _SHOWING_VALUE_FLAGS:
+            taken = True
+        elif not word.startswith("-"):
+            shown_here.append(int(word) if word.isdigit() else number_in(word))
+    return shown_here
+
+
+def prompted(ctx: GitContext, session_id: str, at: float) -> None:
+    """Note that the founder wrote to this chat at `at`: what it shows after is shown to them."""
+    def note(chat: dict[str, Any]) -> None:
+        chat["prompts"] = sorted([*chat.get("prompts", []), at])[-_PROMPTS_KEPT:]
+        oldest = chat["prompts"][0]
+        chat["numbers"] = {key: when for key, when in chat.get("numbers", {}).items()
+                           if when >= oldest}
+    _rewrite_shown(ctx, session_id, note)
+
+
+def shown(ctx: GitContext, session_id: str, numbers: list[int]) -> None:
+    """Note that this chat showed the founder these pull requests, by number, now."""
+    wanted = [number for number in numbers if number > 0]
+    if not wanted:
+        return
+    now = time.time()
+
+    def note(chat: dict[str, Any]) -> None:
+        chat.setdefault("numbers", {}).update({str(number): now for number in wanted})
+    _rewrite_shown(ctx, session_id, note)
+
+
+def _rewrite_shown(ctx: GitContext, session_id: str,
+                   change: Callable[[dict[str, Any]], None]) -> None:
+    from . import hookio
+
+    path = store.tier_b(ctx, SHOWN)
+    with store.file_lock(store.tier_b(ctx, SHOWN + ".lock")):
+        found = store.read_json(path, default={})
+        every = found if isinstance(found, dict) else {}
+        harness = hookio.harness_of(session_id, str(ctx.worktree_root))
+        chat = every.get(harness) if isinstance(every.get(harness), dict) else {}
+        change(chat)
+        every[harness] = chat
+        store.write_json(path, every)
+
+
+def _shown_before(ctx: GitContext, session_id: str, said: float,
+                  still_open: dict[str, dict[str, Any]]) -> set[str]:
+    """What this chat showed the founder between their previous message and the word, as the
+    pool names it: a recorded pull request by its entry, a draft not at all, any other by
+    `#<number>`."""
+    from . import hookio
+
+    found = store.read_json(store.tier_b(ctx, SHOWN), default={})
+    chat = found.get(hookio.harness_of(session_id, str(ctx.worktree_root))) \
+        if isinstance(found, dict) else None
+    if not isinstance(chat, dict):
+        return set()
+    # The word's own message is noted after it is heard, so the latest before it is the last one.
+    since = max((when for when in chat.get("prompts", []) if when < said), default=0.0)
+    numbers = {int(key) for key, when in chat.get("numbers", {}).items()
+               if since < when <= said and str(key).isdigit()}
+    by_number = {_as_number(record.get("number")): entry for entry, record in still_open.items()}
+    drafts = {_as_number(record.get("number")) for record in still_open.values()
+              if record.get("draft")}
+    return {by_number.get(number, f"#{number}") for number in numbers - drafts}
 
 
 def _open_when_said(ours: Callable[[Any], bool], still_open: dict[str, dict[str, Any]],
@@ -1808,21 +1920,25 @@ def _not_open(ctx: GitContext, number: int) -> str:
             f"{settled.get('branch')}, so nothing open carried it")
 
 
-def acceptance(ctx: GitContext, record: dict[str, Any] | None) -> str:
-    """How the founder's word covers merging `record`: `POOLED`, `ONCE`, or "" when it does not."""
-    if record is not None and _entry(record) in _pool(ctx):
+def acceptance(ctx: GitContext, record: dict[str, Any] | None, number: int = 0) -> str:
+    """How the founder's word covers merging `record`, pull request `number`: `POOLED`, `ONCE`,
+    or "" when it does not. A pull request shown to them by number and known here by nothing
+    else is pooled as `#<number>`."""
+    pooled = _pool(ctx)
+    if (record is not None and _entry(record) in pooled) or (number > 0 and f"#{number}" in pooled):
         return POOLED
     return ONCE if config.approved(ctx, config.APPROVE_MERGE) else ""
 
 
-def spend(ctx: GitContext, record: dict[str, Any] | None, cover: str) -> None:
+def spend(ctx: GitContext, record: dict[str, Any] | None, cover: str, number: int = 0) -> None:
     """Take this merge off what the founder's word covers. Each pull request merges once."""
     if cover == ONCE:
         config.clear_switch(ctx, config.APPROVE_MERGE)
         return
-    if cover != POOLED or record is None:
+    if cover != POOLED or (record is None and number <= 0):
         return
-    left = [entry for entry in _pool(ctx) if entry != _entry(record)]
+    spent = {f"#{number}"} | ({_entry(record)} if record is not None else set())
+    left = [entry for entry in _pool(ctx) if entry not in spent]
     if left:
         config.record_switches(ctx, {config.MERGE_POOL: " ".join(left)})
     else:
@@ -1898,7 +2014,7 @@ def complete(ctx: GitContext, session_id: str, merge: dict[str, Any]) -> None:
     """
     from . import inbox, plan
 
-    spend(ctx, merge.get("named"), str(merge.get("cover", "")))
+    spend(ctx, merge.get("named"), str(merge.get("cover", "")), _as_number(merge.get("number")))
     branch = str(merge.get("branch", ""))
     if not branch or merge.get("queued"):
         return
