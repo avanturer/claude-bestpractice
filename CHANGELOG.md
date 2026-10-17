@@ -26,11 +26,16 @@ clear it, and the merge gate refused over a suite nothing had run.
 ### What changed
 
 - `+merge` also names each pull request the chat showed by number since the founder's previous
-  message: `gh pr view`, `checks` or `diff` of it, the GitHub tool reading it, or a merge of it
-  refused. A recorded one is named by its record, a draft not at all, any other as `#<number>`;
-  each merges once. A listing, another repository's numbers and another chat's pull request
-  this chat never showed name nothing. `pull_request_read` now reaches `pre-tool`
-  (decision 0043).
+  message, one sent into a running turn included: `gh pr view`, `checks` or `diff` of it, the
+  GitHub tool reading it, or a merge of it refused to the founder. A recorded one is named by
+  its record, any other as `#<number>`, kept by later words until it merges or is recorded
+  closed; each merges once. A listing, a draft, one recorded as merged or closed, another
+  chat's pull request this chat never showed, and another repository's numbers (`-R` however
+  joined, a URL, `GH_REPO`, the tool's owner and repo, a `cd` into another clone) name nothing,
+  and with nothing named the word is still the one merge. `pull_request_read` now reaches
+  `pre-tool`, which lets it through uncounted (decision 0043).
+- Which repository a `gh` line names is read off its `gh` calls alone: `grep -R pattern` was
+  read as naming a repository called `pattern`, and asked git for the remotes.
 - An unverified finish's attempt is titled by the cards the session holds, or "unverified
   finish on <branch>", and its reason is cut at a word.
 - This repository's `needs-pytest` guard says `pytest: not found`, which the gate reads as a

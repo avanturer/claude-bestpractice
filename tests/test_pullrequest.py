@@ -12,9 +12,10 @@ import unittest
 from unittest import mock
 
 from helpers import (BIN, RepoCase, a_gate_underway, add_origin, another_clone, answer_of,
-                     git, harness_matches, real_acceptance_grace, session_record_for, sid)
+                     git, harness_matches, queued, real_acceptance_grace, session_record_for,
+                     sid)
 
-from claude_bestpractice import board, delivery, evidence, pullrequest, store
+from claude_bestpractice import board, config, delivery, evidence, pullrequest, store
 
 # Code that genuinely trips `sql-interpolation`. Findings are re-asked of the file before
 # they are counted, so a fixture asserting on a clean file asserts on nothing.
@@ -3410,20 +3411,33 @@ class TestTheWordNamesWhatTheChatShowed(PRCase):
     was refused after every `+merge` in the chat that had shown it."""
 
     def green(self) -> None:
+        # The repository every number below is shown in: one named outright is compared to it.
+        git(["remote", "add", "origin", "https://github.com/o/r.git"], self.repo)
         self.write("src/app.py", "x = 1\n")
         self.commit("add the app module")
         evidence.record_green(self.ctx(), ["pytest"])
         self.start()
 
-    def say(self, prompt: str, session_id: str = "s1") -> None:
+    def say(self, prompt: str, session_id: str = "s1", **where) -> None:
         self.gate("prompt-capture", {"session_id": session_id,
-                                     "hook_event_name": "UserPromptSubmit", "prompt": prompt})
+                                     "hook_event_name": "UserPromptSubmit", "prompt": prompt,
+                                     **where})
+
+    def covers(self, number: int) -> str:
+        """How the word on record covers a merge of `number`, known here by nothing else."""
+        return pullrequest.acceptance(self.ctx(), None, number)
 
     def view(self, number: int, session_id: str = "s1") -> None:
         self.tool("Bash", {"command": f"gh pr view {number} --json title,mergeable"}, session_id)
 
-    def merge(self, number: int, session_id: str = "s1"):
-        return self.ran("Bash", {"command": f"gh pr merge {number} --squash"}, session_id)
+    def merge(self, number: int, session_id: str = "s1", command: str = "", **where):
+        return self.ran("Bash", {"command": command or f"gh pr merge {number} --squash"},
+                        session_id, **where)
+
+    def record(self):
+        from claude_bestpractice import sessions
+
+        return sessions.get(self.ctx(), sid(self.repo, "s1"))
 
     def test_each_pull_request_shown_is_merged_on_one_word(self):
         self.green()
@@ -3477,9 +3491,125 @@ class TestTheWordNamesWhatTheChatShowed(PRCase):
         self.assertEqual("deny", self.decision(self.merge(936)))
 
     def test_a_listing_and_another_repository_show_nothing(self):
-        self.assertEqual([], pullrequest.numbers_shown("Bash", "gh pr list --state open", {}))
-        self.assertEqual([], pullrequest.numbers_shown(
-            "Bash", "gh pr view 5 -R someone/else", {}))
-        self.assertEqual([5, 7], pullrequest.numbers_shown(
-            "Bash", "gh pr view 5 --json title -q .title && gh pr checks "
-                    "https://github.com/o/r/pull/7 > /dev/null", {}))
+        git(["remote", "add", "origin", "https://github.com/o/r.git"], self.repo)
+        here = str(self.repo)
+
+        def shown(command: str) -> list[int]:
+            return pullrequest.numbers_shown(self.ctx(), "Bash", command, {}, here)
+
+        self.assertEqual([], shown("gh pr list --state open"))
+        for line in ("gh pr view 5 -R someone/else", "gh pr view 5 -Rsomeone/else",
+                     "gh pr view 5 --repo=someone/else", "gh pr view -wR someone/else 5",
+                     "GH_REPO=someone/else gh pr view 5", "gh pr view "
+                     "https://github.com/someone/else/pull/5"):
+            with self.subTest(line=line):
+                self.assertEqual([], shown(line))
+        self.assertEqual([5, 7], shown(
+            "gh pr view 5 --json title -q .title && gh pr checks "
+            "https://github.com/o/r/pull/7 > /dev/null"))
+        self.assertEqual([5], shown("gh pr view -R github.com/O/R 5"), "this one, named")
+
+    def test_another_repositorys_pull_requests_are_not_named(self):
+        """Shown by number in another repository, a pull request has that repository's number,
+        and the word named this one's pull request of the same number."""
+        self.green()
+        elsewhere = self.tmp / "elsewhere"
+        elsewhere.mkdir()
+        git(["init", "-q", "-b", "main"], elsewhere)
+        git(["remote", "add", "origin", "https://github.com/other/x.git"], elsewhere)
+        self.say("что висит у соседей?")
+        self.ran("mcp__github__pull_request_read",
+                 {"method": "get", "owner": "other", "repo": "x", "pullNumber": 12})
+        for line in ("gh pr view https://github.com/other/x/pull/13",
+                     "GH_REPO=other/x gh pr view 14", "gh pr view 15 -Rother/x",
+                     f"cd {elsewhere} && gh pr view 16"):
+            self.ran("Bash", {"command": line})
+        refused = self.merge(17, command="gh pr merge 17 --squash -R other/x")
+        self.assertEqual("deny", self.decision(refused), "precondition: put to the founder")
+        self.view(18)
+        self.accept()
+        for number in (12, 13, 14, 15, 16, 17):
+            with self.subTest(number=number):
+                self.assertNotEqual(pullrequest.POOLED, self.covers(number))
+        self.assertEqual(pullrequest.POOLED, self.covers(18), "this repository's is named")
+
+    def test_reading_pull_requests_over_and_over_is_no_loop(self):
+        """Hashed with no path or command, every read was one call repeated: the fourth in a
+        row was refused, and each counted towards the session's ceiling."""
+        self.green()
+        before = self.record().tool_calls
+        for _ in range(8):
+            proc = self.ran("mcp__github__pull_request_read",
+                            {"method": "get_status", "owner": "o", "repo": "r", "pullNumber": 941})
+            self.assertNotEqual("deny", self.decision(proc), self.reason(proc))
+        self.assertEqual(before, self.record().tool_calls)
+
+    def test_a_pull_request_shown_after_it_merged_keeps_the_one_merge(self):
+        """Merged on the first word and looked at again, it named nothing that could merge, and
+        the next word lost the one merge it allows."""
+        self.green()
+        self.open_a_pr()
+        self.accept()
+        self.assertNotEqual("deny", self.decision(self.merge(self.PR_NUMBER)))
+        self.view(self.PR_NUMBER)
+        self.accept()
+        self.assertEqual(pullrequest.ONCE, self.covers(777))
+
+    def test_a_number_named_before_stays_named(self):
+        """Named as `#967` by one word and not merged yet, it was dropped by the next."""
+        self.green()
+        self.say("что с 967?")
+        self.view(967)
+        self.accept()
+        self.say("а 941?")
+        self.view(941)
+        self.accept()
+        for number in (967, 941):
+            with self.subTest(number=number):
+                self.assertNotEqual("deny", self.decision(self.merge(number)))
+
+    def test_a_message_sent_while_it_worked_starts_the_window(self):
+        """"Leave #936 alone", sent while the session worked, reached no hook, and the next
+        word named #936 with what was shown after it."""
+        self.green()
+        transcript = self.tmp / "transcript.jsonl"
+        self.say("что висит?")
+        self.view(936)
+        transcript.write_text(json.dumps(queued("936 не трогай", time.time())) + "\n")
+        self.view(941)
+        self.say("+merge", transcript_path=str(transcript))
+        self.assertNotEqual("deny", self.decision(self.merge(941)))
+        self.assertEqual("deny", self.decision(self.merge(936)))
+
+    def test_a_word_sent_while_it_worked_names_what_was_shown_since_the_message_before(self):
+        self.green()
+        transcript = self.tmp / "transcript.jsonl"
+        self.say("что висит?")
+        self.view(936)
+        leave = json.dumps(queued("936 не трогай", time.time(), source_uuid="q-1"))
+        self.view(941)
+        word = json.dumps(queued("+merge", time.time(), source_uuid="q-2"))
+        transcript.write_text(f"{leave}\n{word}\n")
+        merged = self.merge(941, transcript_path=str(transcript))
+        self.assertNotEqual("deny", self.decision(merged), self.reason(merged))
+        self.assertEqual("deny", self.decision(self.merge(936, transcript_path=str(transcript))))
+
+    def test_a_refusal_the_session_resolves_names_nothing(self):
+        """Refused as a number this clone never learned, the merge is the session's to redo by
+        branch, not the founder's to answer; named by their next word, it merged by number
+        unjudged, a pull request no record here carries."""
+        self.green()
+        self.tool("Bash", {"command": "gh pr create --fill"})
+        self.accept()
+        refused = self.merge(self.PR_NUMBER)
+        self.assertIn("is not a pull request this clone knows by number", self.reason(refused))
+        self.accept()
+        self.assertNotIn(f"#{self.PR_NUMBER}", pullrequest._pool(self.ctx()))
+
+    def test_chats_with_no_harness_id_keep_their_own_notes(self):
+        self.green()
+        ctx = self.ctx()
+        pullrequest.shown(ctx, "anon-0000aaaa", [936])
+        granted = pullrequest.accept_merges(ctx, config.approvals_in("+merge"), "anon-0000bbbb")
+        self.assertNotIn(config.MERGE_POOL, granted)
+        self.assertIn(config.APPROVE_MERGE, granted)

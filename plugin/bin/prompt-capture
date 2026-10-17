@@ -155,7 +155,13 @@ def main() -> None:
         # gives this prompt, so that a gate reading the transcript later knows this one was
         # heard already (`founder.catch_up`).
         said = time.time()
-        founder.heard(ctx, config.approvals_in(typed), event.session_id, at=said,
+        approvals = config.approvals_in(typed)
+        if config.APPROVE_MERGE in approvals:
+            # The founder's previous message may be one they sent while the session worked,
+            # which no hook heard: what the chat showed before it is not this word's (#276).
+            pullrequest.prompted(ctx, event.session_id,
+                                 *founder.interjected(event.transcript_path))
+        founder.heard(ctx, approvals, event.session_id, at=said,
                       ident=str(event.raw.get("prompt_id") or ""))
         # After the word, so that the word names what the chat showed since the message
         # before it: the pull requests it looked at by number or was refused (#276).

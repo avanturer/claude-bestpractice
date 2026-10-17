@@ -277,7 +277,7 @@ told it is waiting for you rather than the other way round.
 merges on its own without asking again. One `+merge` covers every pull request that chat has
 open when you say it, so ten finished pull requests take one word, not ten — including the
 ones it opened before a `--resume`, which is the same chat. It also covers each pull request
-the chat showed you by number since your previous message (looked at with `gh pr view`,
+of this repository the chat showed you by number since your previous message (looked at with `gh pr view`,
 `checks` or `diff`, or a merge of it refused), Dependabot's or another chat's included, so
 "close the hanging ones" takes one word too. It never covers one opened after the word, or
 another chat's it did not show you. Each is judged as itself, from whichever tree the merge is run:

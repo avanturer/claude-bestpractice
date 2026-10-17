@@ -43,8 +43,10 @@ _SAME_WORD_SECONDS = 30.0
 # session's transcript runs to tens of megabytes, and this runs on a refusal path.
 _MOST_BYTES = 64 * 1024 * 1024
 
-# A line worth decoding at all. Nearly none are, and this keeps a large transcript cheap.
+# A line worth decoding at all. Nearly none are, and this keeps a large transcript cheap: one
+# holding a word, or a message sent into a running turn, whose moment no hook records.
 _A_LITERAL = re.compile(rb"(?i)\+(?:merge|release|deploy|migration)")
+_QUEUED = b'"queued_command"'
 
 
 # ---------------------------------------------------------------------------------------------
@@ -213,13 +215,27 @@ def said(transcript_path: str) -> list[Word]:
     failure here reads as "nothing said" rather than raising: the gate then refuses as it did
     before, which is the direction a reader of an unknown format is allowed to be wrong in.
     """
+    return _reading(transcript_path)[0]
+
+
+def interjected(transcript_path: str) -> list[float]:
+    """When the founder wrote into a turn that was already running, oldest first.
+
+    No hook hears such a message, so the moment they last spoke is found here for it: a
+    `+merge` names what the chat showed them since then, and a "leave #936 alone" sent while
+    it worked is a message the window has to start after.
+    """
+    return _reading(transcript_path)[1]
+
+
+def _reading(transcript_path: str) -> tuple[list[Word], list[float]]:
     path = Path(transcript_path) if transcript_path else None
     if path is None:
-        return []
+        return [], []
     try:
         stamp = path.stat()
     except OSError:
-        return []
+        return [], []
     key = (str(path), stamp.st_size, stamp.st_mtime_ns)
     if key not in _READ:
         _READ.clear()
@@ -229,36 +245,42 @@ def said(transcript_path: str) -> list[Word]:
 
 # One reading per transcript state, for the length of a hook: a gate that waits for the word
 # asks for it several times a second.
-_READ: dict[tuple[str, int, int], list[Word]] = {}
+_READ: dict[tuple[str, int, int], tuple[list[Word], list[float]]] = {}
 
 
-def _read(path: Path, size: int) -> list[Word]:
-    found: list[Word] = []
+def _read(path: Path, size: int) -> tuple[list[Word], list[float]]:
+    words: list[Word] = []
+    moments: list[float] = []
     try:
         with path.open("rb") as handle:
             if size > _MOST_BYTES:
                 handle.seek(size - _MOST_BYTES)
                 handle.readline()
             for raw in handle:
-                word = _word_in(raw) if _A_LITERAL.search(raw) else None
-                if word is not None:
-                    found.append(word)
+                literal = _A_LITERAL.search(raw) is not None
+                if literal or _QUEUED in raw:
+                    _note(raw, literal, words, moments)
     except OSError:
-        return []
-    return found
+        return [], []
+    return words, moments
 
 
-def _word_in(raw: bytes) -> Word | None:
+def _note(raw: bytes, literal: bool, words: list[Word], moments: list[float]) -> None:
+    """File one transcript line: its word, if it says one, and its moment, if it is a message
+    sent into a running turn."""
     try:
         entry = json.loads(raw)
     except ValueError:
-        return None
+        return
     message = _from_a_person(entry) if isinstance(entry, dict) else None
     if message is None:
-        return None
+        return
     ident, text, at = message
-    approvals = config.approvals_in(founders_word(text))
-    return Word(ident, at, approvals) if approvals else None
+    if entry.get("type") == "attachment":
+        moments.append(at)
+    approvals = config.approvals_in(founders_word(text)) if literal else {}
+    if approvals:
+        words.append(Word(ident, at, approvals))
 
 
 def _from_a_person(entry: dict[str, Any]) -> tuple[str, str, float] | None:
@@ -372,6 +394,11 @@ def catch_up(ctx: GitContext, session_id: str, transcript_path: str) -> None:
     if not words:
         return
     try:
+        # Before the words: one said into a running turn names what the chat showed since
+        # the message before it, which may have been sent the same way.
+        from . import pullrequest
+
+        pullrequest.prompted(ctx, session_id, *interjected(transcript_path))
         with store.file_lock(store.tier_b(ctx, _LOCK)):
             _catch_up(ctx, session_id, words)
     except Exception:  # noqa: BLE001 - see above
