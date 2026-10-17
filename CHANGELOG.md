@@ -8,15 +8,17 @@ says what the founder's word does cover, a session that removes the tree it stan
 how to leave it, and a resumed chat's own hooks stamp it alive.
 
 Found working the three open issues, with reproductions against 2.4.0 and two measurements of
-Claude Code 2.1.301 itself.
+Claude Code 2.1.301 itself. An independent review of the release then read its new shell reading
+against bash and found it wrong in places; every line below was checked against bash 5.2.
 
 ### What broke
 
 **A second merge on a line merged on nobody's word.** The gate judged the first `gh pr merge` on
 a line and nothing past it. With the word on #48 only, `gh pr merge 48 && gh pr merge 49` was
 approved by the plugin itself, with no prompt. A merge in a loop, a condition or a group, behind
-`!`, `xargs`, `sudo`, `exec`, `eval` or `sh -c`, inside `"$(…)"` or through `gh api` was no merge
-to it at all, and auto-merge through the GitHub tool went through unasked. Behind `| tail` a
+`!`, `xargs`, `sudo`, `exec`, `eval` or `sh -c`, in a heredoc fed to a shell, inside `"$(…)"` or
+through `gh api` was no merge to it at all, and auto-merge through the GitHub tool went through
+unasked. Behind `| tail` a
 failed merge read as done, spending the word over a pull request still open; `--squash 2>&1`
 named pull request #2; and `gh pr merge --help` waited for `+merge` (#272).
 
@@ -40,17 +42,22 @@ which is gone — reclaimable", its record and leases theirs to reap.
 
 ### What changed
 
-- A shell line that merges runs one merge, named by number, URL or nothing and joined to the
-  rest with `&&`; anything else is refused with the merge written out to run alone. The value
-  of a merge flag and a redirection are no longer read as its pull request.
+- A shell line that merges runs one merge, named by number, URL or nothing, on a line that
+  fails whenever it does; anything else is refused with the merge written out to run alone.
   `enable_pr_auto_merge` waits for the word and spends it like `--auto`; `--help` and
   `--disable-auto` need none (decision 0040).
+- A shell line is read as bash hands its words over, for every gate: a number written against
+  `<` or `>` is a descriptor, so `gh pr merge 5 >log` names #5 and `5>log` names nothing; a
+  quoted `;`, `|` or `>` is text, which also lets `find … \( … \)` be read at all; a heredoc a
+  shell reads is read as its script; and a substitution runs only its own text, so
+  `"Merged at $(date). Next: gh pr merge 6"` merges nothing.
 - Where a word naming pull requests is on record, a merge it does not cover is told which it
-  names and why this one is not among them: a draft, another chat's or found on GitHub, opened
-  or marked ready after the word, recorded as merged or closed, or not on record.
+  names and, where the records say, why this one is not among them: a draft, another chat's or
+  found on GitHub, recorded as merged or closed, not on record, or a word said in another chat.
 - The Stop gate asks for a pull request only for commits no other place delivers: not in the
   trunk as a patch, not on another remote branch, and changing a file the trunk does not
-  already hold as they leave it (decision 0041).
+  already hold as they leave it. A merge counts for what `--cc` shows of it, and a root commit
+  for every file it holds (decision 0041).
 - `git worktree remove` of the tree a shell stands in is performed from the main checkout
   whoever made the tree, where no other chat works in it. The refusal names `ExitWorktree` with
   `keep`, which still works on a removed tree, and the Stop gate that removes the tree a shell

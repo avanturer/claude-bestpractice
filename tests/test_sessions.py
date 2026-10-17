@@ -909,6 +909,20 @@ class TestAHookStampsTheSessionItRunsFor(RepoCase):
         self.assertEqual((os.getpid(), sessions.current_boot()), (after.pid, after.boot_id))
         self.assertTrue(sessions.is_live(self.ctx(), after))
 
+    def test_a_cli_that_exited_on_this_boot_is_stamped_over(self):
+        """The same boot, and the CLI the record names gone: a chat resumed after its CLI quit.
+        Untested in the release that added this, so reading the boot alone still passed."""
+        ctx = self.ctx()
+        exited = subprocess.Popen(["true"])
+        exited.wait()
+        sessions.register(ctx, record(ctx, "resumed", pid=exited.pid))
+        rec = sessions.get(ctx, "resumed")
+        self.assertEqual(sessions.current_boot(), rec.boot_id, "precondition: this boot")
+        self.assertFalse(sessions.is_live(ctx, rec), "precondition: it reads as dead")
+        with self.owner(os.getpid()):
+            sessions.restamped(ctx, rec)
+        self.assertTrue(sessions.is_live(ctx, sessions.get(ctx, "resumed")))
+
     def test_a_hook_that_cannot_name_its_cli_changes_nothing(self):
         """A parent pid is the hook's own shell, and proves nothing about who is alive."""
         rec = self.stale()

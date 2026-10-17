@@ -19,6 +19,7 @@ from __future__ import annotations
 import functools
 import re
 import shlex
+from typing import Iterator
 
 # The operators bash uses to end one command and start another. `shlex` with
 # `punctuation_chars` emits these as their own tokens, and — the part that matters —
@@ -60,13 +61,37 @@ _NEEDS_A_FOLLOWER = {"&&", "||", "|", "|&"}
 # keeps the substitution inside ONE token and is still read as text. That is why this is
 # asked of the token stream and never of the raw line — matching text is #76, the defect
 # this module was written to end. The backtick earns its place in `punctuation_chars` for
-# the same reason: unquoted it becomes its own token, quoted it stays inside one.
-#
-# The cost, stated: `find . \( -name '*.py' \) -print` is declined too, because an escaped
-# paren and a real one are the same token here. A declined line is not vouched for and its
-# gates fall back to the substring match — the direction that refuses rather than allows,
-# and the one this module already documents as its failure mode.
+# the same reason: unquoted it becomes its own token, quoted it stays inside one. A word
+# that is only a quoted or escaped operator, `';'` or `\(`, is a `_Quoted` word, never one.
 _UNMODELLED = {";;", ";&", ";;&", "(", ")", "<(", ">(", "`"}
+
+# The operators that hand a pipeline's status to the command after them.
+_PIPES = ("|", "|&")
+
+# What `shlex` reads the same as something else, told apart while the line is still text. A
+# word with a quoted or escaped part is a word, whatever its characters: `'>'` is an argument
+# and `';'` ends nothing. A number written against `<` or `>` with nothing between is that
+# redirection's descriptor, which no program receives: bash passes the `5` on in `gh pr merge
+# 5 >out` and not in `gh pr merge 5>out`, measured on bash 5.2, and `shlex` read both as `5`,
+# `>`, `out`. Each is marked by a character `shlex` keeps inside the word, and the word comes
+# back as the str it was with its kind on it, so a reader comparing text reads what it did.
+_QUOTED_MARK = "﷐"
+_DESCRIPTOR_MARK = "﷑"
+
+# A descriptor as bash takes one: digits, or the `{name}` it assigns one to, as a whole word.
+# A quoted or expanded part makes it an argument: `'5'>out` and `5$n>out` pass it on.
+_DESCRIPTOR = re.compile(r"(?<![^\s;&|()<>])(?:\d+|\{[A-Za-z_][A-Za-z0-9_]*\})")
+
+# A redirection's operator, as `shlex` cuts one out of an unquoted run of punctuation.
+_REDIRECTION = re.compile(r"[<>&|]*[<>][<>&|]*")
+
+
+class _Quoted(str):
+    """A word with a quoted or escaped part, which is never an operator."""
+
+
+class _Descriptor(str):
+    """The number or `{name}` a redirection is written against, which no program receives."""
 
 # Programs that run their argument as the real command, so the thing being gated is one
 # position further along. The same list Claude Code itself strips, plus `env`, which takes
@@ -99,7 +124,7 @@ def segments(line: str) -> list[list[str]]:
     if not line:
         return []
     # Copies, so a caller that edits what it was handed cannot change what the next one reads.
-    return [list(argv) for argv in _parsed(line)]
+    return [list(argv) for argv, _ in _linked(line)]
 
 
 # Read ONCE per hook call. Every gate asks its own question of the same line — the pull
@@ -107,43 +132,83 @@ def segments(line: str) -> list[list[str]]:
 # verbs, the ceiling and the vouch — and each used to tokenise it afresh: eleven readings of
 # one `git commit`, which is what made a long command cost seconds.
 @functools.lru_cache(maxsize=8)
-def _parsed(line: str) -> tuple[tuple[str, ...], ...]:
+def _linked(line: str) -> tuple[tuple[tuple[str, ...], str], ...]:
+    """Every command in `line` as written, with the operator that ends it, "" for none.
+
+    A gap the separators leave, as in `a ;; b` or after a trailing `;`, is no command to hand
+    a gate, and is dropped.
+    """
     try:
         tokens = _tokens(line)
     except ValueError:
         return ()
 
-    out: list[list[str]] = []
+    out: list[tuple[tuple[str, ...], str]] = []
     current: list[str] = []
     # Whether the separator just seen still owes us a command. Tracked rather than checked
     # at the end, so `a && && b` and `&& a` are caught for the same reason `a &&` is.
     owed = False
     for token in tokens:
-        if token in _SEPARATORS:
-            if token in _UNMODELLED or (token in _NEEDS_A_FOLLOWER and not current):
-                return ()
-            out.append(current)
-            current = []
-            owed = token in _NEEDS_A_FOLLOWER
+        if not _separates(token):
+            current.append(token)
+            owed = False
             continue
-        current.append(token)
-        owed = False
+        if token in _UNMODELLED or (token in _NEEDS_A_FOLLOWER and not current):
+            return ()
+        if current:
+            out.append((tuple(current), token))
+        current = []
+        owed = token in _NEEDS_A_FOLLOWER
     if owed:
         return ()
-    out.append(current)
-    # Emptied in one place rather than guarded in two: `a ;; b` and a trailing `;` both
-    # leave a gap, and neither is a command to hand a gate.
-    return tuple(tuple(argv) for argv in out if argv)
+    return (*out, (tuple(current), "")) if current else tuple(out)
+
+
+def _separates(token: str) -> bool:
+    """Does this token end a command? A quoted `;` or `|` is an argument like any other."""
+    return token in _SEPARATORS and not isinstance(token, _Quoted)
 
 
 def _tokens(line: str) -> list[str]:
-    text = _one_line(_without_substituted_documents(line))
+    text = _marked(_one_line(_without_substituted_documents(line)))
     try:
-        return _lexed(_Lexer, text)
+        words = _lexed(_Lexer, text)
     except (TypeError, AttributeError):
         # A Python whose `shlex` builds its token in a way `_Token` does not answer for: the
         # stock lexer reads the line exactly the same, only in quadratic time.
-        return _lexed(shlex.shlex, text)
+        words = _lexed(shlex.shlex, text)
+    return [_typed(word) for word in words]
+
+
+def _marked(text: str) -> str:
+    """`text` with each quoted part and each redirection's descriptor marked for `_typed`.
+
+    A line already carrying either mark cannot be read this way, and is not read at all.
+    """
+    if _QUOTED_MARK in text or _DESCRIPTOR_MARK in text:
+        raise ValueError("the line carries a character its words are marked with")
+    out: list[str] = []
+    at = 0
+    for piece in _PIECE.finditer(text):
+        if piece.lastgroup == "quoted":
+            out.append(text[at:piece.start() + 1] + _QUOTED_MARK)
+            at = piece.start() + 1
+        elif piece.lastgroup == "plain":
+            for found in _DESCRIPTOR.finditer(text, piece.start(), piece.end()):
+                if text[found.end():found.end() + 1] in ("<", ">"):
+                    out.append(text[at:found.end()] + _DESCRIPTOR_MARK)
+                    at = found.end()
+    out.append(text[at:])
+    return "".join(out)
+
+
+def _typed(word: str) -> str:
+    """A word as `shlex` read it, with its mark taken off and its kind put on."""
+    if _DESCRIPTOR_MARK in word:
+        return _Descriptor(word.replace(_DESCRIPTOR_MARK, ""))
+    if _QUOTED_MARK in word:
+        return _Quoted(word.replace(_QUOTED_MARK, ""))
+    return word
 
 
 def _lexed(lexer_class: type, line: str) -> list[str]:
@@ -221,8 +286,15 @@ def _one_line(line: str) -> str:
     A heredoc's lines stay out of it the other way: they are what a command reads, and a
     script being written that contains `git add -A` is not the session staging anything.
     """
+    return _read(line)[0]
+
+
+def _read(line: str) -> tuple[str, list[tuple[str, str]]]:
+    """`line` as `_one_line` gives it, and each document it took out, after the operator that
+    opened it: `[("<<'EOF'", "gh pr merge 5\\n")]`."""
     out: list[str] = []
-    documents: list[str] = []
+    opened: list[str] = []
+    documents: list[tuple[str, str]] = []
     last = ""
     at = 0
     while at < len(line):
@@ -231,13 +303,14 @@ def _one_line(line: str) -> str:
         text = _spoken(piece)
         if piece.lastgroup == "newline":
             text = " " if last.endswith(_CONTINUED) else " ; "
-            at = _past_documents(line, at, documents)
-            documents = []
+            at, read = _past_documents(line, at, opened)
+            documents.extend(zip(opened, read))
+            opened = []
         elif piece.lastgroup == "heredoc":
-            documents.append(_delimiter(text))
+            opened.append(text)
         out.append(text)
         last = text.rstrip() or last
-    return "".join(out)
+    return "".join(out), documents
 
 
 def _spoken(piece: re.Match) -> str:
@@ -257,12 +330,15 @@ def _delimiter(heredoc: str) -> str:
     return heredoc.lstrip("<").lstrip("-").strip().strip("'\"").lstrip("\\")
 
 
-def _past_documents(line: str, at: int, documents: list[str]) -> int:
-    """Where the commands resume after the heredoc documents that start at `at`."""
-    for delimiter in documents:
-        end = re.compile(rf"^[ \t]*{re.escape(delimiter)}[ \t]*$", re.M).search(line, at)
+def _past_documents(line: str, at: int, opened: list[str]) -> tuple[int, list[str]]:
+    """Where the commands resume after the documents the heredocs `opened` start at `at`, and
+    the text of each."""
+    read: list[str] = []
+    for heredoc in opened:
+        end = re.compile(rf"^[ \t]*{re.escape(_delimiter(heredoc))}[ \t]*$", re.M).search(line, at)
+        read.append(line[at:end.start()] if end else line[at:])
         at = end.end() + 1 if end else len(line)
-    return at
+    return at, read
 
 
 class _Token:
@@ -395,8 +471,47 @@ def acting(line: str) -> list[list[str]]:
 _SCRIPT_RUNNERS = {"bash", "sh", "zsh", "dash", "ksh", "ash", "fish", "eval", "su", "ssh",
                    "watch", "script"}
 
-# A command substitution bash runs: `$(` that is not `$((` arithmetic, or a backtick.
-_SUBSTITUTION = re.compile(r"\$\((?!\()|`")
+
+def without_redirections(words: list[str]) -> list[str]:
+    """`words` as the program receives them: each redirection gone, with its target and the
+    descriptor written against it. `gh pr merge 5 >out` passes `5` on, `gh pr merge 5>out` and
+    `gh pr merge 2>&1` pass nothing, and `-b '> said'` is a flag and its value."""
+    kept: list[str] = []
+    target = False
+    for word in words:
+        if target or isinstance(word, _Descriptor):
+            target = False
+        elif not isinstance(word, _Quoted) and _REDIRECTION.fullmatch(word):
+            target = True
+        else:
+            kept.append(word)
+    return kept
+
+
+def masked_by(line: str, argv: list[str]) -> str | None:
+    """The operator that lets `line` exit 0 when its command `argv` failed, "" when none does.
+    None when `argv` is not a command of `line`.
+
+    A pipe after it hands the line the next command's status; `;`, `||` or `&` after it, or a
+    line sent to the background, goes on whatever it did; and `||` before its pipeline skips
+    it when what came first succeeded. `&&` after it carries its failure to the end, past
+    every pipeline the failure skips, and `;` before it or after the last command joins
+    nothing it depends on.
+    """
+    links = _linked(line)
+    at = next((at for at, (words, _) in enumerate(links) if _unwrap(list(words)) == argv), None)
+    if at is None:
+        return None
+    joints = [joint for _, joint in links]
+    if joints[at] in _PIPES:
+        return joints[at]
+    for joint in joints[at:-1]:
+        if joint not in ("&&", *_PIPES):
+            return joint
+    if joints[-1] == "&":
+        return "&"
+    before = next((joint for joint in reversed(joints[:at]) if joint not in _PIPES), "")
+    return before if before == "||" else ""
 
 
 def hidden(line: str, program: str, *subcommand: str) -> bool:
@@ -404,10 +519,11 @@ def hidden(line: str, program: str, *subcommand: str) -> bool:
 
     `runs` reads the first word of each command, so `gh pr merge` in a loop, a condition or a
     group, behind `!`, handed to `xargs`, `sudo` or `exec`, in a string `sh -c`, `eval` or
-    `ssh` runs, or in a substitution bash expands, `"$(…)"` included, was no merge at all to
-    the gate that judges merges, and `for n in 1 2; do gh pr merge $n; done` went through on
-    nobody's word. Here a word that is not the program in front of it is no cover, a string a
-    shell runs is read as a line, and a reader's arguments are data, as everywhere else.
+    `ssh` runs, in a document a shell reads as its script, or in a substitution bash expands,
+    `"$(…)"` included, was no merge at all to the gate that judges merges, and `for n in 1 2;
+    do gh pr merge $n; done` went through on nobody's word. Here a word that is not the program
+    in front of it is no cover, a string a shell runs is read as a line, and a reader's
+    arguments are data, as everywhere else.
     """
     wanted = [program, *subcommand]
     for argv in commands(line):
@@ -418,7 +534,7 @@ def hidden(line: str, program: str, *subcommand: str) -> bool:
             return True
         if names[0] in _SCRIPT_RUNNERS and any(_runs_text(word, wanted) for word in argv[1:]):
             return True
-    return _substituted(line, wanted)
+    return _scripted(line, wanted) or _substituted(line, wanted)
 
 
 def _runs_text(text: str, wanted: list[str]) -> bool:
@@ -428,38 +544,132 @@ def _runs_text(text: str, wanted: list[str]) -> bool:
     return bool(runs(text, *wanted)) or hidden(text, *wanted)
 
 
-def _substituted(line: str, wanted: list[str]) -> bool:
-    """Does a command substitution in `line` run `wanted`?
+def _scripted(line: str, wanted: list[str]) -> bool:
+    """Does a document or a here-string `line` hands a shell as its script run `wanted`?
 
-    Bash expands one unquoted and inside double quotes alike. Only single quotes keep it text,
-    which is why `echo '$(gh pr merge 1)'` is writing about a merge and `echo "$(gh pr merge
-    1)"` is one. Documents and comments are set aside first, as for every other reading here.
+    `bash <<'EOF'`, `cat <<'EOF' | sh`, `ssh host <<'EOF'` and `bash -c "$(cat <<'EOF' …)"`: the
+    document is the script, and every reading here sets documents aside as text a command
+    reads. Read as a line wherever a script runner reads it, or reads what it was written for.
     """
-    words = _words(wanted)
-    for piece in _PIECE.finditer(_one_line(_without_substituted_documents(line))):
-        text = piece.group()
-        if piece.lastgroup == "quoted" and text.startswith("'"):
-            continue
-        opened = _SUBSTITUTION.search(text)
-        if opened and words.search(text, opened.end()):
+    links = _linked(line)
+    documents = iter(_read(_without_substituted_documents(line))[1])
+    for at, (words, _) in enumerate(links):
+        written = _written_for(words, documents, line)
+        if written and _a_shell_reads(links, at) and \
+                any(_runs_text(text, wanted) for text in written):
             return True
     return False
 
 
+def _written_for(words: tuple[str, ...], documents: Iterator[tuple[str, str]],
+                 line: str) -> list[str]:
+    """The text `line` writes out for a command to read: the document of each heredoc it opens,
+    taken from `documents` in order, each here-string's word, and the documents `cat` prints
+    inside its words."""
+    written: list[str] = []
+    for word, following in zip(words, [*words[1:], ""]):
+        if isinstance(word, _Quoted):
+            if "<<" in word:
+                written.extend(found["document"] for found in _SUBSTITUTED_DOCUMENT.finditer(line))
+        elif word == "<<":
+            written.append(next(documents, ("", ""))[1])
+        elif word == "<<<":
+            written.append(following)
+    return written
+
+
+def _a_shell_reads(links: tuple[tuple[tuple[str, ...], str], ...], at: int) -> bool:
+    """Is command `at` a script runner, or does its output reach one through pipes?"""
+    for words, joint in links[at:]:
+        names = [word.rsplit("/", 1)[-1] for word in _unwrap(list(words))]
+        if names and names[0] not in READERS and any(name in _SCRIPT_RUNNERS for name in names):
+            return True
+        if joint not in _PIPES:
+            return False
+    return False
+
+
+def _substituted(line: str, wanted: list[str]) -> bool:
+    """Does a command substitution bash expands in `line` run `wanted`?
+
+    Bash expands one unquoted, inside double quotes, and in the document of a heredoc whose
+    delimiter is not quoted. Single quotes keep it text, and so does a backslash before the
+    `$` or the backtick: `echo '$(gh pr merge 1)'` and `"run \\`gh pr merge 5\\` later"` write
+    about a merge, and `echo "$(gh pr merge 1)"` is one. What a substitution runs is read as a
+    line of its own, so `"Merged at $(date). Next: gh pr merge 6"` runs `date`.
+    """
+    text, documents = _read(_without_substituted_documents(line))
+    expanded = [(text, True), *((document, False) for opened, document in documents
+                                if not _delimited_by_a_quote(opened))]
+    try:
+        return any(_runs_text(inner, wanted)
+                   for body, quoting in expanded for inner in substitutions(body, quoting))
+    except RecursionError:
+        # Nested past what a stack can follow: read as running it, never as running nothing.
+        return True
+
+
+def _delimited_by_a_quote(heredoc: str) -> bool:
+    """`<<'EOF'`, `<<"EOF"` and `<<\\EOF`, whose document bash expands nothing in."""
+    return heredoc.lstrip("<").lstrip("-").strip()[:1] in ("'", '"', "\\")
+
+
+# What decides where a substitution is: a single-quoted span, a backslash and what it escapes,
+# `$(`, a backtick, a double quote. `$((` arithmetic is read as a substitution of `(…)`, which
+# runs nothing, and a `$(` inside it is read in its turn.
+_EXPANSION = re.compile(r"""(?P<single>'[^']*'?)|(?P<escape>\\.?)|(?P<opened>\$\()|(?P<tick>`)"""
+                        r"""|(?P<double>")""", re.S)
+_TICKED = re.compile(r"(?:\\.|[^`\\])*", re.S)
+
+
+def substitutions(text: str, quoting: bool = True) -> list[str]:
+    """The command each outermost `$(…)` or backtick substitution in `text` runs.
+
+    `quoting` is False for a heredoc's document, where a quote is a character like any other.
+    """
+    found: list[str] = []
+    at = 0
+    double = False
+    while True:
+        hit = _EXPANSION.search(text, at)
+        if hit is None:
+            return found
+        kind, at = hit.lastgroup, hit.end()
+        if kind == "single" and (double or not quoting):
+            at = hit.start() + 1
+        elif kind == "opened":
+            end = _closing(text, at)
+            found.append(text[at:end])
+            at = end + 1
+        elif kind == "tick":
+            end = _TICKED.match(text, at).end()
+            found.append(text[at:end])
+            at = end + 1
+        elif kind == "double" and quoting:
+            double = not double
+
+
+# Inside a substitution: quoted spans and escapes, which hold no parenthesis that counts, a
+# substitution or a parenthesis opened, one closed, and `case`, whose patterns close one.
+_NESTED = re.compile(r"""'[^']*'|"(?:\\.|[^"\\])*"|\\.|\$\(|[()]|\bcase\b""", re.S)
+
+
+def _closing(text: str, at: int) -> int:
+    """Where the `)` closing the substitution whose command starts at `at` is: past every one
+    nested in it, or the end of `text` when it has none, or when a `case` pattern's `)` could
+    be taken for it."""
+    depth = 1
+    for hit in _NESTED.finditer(text, at):
+        if hit.group() in ("$(", "("):
+            depth += 1
+        elif hit.group() == ")":
+            depth -= 1
+            if not depth:
+                return hit.start()
+        elif hit.group() == "case":
+            break
+    return len(text)
+
+
 def _words(wanted: list[str]) -> re.Pattern[str]:
     return re.compile(r"\b" + r"\s+".join(map(re.escape, wanted)) + r"\b")
-
-
-def joints(line: str) -> list[str] | None:
-    """The operators joining `line`'s commands, in order. None when the line cannot be read.
-
-    What says whether the line's exit status is a given command's: only `&&` carries a failure
-    through to the end, and a command left running with `&` has no status here at all. A `;`
-    the line ends on joins nothing.
-    """
-    if not segments(line):
-        return None
-    tokens = _tokens(line)
-    last = max(at for at, token in enumerate(tokens) if token not in _SEPARATORS)
-    return [token for at, token in enumerate(tokens)
-            if token in _SEPARATORS and (at < last or token == "&")]
