@@ -1,5 +1,26 @@
 # Changelog
 
+## v2.5.3
+
+A second pull request opened on a branch is a new one, and a `+merge` the founder said for the
+first no longer merges it.
+
+### What broke
+
+**A `+merge` said for #279 merged #280.** #279 merged where no hook here heard it, so its
+record stayed open. #280, opened on the same branch, was stamped onto that record and took over
+when it had been opened, and the founder's acceptance of its finish with it: the word said for
+#279 named #280 too, and the merge went through though nobody had shown it to them.
+
+### What changed
+
+- A pull request opened on a branch whose open record names another number settles that record
+  and is filed as opened now. GitHub keeps one open pull request per head and base, so the first
+  has been merged or closed by then. A word said before the second was opened does not name it
+  (decision 0023).
+
+No `migrate._REPAIRS` step: a record that took over another's number cannot be told apart now.
+
 ## v2.5.2
 
 From outside every repository, a session is the session of the tree it last worked in: the

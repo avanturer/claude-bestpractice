@@ -920,6 +920,32 @@ class TestAPullRequestIsNeverLeftHanging(PRCase):
         self.assertEqual(0, self.stop().returncode)
 
 
+class TestASecondPullRequestOnTheBranchIsANewOne(PRCase):
+    """#279 merged where no hook here heard it, and its record stayed open. #280, opened on the
+    same branch, was stamped onto that record and inherited when it had been opened, and with
+    that the founder's `+merge` said for #279: it merged #280, which nobody had shown them."""
+
+    def test_the_word_said_for_the_first_does_not_merge_the_second(self):
+        self.write("src/app.py", "x = 1\n")
+        self.commit("add the app module")
+        evidence.record_green(self.ctx(), ["pytest"])
+        self.start()
+        self.open_a_pr(number=41)
+        self.accept()
+        self.open_a_pr(number=42)
+        proc = self.ran("mcp__github__merge_pull_request", {"owner": "o", "repo": "r", "pullNumber": 42})
+        self.assertEqual("deny", self.decision(proc), proc.stdout + proc.stderr)
+
+    def test_the_second_is_on_record_as_itself(self):
+        self.start()
+        self.open_a_pr(number=41)
+        first = pullrequest._records(self.ctx())["feat/x"]
+        self.open_a_pr(number=42)
+        second = pullrequest._records(self.ctx())["feat/x"]
+        self.assertEqual((42, pullrequest.OPEN), (second["number"], second["state"]))
+        self.assertGreater(second["opened_at"], first["opened_at"])
+
+
 class TestAPullRequestClosedWithoutMergingIsDischarged(PRCase):
     """`CLOSED` was defined and never written. A pull request closed on the website, or with
     `gh pr close`, stayed OPEN: a nine-day-old record for a deleted branch was named at every
