@@ -221,15 +221,19 @@ def learn_number(ctx: GitContext, branch: str, number: int) -> bool:
     The number is the only thing that makes "is this merge about this branch?" decidable
     without a network call, and the request that opens a pull request does not carry it.
 
-    The latest answer wins. A write-once guard was tried and taken back out: `opened`
-    already refuses to replace an OPEN record, so a second pull request on the same branch
-    keeps the first record — and pinning the first NUMBER onto it would leave the gate
-    judging merges against a pull request that no longer exists.
+    Another number is another pull request. GitHub keeps one open per head and base, so the
+    one on record has been merged or closed by then, somewhere no hook here heard it: its
+    record is settled, and the new one is filed as opened now. Stamped onto the old record,
+    the new number inherited when that had been opened, and with it the founder's word: a
+    `+merge` said for #279 merged #280, which nobody had shown them. Pinning the first number
+    was tried before and taken back out, since it judged merges against a pull request that
+    no longer existed.
     """
     record = _records(ctx).get(branch)
-    if not record or record.get("state") != OPEN:
+    if not record or record.get("state") != OPEN or number <= 0:
         return False
-    if number <= 0:
+    if int(record.get("number") or 0) not in (0, number):
+        settle(ctx, branch, CLOSED)
         return False
     _write(ctx, {**record, "number": number})
     return True

@@ -27,6 +27,7 @@ delivered only once the hook returned.
 ## Rejected
 - **The suite in an `asyncRewake` hook, after the turn.** A thirteenth hook entry, and a run
   going on while the session works again reads files it is editing, beside its own test run.
+  Retired by decision 0046: the founder's client takes no message while a hook holds the turn.
 - **Letting the run finish in the background once they speak.** The same, one step later.
 - **Skipping the run where the pre-push hook passed on the tree.** A remembered pass (0013).
 - **Stopping the run and keeping the older green.** A `+merge` typed during it merged on that

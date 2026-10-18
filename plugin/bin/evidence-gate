@@ -733,9 +733,15 @@ def _how_to_stop_here(ctx, rec: sessions.SessionRecord) -> str:
 
 def main() -> None:
     event = hookio.read_event()
-    # From the moment this hook starts: what the founder types now waits for it to return, and
-    # a suite run it starts below is stopped for them (#277).
-    listening = founder.Listener(event.transcript_path)
+    # Claude Code runs this gate once the turn is over (`asyncRewake` in hooks.json), so the
+    # founder can write while it checks: a client that takes no message while a hook holds the
+    # turn kept them out for the whole suite. A refusal or a question then wakes the session.
+    after = "--after-the-turn" in sys.argv[1:]
+    if after:
+        hookio.after_the_turn()
+    # From the moment this hook starts: a suite run it starts below is stopped for the founder's
+    # message (#277), and after the turn for the session working again too.
+    listening = founder.Listener(event.transcript_path, after_the_turn=after)
     # The tree this session works in, which is not always the directory the harness hands
     # us: Claude Code reports the tree once the session has `cd`-ed into it, but a session
     # can still stand in the main checkout with its work in its own tree. Judging a turn

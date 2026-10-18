@@ -2525,10 +2525,10 @@ def unproven(ctx: GitContext, branch: str = "") -> str:
     where = f" on {branch}" if branch else " on this branch"
     if stopped is not None:
         return (f"the Stop gate's run of the suite{where} was stopped "
-                f"({_lasted(stopped.get('at'))}) because the founder wrote while it ran, and "
-                "nothing has passed on that work since: it runs again at the session's next "
-                "finish, and on `git push` where the pre-push hook is installed "
-                "(`claude-bp-ci status`)")
+                f"({_lasted(stopped.get('at'))}) because the founder wrote, or the session went "
+                "back to work, while it ran, and nothing has passed on that work since: it runs "
+                "again at the session's next finish, and on `git push` where the pre-push hook "
+                "is installed (`claude-bp-ci status`)")
     if not seen:
         return f"no test run has ever been observed{where}"
     ran = " ".join(seen.get("command") or ["?"])

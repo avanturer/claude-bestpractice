@@ -22,7 +22,7 @@ _STDLIB_39 = {
     "contextlib", "copy", "csv", "dataclasses", "datetime", "difflib", "enum", "errno",
     "filecmp", "fnmatch", "functools", "glob", "hashlib", "heapq", "hmac", "html", "http",
     "importlib", "inspect", "io", "itertools", "json", "logging", "math", "os",
-    "pathlib", "pickle", "platform", "pprint", "queue", "random", "re", "secrets",
+    "pathlib", "pickle", "platform", "pprint", "queue", "random", "re", "runpy", "secrets",
     "select", "shlex", "shutil", "signal", "socket", "sqlite3", "stat", "statistics",
     "string", "subprocess", "sys", "tempfile", "textwrap", "threading", "time", "token",
     "tokenize", "traceback", "types", "typing", "unicodedata", "unittest", "urllib",

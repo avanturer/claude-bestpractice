@@ -201,18 +201,25 @@ CLEAN_SLOW_TEST = (
 )
 
 
+def a_session_over_a_slow_suite(case: RepoCase) -> Path:
+    """A started session in a repository whose suite takes `SLOW_TEST_SECONDS`, and its empty
+    transcript."""
+    case.configure(require_task=False, manage_pull_requests=False, test_command=[
+        "python3", "-m", "unittest", "discover", "-s", "tests", "-t", "."])
+    case.write("tests/__init__.py", "")
+    case.write("tests/test_slow.py", SLOW_TEST)
+    case.commit("a suite that takes its time")
+    case.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart",
+                                    "source": "startup"})
+    transcript = case.tmp / "transcript.jsonl"
+    transcript.write_text("", encoding="utf-8")
+    return transcript
+
+
 class TestTheStopGateLetsTheFounderIn(RepoCase):
     def setUp(self) -> None:
         super().setUp()
-        self.configure(require_task=False, manage_pull_requests=False, test_command=[
-            "python3", "-m", "unittest", "discover", "-s", "tests", "-t", "."])
-        self.write("tests/__init__.py", "")
-        self.write("tests/test_slow.py", SLOW_TEST)
-        self.commit("a suite that takes its time")
-        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart",
-                                        "source": "startup"})
-        self.transcript = self.tmp / "transcript.jsonl"
-        self.transcript.write_text("", encoding="utf-8")
+        self.transcript = a_session_over_a_slow_suite(self)
         self.edits = 0
 
     def work(self) -> None:
@@ -250,9 +257,11 @@ class TestTheStopGateLetsTheFounderIn(RepoCase):
         self.work()
         self.stop(slow=60, said="+merge")
         said = evidence.unproven(self.ctx())
-        self.assertIn("because the founder wrote while it ran", said)
+        self.assertIn("because the founder wrote, or the session went back to work, while it ran",
+                      said)
         self.assertIn(said, delivery.ready(self.ctx(), "main"))
-        self.assertIn("stopped when the founder wrote", delivery._test_health(self.ctx()))
+        self.assertIn("stopped when the founder wrote or the session went back to work",
+                      delivery._test_health(self.ctx()))
         proc, _ = self.stop(slow=0)
         self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
         self.assertEqual("", evidence.unproven(self.ctx()), "the next run that passes clears it")
