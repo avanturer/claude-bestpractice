@@ -19,9 +19,9 @@ import os
 import re
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, NoReturn
+from typing import Any, Callable, Iterable, NoReturn
 
 # The documented ceiling for injected context. The knowledge layer is sized to sit
 # exactly under it so the same payload works as a committed file or as an injection.
@@ -171,6 +171,9 @@ def current_session_id(cwd: str) -> str:
 @dataclass(frozen=True)
 class HookEvent:
     raw: dict[str, Any]
+    # Where the call acts, as `placed` found it; "" until then, and the shell's directory
+    # stands in for it.
+    place: str = ""
 
     @property
     def session_id(self) -> str:
@@ -188,8 +191,12 @@ class HookEvent:
         — it fed sessions each other's work. Identity is therefore (harness id, worktree).
         One session per worktree is this product's model already, and a resume or a
         post-compaction restart in the same worktree still resolves to its own record.
+
+        The worktree is the one the call is placed in. From outside every repository the
+        shell's directory names none, and the session was the bare harness id there, which
+        holds none of its records: not the founder's word, not its pull requests.
         """
-        return compose_session_id(str(self.raw.get("session_id") or ""), self.cwd)
+        return compose_session_id(str(self.raw.get("session_id") or ""), self.place or self.cwd)
 
     @property
     def event_name(self) -> str:
@@ -401,6 +408,72 @@ def repo(cwd: Any) -> Any:
         return resolve(cwd)
     except GitError as exc:
         raise NotApplicable(str(exc)) from exc
+
+
+def placed(event: HookEvent, written: Callable[[str], Iterable[Path]] = lambda _cwd: ()) -> HookEvent:
+    """The event placed where it acts, which judges it and keeps what it did: where the shell
+    stands, when that is in a repository; from outside every one, the tree of the first path
+    in one that the call writes or deletes; else the project the session was started in
+    (`CLAUDE_PROJECT_DIR`); else the last tree the session's transcript says it worked in.
+
+    One answer for the gate that judges a call and the hooks that keep what it did and what
+    the founder said. Read off the shell by all but the first, the founder's `+merge` typed
+    while the shell stood in `/home/user` was dropped, a merge from there was judged for a
+    session holding nothing, and one let through was never settled: its pull request stayed
+    open on the board and its card in `doing`. A directory gone from disk, a removed tree or
+    one a write is about to make, is read as the tree that holds it; taken as it was, it named
+    no repository, and the call went through unjudged.
+    """
+    cwd = event.cwd or os.getcwd()
+    tree = _tree_holding(cwd)
+    if tree:
+        return replace(event, place=cwd if os.path.isdir(cwd) and ".git" not in Path(cwd).parts
+                       else tree)
+    for target in written(cwd):
+        tree = _tree_holding(str(target))
+        if tree:
+            return replace(event, place=tree)
+    for where in (os.environ.get("CLAUDE_PROJECT_DIR", ""), _last_worked_in(event.transcript_path)):
+        tree = _tree_holding(where)
+        if tree:
+            return replace(event, place=tree)
+    return replace(event, place=cwd)
+
+
+def _tree_holding(place: str) -> str:
+    """The working tree `place` belongs to, whether it exists yet or not: the nearest directory
+    at or above it that holds a `.git`, and never one inside `.git`. "" for none."""
+    if not place:
+        return ""
+    path = Path(place)
+    for parent in (path, *path.parents):
+        if parent.name != ".git" and (parent / ".git").exists():
+            return str(parent)
+    return ""
+
+
+# How much of a transcript's end is read for the last tree a session worked in.
+_LAST_CWD_BYTES = 1024 * 1024
+_CWD_FIELD = re.compile(r'"cwd"\s*:\s*"((?:[^"\\]|\\.)*)"')
+
+
+def _last_worked_in(transcript_path: str) -> str:
+    """The last directory in a repository the transcript says this session worked in. "" when
+    it says none, or cannot be read: its format is the harness's own."""
+    try:
+        with open(transcript_path, "rb") as handle:
+            handle.seek(max(os.path.getsize(transcript_path) - _LAST_CWD_BYTES, 0))
+            tail = handle.read().decode("utf-8", errors="replace")
+    except (OSError, ValueError):
+        return ""
+    for raw in reversed(_CWD_FIELD.findall(tail)):
+        try:
+            place = json.loads(f'"{raw}"')
+        except ValueError:
+            continue
+        if _tree_holding(place):
+            return place
+    return ""
 
 
 def _one_of_our_gates() -> bool:

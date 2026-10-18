@@ -115,8 +115,10 @@ def extract_paths(text: str, root: Path) -> list[str]:
 
 
 def main() -> None:
-    event = hookio.read_event()
-    ctx = hookio.repo(event.cwd or os.getcwd())
+    # Placed as pre-tool places a call: the founder's `+merge`, typed while the shell stood
+    # outside the repository, was dropped here and refused there.
+    event = hookio.placed(hookio.read_event())
+    ctx = hookio.repo(event.place)
 
     # Claude Code's `/goal` arrives as typed. Its condition is the instruction and the
     # command is not; `/goal clear` and `/goal` alone instruct nothing and change nothing.
