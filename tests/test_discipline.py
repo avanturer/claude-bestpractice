@@ -23,6 +23,17 @@ class TestStubDetection(unittest.TestCase):
     def kinds(self, name: str, source: str) -> set:
         return {f.kind for f in self.scan(name, source)}
 
+    def test_a_marker_in_a_python_string_is_no_marker(self):
+        """A test writing `"x = 1  # TODO: fix this"` into a throwaway repository was refused as
+        unfinished work, and its turn let go UNVERIFIED over a fixture."""
+        for source in ('X = "x = 1  # TODO: fix this"\n', 'Y = f"{1} # TODO: later"\n',
+                       'Z = """\n# TODO: handle retries\n"""\n'):
+            with self.subTest(source=source):
+                self.assertNotIn("bare-todo", self.kinds("a.py", source))
+
+    def test_a_file_that_does_not_tokenize_is_read_as_text(self):
+        self.assertIn("bare-todo", self.kinds("a.py", "def f(:\n    # TODO: handle this\n"))
+
     def test_a_pass_only_function_is_a_stub(self):
         self.assertIn("stub", self.kinds("a.py", "def charge(amount):\n    pass\n"))
 
