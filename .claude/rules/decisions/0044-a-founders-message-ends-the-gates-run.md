@@ -11,8 +11,9 @@ appends to the transcript while it runs: a message of the founder's queued there
 a task's notification or a message of this plugin's is not.
 
 **A run stopped that way is no verdict.** Nothing is filed red, green or UNVERIFIED, and no note
-is asked for. It is recorded as cut short, which a merge reads as no green on the branch until a
-run passes: the gate's at the next finish, or the pre-push hook's.
+is asked for. It is recorded as cut short, with its tree, which a merge reads as no green on the
+branch until a run passes or fails, the gate's or the pre-push hook's. A green of the whole
+suite on the very tree it stopped on still stands: the run was judging what had passed.
 
 ## Why
 > Сообщения, которые пользователь пишет в это время, стоят в очереди и доходят до модели только

@@ -251,10 +251,12 @@ at most `witness_cpus` CPUs, four unless you say otherwise (`0` is all of them),
 does not start a jest worker per core while the other sessions on the machine run theirs.
 
 **What you type is not held behind it.** The suite runs while the turn is still open, and a
-message you send meanwhile used to wait for the whole run. Now the run stops the moment you
-type, and the turn ends for your message. A run stopped that way proves nothing either way,
-so a merge waits until one finishes: at the session's next finish, or on `git push` where the
-pre-push hook is installed.
+message you send meanwhile used to wait for the whole run. Now the run stops within a second of
+your typing, and unless the gate has something else to refuse, the turn ends for your message;
+if it has, your message reaches the session with its next step. A message that is only a paste
+or a code block does not count as you speaking. A run stopped that way proves nothing either
+way, so a merge waits until one finishes, at the session's next finish or on `git push` where
+the pre-push hook is installed, unless the suite already passed on exactly that tree.
 
 It also escalates rather than wedging: after four blocked attempts it records an
 unverified finish and lets the turn end, because a gate that blocks a founder's workflow

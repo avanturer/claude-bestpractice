@@ -27,6 +27,20 @@ NOTIFICATION = ("<task-notification>\n<task-id>b1</task-id>\n<status>completed</
                 "</task-notification>")
 
 
+def gone(pid: int) -> bool:
+    """Has the process ended? One killed and not yet reaped by its parent is a zombie, which
+    has ended too: init reaps it on its own clock, and may not at all."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+    except (OSError, IndexError):
+        return False
+    return state == "Z"
+
+
 def appended(path: Path, text: str, after: float) -> threading.Timer:
     """`text` added to the end of `path` in `after` seconds, the way the harness appends."""
     def write() -> None:
@@ -72,6 +86,13 @@ class TestTheListenerHearsOnlyTheFounder(unittest.TestCase):
         self.add(line[30:])
         self.assertTrue(listening.heard())
 
+    def test_a_line_longer_than_one_look_does_not_deafen_it(self):
+        listening = founder.Listener(str(self.transcript))
+        self.add("x" * (founder._MOST_PER_LOOK + 10))
+        self.assertFalse(listening.heard())
+        self.add("\n" + enqueued("+merge"))
+        self.assertTrue(listening.heard(), "every message after the long line went unheard")
+
     def test_no_transcript_says_nothing(self):
         for path in ("", str(self.tmp / "gone.jsonl")):
             with self.subTest(path=path):
@@ -92,10 +113,10 @@ class TestARunStopsForTheFounder(unittest.TestCase):
                                 self.tmp, dict(os.environ), 60)
         self.assertLess(time.monotonic() - began, 10)
         child = int(pid_file.read_text().strip())
-        with self.assertRaises(ProcessLookupError):
-            for _ in range(50):
-                os.kill(child, 0)
-                time.sleep(0.1)
+        deadline = time.monotonic() + 5
+        while not gone(child) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        self.assertTrue(gone(child), "what the run started outlived it")
 
     def test_none_starts_once_they_have_spoken(self):
         started = self.tmp / "started"
@@ -119,12 +140,64 @@ class TestARunStopsForTheFounder(unittest.TestCase):
         self.assertEqual(0, proc.returncode)
 
 
+class TestWhatEndsAStoppedRun(RepoCase):
+    """A run stopped for the founder is no green while it is the latest word on the work it was
+    judging, and only while it is."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.write("app.py", "VERSION = 1\n")
+        self.commit("work")
+
+    def test_a_green_of_the_very_tree_it_stopped_on_stands(self):
+        """The pre-push hook records one for what it pushes, the Stop after it runs that tree
+        again, and the push the refusal names skips a tree that is covered."""
+        ctx = self.ctx()
+        evidence.record_green(ctx, ["pytest"])
+        evidence.record_cut_short(ctx, ["pytest"])
+        self.assertIsNone(evidence.cut_short(ctx))
+        self.assertEqual("", evidence.unproven(ctx))
+        self.assertEqual("Tests: green (observed by the gate).", delivery._test_health(ctx))
+
+    def test_a_green_of_one_suite_of_it_does_not(self):
+        from claude_bestpractice import suites
+
+        ctx = self.ctx()
+        evidence.record_green(ctx, ["jest"], suites.Suite("mobile", ("jest",), True))
+        evidence.record_cut_short(ctx, ["pytest"])
+        self.assertIsNotNone(evidence.cut_short(ctx))
+
+    def test_a_green_of_another_tree_does_not_and_a_failure_after_it_ends_it(self):
+        ctx = self.ctx()
+        evidence.record_green(ctx, ["pytest"])
+        self.write("app.py", "VERSION = 2\n")
+        self.commit("more work")
+        evidence.record_cut_short(ctx, ["pytest"])
+        self.assertIsNotNone(evidence.cut_short(ctx))
+        evidence.record_red(ctx, ["pytest"], "FAILED tests/test_app.py::test_version")
+        self.assertIsNone(evidence.cut_short(ctx), "a failure after it is the latest word")
+        self.assertNotIn("founder wrote", evidence.unproven(ctx))
+
+
 # A suite as slow as the environment says, so one project serves every case below.
 SLOW_TEST = (
     "import os\nimport time\nimport unittest\n\n\n"
     "class TestSlow(unittest.TestCase):\n"
     "    def test_takes_its_time(self):\n"
     "        time.sleep(float(os.environ.get('SLOW_TEST_SECONDS') or 0))\n"
+)
+
+
+# Slow only away from the repository itself: in the clean checkout of the commit, where the gate
+# runs the suite again past the prototype stage. It says when that run has begun.
+CLEAN_SLOW_TEST = (
+    "import os\nimport time\nimport unittest\nfrom pathlib import Path\n\n\n"
+    "class TestSlowInACleanCheckout(unittest.TestCase):\n"
+    "    def test_takes_its_time_anywhere_but_home(self):\n"
+    "        if Path.cwd().resolve() == Path(os.environ['SLOW_TEST_HOME']).resolve():\n"
+    "            return\n"
+    "        Path(os.environ['SLOW_TEST_MARK']).touch()\n"
+    "        time.sleep(60)\n"
 )
 
 
@@ -195,6 +268,56 @@ class TestTheStopGateLetsTheFounderIn(RepoCase):
         self.assertNotIn("additionalContext", proc.stdout)
         proc, _ = self.stop(slow=0)
         self.assertIn("additionalContext", proc.stdout, "precondition: a finish is asked")
+
+    def test_a_block_the_turn_ended_on_is_still_asked_about_once(self):
+        """Decision 0014: a turn that ends on a refusal nothing answered is asked about it once.
+        Their message then reaches the session with its next call."""
+        self.work()
+        self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Write",
+            "tool_input": {"file_path": str(self.repo / "src" / "config.py"),
+                           "content": 'API_TOKEN = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"\n'},
+        })
+        proc, _ = self.stop(slow=60, said="+merge")
+        self.assertEqual(2, proc.returncode, proc.stdout + proc.stderr)
+        self.assertIn("ending on a block nothing was done about", proc.stderr)
+        self.assertTrue((evidence.last_run(self.ctx()) or {}).get("cut_short"))
+
+    def test_with_more_to_refuse_it_refuses_and_still_records_the_cut(self):
+        self.write("app.py", "VERSION = 1  # TODO: fix this\n")
+        self.commit("work left unfinished")
+        proc, _ = self.stop(slow=60, said="+merge")
+        self.assertEqual(2, proc.returncode, proc.stdout + proc.stderr)
+        self.assertIn("TODO", proc.stderr)
+        self.assertTrue((evidence.last_run(self.ctx()) or {}).get("cut_short"))
+
+    def test_a_run_of_the_committed_tree_stops_too(self):
+        """Past the prototype stage the suite runs again in a clean checkout of the commit."""
+        mark = self.tmp / "clean-run-began"
+        self.configure(stage_override="traction")
+        self.write("tests/test_clean_slow.py", CLEAN_SLOW_TEST)
+        self.commit("a test that is slow only in a clean checkout")
+
+        def speak_once_it_runs() -> None:
+            deadline = time.monotonic() + 60
+            while not mark.exists() and time.monotonic() < deadline:
+                time.sleep(0.1)
+            with self.transcript.open("a", encoding="utf-8") as handle:
+                handle.write(enqueued("+merge"))
+
+        speaker = threading.Thread(target=speak_once_it_runs)
+        speaker.start()
+        began = time.monotonic()
+        proc = self.run_hook(
+            "evidence-gate",
+            {"session_id": "s1", "hook_event_name": "Stop", "stop_hook_active": False,
+             "transcript_path": str(self.transcript)},
+            env={**os.environ, "SLOW_TEST_MARK": str(mark), "SLOW_TEST_HOME": str(self.repo)})
+        speaker.join()
+        self.assertTrue(mark.exists(), "precondition: the clean checkout's run began")
+        self.assertLess(time.monotonic() - began, 50, "the clean run went on while they waited")
+        self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
+        self.assertIn("the founder wrote while the suite ran", proc.stderr)
 
     def test_a_notification_does_not_stop_it(self):
         self.work()

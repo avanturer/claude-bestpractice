@@ -42,15 +42,19 @@ clear it, and the merge gate refused over a suite nothing had run.
   `pre-tool`, which lets it through uncounted (decision 0043).
 - Which repository a `gh` line names is read off its `gh` calls alone: `grep -R pattern` was
   read as naming a repository called `pattern`, and asked git for the remotes. A pull
-  request's URL names its repository too, so `gh pr ready`, `close` or `merge` of another
-  repository's URL leaves this clone's record of the same number alone.
+  request's URL names its repository too, whatever follows the number (`/files`, a comment, a
+  query), so `gh pr ready`, `close` or `merge` of another repository's URL leaves this clone's
+  record of the same number alone: a merge of one was judged by that record's blockers and
+  settled it as merged. A remote that is a local path names no repository.
 - A suite the Stop gate runs stops, with what it started, as soon as the founder types into the
   session: the gate reads the `queue-operation` entry the harness writes to the transcript the
   moment a message is queued (measured on 2.1.302), and a task's notification is not the
   founder. With nothing else to refuse, the turn ends for their message. The run is no verdict:
   nothing red, green or UNVERIFIED is filed, and no note is asked for. It is recorded as cut
-  short, which the merge check and the ship report read as no green on the branch until a run
-  passes (decision 0044).
+  short with its tree, which the merge check and the ship report read as no green on the branch
+  until a run passes or fails; a green of the whole suite on that very tree still stands. A
+  refusal the turn ended on is still asked about once (decision 0014), and their message then
+  reaches the session with its next call (decision 0044).
 - A `cd` into a sibling worktree nested in the main checkout's directory, where Claude Code
   makes them (`.claude/worktrees/<name>`), is no longer refused as a step into the shared
   checkout: the harness runs the shell there (measured on 2.1.302). A directory of the main
