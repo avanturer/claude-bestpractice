@@ -79,6 +79,8 @@ _MERGES_SHELL = re.compile(r"\bgh\s+pr\s+merge\b(?:\s+(?P<number>\d+))?")
 # thirty days `outstanding` keeps a record, as "ready to merge". The structured tool has no
 # close of its own; it is `update_pull_request` with `state: closed`.
 _CLOSES_TOOL = re.compile(r"(?:^|__)update_pull_request$")
+# Reading one pull request merges nothing. It puts that one in front of the founder (#276).
+_READS_TOOL = re.compile(r"(?:^|__)pull_request_read$")
 _CLOSES_SHELL = re.compile(r"\bgh\s+pr\s+close\b(?:\s+(?P<number>\d+))?")
 
 # Marked ready for review, or turned back into a draft with `--undo`. The structured tool
@@ -1448,9 +1450,15 @@ def merged_in(ctx: GitContext, command: str, cwd: str) -> GitContext | None:
     merged that tree's pull request as the session's own: judged by its blockers, its word
     spent, its record settled as merged (#248).
     """
-    where = _where(command, "merge", cwd)
-    if where is None:
+    return _tree_at(ctx, _moved_to(command, "merge"), cwd)
+
+
+def _tree_at(ctx: GitContext, moved: str, cwd: str) -> GitContext | None:
+    """The working tree of this clone at `cwd` moved by the `cd`s `moved` joins, or None for a
+    place only the shell can name, as `cd $TREE` is, or another clone's."""
+    if "$" in moved or "`" in moved:
         return None
+    where = os.path.join(cwd, moved) if moved else cwd
     if where == cwd:
         return ctx
     from .gitctx import GitError, resolve
@@ -1527,7 +1535,9 @@ def _branch_of(directory: str) -> str:
 # `owner/repo` out of either URL spelling git writes. Anything else — a local path, a
 # host this does not recognise — leaves the set empty, and an empty set vouches for
 # nothing, which is the safe direction.
-_REMOTE = re.compile(r"[:/](?P<owner>[^/:]+)/(?P<repo>[^/]+?)(?:\.git)?/?$")
+_REMOTE = re.compile(
+    r"^(?:[a-z][a-z0-9+.-]*://(?:[^/@]+@)?[^/:]+(?::\d+)?/|(?:[^/@:\\]+@)?[^/:\\]+:)"
+    r"(?P<owner>[^/:]+)/(?P<repo>[^/]+?)(?:\.git)?/?$", re.I)
 
 
 def _remote_names(ctx: GitContext) -> set[str]:
@@ -1549,26 +1559,78 @@ def _remote_names(ctx: GitContext) -> set[str]:
     return names
 
 
-def _repo_flag(command: str) -> str:
-    """`--repo owner/name` out of a `gh` line, in either spelling."""
-    from . import shellcmd
+# A pull request's address, which `gh` takes in place of its number, and names its repository:
+# with whatever follows the number, as a link to its files, a comment or a commit carries it.
+# Read only to the number, `…/pull/7/files` of another repository was this one's #7.
+_PULL_URL = re.compile(
+    r"https?://[^/\s]+/(?P<owner>[^/\s]+)/(?P<repo>[^/\s]+)/pull/\d+(?:[/?#]\S*)?")
 
-    for argv in shellcmd.commands(command):
-        for index, token in enumerate(argv):
-            if token in ("--repo", "-R") and index + 1 < len(argv):
-                return argv[index + 1].lower()
-            if token.startswith("--repo="):
-                return token.split("=", 1)[1].lower()
+
+def _as_repository(value: str) -> str:
+    """`owner/name` out of `[HOST/]OWNER/REPO`, as `gh` takes a repository; "?" for a value
+    that is not one, which no remote here matches."""
+    parts = value.strip().strip("/").lower().split("/")
+    return "/".join(parts[-2:]) if len(parts) >= 2 and all(parts[-2:]) else "?"
+
+
+def _repo_option(words: list[str]) -> str:
+    """The repository one `gh` call names with `--repo` or `-R`, the value apart, after `=` or
+    joined to `-R`. "?" for a group of short flags holding `R`, whose value is not told apart
+    here, and "" when none is given."""
+    for index, word in enumerate(words):
+        if word in ("--repo", "-R"):
+            return _as_repository(words[index + 1] if index + 1 < len(words) else "")
+        if word.startswith("--repo="):
+            return _as_repository(word.split("=", 1)[1])
+        if word.startswith("-R"):
+            return _as_repository(word[2:].lstrip("="))
+        if word.startswith("-") and not word.startswith("--") and "R" in word:
+            return "?"
     return ""
 
 
-def _repository_named(tool_name: str, tool_input: dict[str, Any], command: str) -> str:
-    """The repository this call names outright, or "" when it names none."""
-    if not any(tool.search(tool_name) for tool in (_OPENS_TOOL, _MERGES_TOOL, _CLOSES_TOOL)):
-        return _repo_flag(command)
-    owner = str(tool_input.get("owner") or "").strip()
-    repo = str(tool_input.get("repo") or "").strip()
-    return f"{owner}/{repo}".lower() if owner and repo else ""
+def _gh_repo(line: str) -> str:
+    """The `GH_REPO` a `gh` on this line runs with: set on the line, or else in the environment
+    this hook was started with, which the session's shell inherits too. "" for none."""
+    from . import shellcmd
+
+    for argv in shellcmd.segments(line):
+        for word in argv:
+            if word.startswith("GH_REPO="):
+                value = word.split("=", 1)[1]
+                return _as_repository(value) if value else ""
+    value = os.environ.get("GH_REPO", "")
+    return _as_repository(value) if value.strip() else ""
+
+
+def _repositories_in(argv: list[str], line: str) -> set[str]:
+    """Every repository one `gh` call names outright: its `--repo`, the owner and name in a pull
+    request's URL among its words, and else the `GH_REPO` it runs with, which those override."""
+    named = {_repo_option(argv[1:])} - {""}
+    named |= {f"{found['owner']}/{found['repo']}".lower()
+              for found in map(_PULL_URL.fullmatch, argv) if found}
+    return named or ({_gh_repo(line)} - {""})
+
+
+def _repositories_named(tool_name: str, tool_input: dict[str, Any], command: str) -> set[str]:
+    """The repositories this call names outright; empty when it names none.
+
+    Read off `gh` calls only: `grep -R pattern` named a repository called `pattern`, and every
+    line holding one asked git for this clone's remotes."""
+    if any(tool.search(tool_name) for tool in
+           (_OPENS_TOOL, _MERGES_TOOL, _CLOSES_TOOL, _READS_TOOL)):
+        owner = str(tool_input.get("owner") or "").strip()
+        repo = str(tool_input.get("repo") or "").strip()
+        return {f"{owner}/{repo}".lower()} if owner and repo else set()
+    if "gh" not in command:
+        return set()
+    from . import shellcmd
+
+    named: set[str] = set()
+    for argv in shellcmd.commands(command):
+        if argv[0].rsplit("/", 1)[-1] == "gh":
+            named |= _repositories_in(argv, command)
+    return named
 
 
 def about_this_repository(ctx: GitContext, tool_name: str, tool_input: dict[str, Any],
@@ -1583,8 +1645,23 @@ def about_this_repository(ctx: GitContext, tool_name: str, tool_input: dict[str,
     Naming nothing is this repository, because that is what `gh` resolves a bare call to —
     the remote of the tree it is run in.
     """
-    named = _repository_named(tool_name, tool_input, command)
-    return not named or named in _remote_names(ctx)
+    named = _repositories_named(tool_name, tool_input, command)
+    return not named or named <= _remote_names(ctx)
+
+
+def elsewhere(ctx: GitContext, tool_name: str, tool_input: dict[str, Any],
+              command: str = "") -> bool:
+    """Does this call name a repository this clone's remotes say is not this one?
+
+    Asked before a merge is matched to this clone's records by its number. False where the call
+    names none, and where no remote of this clone names one: a clone whose remotes say nothing
+    cannot tell its own pull requests from another repository's, and is matched as it was.
+    """
+    named = _repositories_named(tool_name, tool_input, command)
+    if not named:
+        return False
+    here = _remote_names(ctx)
+    return bool(here) and not named <= here
 
 
 def about_current_branch(tool_name: str, command: str) -> bool:
@@ -1674,11 +1751,197 @@ def accept_merges(ctx: GitContext, approvals: dict[str, str],
     shown_here = {entry for entry, record in still_open.items() if ours(record.get(SHOWN_TO))}
     for entry in sorted(named | shown_here):
         _accept_its_finish(ctx, still_open[entry], said)
+    named |= _shown_before(ctx, session_id, said, still_open)
     if not named:
         return approvals
-    kept = {entry for entry in _pool(ctx) if entry in still_open}
+    settled = _settled_numbers(ctx)
+    kept = {entry for entry in _pool(ctx) if _may_still_merge(entry, still_open, settled)}
     rest = {key: value for key, value in approvals.items() if key != config.APPROVE_MERGE}
     return {**rest, config.MERGE_POOL: " ".join(sorted(kept | named))}
+
+
+# The pull requests a chat put in front of the founder by number in the turn before they spoke:
+# looked at one by one, or refused a merge of. A session asked to close every hanging pull
+# request checked #936, #941 and #967, listed them, and was answered `+merge`; with none of its
+# own open the word was the one merge it always was, and #941 was refused next (#276). #967,
+# another chat's, was refused after every `+merge` in the chat that had shown it (#272).
+SHOWN = "pull-requests-shown.json"
+# How many of a chat's messages are kept, and what was shown since the oldest of them.
+_PROMPTS_KEPT = 4
+
+
+# The `gh pr` verbs that show one pull request, with the flags of theirs that take a value
+# (gh 2.89, cli.github.com/manual).
+_SHOWING_VERBS = ("view", "checks", "diff")
+_SHOWING_VALUE_FLAGS = frozenset({"--json", "-q", "--jq", "-t", "--template", "-i",
+                                  "--interval", "--color", "-R", "--repo"})
+
+
+def reads_one(tool_name: str) -> bool:
+    """Is this the GitHub tool reading one pull request?"""
+    return bool(_READS_TOOL.search(tool_name))
+
+
+def numbers_shown(ctx: GitContext, tool_name: str, command: str, tool_input: dict[str, Any],
+                  cwd: str) -> list[int]:
+    """The pull requests of this repository a call puts in front of the founder by number:
+    `gh pr view|checks|diff <n>`, or the GitHub tool reading one. A listing shows none, and
+    neither does a call about another repository, named outright or by where it runs."""
+    if _READS_TOOL.search(tool_name):
+        number = _as_number(tool_input.get("pullNumber"))
+        return [number] if number > 0 and about_this_repository(ctx, tool_name, tool_input) \
+            else []
+    if tool_name != "Bash" or "gh" not in command:
+        return []
+    return _shown_on_the_line(ctx, command, cwd)
+
+
+def _shown_on_the_line(ctx: GitContext, command: str, cwd: str) -> list[int]:
+    """This repository's pull requests a shell line shows by number, each `gh pr view|checks|
+    diff` placed where the `cd`s before it leave it."""
+    from . import shellcmd
+
+    found: list[int] = []
+    moved = ""
+    for argv in shellcmd.commands(command):
+        if argv[0] == "cd" and len(argv) > 1:
+            moved = os.path.join(moved, os.path.expanduser(argv[1]))
+        elif _shows(argv):
+            numbers = _shown_by(shellcmd.without_redirections(argv[3:]))
+            if numbers and _about_here(ctx, argv, command, moved, cwd):
+                found += numbers
+    return found
+
+
+def _shows(argv: list[str]) -> bool:
+    """Is this command a `gh pr view|checks|diff`?"""
+    return argv[0].rsplit("/", 1)[-1] == "gh" and argv[1:2] == ["pr"] \
+        and argv[2:3] != [] and argv[2] in _SHOWING_VERBS
+
+
+def _shown_by(words: list[str]) -> list[int]:
+    """The pull request numbers among one `gh pr view|checks|diff`'s words."""
+    shown_here: list[int] = []
+    taken = False
+    for word in words:
+        if taken:
+            taken = False
+        elif word in _SHOWING_VALUE_FLAGS:
+            taken = True
+        elif not word.startswith("-"):
+            shown_here.append(int(word) if word.isdigit() else number_in(word))
+    return [number for number in shown_here if number > 0]
+
+
+def _about_here(ctx: GitContext, argv: list[str], command: str, moved: str, cwd: str) -> bool:
+    """Is this `gh` call about this clone's repository: naming it, or naming none and run in one
+    of its trees, `cwd` moved by `moved`? `gh` resolves a call that names none to the remote of
+    where it runs."""
+    named = _repositories_in(argv, command)
+    if named:
+        return named <= _remote_names(ctx)
+    return _tree_at(ctx, moved, cwd) is not None
+
+
+def put_to_the_founder(ctx: GitContext, session_id: str, tool_name: str, command: str,
+                       tool_input: dict[str, Any], cwd: str, number: int) -> None:
+    """Note that a merge of `number` was refused where the founder reads it, so that the word
+    they answer with names it. Not another repository's, which has numbers of its own."""
+    if number <= 0:
+        return
+    if tool_name == "Bash":
+        from . import shellcmd
+
+        ours = any(_about_here(ctx, argv, command, _moved_to(command, "merge"), cwd)
+                   for argv in shellcmd.runs(command, "gh", "pr", "merge"))
+    else:
+        ours = about_this_repository(ctx, tool_name, tool_input)
+    if ours:
+        shown(ctx, session_id, [number])
+
+
+def prompted(ctx: GitContext, session_id: str, *moments: float) -> None:
+    """Note that the founder wrote to this chat at these moments: what it shows after is shown
+    to them. A message sent into a running turn, which no hook hears, is one as well."""
+    if not moments:
+        return
+
+    def note(chat: dict[str, Any]) -> None:
+        kept = {float(when) for when in chat.get("prompts", [])} | set(moments)
+        chat["prompts"] = sorted(kept)[-_PROMPTS_KEPT:]
+        oldest = chat["prompts"][0]
+        chat["numbers"] = {key: when for key, when in chat.get("numbers", {}).items()
+                           if when >= oldest}
+    _rewrite_shown(ctx, session_id, note)
+
+
+def shown(ctx: GitContext, session_id: str, numbers: list[int]) -> None:
+    """Note that this chat showed the founder these pull requests, by number, now."""
+    wanted = [number for number in numbers if number > 0]
+    if not wanted:
+        return
+    now = time.time()
+
+    def note(chat: dict[str, Any]) -> None:
+        chat.setdefault("numbers", {}).update({str(number): now for number in wanted})
+    _rewrite_shown(ctx, session_id, note)
+
+
+def _rewrite_shown(ctx: GitContext, session_id: str,
+                   change: Callable[[dict[str, Any]], None]) -> None:
+    path = store.tier_b(ctx, SHOWN)
+    with store.file_lock(store.tier_b(ctx, SHOWN + ".lock")):
+        found = store.read_json(path, default={})
+        every = found if isinstance(found, dict) else {}
+        key = _chat_key(ctx, session_id)
+        chat = every.get(key) if isinstance(every.get(key), dict) else {}
+        change(chat)
+        every[key] = chat
+        store.write_json(path, every)
+
+
+def _chat_key(ctx: GitContext, session_id: str) -> str:
+    """Whose notes these are: the chat by its harness id, or the identity itself where it has
+    none to give. Every anonymous session shared the one unnamed chat's notes."""
+    from . import hookio
+
+    return hookio.harness_of(session_id, str(ctx.worktree_root)) or f"id:{session_id}"
+
+
+def _shown_before(ctx: GitContext, session_id: str, said: float,
+                  still_open: dict[str, dict[str, Any]]) -> set[str]:
+    """What this chat showed the founder between their previous message and the word, as the
+    pool names it: a recorded pull request by its entry, and any other by `#<number>`. Not a
+    draft, nor one recorded here as merged or closed: a word naming only what cannot merge
+    would have taken away the one merge it allows."""
+    found = store.read_json(store.tier_b(ctx, SHOWN), default={})
+    chat = found.get(_chat_key(ctx, session_id)) if isinstance(found, dict) else None
+    if not isinstance(chat, dict):
+        return set()
+    # The word's own message is noted after it is heard, so the latest before it is the last one.
+    since = max((when for when in chat.get("prompts", []) if when < said), default=0.0)
+    numbers = {int(key) for key, when in chat.get("numbers", {}).items()
+               if since < when <= said and str(key).isdigit()}
+    by_number = {_as_number(record.get("number")): entry for entry, record in still_open.items()}
+    drafts = {_as_number(record.get("number")) for record in still_open.values()
+              if record.get("draft")}
+    return {by_number.get(number, f"#{number}")
+            for number in numbers - drafts - _settled_numbers(ctx)}
+
+
+def _settled_numbers(ctx: GitContext) -> set[int]:
+    """The pull requests recorded here as merged or closed, by number."""
+    return {_as_number(row.get("number")) for row in _records(ctx).values()
+            if row.get("state") != OPEN} - {0}
+
+
+def _may_still_merge(entry: str, still_open: dict[str, dict[str, Any]],
+                     settled: set[int]) -> bool:
+    """Does an entry of the pool name a pull request that can still merge: one recorded open,
+    or a number nothing here records as merged or closed?"""
+    if entry in still_open:
+        return True
+    return entry.startswith("#") and entry[1:].isdigit() and int(entry[1:]) not in settled
 
 
 def _open_when_said(ours: Callable[[Any], bool], still_open: dict[str, dict[str, Any]],
@@ -1808,21 +2071,25 @@ def _not_open(ctx: GitContext, number: int) -> str:
             f"{settled.get('branch')}, so nothing open carried it")
 
 
-def acceptance(ctx: GitContext, record: dict[str, Any] | None) -> str:
-    """How the founder's word covers merging `record`: `POOLED`, `ONCE`, or "" when it does not."""
-    if record is not None and _entry(record) in _pool(ctx):
+def acceptance(ctx: GitContext, record: dict[str, Any] | None, number: int = 0) -> str:
+    """How the founder's word covers merging `record`, pull request `number`: `POOLED`, `ONCE`,
+    or "" when it does not. A pull request shown to them by number and known here by nothing
+    else is pooled as `#<number>`."""
+    pooled = _pool(ctx)
+    if (record is not None and _entry(record) in pooled) or (number > 0 and f"#{number}" in pooled):
         return POOLED
     return ONCE if config.approved(ctx, config.APPROVE_MERGE) else ""
 
 
-def spend(ctx: GitContext, record: dict[str, Any] | None, cover: str) -> None:
+def spend(ctx: GitContext, record: dict[str, Any] | None, cover: str, number: int = 0) -> None:
     """Take this merge off what the founder's word covers. Each pull request merges once."""
     if cover == ONCE:
         config.clear_switch(ctx, config.APPROVE_MERGE)
         return
-    if cover != POOLED or record is None:
+    if cover != POOLED or (record is None and number <= 0):
         return
-    left = [entry for entry in _pool(ctx) if entry != _entry(record)]
+    spent = {f"#{number}"} | ({_entry(record)} if record is not None else set())
+    left = [entry for entry in _pool(ctx) if entry not in spent]
     if left:
         config.record_switches(ctx, {config.MERGE_POOL: " ".join(left)})
     else:
@@ -1898,7 +2165,7 @@ def complete(ctx: GitContext, session_id: str, merge: dict[str, Any]) -> None:
     """
     from . import inbox, plan
 
-    spend(ctx, merge.get("named"), str(merge.get("cover", "")))
+    spend(ctx, merge.get("named"), str(merge.get("cover", "")), _as_number(merge.get("number")))
     branch = str(merge.get("branch", ""))
     if not branch or merge.get("queued"):
         return

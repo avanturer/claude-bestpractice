@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-2.4.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.5.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-2541%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -250,6 +250,14 @@ is never asked twice. A red run names its first broken test and keeps its report
 at most `witness_cpus` CPUs, four unless you say otherwise (`0` is all of them), so one Stop
 does not start a jest worker per core while the other sessions on the machine run theirs.
 
+**What you type is not held behind it.** The suite runs while the turn is still open, and a
+message you send meanwhile used to wait for the whole run. Now the run stops within a second of
+your typing, and unless the gate has something else to refuse, the turn ends for your message;
+if it has, your message reaches the session with its next step. A message that is only a paste
+or a code block does not count as you speaking. A run stopped that way proves nothing either
+way, so a merge waits until one finishes, at the session's next finish or on `git push` where
+the pre-push hook is installed, unless the suite already passed on exactly that tree.
+
 It also escalates rather than wedging: after four blocked attempts it records an
 unverified finish and lets the turn end, because a gate that blocks a founder's workflow
 forever is a gate that gets uninstalled.
@@ -276,8 +284,11 @@ told it is waiting for you rather than the other way round.
 **Merged, by the session that opened it.** Once you say `+merge`, it opens, checks and
 merges on its own without asking again. One `+merge` covers every pull request that chat has
 open when you say it, so ten finished pull requests take one word, not ten — including the
-ones it opened before a `--resume`, which is the same chat. It never covers one opened after
-the word or another chat's. Each is judged as itself, from whichever tree the merge is run:
+ones it opened before a `--resume`, which is the same chat. It also covers each pull request
+of this repository the chat showed you by number since your previous message (looked at with `gh pr view`,
+`checks` or `diff`, or a merge of it refused), Dependabot's or another chat's included, so
+"close the hanging ones" takes one word too. It never covers one opened after the word, or
+another chat's it did not show you. Each is judged as itself, from whichever tree the merge is run:
 `cd <tree> && gh pr merge` is that tree's pull request, not the one the session stands on.
 A merge that fails on a conflict or a check keeps your word for its retry: it is spent, and
 the pull request and its cards are closed, only once the merge has run; `--auto` spends it
@@ -359,7 +370,7 @@ messages, and each is **spent when it is used**, never a standing grant.
 
 | You type | It allows | Once |
 | --- | --- | --- |
-| `+merge` | merging the pull requests this chat has open, drafts aside | each of them once; with none open, the next merge |
+| `+merge` | merging the pull requests this chat has open, and those it showed you by number since your last message, drafts aside | each of them once; with none of either, the next merge |
 | `+release` | promoting to production | one promotion |
 | `+migration` | destructive DDL in a migration | one migration |
 

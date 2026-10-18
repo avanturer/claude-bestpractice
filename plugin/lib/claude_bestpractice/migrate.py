@@ -1304,6 +1304,34 @@ def _forget_a_red_suite_that_never_ran(ctx: GitContext) -> str:
             "installed, so that run never reached the code")
 
 
+# What make prints when this repository's own `needs-pytest` guard stops `make test`.
+_THE_PYTEST_GUARD_STOPPED_MAKE = re.compile(r"\[Makefile:\d+: needs-pytest\] Error \d+")
+
+
+def _forget_a_red_suite_the_pytest_guard_left(ctx: GitContext) -> str:
+    """A red-suite record of `make test` that this repository's `needs-pytest` guard stopped.
+
+    The guard refuses to start the suite without pytest, because the Stop gate the suite tests
+    drives `python3 -m pytest`. Until 2.5.0 it said so in words the gate did not read as a
+    missing runner, so a machine without pytest filed `make test` as red with no test run,
+    and nothing could clear it: this repository's suite outlives the Stop hook, and the
+    pre-push hook runs `make check`. The guard says `pytest: not found` now.
+
+    Only a record of no test executed whose output is that guard stopping make; every other
+    repository has no such guard, and a suite that ran and failed stays red.
+    """
+    from . import evidence
+
+    entry = evidence.red(ctx)
+    if not entry or int(entry.get("executed") or 0):
+        return ""
+    if not _THE_PYTEST_GUARD_STOPPED_MAKE.search(str(entry.get("tail") or "")):
+        return ""
+    store.tier_a(ctx, evidence.RED_SUITE_FILE).unlink(missing_ok=True)
+    return (f"dropped the red-suite record for `{' '.join(entry.get('command') or [])}` — its "
+            "`needs-pytest` guard stopped it before any test ran")
+
+
 def _scrub_what_a_failing_suite_printed(ctx: GitContext) -> str:
     """Credentials a failing suite printed, already written where the gate records failures.
 
@@ -1753,6 +1781,7 @@ _REPAIRS = {
     "0038-unstage-what-another-tree-staged": (1, _unstage_what_another_tree_staged),
     "0039-withdraw-messages-that-were-never-work": (1, _withdraw_messages_that_were_never_work),
     "0040-name-who-paused-a-card": (1, _name_who_paused_a_card),
+    "0041-forget-a-red-suite-the-pytest-guard-left": (1, _forget_a_red_suite_the_pytest_guard_left),
 }
 
 

@@ -1,5 +1,74 @@
 # Changelog
 
+## v2.5.0
+
+`+merge` answers what the chat put in front of the founder: each pull request it showed them by
+number since their previous message merges on the word, as its own open ones do. What the
+founder types while the Stop gate runs the suite is no longer held behind the run: the run
+stops and the turn ends for their message. An unverified finish is filed under the work it was
+about, and a missing pytest in this repository is a suite that never ran, not a red one.
+
+### What broke
+
+**One word, one merge, for pull requests the chat did not open.** Asked to close the hanging
+pull requests, a session with none of its own open checked #936, #941 and #967 and listed
+them. The founder answered `+merge`; #936 merged, #941 was refused as having no word (#276).
+#967, opened by another chat, was refused after every `+merge` in the chat that had shown it
+(#272): the word named only the pull requests its own chat had opened.
+
+**The founder's message waited behind the gate's run.** The Stop gate runs the suite while the
+turn is still open, and in fuddy that was five minutes of pytest and a minute of jest at a
+finish. What the founder typed meanwhile, `+merge` included, reached the session only once the
+run ended, or after Esc (#277).
+
+**An unverified finish was titled with whatever the founder said last.** A finish after "pause
+for four hours" was committed under `attempts/` as a failed attempt by that name.
+
+**A missing pytest was a red suite nobody could clear.** `make test` stopped at its
+`needs-pytest` guard, in words the Stop gate did not read as a missing runner, so it was filed
+as `make test` failing. This repository's suite outlives the Stop hook, so no later run could
+clear it, and the merge gate refused over a suite nothing had run.
+
+### What changed
+
+- `+merge` also names each pull request the chat showed by number since the founder's previous
+  message, one sent into a running turn included: `gh pr view`, `checks` or `diff` of it, the
+  GitHub tool reading it, or a merge of it refused to the founder. A recorded one is named by
+  its record, any other as `#<number>`, kept by later words until it merges or is recorded
+  closed; each merges once. A listing, a draft, one recorded as merged or closed, another
+  chat's pull request this chat never showed, and another repository's numbers (`-R` however
+  joined, a URL, `GH_REPO`, the tool's owner and repo, a `cd` into another clone) name nothing,
+  and with nothing named the word is still the one merge. `pull_request_read` now reaches
+  `pre-tool`, which lets it through uncounted (decision 0043).
+- Which repository a `gh` line names is read off its `gh` calls alone: `grep -R pattern` was
+  read as naming a repository called `pattern`, and asked git for the remotes. A pull
+  request's URL names its repository too, whatever follows the number (`/files`, a comment, a
+  query), so `gh pr ready`, `close` or `merge` of another repository's URL leaves this clone's
+  record of the same number alone: a merge of one was judged by that record's blockers and
+  settled it as merged. A remote that is a local path names no repository.
+- A suite the Stop gate runs stops, with what it started, as soon as the founder types into the
+  session: the gate reads the `queue-operation` entry the harness writes to the transcript the
+  moment a message is queued (measured on 2.1.302), and a task's notification is not the
+  founder. With nothing else to refuse, the turn ends for their message. The run is no verdict:
+  nothing red, green or UNVERIFIED is filed, and no note is asked for. It is recorded as cut
+  short with its tree, which the merge check and the ship report read as no green on the branch
+  until a run passes or fails; a green of the whole suite on that very tree still stands. A
+  refusal the turn ended on is still asked about once (decision 0014), and their message then
+  reaches the session with its next call (decision 0044).
+- A `cd` into a sibling worktree nested in the main checkout's directory, where Claude Code
+  makes them (`.claude/worktrees/<name>`), is no longer refused as a step into the shared
+  checkout: the harness runs the shell there (measured on 2.1.302). A directory of the main
+  checkout's own is still refused.
+- An unverified finish's attempt is titled by the cards the session holds, or "unverified
+  finish on <branch>", and its reason is cut at a word.
+- This repository's `needs-pytest` guard says `pytest: not found`, which the gate reads as a
+  runner missing rather than as code failing.
+
+One `migrate._REPAIRS` step, 0041: the red `make test` record this repository's
+`needs-pytest` guard left before this release, with no test run, is dropped at the next session
+start. Nothing could clear it: the suite outlives the Stop hook, and the pre-push hook runs
+`make check`. A suite that ran and failed stays red; every other repository has no such guard.
+
 ## v2.4.1
 
 A line that merges is one merge the gate can read, so a second merge no longer rides the first

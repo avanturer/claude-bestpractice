@@ -1407,6 +1407,16 @@ def main() -> None:
         # switched-off gate has no business having an opinion either way.
         hookio.emit_silent()
 
+    # Reading one pull request is asked about here for one reason: it puts that pull request in
+    # front of the founder, and their next `+merge` names it (#276). It is let through as it
+    # was before this hook saw it, and counted nowhere: hashed with no path or command, four
+    # reads in a row were refused as one call repeated.
+    if pullrequest.reads_one(event.tool_name):
+        if cfg.manage_pull_requests:
+            pullrequest.shown(ctx, event.session_id, pullrequest.numbers_shown(
+                ctx, event.tool_name, "", event.tool_input, event.cwd or str(ctx.worktree_root)))
+        hookio.emit_silent()
+
     rec = sessions.get(ctx, event.session_id)
     if rec is None:
         # No record means SessionStart never ran, or something deleted it. Re-register
@@ -1578,6 +1588,10 @@ def main() -> None:
         unjudged = pullrequest.merge_line(event.tool_name, command)
         if unjudged:
             deny(ctx, rec, unjudged)
+        # Looked at by number, it is in front of the founder, and their next `+merge` is an
+        # answer about it as well (#276). Another repository's numbers are not this one's.
+        pullrequest.shown(ctx, event.session_id, pullrequest.numbers_shown(
+            ctx, event.tool_name, command, ti, str(session_cwd)))
         number = pullrequest.merge_target(event.tool_name, command, ti)
         if number is not None:
             # Green is not accepted. The checks say the code works; they say nothing about
@@ -1608,28 +1622,37 @@ def main() -> None:
                 deny(ctx, rec, pullrequest.unplaceable(command))
             here = here or ctx
             current = pullrequest.about_current_branch(event.tool_name, command)
-            named = pullrequest.named_by(here, number, current)
+            # Another repository's pull request has numbers of its own, and this clone's record
+            # of the same number is not it: `gh pr merge <its URL>` was judged by that record's
+            # blockers, covered by the word that named it, and settled it as merged.
+            elsewhere = pullrequest.elsewhere(ctx, event.tool_name, ti, command)
+            ours = 0 if elsewhere else number
+            named = None if elsewhere else pullrequest.named_by(here, number, current)
 
             # Their word as the hook heard it, or else as the harness wrote it down: one sent
             # while the session was working reached it with no hook at all, and every merge
             # after it was refused as if they had said nothing (#251).
             def covered() -> str:
-                found = pullrequest.acceptance(here, named)
+                found = pullrequest.acceptance(here, named, ours)
                 if not found:
                     founder.catch_up(ctx, event.session_id, event.transcript_path)
-                    found = pullrequest.acceptance(here, named)
+                    found = pullrequest.acceptance(here, named, ours)
                 return found
 
             cover = config.within_grace(covered)
             if not cover:
                 # The word on record may cover it, under a number this clone never learned.
                 # That is not a word missing, and it is the session's to resolve (#241).
-                unplaced = pullrequest.unplaced(ctx, number, event.session_id)
+                unplaced = pullrequest.unplaced(ctx, ours, event.session_id)
                 if unplaced:
                     deny(ctx, rec, unplaced)
+                # Refused to the founder, it is put to them, and the word they answer with
+                # names it.
+                pullrequest.put_to_the_founder(ctx, event.session_id, event.tool_name, command,
+                                               ti, str(session_cwd), number)
                 # And it may name other pull requests and not this one, which the refusal
                 # called no word at all: #967 was refused that way after every `+merge` (#272).
-                why = pullrequest.uncovered(ctx, named, number, event.session_id)
+                why = pullrequest.uncovered(ctx, named, ours, event.session_id)
                 waited = f"{config.acceptance_grace():.0f} seconds this gate waited for one"
                 deny_for_founder(
                     ctx, rec,
@@ -1645,19 +1668,19 @@ def main() -> None:
                     "more first.\n"
                     "  Otherwise show them what changed and ask. When they are happy they "
                     "say `+merge` — copy it exactly — and this allows every pull request "
-                    "you have open when they say it, each once; with none open, the next "
-                    "merge.\n"
+                    "you have open, and every one you showed them by number since their "
+                    "last message, each once; with none of either, the next merge.\n"
                     "  Their word is read from their own message; nothing you write "
                     "can stand in for it."
                 )
-            gated = pullrequest.gated_by(here, number, current)
+            gated = None if elsewhere else pullrequest.gated_by(here, number, current)
             # Held, and finished by `pr-opened` once the merge has run: PostToolUse fires only
             # for a call that succeeded. Spent, settled and delivered here, a merge that then
             # failed had taken the founder's word, called the pull request merged and closed
             # its cards, and they were asked for `+merge` again (#232, #243, #268).
             # The session that sends it, as it is here: the result can arrive from the tree a
             # `cd` left the shell in, under an identity this chat never started a session as.
-            merge: dict = {"named": named, "session": event.session_id}
+            merge: dict = {"named": named, "number": ours, "session": event.session_id}
             if gated is None:
                 # Somebody else's pull request: nothing checked here is about it (#135).
                 # Still taken off what the word covers, once it has merged.
@@ -1677,6 +1700,8 @@ def main() -> None:
                     # Put to the founder by this refusal, so that their next word is a word
                     # about what it lists (#243), at this commit and in this chat (#268).
                     pullrequest.note_refusal(ctx, pr_branch, here.head, problems, event.session_id)
+                    pullrequest.put_to_the_founder(ctx, event.session_id, event.tool_name,
+                                                   command, ti, str(session_cwd), number)
                     deny_for_founder(ctx, rec, pullrequest.merge_refusal(gated, problems))
                 # Bound to this pull request once its blockers are judged, and never before:
                 # the refusal above promises the merge "as soon as the list is empty", so a

@@ -197,6 +197,11 @@ def strands_the_shell(command: str, cwd: Path, ctx: GitContext) -> Path | None:
     So this refuses the STEP INTO it. One turn's friction against a shell that cannot be
     recovered without restarting the session — and the step was already against this
     plugin's own rule, which is why it costs nothing to refuse.
+
+    The checkout is the main tree, not every directory under its path. Claude Code makes its
+    worktrees in `.claude/worktrees/<name>`, inside the main checkout's directory, and the
+    step into a sibling one was refused as the shared checkout, while the harness, measured
+    on 2.1.302, runs the shell there and every call after it.
     """
     from . import worktree
 
@@ -212,7 +217,22 @@ def strands_the_shell(command: str, cwd: Path, ctx: GitContext) -> Path | None:
         guarded = worktree.main_checkout(ctx).resolve()
     except OSError:
         return None
-    return landing if here == guarded or guarded in here.parents else None
+    if not (here == guarded or guarded in here.parents):
+        return None
+    return None if _in_a_nested_tree(ctx, here, guarded) else landing
+
+
+def _in_a_nested_tree(ctx: GitContext, here: Path, guarded: Path) -> bool:
+    """Is `here` inside a working tree of this repository other than the main checkout, one
+    nested in the main checkout's directory?"""
+    for tree in working_trees(ctx):
+        try:
+            root = tree.resolve()
+        except OSError:
+            continue
+        if root != guarded and (here == root or root in here.parents):
+            return True
+    return False
 
 
 def working_trees(ctx: GitContext) -> list[Path]:

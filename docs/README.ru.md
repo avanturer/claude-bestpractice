@@ -4,7 +4,7 @@
 
 **Память, координация и принуждение для разработки продукта в нескольких параллельных сессиях Claude Code.**
 
-[![version](https://img.shields.io/badge/version-2.4.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.5.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-2541%20passing-2ea44f)](#проверено)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#проверено)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#требования)
@@ -284,7 +284,7 @@ Claude Code и после этого держит в нём и отказыва�
 
 | Вы пишете | Что разрешает | Сколько раз |
 | --- | --- | --- |
-| `+merge` | смержить PR, открытые в этом чате, кроме draft | каждый по разу; если открытых нет — следующий мерж |
+| `+merge` | смержить PR, открытые в этом чате, и те, что чат показал тебе по номеру после твоего прошлого сообщения, кроме draft | каждый по разу; если нет ни тех, ни других — следующий мерж |
 | `+release` | выкатить в прод | один выкат |
 | `+migration` | разрушающий DDL в миграции | одну миграцию |
 

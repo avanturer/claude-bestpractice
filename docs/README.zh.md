@@ -4,7 +4,7 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-2.4.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.5.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-2541%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
@@ -221,7 +221,7 @@ setup、teardown 或收集阶段，且没有任何断言失败——会被单独
 
 | 你输入 | 允许的操作 | 次数 |
 | --- | --- | --- |
-| `+merge` | 合并本对话已打开的 PR（草稿除外）| 每个一次；若没有已打开的，则下一次合并 |
+| `+merge` | 合并本对话已打开的 PR，以及自你上一条消息以来本对话按编号展示给你的 PR（草稿除外）| 每个一次；两者都没有时，则下一次合并 |
 | `+release` | 发布到生产环境 | 一次发布 |
 | `+migration` | 迁移中的破坏性 DDL | 一次迁移 |
 

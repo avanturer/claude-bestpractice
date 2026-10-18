@@ -7,7 +7,7 @@ import subprocess
 import sys
 import unittest
 
-from helpers import BIN, RepoCase
+from helpers import BIN, RepoCase, sid
 
 from claude_bestpractice import attempts
 
@@ -175,6 +175,41 @@ class TestAutomaticCapture(AttemptCase):
         self.assertTrue(filed, "an unverified finish left no trace for the next session")
         self.assertEqual(filed[0].outcome, attempts.FAILED)
         self.assertIn("app.py", filed[0].paths)
+
+
+class TestAnUnverifiedFinishIsTitledByItsWork(AttemptCase):
+    """The attempt was titled with the founder's last message, whatever it was: a finish after
+    "поставь на паузу все на 4 часа 15 минут" was committed as a failed attempt by that name."""
+
+    def finish_unverified(self, last_said: str) -> list:
+        from claude_bestpractice import attempts
+
+        self.write("app.py", "x = 1\n")
+        self.commit()
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
+        self.run_hook("prompt-capture", {"session_id": "s1", "hook_event_name": "UserPromptSubmit",
+                                         "prompt": last_said})
+        self.write("app.py", "x = 2\n")
+        for _ in range(6):
+            self.run_hook("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop",
+                                            "stop_hook_active": False})
+        return attempts.load_all(self.ctx())
+
+    def test_the_card_the_session_holds_names_it(self):
+        from claude_bestpractice import plan, sessions
+
+        self.run_hook("session-start", {"session_id": "s1", "hook_event_name": "SessionStart"})
+        rec = sessions.get(self.ctx(), sid(self.repo, "s1"))
+        card = plan.add(self.ctx(), "Rewrite the app module", paths=["app.py"],
+                        done_when="the suite passes")
+        plan.claim(self.ctx(), card.id, rec.session_id, self.ctx().branch)
+        [filed] = self.finish_unverified("поставь на паузу все на 4 часа")
+        self.assertEqual("Rewrite the app module", filed.title)
+
+    def test_with_no_card_it_is_the_branchs(self):
+        [filed] = self.finish_unverified("поставь на паузу все на 4 часа")
+        self.assertNotIn("паузу", filed.title)
+        self.assertIn("unverified finish on", filed.title)
 
 
 class TestCLI(AttemptCase):
