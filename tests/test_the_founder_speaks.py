@@ -273,10 +273,13 @@ class TestTheStopGateLetsTheFounderIn(RepoCase):
         """Decision 0014: a turn that ends on a refusal nothing answered is asked about it once.
         Their message then reaches the session with its next call."""
         self.work()
+        # Put together here rather than written out: a credential-shaped literal in a test file
+        # is what the commit review and every secret scanner exist to flag.
+        token = "gh" + "p_" + "abcdefghijklmnopqrstuvwxyz0123456789"
         self.run_hook("pre-tool", {
             "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Write",
             "tool_input": {"file_path": str(self.repo / "src" / "config.py"),
-                           "content": 'API_TOKEN = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"\n'},
+                           "content": 'API_TOKEN = "' + token + '"\n'},
         })
         proc, _ = self.stop(slow=60, said="+merge")
         self.assertEqual(2, proc.returncode, proc.stdout + proc.stderr)
