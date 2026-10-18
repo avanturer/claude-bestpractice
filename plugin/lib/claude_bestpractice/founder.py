@@ -374,12 +374,18 @@ class Listener:
     Reads only what the harness appends after that moment, a line at a time and only once it
     is complete, so a message half written is read on the next look. Never raises: a
     transcript that cannot be read, or reads in a shape this does not know, has said nothing.
+
+    After the turn (`after_the_turn`) the session counts as well. There the founder's message
+    reaches an idle session as a turn of its own rather than a queued one, and a session woken
+    by anything else, a task's notification among them, is at work in the tree the run judges.
     """
 
-    def __init__(self, transcript_path: str) -> None:
+    def __init__(self, transcript_path: str, after_the_turn: bool = False) -> None:
         self._path = Path(transcript_path) if transcript_path else None
         self._offset = self._size()
         self._heard = False
+        self._after_the_turn = after_the_turn
+        self._since = time.time()
 
     def _size(self) -> int:
         try:
@@ -404,9 +410,29 @@ class Listener:
             self._offset += len(fresh)
             return False
         self._offset += len(whole)
-        self._heard = any(_queued_by_the_founder(line) for line in whole.splitlines()
-                          if _QUEUED_BY_SOMEONE in line)
+        self._heard = any(self._spoken(line) for line in whole.splitlines())
         return self._heard
+
+    def _spoken(self, line: bytes) -> bool:
+        if _QUEUED_BY_SOMEONE in line:
+            return _queued_by_the_founder(line)
+        return self._after_the_turn and _the_session_went_on(line, self._since)
+
+
+def _the_session_went_on(raw: bytes, since: float) -> bool:
+    """Is this line, stamped since the run began, the founder's message or the session at work
+    again? The turn's own last message can reach the file late, and is stamped before."""
+    try:
+        entry = json.loads(raw)
+    except ValueError:
+        return False
+    if not isinstance(entry, dict) or _moment(entry.get("timestamp")) < since:
+        return False
+    if entry.get("type") == "assistant":
+        return True
+    message = entry.get("message")
+    return entry.get("type") == "user" and isinstance(message, dict) \
+        and bool(founders_word(_text_of(message.get("content"))).strip())
 
 
 def _queued_by_the_founder(raw: bytes) -> bool:

@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+"""Stop, after the turn: the Stop gate as Claude Code runs it in the background (`asyncRewake`).
+
+Its own name rather than `evidence-gate --after-the-turn` because a hook command is one word to
+the shell: anything after the quoted path is a second word, and the install path is the part
+that holds spaces. It is the same gate, told it runs after the turn, where a refusal or a
+question wakes the session instead of holding a turn that is already over (decision 0046).
+"""
+
+import runpy
+import sys
+from pathlib import Path
+
+sys.argv[1:] = ["--after-the-turn"]
+runpy.run_path(str(Path(__file__).resolve().with_name("evidence-gate")), run_name="__main__")

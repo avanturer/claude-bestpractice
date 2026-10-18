@@ -1,11 +1,18 @@
 # Changelog
 
-## v2.5.3
+## v2.6.0
 
-A second pull request opened on a branch is a new one, and a `+merge` the founder said for the
-first no longer merges it.
+The Stop gate checks after the turn, in the background: the founder can write to the session the
+moment it answers, and a refusal or a question wakes the session instead of holding the turn. A
+second pull request opened on a branch is a new one, and a `+merge` the founder said for the first
+no longer merges it.
 
 ### What broke
+
+**The founder could not write while the gate ran the suite.** The gate held the turn open for the
+whole run, minutes in fuddy and the hook's quarter hour in this repository, and the client the
+founder works in takes no message while a hook holds the turn. 2.5.0 stopped the run for a
+message typed during it (#277); in that client there was no message to hear.
 
 **A `+merge` said for #279 merged #280.** #279 merged where no hook here heard it, so its
 record stayed open. #280, opened on the same branch, was stamped onto that record and took over
@@ -14,12 +21,21 @@ when it had been opened, and the founder's acceptance of its finish with it: the
 
 ### What changed
 
+- Claude Code runs the Stop gate once the turn is over (`asyncRewake`), with an hour for the run.
+  What it refuses, asks or hands off wakes the session with an exit of 2, and a finish it lets go
+  is recorded as before (decision 0046).
+- A run stops as soon as the founder writes to the idle session or the session goes back to work
+  for any other reason, and is recorded as cut short, as one stopped for the founder's message is
+  (decision 0044).
+- A `claude -p` whose process ends with its turn stops the gate with it; its work is judged by the
+  green a merge needs.
 - A pull request opened on a branch whose open record names another number settles that record
   and is filed as opened now. GitHub keeps one open pull request per head and base, so the first
   has been merged or closed by then. A word said before the second was opened does not name it
   (decision 0023).
 
-No `migrate._REPAIRS` step: a record that took over another's number cannot be told apart now.
+No `migrate._REPAIRS` step: nothing on disk changes meaning, the hook entry changes with the
+plugin, and a record that took over another's number cannot be told apart now.
 
 ## v2.5.2
 

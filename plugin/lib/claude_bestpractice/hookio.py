@@ -301,6 +301,21 @@ def emit_silent(note: str = "") -> NoReturn:
     raise SystemExit(OK)
 
 
+# Whether this process is a Stop gate Claude Code runs once the turn has ended (`asyncRewake`).
+_AFTER_THE_TURN = False
+
+
+def after_the_turn() -> None:
+    """Mark this process as running after the turn, where `ask` wakes the session instead.
+
+    Claude Code runs the Stop gate in the background so that the founder can write while it
+    checks: a client that takes no message while a hook holds the turn left them waiting out
+    the whole suite (#277's fix stopped the run for a message they could not send).
+    """
+    global _AFTER_THE_TURN
+    _AFTER_THE_TURN = True
+
+
 def block(reason: str) -> NoReturn:
     """Stop the action and hand `reason` to the model.
 
@@ -335,7 +350,12 @@ def ask(reason: str, note: str = "") -> NoReturn:
     at session start and exactly the wrong one here — this is the gate's own voice asking
     for an action. Callers keep interpolated repository text short and bounded for the
     same reason.
+
+    After the turn (`after_the_turn`) there is no turn to continue: Claude Code reads that
+    response only with the next one, and only an exit of 2 wakes the session to act on it.
     """
+    if _AFTER_THE_TURN:
+        block(reason)
     payload: dict[str, Any] = {
         "hookSpecificOutput": {
             "hookEventName": "Stop",

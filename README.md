@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-2.5.3-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.6.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-2541%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -250,13 +250,16 @@ is never asked twice. A red run names its first broken test and keeps its report
 at most `witness_cpus` CPUs, four unless you say otherwise (`0` is all of them), so one Stop
 does not start a jest worker per core while the other sessions on the machine run theirs.
 
-**What you type is not held behind it.** The suite runs while the turn is still open, and a
-message you send meanwhile used to wait for the whole run. Now the run stops within a second of
-your typing, and unless the gate has something else to refuse, the turn ends for your message;
-if it has, your message reaches the session with its next step. A message that is only a paste
+**You are never held behind it.** The gate checks after the turn has ended, in the background,
+so you can write to the session the moment it answers; a client that takes no message while a
+hook holds the turn used to keep you out for the whole suite. When the gate has something to
+refuse, or a question to ask, it wakes the session with it. Your message, or the session going
+back to work for any other reason, stops a run within a second. A message that is only a paste
 or a code block does not count as you speaking. A run stopped that way proves nothing either
 way, so a merge waits until one finishes, at the session's next finish or on `git push` where
-the pre-push hook is installed, unless the suite already passed on exactly that tree.
+the pre-push hook is installed, unless the suite already passed on exactly that tree. A
+`claude -p` whose process ends with its turn takes the check with it: its work is judged where
+it lands, by the green a merge needs.
 
 It also escalates rather than wedging: after four blocked attempts it records an
 unverified finish and lets the turn end, because a gate that blocks a founder's workflow

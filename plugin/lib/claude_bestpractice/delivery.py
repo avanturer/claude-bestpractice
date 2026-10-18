@@ -165,8 +165,8 @@ def _test_health(ctx: GitContext) -> str:
         return red
     if evidence.cut_short(ctx):
         # A green from before it is not about the work it was stopped judging (#277).
-        return ("Tests: the gate's last run was stopped when the founder wrote, and nothing "
-                "has passed on the latest work since.")
+        return ("Tests: the gate's last run was stopped when the founder wrote or the session "
+                "went back to work, and nothing has passed on the latest work since.")
     if evidence.last_green(ctx):
         return "Tests: green (observed by the gate)."
     # "NEVER RUN" was said of branches whose suite had just run, at length, inside this

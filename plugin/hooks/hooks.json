@@ -1,6 +1,6 @@
 {
   "$comment": [
-    "Eleven entries across ten events. Budget is 12 for the whole plugin; a thirteenth requires deleting one.",
+    "Twelve entries across ten events. Budget is 12 for the whole plugin; a thirteenth requires deleting one.",
     "",
     "PROTOCOL, because these are the cheap ways to ship a gate that enforces nothing:",
     "  - Exit 2 blocks. Exit 1 is a NON-blocking error and the tool RUNS.",
@@ -171,11 +171,23 @@
     ],
     "Stop": [
       {
+        "$comment": [
+          "After the turn, so the founder can write while the suite runs: a client that takes",
+          "no message while a hook holds the turn kept them out of the session for all of it,",
+          "and the run their message would have stopped (#277) never heard one. A refusal or",
+          "a question wakes the session (exit 2); a message from the founder, or the session",
+          "at work again, stops the run. An hour, because nobody waits on it now.",
+          "",
+          "A `claude -p` whose process ends with its turn stops this hook with it: its finish",
+          "is judged where it lands instead, since a merge needs a green run (decision 0046)."
+        ],
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/evidence-gate\"",
-            "timeout": 900,
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/evidence-gate-after-the-turn\"",
+            "timeout": 3600,
+            "asyncRewake": true,
+            "rewakeMessage": "claude-bestpractice checked the finished turn.",
             "statusMessage": "claude-bestpractice: verifying"
           }
         ]
