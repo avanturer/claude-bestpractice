@@ -44,7 +44,10 @@ def main() -> None:
     # most other lines the process, and where that is not honoured this spares them the rest.
     if event.tool_name == "Bash" and not (merges or pullrequest.opens_a_pull_request("Bash", command)):
         hookio.emit_silent()
-    ctx = hookio.repo(event.cwd or os.getcwd())
+    # Placed as pre-tool placed it, or a merge it let through from outside the repository is
+    # judged there and settled nowhere.
+    event = hookio.placed(event)
+    ctx = hookio.repo(event.place)
     # It files and settles obligations now, so it stands down where pre-tool does: with the
     # pull-request flow switched off, and with the plugin switched off (decision 0016).
     if not (config.enforcing(ctx)[0] and config.load(ctx).manage_pull_requests):

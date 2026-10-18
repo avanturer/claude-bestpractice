@@ -1,5 +1,38 @@
 # Changelog
 
+## v2.5.2
+
+From outside every repository, a session is the session of the tree it last worked in: the
+founder's word typed there is heard, a merge from there is judged with the word said in the
+tree and settled once it has run, and a tree that is gone no longer lets a call through
+unjudged.
+
+### What broke
+
+**2.5.1 judged a call from outside, and nothing else looked.** Only the tool-call gate placed a
+call away from the shell's directory, and there the session was the bare harness id, which holds
+none of its records. The founder's `+merge` typed while the shell stood in `/home/user` was
+dropped, a merge from there was refused for want of the word said in the tree, and nothing
+settled one that ran: #279, merged from `/home/user`, stayed open on the board with its card in
+`doing`.
+
+**A tree that is gone named no repository.** A worktree removed while the transcript or the
+project still named it, a directory a write was about to make, and a shell standing inside
+`.git` were taken as they were. None of them is a working tree git can answer for, so the call
+went through unjudged, as before 2.5.1.
+
+### What changed
+
+- `pre-tool`, `pr-opened` and `prompt-capture` place a call the same way, and the session is
+  known there by that tree: the word, the pull requests and the cards are the ones it holds
+  there (decision 0045).
+- A directory gone from disk is read as the tree that holds it: a removed worktree as its
+  clone, a directory a write is about to make as its repository, a place inside `.git` as its
+  working tree.
+
+No `migrate._REPAIRS` step: a pull request a merge from outside left open is settled by
+`reconcile` once its work is on the trunk or its branch is gone (decision 0038).
+
 ## v2.5.1
 
 The tool-call gate judges a call by the repository it acts on, not only by where the shell

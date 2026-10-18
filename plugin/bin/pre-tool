@@ -1385,35 +1385,14 @@ def _without_environment(literal: str, segment: str) -> str:
     return "".join(out)
 
 
-def _where_it_acts(event: hookio.HookEvent) -> str:
-    """The directory whose repository judges this call: where the shell stands; from outside
-    every repository, the first place in one that the call writes; else the project the session
-    was started in; else the last directory in a repository the session worked in.
+def _written(event: hookio.HookEvent, cwd: str) -> list[Path]:
+    """The absolute paths this call writes or deletes, as the rules below read them: from
+    outside every repository, the first of them in one places the call there.
 
     Read off the shell alone, a session left standing in `/home/user` was outside every rule:
     `rm <tree>/.claude/claude-bestpractice/failing-suite.json` went through, and a merge with the
     GitHub tool was judged by nothing, which is how 2.4.1's own release merged over a red record.
     """
-    cwd = event.cwd or os.getcwd()
-    if _repository_holds(cwd):
-        return cwd
-    for target in _written(event, cwd):
-        if _repository_holds(str(target.parent)):
-            return str(target.parent)
-    for place in (os.environ.get("CLAUDE_PROJECT_DIR", ""), _last_worked_in(event.transcript_path)):
-        if place and _repository_holds(place):
-            return place
-    return cwd
-
-
-def _repository_holds(place: str) -> bool:
-    """Is `place`, or the nearest directory above it that exists, inside a git working tree?"""
-    path = Path(place)
-    return any((parent / ".git").exists() for parent in (path, *path.parents))
-
-
-def _written(event: hookio.HookEvent, cwd: str) -> list[Path]:
-    """The absolute paths this call writes or deletes, as the rules below read them."""
     ti = event.tool_input
     if event.tool_name in WRITE_TOOLS and ti.get("file_path"):
         target = _resolve(Path(cwd), str(ti["file_path"]))
@@ -1423,33 +1402,10 @@ def _written(event: hookio.HookEvent, cwd: str) -> list[Path]:
     return []
 
 
-# How much of a transcript's end is read for the last directory a session worked in.
-_LAST_CWD_BYTES = 1024 * 1024
-_CWD_FIELD = re.compile(r'"cwd"\s*:\s*"((?:[^"\\]|\\.)*)"')
-
-
-def _last_worked_in(transcript_path: str) -> str:
-    """The last directory in a repository the transcript says this session worked in. "" when
-    it says none, or cannot be read: its format is the harness's own."""
-    try:
-        with open(transcript_path, "rb") as handle:
-            handle.seek(max(os.path.getsize(transcript_path) - _LAST_CWD_BYTES, 0))
-            tail = handle.read().decode("utf-8", errors="replace")
-    except (OSError, ValueError):
-        return ""
-    for raw in reversed(_CWD_FIELD.findall(tail)):
-        try:
-            place = json.loads(f'"{raw}"')
-        except ValueError:
-            continue
-        if _repository_holds(place):
-            return place
-    return ""
-
-
 def main() -> None:
-    event = hookio.read_event()
-    ctx = hookio.repo(_where_it_acts(event))
+    heard = hookio.read_event()
+    event = hookio.placed(heard, functools.partial(_written, heard))
+    ctx = hookio.repo(event.place)
     cfg = config.load(ctx)
 
     # Off means off, on this call rather than after a restart. The harness reads
