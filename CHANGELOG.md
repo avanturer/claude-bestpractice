@@ -1,5 +1,34 @@
 # Changelog
 
+## v2.5.1
+
+The tool-call gate judges a call by the repository it acts on, not only by where the shell
+stands, and a `TODO` inside a Python string is no longer unfinished work.
+
+### What broke
+
+**From outside every repository, nothing was judged.** The gate found its repository from the
+shell's directory and stood down when that was none. A session left standing in `/home/user`
+deleted `.claude/claude-bestpractice/failing-suite.json` of a clone by absolute path, one of
+the records no session may touch, and a merge with the GitHub tool from there was judged by
+nothing: 2.4.1's own release merged that way, over a red record still on its branch.
+
+**A fixture was refused as unfinished work.** The marker check read lines as text, so a test
+writing `"x = 1  # TODO: fix this"` into a throwaway repository was refused at Stop, and the
+turn was let go UNVERIFIED over it.
+
+### What changed
+
+- From outside every repository, a call is judged by the repository of the first path it
+  writes or deletes; failing that, the project the session was started in
+  (`CLAUDE_PROJECT_DIR`); failing that, the last directory in a repository the session's
+  transcript says it worked in. A call that touches no repository is still none of the gate's
+  business (decision 0045).
+- In Python, `bare-todo` and `placeholder-return` count only on lines that hold a comment, read
+  with `tokenize`; a file that does not tokenize is read as text, as before.
+
+No `migrate._REPAIRS` step: nothing on disk changes meaning.
+
 ## v2.5.0
 
 `+merge` answers what the chat put in front of the founder: each pull request it showed them by

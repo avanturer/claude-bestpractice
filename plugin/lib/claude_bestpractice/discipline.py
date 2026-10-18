@@ -162,17 +162,52 @@ def scan(root: Path, relpaths: list[str]) -> list[Finding]:
         source = _read(path)
         if not source:
             continue
+        comments = None
         if path.suffix == ".py":
             out.extend(python_stubs(source, rel))
-        for line_number, line in enumerate(source.splitlines(), 1):
-            for kind, pattern in _MARKERS[:3]:
-                if pattern.search(line):
-                    out.append(Finding(rel, line_number, kind, line.strip()))
+            comments = _python_comments(source)
+        out.extend(_line_markers(rel, source, comments))
         block = _MARKERS[3][1].search(source)
         if block:
             line_number = source[: block.start()].count("\n") + 1
             out.append(Finding(rel, line_number, "commented-out-block", "3+ commented-out code lines"))
     return out
+
+
+# The markers that are a comment's words. In Python they count only where a comment holds them:
+# a test writing a bare to-do comment, as a string, into a throwaway repository was refused as
+# unfinished work, and its turn let go UNVERIFIED over a fixture.
+_COMMENT_MARKERS = ("bare-todo", "placeholder-return")
+
+
+def _python_comments(source: str) -> set[int] | None:
+    """The lines of Python source that hold a comment. None where it does not tokenize, and the
+    lines are then read as text, as before."""
+    import io
+    import tokenize
+
+    lines: set[int] = set()
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(source).readline):
+            if token.type == tokenize.COMMENT:
+                lines.add(token.start[0])
+    except (tokenize.TokenError, SyntaxError):
+        return None
+    return lines
+
+
+def _line_markers(rel: str, source: str, comments: set[int] | None) -> list[Finding]:
+    """The markers read line by line, each kept where it counts (`_said_in_code`)."""
+    return [Finding(rel, number, kind, line.strip())
+            for number, line in enumerate(source.splitlines(), 1)
+            for kind, pattern in _MARKERS[:3]
+            if pattern.search(line) and _said_in_code(kind, number, comments)]
+
+
+def _said_in_code(kind: str, line_number: int, comments: set[int] | None) -> bool:
+    """Does a marker of `kind` found on this line stand where it counts: a comment's marker in a
+    comment, where the comments of the file are known?"""
+    return comments is None or kind not in _COMMENT_MARKERS or line_number in comments
 
 
 def introduced(ctx: GitContext, relpaths: list[str], baseline: str,
