@@ -27,7 +27,7 @@ import json  # noqa: E402
 import re  # noqa: E402
 import shlex  # noqa: E402
 
-from claude_bestpractice import ci, config, evidence, founder, gitpolicy, hookio, inbox, pullrequest, redact, sessions, shellcmd, stage, store, subagents, vouch, worktree  # noqa: E402
+from claude_bestpractice import ci, config, evidence, founder, gitpolicy, hookio, inbox, pullrequest, redact, search, sessions, shellcmd, stage, store, subagents, vouch, worktree  # noqa: E402
 from claude_bestpractice.gitctx import resolve  # noqa: E402
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
@@ -1435,6 +1435,18 @@ def main() -> None:
                 ctx, event.tool_name, "", event.tool_input, event.cwd or str(ctx.worktree_root)))
         hookio.emit_silent()
 
+    # A query is read by whoever runs the engine it goes to, so a credential in it is refused
+    # before it leaves, whichever tool carries it. Parallel's and Exa's then run unasked: the
+    # plugin ships them and sends the harness's WebSearch through them (decision 0049).
+    if search.judged(event.tool_name):
+        leaked = search.secrets_in(event.tool_input)
+        if leaked:
+            hookio.deny_tool(search.refusal(event.tool_name, leaked) + REFUSAL_IS_YOURS)
+        if search.vouched(event.tool_name):
+            hookio.allow_tool("claude-bestpractice: a search through Parallel or Exa, with no "
+                              "credential in it.")
+        hookio.emit_silent()
+
     rec = sessions.get(ctx, event.session_id)
     if rec is None:
         # No record means SessionStart never ran, or something deleted it. Re-register
@@ -1708,10 +1720,11 @@ def main() -> None:
                 pr_branch = str(gated.get("branch") or "")
                 # The pull request's own head, not the tree this session is standing in.
                 problems = pullrequest.blockers(here, base, pr_branch)
-                if pullrequest.awaits_the_founder(problems):
-                    # Their word on the finish may be in the transcript and nowhere else: sent
-                    # while the session worked, it reached no hook, and the word already on
-                    # record covered this merge, so `covered` never read it back (#268).
+                if pullrequest.awaits_the_founder(problems) or pullrequest.findings_in(problems):
+                    # Their word on the finish, or on a finding, may be in the transcript and
+                    # nowhere else: sent while the session worked, it reached no hook, and the
+                    # word already on record covered this merge, so `covered` never read it
+                    # back (#268, #283).
                     founder.catch_up(ctx, event.session_id, event.transcript_path)
                     problems = pullrequest.blockers(here, base, pr_branch)
                 if problems:

@@ -606,7 +606,7 @@ def blockers(ctx: GitContext, base: str, head: str = "") -> list[str]:
         else _about_the_pull_request(ctx, base, branch)
     )
     problems = _with_the_founders_word(ctx, branch, problems)
-    problems.extend(_findings(ctx, base, branch))
+    problems.extend(_not_merged_past(ctx, branch, _findings(ctx, base, branch)))
     return problems
 
 
@@ -644,6 +644,13 @@ REFUSED = "refused_at"
 # session it was put to: the chat the founder's next word is said in.
 SHOWN_ON = "unverified_shown_head"
 SHOWN_TO = "shown_to"
+
+# The review findings a refusal or a hand-off last listed, as it listed them, and those the
+# founder's `+merge` after it took off this pull request's list.
+SHOWN_FINDINGS = "findings_shown"
+FINDINGS_ACCEPTED = "findings_accepted"
+# A review finding as `_findings` lists it among a merge's blockers.
+_FINDING = re.compile(r"^\d+ review finding\(s\): ")
 
 
 def _finish_accepted(ctx: GitContext, branch: str, record: dict[str, Any]) -> bool:
@@ -695,6 +702,28 @@ def _accept_its_finish(ctx: GitContext, record: dict[str, Any], said: float) -> 
         _write(ctx, {**record, FINISH_ACCEPTED: said, FINISH_ACCEPTED_ON: head})
 
 
+def _accept_its_findings(ctx: GitContext, branch: str, said: float) -> None:
+    """Record the founder's word, said at `said`, as their decision on the review findings a
+    refusal or a hand-off listed to them before it.
+
+    A finding is a rule's claim about the code, and whether a pull request merges with it
+    standing is the founder's to say, as it is for an UNVERIFIED finish. The refusal promised
+    the merge "as soon as the list above is empty", and nothing but rewriting the code to dodge
+    the rule emptied it: a guard on a new test was flagged, the founder said `+merge` after
+    reading it, and the merge was refused again with the same list (#283). Kept for the pull
+    request, not its commit: a finding is about a file, and merging the base into the branch
+    leaves it where the founder saw it. One the list did not carry is put to them in its turn.
+    """
+    from . import delivery
+
+    record = _records(ctx).get(branch) or {}
+    shown = [str(text) for text in record.get(SHOWN_FINDINGS) or []]
+    seen_at = max(delivery.stamp(record.get("handed_off_at")), delivery.stamp(record.get(REFUSED)))
+    if shown and 0 < seen_at <= said:
+        accepted = sorted({*(str(text) for text in record.get(FINDINGS_ACCEPTED) or []), *shown})
+        _write(ctx, {**record, FINDINGS_ACCEPTED: accepted})
+
+
 def _shown_on(record: dict[str, Any], head: str) -> bool:
     """Whether `head` is the commit the founder was last shown "carries an UNVERIFIED finish" at.
 
@@ -734,10 +763,16 @@ def note_refusal(ctx: GitContext, branch: str, head: str = "", problems: list[st
         _write(ctx, {**record, REFUSED: time.time(), **_shown(head, problems or [], session_id)})
 
 
-def _shown(head: str, problems: list[str], session_id: str) -> dict[str, str]:
+def _shown(head: str, problems: list[str], session_id: str) -> dict[str, Any]:
     """What a refusal or a hand-off put to the founder: the commit, when it listed an UNVERIFIED
-    finish, and the session it reached."""
-    return {SHOWN_ON: head if awaits_the_founder(problems) else "", SHOWN_TO: session_id}
+    finish, the review findings it listed, and the session it reached."""
+    return {SHOWN_ON: head if awaits_the_founder(problems) else "", SHOWN_TO: session_id,
+            SHOWN_FINDINGS: findings_in(problems)}
+
+
+def findings_in(problems: list[str]) -> list[str]:
+    """The review findings among a merge's blockers, which the founder's word can take off it."""
+    return [problem for problem in problems if _FINDING.match(problem)]
 
 
 def awaits_the_founder(problems: list[str]) -> bool:
@@ -791,6 +826,13 @@ def _findings(ctx: GitContext, base: str, branch: str) -> list[str]:
             continue
         out.append(text[:200])
     return out
+
+
+def _not_merged_past(ctx: GitContext, branch: str, findings: list[str]) -> list[str]:
+    """`findings` without those the founder merged past, having been shown them
+    (`_accept_its_findings`)."""
+    accepted = set((_records(ctx).get(branch) or {}).get(FINDINGS_ACCEPTED) or [])
+    return [text for text in findings if text not in accepted]
 
 
 def _all_dismissed(ctx: GitContext, text: str, subjects: list[str]) -> bool:
@@ -915,8 +957,17 @@ def merge_refusal(record: dict[str, Any], problems: list[str]) -> str:
         "assertion, widen a tolerance, revert the change that surfaced the problem — and "
         "which one is acceptable is the founder's call, not yours.\n"
         "Once they have decided, this gate allows the merge as soon as the list above is "
-        f"empty.{_how_a_finish_is_decided(problems)}"
+        f"empty.{_how_a_finish_is_decided(problems)}{_how_findings_are_decided(problems)}"
     )
+
+
+def _how_findings_are_decided(problems: list[str]) -> str:
+    """The word that takes the review findings a merge's list carries off it."""
+    if not findings_in(problems):
+        return ""
+    return ("\nA review finding listed here is theirs to merge past as it stands: a `+merge` they "
+            "send after seeing this takes it off this pull request's list. One they rule false "
+            "for good is `claude-bp dismiss <rule> <path>`, run when they ask for it.")
 
 
 def _how_a_finish_is_decided(problems: list[str]) -> str:
@@ -1755,6 +1806,7 @@ def accept_merges(ctx: GitContext, approvals: dict[str, str],
     shown_here = {entry for entry, record in still_open.items() if ours(record.get(SHOWN_TO))}
     for entry in sorted(named | shown_here):
         _accept_its_finish(ctx, still_open[entry], said)
+        _accept_its_findings(ctx, str(still_open[entry].get("branch") or ""), said)
     named |= _shown_before(ctx, session_id, said, still_open)
     if not named:
         return approvals

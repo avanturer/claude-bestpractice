@@ -2,6 +2,7 @@
 description: Review the current diff with a fresh-context agent that cannot edit
 argument-hint: "[baseline ref, defaults to the session baseline]"
 allowed-tools: Bash(git:*), Task
+disable-model-invocation: true
 ---
 
 Baseline: $1

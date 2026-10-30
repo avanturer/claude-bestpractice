@@ -200,10 +200,13 @@ class Witnessed:
         return self.executed == 0 and self.failed == 0 and self.returncode in quiet
 
 
-def _python_has_pytest() -> bool:
-    probe = subprocess.run(
-        ["python3", "-c", "import pytest"], capture_output=True, timeout=60
-    )
+def _has_pytest(python: list[str]) -> bool:
+    """Whether `python`, as `python_for` starts it, can import pytest."""
+    try:
+        probe = subprocess.run([*python, "-c", "import pytest"], capture_output=True,
+                               stdin=subprocess.DEVNULL, timeout=PROBE_SECONDS)
+    except (OSError, subprocess.SubprocessError):
+        return False
     return probe.returncode == 0
 
 
@@ -213,12 +216,72 @@ def detect(root: Path) -> str:
     Deliberately narrow. A runner belongs here only when it can be told, on the command
     line, to write a machine-readable report to an arbitrary absolute path — that is the
     property that takes the project's own build files out of the loop.
+
+    pytest is asked of each interpreter the projects under `root` run their tests with, so a
+    project whose own environment has it is driven even where the `python3` on PATH has not.
     """
-    if shutil.which("python3") and _has_python_tests(root) and _python_has_pytest():
+    if _has_python_tests(root) and any(_has_pytest(python) for python in _interpreters(root)):
         return "pytest"
     if (root / "go.mod").exists() and shutil.which("go"):
         return "go"
     return ""
+
+
+# How long asking an interpreter whether it has pytest may take. `uv run` syncs the project's
+# environment before it answers, which the run that follows would have waited for anyway.
+PROBE_SECONDS = 120
+
+# Where a project keeps its own environment, beside the configuration its tests are run with.
+_VENVS = (".venv", "venv")
+
+
+def python_for(home: Path, top: Path) -> list[str]:
+    """How to start Python for the tests under `home`, read from `home` up to `top`.
+
+    The project's own environment, as its tests are run there: `uv run --frozen python` in a
+    uv project, the interpreter of a virtual environment kept beside the configuration, and
+    `python3` only where there is neither. Driven with whatever `python3` the PATH found
+    first, a uv project in `backend/` collected nothing past `No module named 'sqlalchemy'`,
+    and the gate filed two failing of two over a suite that `uv run pytest` passed 33 of 33
+    (#282). `--frozen`, because the lockfile is the project's: a gate that rewrote it would
+    be writing the diff it judges.
+    """
+    for here in _upward(home, top):
+        if (here / "uv.lock").is_file() and shutil.which("uv"):
+            return ["uv", "run", "--frozen", "python"]
+        found = _venv_python(here)
+        if found is not None:
+            return [str(found)]
+    return ["python3"]
+
+
+def _upward(home: Path, top: Path) -> list[Path]:
+    """`home`, then each directory above it up to `top`; `home` alone when it is not under `top`."""
+    if top not in home.parents:
+        return [home]
+    return [home, *(above for above in home.parents if above == top or top in above.parents)]
+
+
+def _venv_python(directory: Path) -> Path | None:
+    """The interpreter of the virtual environment kept in `directory`, if one is."""
+    for name in _VENVS:
+        venv = directory / name
+        if not (venv / "pyvenv.cfg").is_file():
+            continue
+        for python in (venv / "bin" / "python", venv / "Scripts" / "python.exe"):
+            if python.is_file():
+                return python
+    return None
+
+
+def _interpreters(root: Path) -> list[list[str]]:
+    """Each way the projects under `root` start Python, `root`'s own first, once each."""
+    found: list[list[str]] = []
+    for home in projects(root):
+        python = python_for(home, root)
+        if python not in found:
+            found.append(python)
+    return found
 
 
 # What makes a shared config file pytest's, rather than a file that merely exists:
@@ -647,16 +710,18 @@ def _run_pytest(ctx: GitContext, scratch: Path, env: dict[str, str] | None,
         pinned = _pytest_config(home, scratch, ctx.worktree_root)
         cache = scratch / f"cache-{len(runs)}"
         env_of_run = {**(env or {}), "PYTEST_ADDOPTS": ""}
+        python = python_for(home, ctx.worktree_root)
         try:
-            proc = _spawn(ctx, _pytest_argv(pinned, report, ignored, cache), env_of_run, home, left)
+            proc = _spawn(ctx, _pytest_argv(python, pinned, report, ignored, cache), env_of_run,
+                          home, left)
         except RanOutOfTime:
             raise RanOutOfTime(budget) from None
         seen = _reported(proc, report)
         if seen is None:
             return None
         again = report.with_name(f"again-{report.name}")
-        runs.append((home, _once_more(ctx, _pytest_argv(pinned, again, ignored, cache), again,
-                                      env_of_run, home, until - time.monotonic(), seen)))
+        runs.append((home, _once_more(ctx, _pytest_argv(python, pinned, again, ignored, cache),
+                                      again, env_of_run, home, until - time.monotonic(), seen)))
     return _together(ctx.worktree_root, runs)
 
 
@@ -691,8 +756,10 @@ def _once_more(ctx: GitContext, argv: list[str], report: Path, env: dict[str, st
     return replace(seen, returncode=0, failed=0, errors=0, recovered=seen.errors)
 
 
-def _pytest_argv(config: Path, report: Path, ignored: list[Path], cache: Path) -> list[str]:
-    """One pytest run as this gate drives it, pinned to `config`, leaving `ignored` alone.
+def _pytest_argv(python: list[str], config: Path, report: Path, ignored: list[Path],
+                 cache: Path) -> list[str]:
+    """One pytest run as this gate drives it, under `python`, pinned to `config`, leaving
+    `ignored` alone.
 
     `-o addopts=` and an empty PYTEST_ADDOPTS neutralise the one-line attack: a single
     `addopts = -k "not price"` or `--ignore=tests/test_total.py` in a config file the gate was
@@ -708,7 +775,7 @@ def _pytest_argv(config: Path, report: Path, ignored: list[Path], cache: Path) -
     nothing a session could have written there first.
     """
     return [
-        "python3", "-m", "pytest", "-q",
+        *python, "-m", "pytest", "-q",
         "-c", str(config),
         "-o", "addopts=",
         "-o", f"cache_dir={cache}",

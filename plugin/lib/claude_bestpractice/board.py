@@ -205,7 +205,8 @@ def _sessions_block(ctx: GitContext, others: list[SessionRecord], leases: dict,
     if not others:
         return ["OTHER LIVE SESSIONS: none. This session is alone on the repository."]
 
-    out = [f"OTHER LIVE SESSIONS ({len(others)}) — do not edit files they hold:"]
+    out = [f"OTHER LIVE SESSIONS ({len(others)}) — do not edit files they hold; SendMessage "
+           "reaches each by the name its row starts with:"]
     for rec in sorted(others, key=lambda r: r.heartbeat_at, reverse=True):
         out.append(
             f"  - {sessions.label(rec)} on {rec.branch} "
@@ -219,6 +220,32 @@ def _sessions_block(ctx: GitContext, others: list[SessionRecord], leases: dict,
         if task:
             out.append(f"      task: {task[:120]}")
     return out
+
+
+def roster(ctx: GitContext, harness_id: str) -> str:
+    """What each other live session on this repository is doing, each by the name `SendMessage`
+    takes. "" when no other is live.
+
+    For the moment a session lists the agents it can message (decision 0050). The board names
+    them once, at the session's start, so a session started later was a name with no work
+    against it, and a session with something to say sent it to every agent it could list.
+    Asked fresh here, names included, and only then: `claude agents --json` takes a third of a
+    second, which a listing can afford and a tool call cannot (decision 0028).
+    """
+    from . import hookio
+
+    running = sessions.running()
+    sessions.learn_names(ctx, running)
+    others = [rec for rec in sessions.one_per_session(sessions.live_sessions(ctx, live=running))
+              if not harness_id or hookio.harness_of(rec.session_id, rec.worktree) != harness_id]
+    if not others:
+        return ""
+    rows = [f"  - {rec.name or rec.session_id[:8]}: {doing(ctx, rec)[:100] or 'no card yet'} "
+            f"(branch {rec.branch}, tree {Path(rec.worktree).name})"
+            for rec in sorted(others, key=lambda r: r.heartbeat_at, reverse=True)]
+    return (f"What each session on {ctx.worktree_root.name} is doing, from claude-bestpractice's "
+            "board. Send to the one whose work it is, by the name its row starts with:\n"
+            + "\n".join(rows))
 
 
 def doing(ctx: GitContext, rec: SessionRecord) -> str:

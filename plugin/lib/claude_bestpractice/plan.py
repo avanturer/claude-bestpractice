@@ -639,7 +639,7 @@ def reconcile_copies(ctx: GitContext) -> int:
         for copy in copies(ctx, task.id):
             if STATES.index(copy.state) >= STATES.index(task.state):
                 continue
-            if _move(copy, task.state, owner=copy.owner, branch=copy.branch) is not None:
+            if _move_if_there(copy, task.state, owner=copy.owner, branch=copy.branch) is not None:
                 moved += 1
     return moved
 
@@ -654,7 +654,7 @@ def _move_every(ctx: GitContext, task_id: str, state: str, **kwargs) -> Task | N
     """
     landed: Task | None = None
     for copy in copies(ctx, task_id):
-        moved = _move(copy, state, **kwargs)
+        moved = _move_if_there(copy, state, **kwargs)
         if moved is not None and (landed is None or (landed.worktree and not copy.worktree)):
             landed = moved
     return landed
@@ -817,6 +817,20 @@ def _move(task: Task, state: str, owner: str = "", branch: str = "",
     return moved
 
 
+def _move_if_there(task: Task, state: str, **kwargs) -> Task | None:
+    """`_move`, or None when a sibling moved or removed the card since it was read.
+
+    The sweeps a session start runs read every card first and move some of them after, with
+    no lock: a sibling moving one in between ended the hook with `FileNotFoundError`, on the
+    founder's machine on 2.3.0 and again on 2.6.0, and that session's board never built. The
+    card is the sibling's to have moved; `claim` reads it again instead, under its lock.
+    """
+    try:
+        return _move(task, state, **kwargs)
+    except FileNotFoundError:
+        return None
+
+
 IDLE_HOURS = 24.0
 
 
@@ -879,8 +893,7 @@ def sweep_idle(ctx: GitContext, hours: float = IDLE_HOURS) -> list[Task]:
                 f"queue: claimed by {sessions.called(ctx, task.owner) if task.owner else 'nobody'}"
                 f" and untouched for {int(idle)}h.")
         task.body = f"{task.body}\n\n{note}".strip() if task.body else note
-        _rewrite_body(task)
-        released = _move(task, NEXT)
+        released = _released(task)
         if released:
             moved.append(released)
     return moved
@@ -913,10 +926,19 @@ def sweep_queue(ctx: GitContext, days: float = QUEUE_STALE_DAYS) -> list[Task]:
         if not idle or task.owner:
             continue
         blocker = f"nobody picked this up in {int(idle // 24)}d — resume it if it still matters"
-        parked = _move(task, PAUSED, blocker=blocker)
+        parked = _move_if_there(task, PAUSED, blocker=blocker)
         if parked:
             moved.append(parked)
     return moved
+
+
+def _released(task: Task) -> Task | None:
+    """`task`, with its amended body, back in `next`; None when a sibling moved it first."""
+    try:
+        _rewrite_body(task)
+    except FileNotFoundError:
+        return None
+    return _move_if_there(task, NEXT)
 
 
 def _rewrite_body(task: Task) -> None:

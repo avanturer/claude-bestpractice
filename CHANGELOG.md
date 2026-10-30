@@ -1,5 +1,74 @@
 # Changelog
 
+## v2.7.0
+
+Context economy without losing what matters, search through the plugin's own Parallel and Exa,
+and the founder's word read where they write it. A long successful test, build or install
+reaches the model as a digest with the whole kept on disk; WebSearch is answered by Parallel
+first and Exa next; `+merge` and `+release` count in an ordinary sentence and together in one
+message; and what an audit of a founder's machine found the plugin had left there is cleaned up.
+
+### What broke
+
+**A passing suite filled the window.** A verbose `pytest` of 10,153 tests printed 2.5 MB, and
+the model read twenty thousand lines of `PASSED` to find one summary line, re-read on every
+turn until a compaction threw it and everything around it away.
+
+**The gate ran pytest outside the project's environment (#282).** A uv project in `backend/`
+was driven with the first `python3` on PATH, and two failing of two were filed over a suite
+`uv run pytest` passed 33 of 33.
+
+**The founder's `+merge` could not take a review finding off a merge (#283).** A new test
+guarded by `skipif(not _db_ok(), …)` was flagged as a skipped test, and after the refusal was
+read and answered with `+merge` the same merge was refused with the same list.
+
+**A word had to be a line of its own.** `+merge +release` on one line granted neither, and
+`всё ок, +merge` granted nothing.
+
+**To message another session, a session asked them all.** The board named sessions once, at a
+session's start, so one started later was a bare name in `ListAgents`.
+
+**What a founder's machine had kept.** A red record a 1.72.0 gate wrote a month earlier told
+every session started in the main checkout "Fix it before new work" over code 103 commits on;
+a session start died on a card a sibling had moved since it was read; the decision-draft inbox
+had grown to 10.9 MB; 170 tokens of killed runs and 362 inboxes of gone sessions stayed; and a
+compaction read a 1.1 GB transcript whole to find the founder's last messages, taking a tool's
+result for one of them.
+
+### What changed
+
+- The plugin is a mod too: `hooks/hooks.json` names `hooks/bestpractice.ts`, which runs inside
+  Claude Code and asks the plugin's library through `claude-bp-mod`. Where mods are off it is
+  not loaded and every hook works as before.
+- A test suite, build or install that succeeded and printed 6,000 characters or more reaches the
+  model as a digest: its summary, every error and warning line, head and tail, and where the
+  whole is kept (`.claude/claude-bestpractice/out/`, out of git, forty for a week). Any other
+  output Claude Code would have cut to 2 KB gets one too; reads and failures never do.
+  `compress_output off` switches it off (decision 0048).
+- The plugin ships Parallel's and Exa's search servers (`plugin/.mcp.json`, no key needed).
+  WebSearch is answered by Parallel, then Exa, then itself; Exa waits for a Parallel search;
+  every query is refused if it carries a credential; Parallel's and Exa's tools run without a
+  prompt. `route_search off` switches it off (decision 0049).
+- `+merge`, `+release` and `+migration` count in a sentence and together, except in a clause
+  that refuses, defers or conditions them, in a question, or quoted (decision 0047).
+- A `+merge` sent after a refusal listed review findings takes them off that pull request's
+  list; `skipif` with a condition is no longer a skipped test (decision 0052).
+- The gate runs pytest through `uv run --frozen` in a uv project, else in the project's own
+  `.venv`; a uv project's detected test command is `uv run --frozen python -m pytest -q`
+  (decision 0053).
+- `ListAgents` says what each other session on the repository is doing, and the board says
+  `SendMessage` reaches each by the name its row starts with (decision 0050).
+- A subagent spawned below `subagent_min_model`, `sonnet` by default, runs on it (decision 0051).
+- Compaction is told to keep the founder's requests and words, the cards, the failing tests and
+  the paths of kept outputs.
+- A red record older than a day, about other code than the tree it is read in, is shown as
+  unconfirmed and asks for a run instead of stopping new work.
+- `/plan`, `/review` and `/status` are the founder's to type and are no longer listed to the model.
+
+Repairs: `0008-collapse-the-decision-inbox` runs again (revision 2) and the inbox now collapses
+itself past 256 KB; `0042-let-go-of-what-dead-runs-and-sessions-left` removes tokens of killed
+runs and inboxes of sessions that are gone.
+
 ## v2.6.0
 
 The Stop gate checks after the turn, in the background: the founder can write to the session the

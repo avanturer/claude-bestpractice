@@ -2,6 +2,7 @@
 description: Show or update the work ledger — what is done, in flight, and next
 argument-hint: "[add <title> | claim <id> | done <id>]"
 allowed-tools: Bash(claude-bp-plan:*)
+disable-model-invocation: true
 ---
 
 !`claude-bp-plan ${1:-list} ${2:-} ${3:-}`

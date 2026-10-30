@@ -1716,16 +1716,12 @@ class TestCheckpoint(GateCase):
     def test_scrubs_secrets_from_the_transcript(self):
         self.start()
         transcript = self.tmp / "t.jsonl"
-        transcript.write_text(
-            json.dumps(
-                {
-                    "type": "user",
-                    "isSidechain": False,
-                    "message": {"content": "deploy with AKIAIOSFODNN7EXAMPLE please"},
-                }
-            )
-            + "\n"
-        )
+        # In the shape the harness writes a founder's turn: the checkpoint reads what a person
+        # typed, which an entry with no moment and no sender is not.
+        from helpers import turn
+
+        transcript.write_text(json.dumps(turn("deploy with AKIAIOSFODNN7EXAMPLE please",
+                                              time.time())) + "\n")
         self.gate(
             "checkpoint",
             {

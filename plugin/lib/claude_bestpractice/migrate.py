@@ -520,23 +520,16 @@ def _collapse_the_decision_inbox(ctx: GitContext) -> str:
     and `claude-bp status` pointed at it as the next action. Nobody reviews a list that
     deep, and a list nobody can act on drifts without limit.
 
-    Rewritten rather than left to `pending`, which collapses on read: the file itself was
-    89KB and still growing on every run.
+    Revision 2: a re-sighting still appended a row, and one clone's inbox had grown back to
+    10.9 MB by the time its machine was audited. `record` now collapses it past a size.
     """
     from . import drafts
 
-    path = store.tier_b(ctx, drafts.INBOX_FILE)
-    rows = [row for row in store.read_jsonl(path) if isinstance(row, dict)]
-    if not rows:
+    dropped, waiting = drafts.collapse(ctx)
+    if not dropped:
         return ""
-    keep = drafts.pending(ctx)
-    resolved = [row for row in rows if row.get("resolved")]
-    if len(keep) + len(resolved) >= len(rows):
-        return ""
-    dropped = len(rows) - len(keep) - len(resolved)
-    store.rewrite_jsonl(path, resolved + keep)
     return (f"{dropped} duplicate decision draft(s) collapsed; the inbox now holds "
-            f"{len(keep)} waiting to be reviewed")
+            f"{waiting} waiting to be reviewed")
 
 
 def _drop_defects_from_things_that_are_not_gates(ctx: GitContext) -> str:
@@ -1332,6 +1325,23 @@ def _forget_a_red_suite_the_pytest_guard_left(ctx: GitContext) -> str:
             "`needs-pytest` guard stopped it before any test ran")
 
 
+def _let_go_of_what_dead_runs_left(ctx: GitContext) -> str:
+    """Tokens of verification runs that were killed, and inboxes of sessions that are gone.
+
+    A run retires its token when it ends; one killed with the Stop hook, which is how a run the
+    founder interrupts ends since decision 0046, never did: 170 empty files on one machine. An
+    inbox is read by its session's next tool call, and a session that never made one left its
+    box behind: 362 files of 120 sessions, none of them live.
+    """
+    from . import evidence, inbox
+
+    tokens = evidence.retire_stale_nonces(ctx)
+    boxes = inbox.drop_unread_boxes(ctx)
+    if not tokens and not boxes:
+        return ""
+    return f"let go of {tokens} token(s) of killed runs and {boxes} inbox(es) of gone sessions"
+
+
 def _scrub_what_a_failing_suite_printed(ctx: GitContext) -> str:
     """Credentials a failing suite printed, already written where the gate records failures.
 
@@ -1745,7 +1755,7 @@ _REPAIRS = {
     "0005-trees-into-the-no-prompt-zone": (3, _move_trees_into_the_no_prompt_zone),
     "0006-drop-the-witness-timeout": (2, _drop_the_witness_timeout),
     "0007-forget-a-switch-taken-as-a-task": (1, _forget_a_statement_that_was_only_a_switch),
-    "0008-collapse-the-decision-inbox": (1, _collapse_the_decision_inbox),
+    "0008-collapse-the-decision-inbox": (2, _collapse_the_decision_inbox),
     "0009-drop-defects-that-are-not-ours": (1, _drop_defects_from_things_that_are_not_gates),
     "0010-shrink-unverified-reasons": (1, _shrink_unverified_reasons),
     "0011-close-shipped-cards": (1, _close_cards_whose_work_shipped),
@@ -1782,6 +1792,7 @@ _REPAIRS = {
     "0039-withdraw-messages-that-were-never-work": (1, _withdraw_messages_that_were_never_work),
     "0040-name-who-paused-a-card": (1, _name_who_paused_a_card),
     "0041-forget-a-red-suite-the-pytest-guard-left": (1, _forget_a_red_suite_the_pytest_guard_left),
+    "0042-let-go-of-what-dead-runs-and-sessions-left": (1, _let_go_of_what_dead_runs_left),
 }
 
 

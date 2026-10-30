@@ -174,7 +174,7 @@ def _what_follows_our_voice(text: str) -> str:
     """
     closing: list[str] = []
     for line in reversed(text.rstrip().split("\n")):
-        if line.strip() and not config.approvals_in(line):
+        if line.strip() and not config.only_approvals(line):
             break
         closing.append(line)
     return "\n".join(reversed(closing))
@@ -281,6 +281,31 @@ def _note(raw: bytes, literal: bool, words: list[Word], moments: list[float]) ->
     approvals = config.approvals_in(founders_word(text)) if literal else {}
     if approvals:
         words.append(Word(ident, at, approvals))
+
+
+def messages(transcript_path: str, most_bytes: int = _MOST_BYTES) -> list[str]:
+    """What a person typed into this chat, oldest first, from the last `most_bytes` of its
+    transcript: turns they started and messages they sent while the session worked, and
+    nothing else the harness files as a user entry (`_from_a_person`)."""
+    try:
+        with open(transcript_path, "rb") as handle:
+            size = handle.seek(0, 2)
+            handle.seek(max(size - most_bytes, 0))
+            if size > most_bytes:
+                handle.readline()
+            lines = handle.read().splitlines()
+    except (OSError, TypeError, ValueError):
+        return []
+    said: list[str] = []
+    for raw in lines:
+        try:
+            entry = json.loads(raw)
+        except ValueError:
+            continue
+        found = _from_a_person(entry) if isinstance(entry, dict) else None
+        if found is not None:
+            said.append(found[1])
+    return said
 
 
 def _from_a_person(entry: dict[str, Any]) -> tuple[str, str, float] | None:

@@ -51,8 +51,8 @@ _MODEL_ID = re.compile(r"^claude-[a-z0-9.\-]+$", re.I)
 _FRONTMATTER_MODEL = re.compile(r"^model\s*:\s*(?P<model>[^\s#]+)", re.M)
 
 WHAT_EACH_TIER_IS_FOR = (
-    "    haiku   mechanical work with one right answer: search, extraction, a scripted "
-    "edit, reading a log\n"
+    "    haiku   runs as `subagent_min_model` when that is higher, sonnet unless the founder "
+    "lowered it\n"
     "    sonnet  ordinary implementation and review — most delegated work belongs here\n"
     "    opus    design, ambiguity, a judgement the parent cannot make for itself\n"
     "    fable   a long autonomous run that has to investigate before it acts\n"

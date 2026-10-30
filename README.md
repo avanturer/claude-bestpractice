@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-2.6.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.7.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-2541%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -135,7 +135,7 @@ rather than leaving your memory describing something that no longer exists.
 ### Sessions that see each other
 
 ```
-OTHER LIVE SESSIONS (2) — do not edit files they hold:
+OTHER LIVE SESSIONS (2) — do not edit files they hold; SendMessage reaches each by the name its row starts with:
   - ledger-export-3c (a3f81c22) on feat/export [ledger-export] active 40s ago
       touched: src/billing.js, src/csv.js
       holds: src/billing.js
@@ -377,13 +377,17 @@ messages, and each is **spent when it is used**, never a standing grant.
 | `+release` | promoting to production | one promotion |
 | `+migration` | destructive DDL in a migration | one migration |
 
-**On a line of its own, with nothing else on it.** Say whatever you like first, then put
-the word on the next line:
+**Anywhere in your message, as many as you mean.** In a sentence, on a line of its own, or
+two at once:
 
 ```
-looks good, ship it
-+merge
+looks good, ship it +merge +release
 ```
+
+A word does not count in a clause that refuses, defers or conditions it, in a question, or
+quoted: *"не мержи, я не говорил +merge"*, *"+merge when CI is green"*, *"можно ли +merge?"*
+and a `` `+merge` `` in backticks grant nothing, while *"+merge, но релиз не надо"* grants the
+merge.
 
 A promotion is read off the program a line runs: `vercel --prod`, `fly deploy`,
 `eas update --channel production`, a script named for deploying that names production. A
@@ -391,9 +395,10 @@ project's own way to ship names neither, so declare it in `config.json` by the n
 runs it under, a make target or a script: `"release_commands": ["mobile-ota",
 "deploy_standalone.sh"]`. Each then waits for `+release` like the rest.
 
-A token sharing a line with prose cannot be told from a token being talked about, and that
-gap ran the wrong way: *"I never said `+merge`"* — a refusal — authorised the merge, and
-two unapproved pull requests reached a deploying trunk before it was caught. The prefix is a
+A token read without the words around it cannot be told from a token being talked about,
+and that gap once ran the wrong way: *"I never said `+merge`"* — a refusal — authorised the
+merge, and two unapproved pull requests reached a deploying trunk before it was caught. That
+is why the clause around a word decides whether it counts. The prefix is a
 symbol rather than the word "ok" because "ok" is English and the gate should not depend on
 which language you happen to be writing in. Nothing the session writes can stand in for these — only your own turns reach the
 hook that records them, which is the whole point: the gate on an irreversible action must
@@ -461,6 +466,34 @@ Both can run at once — a pre-push hook only binds machines that installed it, 
 repository other people push to still wants the hosted run. Bypass once with
 `git push --no-verify`; that is deliberate and leaves a record, which a silently skipped
 hosted run does not.
+
+### Less of the window spent on noise
+
+**A long result reaches the model as what it says.** A test suite, build or install that
+succeeded and printed 6,000 characters or more is handed over as a digest: the runner's
+summary, every line that looks like an error or a warning, the head and the tail, and the path
+of the whole output, kept under `.claude/claude-bestpractice/out/` and out of git. A passing
+`pytest -v` of 10,153 tests in a real project, 2.5 MB, reached the model as 2,600 characters
+holding its verdict and its ten warnings. Anything you asked to read, and any command that
+failed, is left exactly as it was.
+
+**Search goes through the plugin's own Parallel and Exa.** Both servers ship with the plugin
+and need no key. WebSearch is answered by Parallel's search, by Exa's when Parallel returns
+nothing, and by itself only when neither answers; Exa is for the one thing Parallel's results
+miss, and is sent back until Parallel has been asked. A query carrying anything that reads as a
+credential is refused before it leaves. Queries go to Parallel ([privacy
+policy](https://parallel.ai/privacy-policy)) and Exa ([privacy policy](https://exa.ai/privacy-policy));
+Exa refuses requests from some regions, and there search falls through to WebSearch.
+
+**Compaction keeps what you said.** It is told to keep your requests and decisions, every
+`+merge` and what it covered, the cards in play, the failing tests and the paths of kept
+outputs, and to drop logs that can be read again.
+
+**Sessions find each other.** When a session lists the agents it can message, each other
+session on the repository is named with its card, branch and tree, so a message goes to the
+one whose work it is. A subagent spawned on a tier below `subagent_min_model` (`sonnet`) runs on it.
+
+Each is a switch you say: `compress_output off`, `route_search off`, `subagent_min_model off`.
 
 ### It takes over what fights it
 

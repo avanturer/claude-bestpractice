@@ -4,7 +4,7 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-2.6.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.7.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-2541%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
@@ -121,7 +121,7 @@ mtime 整体重置。当断言的对象被改写时，该断言会被抑制并�
 ### 会话彼此可见
 
 ```
-OTHER LIVE SESSIONS (2) — do not edit files they hold:
+OTHER LIVE SESSIONS (2) — do not edit files they hold; SendMessage reaches each by the name its row starts with:
   - ledger-export-3c (a3f81c22) on feat/export [ledger-export] active 40s ago
       touched: src/billing.js, src/csv.js
       holds: src/billing.js
@@ -225,19 +225,20 @@ setup、teardown 或收集阶段，且没有任何断言失败——会被单独
 | `+release` | 发布到生产环境 | 一次发布 |
 | `+migration` | 迁移中的破坏性 DDL | 一次迁移 |
 
-**必须独占一行，该行不能有其他内容。** 前面想写什么都行，把这个词放到下一行：
+**写在消息里任何位置，想写几个就写几个。** 可以在句子里、单独一行，或一次写多个：
 
 ```
-看着不错，发吧
-+merge
+看着不错，发吧 +merge +release
 ```
+
+在表示拒绝、推迟或附加条件的分句里、在问句里、在引用里，这个词都不算数：「不要合并，我没说过 +merge」「CI 变绿后 +merge」「可以 +merge 吗？」以及反引号里的 `` `+merge` `` 都不授权，而「+merge，但不要发布」授权合并。
 
 因冲突或检查而失败的合并会为重试保留你的这句话：只有在合并真正完成之后，它才会被用掉，PR 和它的卡片才会关闭；`--auto` 会用掉这句话，但 PR 保持打开，直到它进入主干，通过 GitHub 工具开启的自动合并也一样。执行合并的那一行只合并一个 PR——按编号、按链接或不写——其余命令只能用 `&&` 连接：一行里两次合并、写在循环里或 `sh -c` 后面的合并、管道接到 `tail` 的合并都会被拒绝，并把这次合并单独写成一条命令。你的这句话没有覆盖的合并，闸门会列出它覆盖了哪些 PR，以及这一个为什么不在其中。一个分支若没有任何自己的东西——每个提交都已在主干里（按补丁或按内容），或在另一个 PR 的分支上，比如集成分支——就不会被要求开 PR。
 
 发布是根据一行命令实际运行的程序来识别的：`vercel --prod`、`fly deploy`、`eas update --channel production`，或名字里带 deploy 且指明生产环境的脚本。项目自己的发布方式两者都不提，所以请在 `config.json` 里按该行运行它时的名字声明它，即 make 目标或脚本：`"release_commands": ["mobile-ota", "deploy_standalone.sh"]`。这样它也会等待 `+release`。
 
-与正文同处一行的令牌，无法与"被谈论的令牌"区分开来，而这个缝隙的方向是错的："我没说过
-`+merge`"——一句拒绝——却批准了合并，两个未经批准的 PR 因此进入了会触发部署的主干。前缀是符号
+脱离上下文读到的令牌，无法与"被谈论的令牌"区分开来，这个缝隙曾经走错方向："我没说过
+`+merge`"——一句拒绝——却批准了合并，两个未经批准的 PR 因此进入了会触发部署的主干。所以由词周围的分句决定它是否算数。前缀是符号
 而非英文单词 "ok"，因为闸门不应取决于你此刻用哪种语言书写。会话写下
 的任何内容都无法代替这些词：只有你自己的发言才能到达记录它们的钩子。这正是关键所在——
 守卫不可逆操作的闸门，不该由它所守卫的那一方来打开。
@@ -297,6 +298,18 @@ claude-bp-ci off        # 移除 pre-push 钩子
 两者可以并存：pre-push 钩子只约束装了它的机器，所以一个别人也会推送的仓库仍然需要托管
 运行。想单次绕过就用 `git push --no-verify`——那是一个有痕迹的、刻意的动作，而被悄悄跳过
 的托管运行没有痕迹。
+
+### 少把上下文窗口花在噪音上
+
+**长结果以它真正说的内容送达模型。** 成功的测试、构建或安装，若输出 6000 个字符以上，会以摘要交给模型：运行器的汇总、每一行像错误或警告的内容、开头和结尾，以及完整输出的路径——完整输出保存在 `.claude/claude-bestpractice/out/`，不进 git。一个真实项目里 10,153 个测试全部通过的 `pytest -v` 输出 2.5 MB，送达模型时是 2600 个字符，包含结论和十条警告。你要求读取的内容和失败的命令保持原样。
+
+**搜索走插件自带的 Parallel 和 Exa。** 两个服务器随插件提供，无需密钥。WebSearch 由 Parallel 回答；Parallel 一无所获时由 Exa 回答；两者都没有结果时才由 WebSearch 自己回答。Exa 用于 Parallel 漏掉的那一件事，在问过 Parallel 之前会被退回。任何看起来像凭据的查询都会在发出前被拒绝。查询会发送给 Parallel（[隐私政策](https://parallel.ai/privacy-policy)）和 Exa（[隐私政策](https://exa.ai/privacy-policy)）；Exa 拒绝部分地区的请求，那里的搜索会转到 WebSearch。
+
+**压缩会保留你说过的话。** 它被要求保留你的请求和决定、每个 `+merge` 及其范围、进行中的卡片、失败的测试和已保存输出的路径，丢弃可以重新读取的日志。
+
+**会话能找到彼此。** 当一个会话列出可以发消息的代理时，仓库里的每个其他会话都会附上它的卡片、分支和工作树，消息因此发给负责那项工作的会话。以低于 `subagent_min_model`（`sonnet`）的级别启动的子代理会以该级别运行。
+
+每一项都是你说出来的开关：`compress_output off`、`route_search off`、`subagent_min_model off`。
 
 ### 它会接管与它冲突的东西
 

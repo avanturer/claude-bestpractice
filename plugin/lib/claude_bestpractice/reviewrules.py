@@ -40,7 +40,14 @@ CHECKS: list[tuple[str, re.Pattern[str], str]] = [
      "SQL built by string interpolation"),
     ("disabled-verification", re.compile(r"(?i)verify\s*=\s*False|rejectUnauthorized\s*:\s*false"),
      "certificate verification disabled"),
-    ("skipped-test", re.compile(r"(?i)@pytest\.mark\.skip|\bit\.skip\(|\bxit\(|\bt\.Skip\(|\.only\("),
+    # `skip`, never `skipif` with a condition: that is a guard on the environment a test needs,
+    # not a test switched off. A new test carrying `skipif(not _db_ok(), reason="требуется
+    # Postgres")`, which ran in CI and skipped nothing more than before, was flagged and kept
+    # its pull request from merging after the founder's `+merge` (#283). A condition that is
+    # always true switches the test off, and is still one.
+    ("skipped-test", re.compile(
+        r"(?i)@pytest\.mark\.skip\b|@pytest\.mark\.skipif\(\s*(?:True|1)\s*[,)]"
+        r"|\bit\.skip\(|\bxit\(|\bt\.Skip\(|\.only\("),
      "test skipped or narrowed — freeze the scoring rules, do not edit them"),
     ("debug-leftover", re.compile(r"(?:^|\s)(?:breakpoint\(\)|debugger;|console\.log\()"),
      "debugging leftover"),

@@ -310,7 +310,37 @@ def record(ctx: GitContext, drafts: list[Draft]) -> int:
             "seen": int(prior.get("seen", 1)) + 1,
             "last_seen_at": draft.created_at,
         })
+    if _size(path) > COMPACT_BYTES:
+        collapse(ctx)
     return filed
+
+
+# Past this size the inbox is rewritten as `pending` reads it. Each sighting of a waiting
+# draft appends a superseding row, so one founder's inbox reached 10.9 MB, sixty per cent of
+# everything this plugin kept for the clone: 7,361 rows holding 591 distinct drafts, one of
+# them 1,684 times over.
+COMPACT_BYTES = 256 * 1024
+
+
+def collapse(ctx: GitContext) -> tuple[int, int]:
+    """Rewrite the inbox as one row per waiting draft and one per resolved one. Returns how many
+    rows went and how many drafts wait."""
+    path = store.tier_b(ctx, INBOX_FILE)
+    rows = [row for row in store.read_jsonl(path) if isinstance(row, dict)]
+    keep = pending(ctx)
+    resolved = list({draft_key(str(row.get("quote", ""))): row
+                     for row in rows if row.get("resolved")}.values())
+    dropped = len(rows) - len(keep) - len(resolved)
+    if dropped > 0:
+        store.rewrite_jsonl(path, resolved + keep)
+    return max(dropped, 0), len(keep)
+
+
+def _size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
 
 
 def pending(ctx: GitContext) -> list[dict]:
