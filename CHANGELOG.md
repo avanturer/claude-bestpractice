@@ -105,6 +105,9 @@ work another tree had stashed, since every tree of a clone shares one stash list
 - A tool an MCP server offers that writes files, the reference filesystem server's and Serena's,
   is judged as the `Write` of the file it names, and a move as `mv`; the gate never approves one
   in its server's place (decision 0060).
+- Every field the gates read is held against the hook payloads Claude Code 2.1.314 sends, and
+  `make payloads` captures them again after an upgrade; the always-on budget counts a command
+  the model is shown.
 - Once git has removed a tree, the processes still running in it are stopped, and the removal
   names them: the founder's own, never the gate, its parents or a Claude Code session; through
   `/proc`, so nowhere it is missing (decision 0059).

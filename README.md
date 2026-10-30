@@ -132,6 +132,10 @@ suppressed and counted, never silently deleted.
 Every entity names a canonical identifier and its file. A rename **fails validation**
 rather than leaving your memory describing something that no longer exists.
 
+The plugin's own logs keep what can still be read. Past a size, the pull-request log is cut to
+one row per branch and the open items to the ones the board can show; an item about a branch
+the clone no longer has is not shown, and a branch's green and run records go with the branch.
+
 ### Sessions that see each other
 
 ```
@@ -157,6 +161,17 @@ health: 3 live session(s), 1 reaped, 4 open item(s), 1 stale (suppressed)
 Editing a file another live session holds is **denied**, naming the owner. A crashed
 session's leases and claims are released by the reaper — in whichever worktree holds
 them — instead of staying in flight forever.
+
+Every tree of a clone shares one stash list, so its top entry is whichever tree stashed last.
+`git stash pop`, `drop`, `clear` and `branch` of an entry another branch stashed are **denied**,
+naming `git stash apply`, which brings the work in and leaves the entry to the tree that made
+it. A tool an MCP server offers that writes files — the reference filesystem server's,
+Serena's — is judged as the `Write` it is, and keeps its own permission prompt.
+
+The suites the sessions' Stop gates start **take turns**: as many at once as fit in half the
+machine's CPUs at `witness_cpus` each, every one pinned to CPUs of its own. Six to twelve
+sessions finishing on one 24-thread machine used to start them all at once, and suites that
+pass alone were filed red under the load.
 
 Every session is named the way `SendMessage` addresses it: on the board, in
 `claude-bp status`, as a card's owner, on a pull request's row, and in every refusal that
@@ -332,6 +347,14 @@ request, it asks GitHub once through `gh`, and records the one it finds. A branc
 nothing of its own — every commit already in the trunk, by patch or by content, or on another
 pull request's branch, as an integration branch is — is asked for none.
 
+**Merged on GitHub, it is settled by the number GitHub writes into the trunk** — `Title (#N)`
+for a squash, `Merge pull request #N` for a merge — so a squash-merged branch still checked out
+somewhere stops being offered as ready to merge. One whose number no hook heard, a `gh pr
+create` that Claude Code put in the background, is asked of GitHub at the Stop on its branch.
+And a merge is refused while the pull request adds a numbered migration under a number the
+trunk already gave another file, naming the next one free: two sessions that each took "the
+next number" are both right until the second merges.
+
 ### Closing the work, not just doing it
 
 Isolation is the half that works: one tree per session, and in sixty days of three to eight
@@ -364,6 +387,12 @@ A tree another tool created is never removed, because that is not a plugin's cal
 **named** instead, with the command — as is a branch carrying commits that no pull request
 here has seen, and a pull request nothing has moved in a week. All three lines are empty in
 the steady state, which is the state the removal produces.
+
+A tree counts as finished when its branch's work is in the trunk by ancestry, by patch or by
+content, which is what a squash merge leaves; asked for, `claude-bp sweep` removes the trees
+the board names, the same way and on the same proofs. Once a tree is gone, the processes still
+running in it — a dev server, Metro, uvicorn — are stopped before its database is dropped, and
+the removal names them.
 
 ### The three things that wait for your word
 
@@ -511,6 +540,7 @@ configuration silently.
 | `claude-bp status` | Sessions, plan, knowledge, memory health, conflicts, next action |
 | `claude-bp init` | Derive the knowledge layer from your code |
 | `claude-bp adopt` | Take over events another tool is contesting |
+| `claude-bp sweep` | Remove the trees nobody is in whose work is already in the trunk |
 | `claude-bp database` | Create this worktree's own database, if the server has not got it (needs `psql`; otherwise `worktree_setup`) |
 | `claude-bp set` | Change a gate switch you asked for in your own words |
 | `claude-bp policy` | Tell auto mode what this repository is; name rules that no longer fire |

@@ -6,6 +6,10 @@ plus ~15 per component. Over the cap, the plugin starts appearing by name in the
 founder's own usage breakdown — where its cost is itemised and its benefit, being
 counterfactual, is invisible. That is a losing trade no amount of value survives.
 
+Skills, agents and commands are counted by what the model is shown of them: a description,
+unless `disable-model-invocation` keeps it from the list. A command was not counted at all, so
+three of them cost ~90 tokens on every turn while this said the plugin was under its cap.
+
 Caps enforced here:
   - total always-on            <= 400 tokens
   - per-skill description      <= 40 words
@@ -51,6 +55,11 @@ def frontmatter(text: str) -> dict[str, str]:
     return out
 
 
+def hidden(meta: dict[str, str]) -> bool:
+    """Kept off the list the model is shown, so it costs no context until the founder types it."""
+    return meta.get("disable-model-invocation", "").lower() == "true"
+
+
 def strip_comments(raw: str) -> str:
     """Our JSON configs carry `$comment` keys; they are documentation, not payload."""
     return re.sub(r'"\$comment[^"]*"\s*:\s*(\[[^\]]*\]|"[^"]*"),?', "", raw, flags=re.S)
@@ -65,6 +74,8 @@ def main() -> int:
         text = skill.read_text(encoding="utf-8")
         meta = frontmatter(text)
         rel = skill.relative_to(ROOT)
+        if hidden(meta):
+            continue
 
         description = meta.get("description", "")
         words = len(description.split())
@@ -79,11 +90,15 @@ def main() -> int:
                 f"{rel}: body is ~{body_tokens:.0f} tokens, cap is {SKILL_BODY_TOKEN_CAP}"
             )
 
-    for agent in sorted((PLUGIN / "agents").glob("*.md")) if (PLUGIN / "agents").is_dir() else []:
-        meta = frontmatter(agent.read_text(encoding="utf-8"))
+    listed = [path for name in ("agents", "commands") if (PLUGIN / name).is_dir()
+              for path in sorted((PLUGIN / name).glob("*.md"))]
+    for item in listed:
+        meta = frontmatter(item.read_text(encoding="utf-8"))
+        if hidden(meta):
+            continue
         words = len(meta.get("description", "").split())
         if words > DESCRIPTION_WORD_CAP:
-            problems.append(f"{agent.relative_to(ROOT)}: description is {words} words")
+            problems.append(f"{item.relative_to(ROOT)}: description is {words} words")
         always_on += words * TOKENS_PER_WORD + TOKENS_PER_COMPONENT
         components += 1
 
