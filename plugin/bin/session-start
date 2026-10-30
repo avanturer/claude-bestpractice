@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import board, ci, config, hookio, knowledge, limits, migrate, onboard, plan, policy, pullrequest, sessions, stage, store, upgrade, worktree  # noqa: E402
+from claude_bestpractice import board, ci, config, evidence, hookio, knowledge, limits, migrate, onboard, plan, policy, pullrequest, sessions, stage, store, upgrade, worktree  # noqa: E402
 from claude_bestpractice.gitctx import GitContext, resolve, stash_baseline  # noqa: E402
 
 
@@ -555,6 +555,8 @@ def main() -> None:
     # there with its branch deleted, was read out at every session start for thirty days,
     # because only the Stop gate and the status line ever reconciled one.
     pullrequest.reconcile(ctx, ctx.branch)
+    # Written on every run, one per branch, and removed by nothing else.
+    evidence.forget_gone_branches(ctx)
 
     cfg, complaints = config.load_checked(ctx)
     # Work that stopped moving. `reap` covers the session that DIED; this covers the

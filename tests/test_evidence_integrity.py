@@ -1302,7 +1302,7 @@ class TestTheProjectsOwnCommandRunsOnTheSameClock(RepoCase):
 
         given = []
 
-        def bounded(argv, _where, _env, limit, _cpus=0):
+        def bounded(argv, _where, _env, limit, _cpus=0, _places=None):
             given.append(limit)
             return subprocess.CompletedProcess(argv, 0, "1 passed", "")
 

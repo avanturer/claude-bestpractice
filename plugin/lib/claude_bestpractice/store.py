@@ -24,7 +24,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from .gitctx import GitContext
 
@@ -319,12 +319,19 @@ def write_json(path: Path, obj: Any, mode: int = 0o600) -> None:
     atomic_write(path, dumps(obj, indent=2, sort_keys=True) + "\n", mode)
 
 
-def append_jsonl(path: Path, obj: Any, mode: int = 0o600) -> None:
+def append_jsonl(path: Path, obj: Any, mode: int = 0o600, locked: bool = False) -> None:
     """Append one record. Append-only files never need a lock between writers.
 
     O_APPEND writes under the pipe-buffer size are atomic on POSIX, so concurrent
     sessions interleave records without tearing one.
+
+    `locked` is for a log `compact_jsonl` rewrites: a row appended between its read and its
+    rename would be lost, so every writer of such a log appends under the lock it holds.
     """
+    if locked:
+        with file_lock(_log_lock(path)):
+            append_jsonl(path, obj, mode)
+        return
     ensure_dir(path.parent)
     line = dumps(obj, sort_keys=True) + "\n"
     # O_NOFOLLOW, for the reason `atomic_write` refuses a link by default: these logs live
@@ -346,15 +353,42 @@ def append_jsonl(path: Path, obj: Any, mode: int = 0o600) -> None:
 
 
 def rewrite_jsonl(path: Path, rows: list[Any], mode: int = 0o600) -> None:
-    """Replace an append-only log with a shorter one. For repairs, and nothing else.
+    """Replace an append-only log with a shorter one. For repairs and `compact_jsonl`.
 
-    Appending never needs a lock; replacing does, and cannot have one that is worth
-    anything here — a concurrent `append_jsonl` between the read and the rename is lost.
-    That is acceptable for a step that runs once per clone at session start, over a log
-    whose duplicate rows are the thing being removed, and it is not acceptable anywhere
-    else. Written atomically, so a reader never sees half a file.
+    Appending never needs a lock; replacing does, and this takes none — a concurrent
+    `append_jsonl` between the read and the rename is lost. That is acceptable for a step
+    that runs once per clone at session start, over a log whose duplicate rows are the thing
+    being removed; anywhere else it is `compact_jsonl`, under the lock the log's writers take.
+    Written atomically, so a reader never sees half a file.
     """
     atomic_write(path, "".join(dumps(row, sort_keys=True) + "\n" for row in rows), mode)
+
+
+def compact_jsonl(path: Path, keep: Callable[[list[Any]], list[Any]], past_bytes: int = 0) -> int:
+    """Rewrite an append-only log as what `keep` makes of its rows, once it is larger than
+    `past_bytes`. How many rows went.
+
+    The log is appended to on every sighting and read whole on every lookup, so left alone it
+    grows without limit: one clone's pull-request log held 1,016 rows for 281 branches, and its
+    open items 1,298 rows of which 27 had ever been closed. Under the lock its writers append
+    under, and re-read inside it, which is what `rewrite_jsonl` alone cannot promise.
+    """
+    try:
+        if path.stat().st_size <= past_bytes:
+            return 0
+    except OSError:
+        return 0
+    with file_lock(_log_lock(path)):
+        rows = read_jsonl(path)
+        kept = keep(rows)
+        if len(kept) >= len(rows):
+            return 0
+        rewrite_jsonl(path, kept)
+    return len(rows) - len(kept)
+
+
+def _log_lock(path: Path) -> Path:
+    return path.with_suffix(path.suffix + ".lock")
 
 
 def read_jsonl(path: Path) -> list[Any]:

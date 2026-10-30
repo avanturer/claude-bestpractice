@@ -27,7 +27,7 @@ import json  # noqa: E402
 import re  # noqa: E402
 import shlex  # noqa: E402
 
-from claude_bestpractice import ci, config, evidence, founder, gitpolicy, hookio, inbox, pullrequest, redact, search, sessions, shellcmd, stage, store, subagents, vouch, worktree  # noqa: E402
+from claude_bestpractice import ci, config, evidence, founder, gitpolicy, hookio, inbox, pullrequest, redact, search, servers, sessions, shellcmd, stage, store, subagents, vouch, worktree  # noqa: E402
 from claude_bestpractice.gitctx import resolve  # noqa: E402
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
@@ -1136,6 +1136,22 @@ def _trees_changed(commands: list[list[str]], here: Path) -> list[tuple[Path | N
     return out
 
 
+def stash_takings(command: str, cwd: Path) -> list[tuple[Path, list[str]]]:
+    """Each `git stash` on this line that takes an entry off the clone's one list, with the
+    tree it runs in and its own arguments."""
+    scannable = _QUOTED.sub(lambda m: " " * len(m.group(0)), command)
+    out: list[tuple[Path, list[str]]] = []
+    for segment, literal, here, _start in _segments_with_cwd(scannable, cwd, command):
+        if not _GIT_VERB.search(segment):
+            continue
+        for argv in _commands_in(literal):
+            pointed, verb, args = gitpolicy.split_git(_launched(argv, "git"))
+            tree = _resolve(here, pointed[-1]) if pointed else here
+            if verb == "stash" and args and args[0] in gitpolicy.STASH_TAKES and tree:
+                out.append((tree, args))
+    return out
+
+
 def _trees_named(rest: str, literal: str, here: Path) -> list[Path | None]:
     """The same, off the text, for a line the tokeniser declines: generous, as before."""
     verbs = GIT_TREE_VERBS & set(_ARG.findall(rest))
@@ -1404,6 +1420,8 @@ def _written(event: hookio.HookEvent, cwd: str) -> list[Path]:
 
 def main() -> None:
     heard = hookio.read_event()
+    # A server's tool that writes files is judged as the write it is (decision 0060).
+    heard = hookio.HookEvent(servers.as_a_write(heard.raw) or heard.raw)
     event = hookio.placed(heard, functools.partial(_written, heard))
     ctx = hookio.repo(event.place)
     cfg = config.load(ctx)
@@ -2060,6 +2078,14 @@ def main() -> None:
                 continue
             deny(ctx, rec, gitpolicy.foreign_git_refusal(owner, ctx, rec.session_id))
 
+    # In the session's own tree too: the stash list is the clone's, and its top entry is
+    # whichever tree stashed last.
+    if event.tool_name == "Bash":
+        for tree, args in stash_takings(str(ti.get("command", "")), session_cwd):
+            taken = gitpolicy.foreign_stash(tree, args)
+            if taken is not None:
+                deny(ctx, rec, gitpolicy.stash_refusal(args[0], *taken))
+
     # Before the shell takes a step it cannot take back. Claude Code refuses every Bash
     # call whose working directory is inside the protected checkout — judged before the
     # command runs, so `cd` back into the worktree is refused too, and the persistent
@@ -2427,7 +2453,8 @@ def main() -> None:
     # Second, never first: a pull request call that any gate above refused never reaches
     # this line, and one that reached it has been judged rather than merely tolerated.
     vouched = vouched or pr_vouch
-    if vouched:
+    # Never in a server's place: its own tools keep the prompt the founder set for them.
+    if vouched and not event.raw.get(servers.SERVED_BY):
         hookio.allow_tool(vouched)
 
     hookio.emit_silent()

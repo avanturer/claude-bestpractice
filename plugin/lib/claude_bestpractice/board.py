@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from . import provenance, sessions, store
-from .gitctx import GitContext
+from .gitctx import GitContext, known_branches
 from .sessions import SessionRecord
 
 # Roughly 800 tokens. The budget exists because this is injected once per session and
@@ -36,6 +36,9 @@ OPEN_ITEM_MAX_AGE_SECONDS = 14 * 24 * 3600
 
 OPEN_ITEMS_FILE = "open-items.jsonl"
 MAX_OPEN_ITEMS = 5
+# Past this size the log is rewritten as the items the board can still show. One clone's held
+# 1,298 rows for 848 items, 27 of them ever closed and 773 about branches that were gone.
+COMPACT_BYTES = 256 * 1024
 
 
 def _age(seconds: float) -> str:
@@ -55,8 +58,8 @@ def open_items(
     """Recent, un-closed, age-gated items for this branch, tagged with provenance.
 
     Append-only log: a later record with the same id supersedes an earlier one, and a
-    record marked closed removes it. Nothing is ever edited in place, so parallel
-    sessions never contend.
+    record marked closed removes it. Nothing is edited in place; past a size the log is
+    rewritten as what it can still show, under the lock its writers append under.
 
     `limit` is how many the board shows, newest first; None is every one of them, for a
     caller that has to close items rather than show them.
@@ -67,15 +70,14 @@ def open_items(
     session's plan entirely.
     """
     now = time.time()
+    # Asked of every branch only. A branch named is the caller's own, and is there.
+    present = None if branch else known_branches(ctx)
     out = []
     for rec in _latest_by_id(ctx).values():
-        if rec.get("closed"):
-            continue
         if branch and rec.get("branch") and rec["branch"] != branch:
             continue
-        if now - _last_seen(rec) > OPEN_ITEM_MAX_AGE_SECONDS:
-            continue
-        out.append(rec)
+        if _showable(rec, now, present):
+            out.append(rec)
 
     out.sort(key=_last_seen, reverse=True)
     if limit is not None:
@@ -84,11 +86,42 @@ def open_items(
 
 
 def _latest_by_id(ctx: GitContext) -> dict[str, dict[str, Any]]:
+    return _latest(store.read_jsonl(store.tier_b(ctx, OPEN_ITEMS_FILE)))
+
+
+def _latest(rows: list[Any]) -> dict[str, dict[str, Any]]:
     latest: dict[str, dict[str, Any]] = {}
-    for rec in store.read_jsonl(store.tier_b(ctx, OPEN_ITEMS_FILE)):
+    for rec in rows:
         if isinstance(rec, dict) and rec.get("id"):
             latest[str(rec["id"])] = rec
     return latest
+
+
+def _showable(rec: dict[str, Any], now: float, present: set[str] | None) -> bool:
+    """Open, seen within `OPEN_ITEM_MAX_AGE_SECONDS`, and about a branch the clone still has.
+
+    A finding about a branch that is gone was merged or abandoned with it. Shown, three in four
+    of one clone's items were about such branches, and they took the board's five places from
+    the ones about work in flight. `present` None is git not saying, which hides nothing.
+    """
+    if rec.get("closed") or now - _last_seen(rec) > OPEN_ITEM_MAX_AGE_SECONDS:
+        return False
+    return present is None or not rec.get("branch") or rec["branch"] in present
+
+
+def compact_items(ctx: GitContext, past_bytes: int = 0) -> int:
+    """Rewrite the log as the items it can still show, once it is larger than `past_bytes`.
+    How many rows went."""
+    def still_showable(rows: list[Any]) -> list[Any]:
+        now, present = time.time(), known_branches(ctx)
+        return [rec for rec in _latest(rows).values() if _showable(rec, now, present)]
+
+    return store.compact_jsonl(store.tier_b(ctx, OPEN_ITEMS_FILE), still_showable, past_bytes)
+
+
+def _append(ctx: GitContext, record: dict[str, Any]) -> None:
+    store.append_jsonl(store.tier_b(ctx, OPEN_ITEMS_FILE), record, locked=True)
+    compact_items(ctx, COMPACT_BYTES)
 
 
 def _last_seen(rec: dict[str, Any]) -> float:
@@ -140,7 +173,7 @@ def add_open_item(
         # against would suppress a finding that is currently, demonstrably true.
         "subject_paths": provenance.stamp(ctx, paths),
     }
-    store.append_jsonl(store.tier_b(ctx, OPEN_ITEMS_FILE), record)
+    _append(ctx, record)
 
 
 def item_key(text: str, branch: str, paths: list[str]) -> str:
@@ -157,10 +190,7 @@ def _open_with_key(ctx: GitContext, key: str) -> dict[str, Any] | None:
 
 
 def close_open_item(ctx: GitContext, item_id: str) -> None:
-    store.append_jsonl(
-        store.tier_b(ctx, OPEN_ITEMS_FILE),
-        {"id": item_id, "closed": True, "created_at": time.time()},
-    )
+    _append(ctx, {"id": item_id, "closed": True, "created_at": time.time()})
 
 
 def red_suite_line(ctx: GitContext) -> str:

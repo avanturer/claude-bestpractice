@@ -1342,6 +1342,26 @@ def _let_go_of_what_dead_runs_left(ctx: GitContext) -> str:
     return f"let go of {tokens} token(s) of killed runs and {boxes} inbox(es) of gone sessions"
 
 
+def _cut_the_logs_down_to_what_is_live(ctx: GitContext) -> str:
+    """Pull requests merged long ago still recorded open, and logs grown without a limit.
+
+    A squash leaves no ancestor and the branch stays checked out, so sixteen of one clone's
+    eighteen open records were pull requests GitHub had merged; the pull-request log held 1,016
+    rows for 281 branches, the open items 1,298 for 848, and 256 of 290 green records were about
+    branches deleted after their merge. Each log now compacts itself past a size; this does the
+    first cut at once, after settling what the trunk's history says was merged.
+    """
+    from . import board, evidence, pullrequest
+
+    settled = len(pullrequest.reconcile(ctx))
+    rows = pullrequest.compact(ctx) + board.compact_items(ctx)
+    records = evidence.forget_gone_branches(ctx)
+    if not (settled or rows or records):
+        return ""
+    return (f"settled {settled} pull request(s) the trunk already has, dropped {rows} log row(s) "
+            f"nothing reads and {records} record(s) of branches that are gone")
+
+
 def _scrub_what_a_failing_suite_printed(ctx: GitContext) -> str:
     """Credentials a failing suite printed, already written where the gate records failures.
 
@@ -1793,6 +1813,7 @@ _REPAIRS = {
     "0040-name-who-paused-a-card": (1, _name_who_paused_a_card),
     "0041-forget-a-red-suite-the-pytest-guard-left": (1, _forget_a_red_suite_the_pytest_guard_left),
     "0042-let-go-of-what-dead-runs-and-sessions-left": (1, _let_go_of_what_dead_runs_left),
+    "0043-cut-the-logs-down-to-what-is-live": (1, _cut_the_logs_down_to_what_is_live),
 }
 
 

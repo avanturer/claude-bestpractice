@@ -41,6 +41,19 @@ squashed branch is in the trunk. Ten migration numbers were held twice over, eac
 sessions that took "the next number" from the same trunk. And a subagent's map was ranked by
 reading every source file of the repository on every spawn, the same generic map for every task.
 
+**What the plugin's own records said.** Sixteen of the clone's eighteen open pull-request
+records were pull requests GitHub had merged up to ten days before, offered on every board as
+ready to merge; twelve of twenty-two without a number had been opened by a `gh pr create` Claude
+Code put in the background. The pull-request log held 1,016 rows for 281 branches and the open
+items 1,298 rows for 848, three in four about deleted branches; 256 of 290 green records were for
+branches gone after their merge; and every gated write read 700 cards to learn what one session
+held. «checkpoint save/restore» in a rule was reported on every start as a file that is not here.
+
+**Six to twelve sessions on one machine.** Each Stop started its suites the moment its turn
+ended; the load reached 30 to 44 on 24 threads, suites that pass alone were filed red, and the
+machine went down twice in a day. And `git stash pop` in one session's tree took the unfinished
+work another tree had stashed, since every tree of a clone shares one stash list.
+
 ### What changed
 
 - The plugin is a mod too: `hooks/hooks.json` names `hooks/bestpractice.ts`, which runs inside
@@ -78,10 +91,30 @@ reading every source file of the repository on every spawn, the same generic map
 - A subagent is handed a map ranked for its own task when it is spawned. The map lists files
   through git and keeps what it read of each blob, so a repository of 2,000 sources is mapped in
   a third of a second once warm.
+- An open pull request whose number the trunk's history names as merged, `Title (#N)` or `Merge
+  pull request #N`, is settled as merged. One whose number no hook heard is asked of GitHub at
+  the Stop on its branch. The pull-request log and the open items are cut down to what can
+  still be read once they pass a size, under a lock their writers take; an item about a branch
+  that is gone is not shown; a branch's green and run records go with it; and the board reads a
+  card only when it is the copy that answers, in the state asked for (decision 0056).
+- `git stash pop`, `drop`, `clear` and `branch` of an entry another branch stashed are refused,
+  naming `git stash apply`, which leaves it on the list (decision 0057).
+- The suites the Stop gates of one clone start take turns: as many at once as fit in half the
+  CPUs at `witness_cpus` each, each pinned to CPUs of its own (decision 0058).
+- A dead end's number is not one the trunk already holds.
+- A tool an MCP server offers that writes files, the reference filesystem server's and Serena's,
+  is judged as the `Write` of the file it names, and a move as `mv`; the gate never approves one
+  in its server's place (decision 0060).
+- Once git has removed a tree, the processes still running in it are stopped, and the removal
+  names them: the founder's own, never the gate, its parents or a Claude Code session; through
+  `/proc`, so nowhere it is missing (decision 0059).
+- A rule's `word/word` is judged as a path only under a directory the tree has or ending in a
+  file name, and a path starting with a dot is read whole.
 
 Repairs: `0008-collapse-the-decision-inbox` runs again (revision 2) and the inbox now collapses
 itself past 256 KB; `0042-let-go-of-what-dead-runs-and-sessions-left` removes tokens of killed
-runs and inboxes of sessions that are gone.
+runs and inboxes of sessions that are gone; `0043-cut-the-logs-down-to-what-is-live` settles the
+pull requests the trunk names as merged and cuts the logs and the records of gone branches.
 
 ## v2.6.0
 

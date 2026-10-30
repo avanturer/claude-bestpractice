@@ -241,7 +241,9 @@ def rules_growth(ctx: GitContext, now: float | None = None) -> str:
 
 # A path-shaped token: an explicit separator, or a bare filename with an extension. Only
 # these are checkable — a rule about a concept has no subject to look for.
-_NAMES_A_PATH = re.compile(r"\b(?:[\w.-]+/)+[\w.-]+\b")
+_NAMES_A_PATH = re.compile(r"(?<![/\w.-])(?:[\w.-]+/)+[\w.-]*\w")
+# A file name's extension: a letter after the dot, so `1.2/1.3` is not one.
+_EXTENSION = re.compile(r"\.[A-Za-z][\w-]*$")
 
 # Directories a rule legitimately names that are not in the working tree.
 _NOT_OURS = ("http", "https", "github.com", "node_modules", "~/", "/etc/", "/usr/")
@@ -267,11 +269,22 @@ def stale_rules(ctx: GitContext, limit: int = 6) -> list[str]:
             if len(out) >= limit or not _PRESCRIPTIVE.search(line):
                 continue
             for named in _NAMES_A_PATH.findall(line):
-                if named.startswith(_NOT_OURS) or (root / named).exists():
+                if named.startswith(_NOT_OURS) or not _a_path(root, named) \
+                        or (root / named).exists():
                     continue
                 out.append(f"{path.name}:{number} names {named}, which is not here")
                 break
     return out
+
+
+def _a_path(root: Path, named: str) -> bool:
+    """Whether a slashed word names a path rather than saying "one or the other": under a
+    directory the tree has, or ending in a file name. «checkpoint save/restore» in a founder's
+    rule was reported on every session start as a file that is not here."""
+    first, *_, last = named.split("/")
+    if (root / first).is_dir():
+        return True
+    return bool(_EXTENSION.search(last.lstrip("."))) and not _EXTENSION.search(first.lstrip("."))
 
 
 def _lines(text: str) -> int:

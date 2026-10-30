@@ -7,18 +7,22 @@ sessions finishing on one WSL machine took it to 4 GB of 47.
 
 from __future__ import annotations
 
+import json
 import os
+import subprocess
 import sys
+import time
 import unittest
 from unittest import mock
 
 from helpers import RepoCase
 
-from claude_bestpractice import config, evidence, witness
+from claude_bestpractice import config, evidence, store, witness
 
 AFFINITY = getattr(os, "sched_getaffinity", None)
 CPUS = len(AFFINITY(0)) if AFFINITY else 0
 COUNTS = [sys.executable, "-c", "import os; print(len(os.sched_getaffinity(0)))"]
+PLACES = witness._places
 
 
 @unittest.skipUnless(CPUS > 2, "needs a CPU mask to narrow, and more than two CPUs in it")
@@ -59,6 +63,66 @@ class TestASuiteTheGateStartsHasItsShareOfTheMachine(RepoCase):
         code, tail = evidence.run_suite(self.ctx(), COUNTS)
         self.assertEqual((0, "1"), (code, tail.strip()))
 
+
+    def test_runs_at_once_never_share_a_cpu(self):
+        """Pinned by their place, not by a pid that two gates can share modulo the machine."""
+        taken = []
+        for place in (0, 1):
+            with witness._at_most(1, place):
+                taken.append(frozenset(AFFINITY(0)))
+        self.assertTrue(taken[0].isdisjoint(taken[1]))
+
+
+class TestTheClonesSuitesTakeTurns(RepoCase):
+    """Six to twelve sessions finished on one 24-thread machine at once, each Stop starting its
+    suites; the load reached 30 to 44, suites that pass alone failed under it, and the machine
+    went down twice in a day."""
+
+    PRINTS = [sys.executable, "-c", "print('ran')"]
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.places = self.tmp / "places"
+        for name, value in (("_places", mock.Mock(return_value=1)), ("_WAIT_EVERY", 0.05)):
+            patched = mock.patch.object(witness, name, value)
+            patched.start()
+            self.addCleanup(patched.stop)
+
+    def run_it(self, limit: float = 30):
+        return witness.run_bounded(self.PRINTS, self.repo, dict(os.environ), limit, 1, self.places)
+
+    def test_a_suite_waits_while_every_place_is_taken(self):
+        with store.file_lock(self.places / "0.lock", timeout=1):
+            started = time.monotonic()
+            with self.assertRaises(witness.RanOutOfTime) as ran_out:
+                self.run_it(limit=0.5)
+            self.assertGreaterEqual(time.monotonic() - started, 0.5)
+            self.assertEqual(0.5, ran_out.exception.seconds)
+        self.assertEqual("ran", self.run_it().stdout.strip())
+
+    def test_a_place_whose_holder_died_is_taken_at_once(self):
+        dead = subprocess.Popen([sys.executable, "-c", "pass"])
+        dead.wait()
+        self.places.mkdir()
+        (self.places / "0.lock").write_text(json.dumps(
+            {"pid": dead.pid, "acquired_at": time.time(), "identity": store.lock_identity()}))
+        self.assertEqual("ran", self.run_it(limit=5).stdout.strip())
+
+    def test_the_place_is_let_go_when_the_run_ends(self):
+        self.run_it()
+        self.assertEqual([], list(self.places.glob("*.lock")))
+
+    def test_the_founder_speaking_ends_the_wait(self):
+        with store.file_lock(self.places / "0.lock", timeout=1), \
+                mock.patch.object(witness, "_spoken", side_effect=[False, True]):
+            with self.assertRaises(witness.FounderSpoke):
+                self.run_it()
+
+    def test_half_the_machine_at_the_gates_share(self):
+        for cpus, share, places in ((24, 4, 3), (4, 4, 1), (24, 0, 1), (8, 1, 4)):
+            with mock.patch.object(witness.os, "sched_getaffinity", create=True,
+                                   return_value=set(range(cpus))):
+                self.assertEqual(places, PLACES(share), (cpus, share))
 
 
 class TestTheShareIsTheFoundersToSet(RepoCase):

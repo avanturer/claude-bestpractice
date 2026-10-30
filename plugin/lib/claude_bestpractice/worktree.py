@@ -26,8 +26,10 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from . import store
@@ -1243,7 +1245,8 @@ def _release(ctx: GitContext, tree: tuple, record_path: Path, notes: list[str] |
     """
     path, branch = tree
     where = main_checkout(ctx)
-    if Path(path).resolve() == where.resolve():
+    standing = Path(path).resolve()
+    if standing == where.resolve():
         return False
     ours = _database_of_ours(ctx, Path(path))
     # `--force` is never this plugin's idea: it is passed only where the session typed it
@@ -1271,13 +1274,110 @@ def _release(ctx: GitContext, tree: tuple, record_path: Path, notes: list[str] |
         with contextlib.suppress(OSError):
             record_path.unlink()
 
-    _carry_the_rest(ctx, where, branch, ours, notes if notes is not None else [])
+    _carry_the_rest(ctx, (where, standing), branch, ours, notes if notes is not None else [])
     return True
 
 
-def _carry_the_rest(ctx: GitContext, where: Path, branch: str,
+# How long a process left running in a removed tree has to stop before it is killed.
+STOP_GRACE_SECONDS = 5.0
+
+
+def stop_what_ran_in(tree: Path) -> list[str]:
+    """Stop the processes still running in a tree that was just removed. Their names.
+
+    A dev server started in a tree outlives `git worktree remove`: Metro, expo and uvicorn
+    went on holding the tree's port and its database, serving code no longer on disk, until
+    somebody went looking. This user's only, only those whose directory was in the tree, and
+    never this process, its parents or a Claude Code session. Where processes cannot be read
+    that way, macOS and Windows among them, nothing is stopped.
+    """
+    found = _running_in(tree)
+    _signal(found, signal.SIGTERM)
+    deadline = time.monotonic() + STOP_GRACE_SECONDS
+    while time.monotonic() < deadline and any(_alive(pid) for pid in found):
+        time.sleep(0.1)
+    _signal([pid for pid in found if _alive(pid)], signal.SIGKILL)
+    return sorted(set(found.values()))
+
+
+def _running_in(tree: Path) -> dict[int, str]:
+    """This user's processes whose directory is `tree` or under it, by pid, with their names."""
+    procs = Path("/proc")
+    if not procs.is_dir():
+        return {}
+    spared = _this_and_its_parents()
+    found: dict[int, str] = {}
+    for entry in procs.iterdir():
+        if not entry.name.isdigit() or int(entry.name) in spared:
+            continue
+        try:
+            if entry.stat().st_uid != os.getuid():
+                continue
+            where = os.readlink(entry / "cwd").removesuffix(" (deleted)")
+            argv = (entry / "cmdline").read_bytes().split(b"\0")
+            name = (entry / "comm").read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            continue
+        if Path(where).is_relative_to(tree) and not _a_claude_session(argv):
+            found[int(entry.name)] = name
+    return found
+
+
+def _this_and_its_parents() -> set[int]:
+    """This process and every process above it, read off `/proc/<pid>/stat`."""
+    chain: set[int] = set()
+    pid = os.getpid()
+    while pid > 1 and pid not in chain:
+        chain.add(pid)
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
+            pid = int(stat.rsplit(")", 1)[1].split()[1])
+        except (OSError, IndexError, ValueError):
+            break
+    return chain
+
+
+def _a_claude_session(argv: list[bytes]) -> bool:
+    """Whether a command line is Claude Code's own, run as `claude` or through node."""
+    return any(Path(os.fsdecode(word)).name in ("claude", "claude.exe") or b"claude-code" in word
+               for word in argv[:2])
+
+
+def _signal(pids, sent: int) -> None:
+    for pid in pids:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.kill(pid, sent)
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return not _a_zombie(pid)
+
+
+def _a_zombie(pid: int) -> bool:
+    """A child that exited and was not yet reaped answers `kill 0`, and is stopped already."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return stat.rsplit(")", 1)[-1].split()[:1] == ["Z"]
+
+
+def _carry_the_rest(ctx: GitContext, trees: tuple[Path, Path], branch: str,
                     ours: tuple | None, notes: list[str]) -> None:
-    """Everything the tree was given that is not the tree: the database, and the siblings."""
+    """Everything the tree was given that is not the tree: what still ran in it, the database,
+    and the siblings. `trees` is the main checkout and the tree that went.
+
+    What ran there goes first: a server holding the database keeps it from being dropped."""
+    where, gone = trees
+    stopped = stop_what_ran_in(gone)
+    if stopped:
+        notes.append(f"{len(stopped)} process(es) still running there: {', '.join(stopped[:4])}")
     dropped = drop_database(*ours) if ours else ""
     if dropped:
         notes.append(f"the database {dropped}")

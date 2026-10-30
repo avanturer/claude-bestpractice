@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 import unittest
 
-from helpers import RepoCase
+from helpers import RepoCase, git
 
 from claude_bestpractice import board, store
 
@@ -57,6 +57,7 @@ class TestAnItemSeenTwiceIsOneItem(RepoCase):
     def test_the_same_words_on_another_branch_are_another_item(self):
         """Two sessions hitting the same defect on two branches are two open items."""
         self.write("api/orders.py", "print('x')\n")
+        git(["branch", "feat/orders"], self.repo)
         self.add(branch="main")
         self.add(branch="feat/orders")
         self.assertEqual(2, len(board.open_items(self.ctx(), with_provenance=False)))

@@ -255,6 +255,24 @@ class TestAStandingRuleWhoseSubjectIsGone(RepoCase):
         self.rule("The importer used to live in old/importer.py.\n")
         self.assertEqual([], knowledge.stale_rules(self.ctx()))
 
+    def test_two_words_joined_by_a_slash_are_not_a_path(self):
+        """«checkpoint save/restore» in a founder's rule was reported on every session start
+        as a file that is not here."""
+        self.rule("- Every new scraper must have at least: test for parsing response, test for "
+                  "checkpoint save/restore\nCI/CD must always pass before release 1.2/1.3.\n"
+                  "Never commit package.json/package-lock.json apart.\n")
+        self.assertEqual([], knowledge.stale_rules(self.ctx()))
+
+    def test_a_path_under_a_directory_the_tree_has_is_judged_without_an_extension(self):
+        self.write("docs/index.md", "x\n")
+        self.rule("Always update docs/runbook before a release.\n")
+        self.assertIn("docs/runbook", knowledge.stale_rules(self.ctx())[0])
+
+    def test_a_path_that_starts_with_a_dot_is_read_whole(self):
+        self.write(".claude/rules/testing.md", "x\n")
+        self.rule("Always read .claude/rules/testing.md before writing a test.\n")
+        self.assertEqual([], knowledge.stale_rules(self.ctx()))
+
     def test_a_url_is_not_a_path_in_this_repository(self):
         self.rule("Always open issues at github.com/o/r/issues before starting.\n")
         self.assertEqual([], knowledge.stale_rules(self.ctx()))

@@ -631,6 +631,71 @@ def _who_is_there(ctx: GitContext, tree: Path, session_id: str = "", ours: bool 
     return line
 
 
+# The `git stash` verbs that take an entry off the list. Every worktree of a clone reads and
+# writes the one `refs/stash`, so the entry on top is whichever tree stashed last.
+STASH_TAKES = frozenset({"pop", "drop", "clear", "branch"})
+_STASHED_ON = re.compile(r"^(?:WIP on|On) (?P<branch>[^:]+):")
+
+
+def foreign_stash(tree: Path, args: list[str]) -> tuple[str, str] | None:
+    """The entry `git stash <args>`, run in `tree`, would take that another branch stashed:
+    (entry, its branch). None when it takes none, or git cannot say.
+
+    Checked live: `git stash pop` in one session's tree took the unfinished work another
+    session's tree had stashed a minute before, and that session's work was then nowhere.
+    """
+    from .gitctx import GitError, resolve
+
+    if not args or args[0] not in STASH_TAKES:
+        return None
+    try:
+        here = resolve(tree)
+    except (GitError, OSError):
+        return None
+    wanted = _stash_named(args)
+    for ref, branch in _stash_entries(here) if here.branch not in ("", "HEAD") else []:
+        if wanted in (None, ref) and branch not in ("", "(no branch)", here.branch):
+            return ref, branch
+    return None
+
+
+def _stash_named(args: list[str]) -> str | None:
+    """The entry a taking `git stash` names, `stash@{0}` when it names none; None for `clear`,
+    which takes them all."""
+    if args[0] == "clear":
+        return None
+    named = [arg for arg in args[1:] if not arg.startswith("-")][1 if args[0] == "branch" else 0:]
+    wanted = named[0] if named else "stash@{0}"
+    return f"stash@{{{wanted}}}" if wanted.isdigit() else wanted
+
+
+def _stash_entries(here: GitContext) -> list[tuple[str, str]]:
+    """The clone's stash list, each entry with the branch it was stashed on, "" where its
+    subject does not say."""
+    from .gitctx import _status
+
+    code, listed = _status(["stash", "list", "--format=%gd%x00%gs"], here.worktree_root)
+    entries: list[tuple[str, str]] = []
+    for line in listed.splitlines() if code == 0 else []:
+        ref, _, subject = line.partition("\x00")
+        found = _STASHED_ON.match(subject)
+        entries.append((ref, found["branch"] if found else ""))
+    return entries
+
+
+def stash_refusal(verb: str, ref: str, branch: str) -> str:
+    """Why a `git stash` that would take another tree's entry is refused, and what to run."""
+    return (
+        f"claude-bestpractice: `git stash {verb}` would take {ref}, which was stashed on "
+        f"{branch}. Every tree of this clone shares one stash list, so that is another tree's "
+        "unfinished work, and taking it off the list takes it from whoever left it there.\n"
+        "  To bring it into this tree and leave it on the list:\n"
+        f"  git stash apply {ref}\n"
+        "  To find this branch's own entry:\n"
+        "  git stash list"
+    )
+
+
 def split_git(argv: list[str]) -> tuple[list[str], str, list[str]]:
     """A git command as the trees `-C` and `--work-tree` point it at, its subcommand, and
     that subcommand's own arguments. All three empty for anything that is not git.

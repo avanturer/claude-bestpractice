@@ -465,7 +465,7 @@ def run_suite(ctx: GitContext, command: list[str], where: Path | None = None,
     limit = witness.timeout_for() if seconds is None else max(1.0, seconds)
     try:
         proc = witness.run_bounded(command, where or ctx.worktree_root, env, limit,
-                                   witness.cpus_for(ctx))
+                                   witness.cpus_for(ctx), witness.places_for(ctx))
     except FileNotFoundError:
         return -1, f"test command not found: {command[0]}"
     except OSError as exc:
@@ -1672,7 +1672,8 @@ def _rerun_committed(ctx: GitContext, command: list[str], where: Path, until: fl
     env = dict(os.environ)
     env[VERIFYING_ENV] = _issue_nonce(ctx)
     try:
-        proc = witness.run_bounded(command, where, env, left, witness.cpus_for(ctx))
+        proc = witness.run_bounded(command, where, env, left, witness.cpus_for(ctx),
+                                   witness.places_for(ctx))
     finally:
         _retire_nonce(ctx, env[VERIFYING_ENV])
     if proc.returncode == 0:
@@ -2223,6 +2224,9 @@ def _shared_environment(ctx: GitContext, previous: dict) -> str:
 GREEN_FILE = "last-green.json"
 
 
+GREEN_DIR = "green"
+
+
 def _green_path(ctx: GitContext, branch: str = ""):
     """One file per branch, in the git common dir.
 
@@ -2238,8 +2242,35 @@ def _green_path(ctx: GitContext, branch: str = ""):
     a green run on `feat/a` answered for `feat/b` — the same defect `_unverified_here` was
     fixed for, still open here in the permissive direction.
     """
-    name = re.sub(r"[^A-Za-z0-9._-]", "-", branch or ctx.branch or "detached") or "detached"
-    return store.tier_b(ctx, "green", f"{name}.json")
+    return store.tier_b(ctx, GREEN_DIR, f"{_record_name(branch or ctx.branch)}.json")
+
+
+def _record_name(branch: str) -> str:
+    """The file name a branch's green and run records are kept under."""
+    return re.sub(r"[^A-Za-z0-9._-]", "-", branch or "detached") or "detached"
+
+
+def forget_gone_branches(ctx: GitContext) -> int:
+    """Drop the green and run records of branches this clone no longer has. How many went.
+
+    One file per branch, written on every run and removed by nothing: 256 of one clone's 290
+    green records were about branches deleted after their merge. A branch that is gone is
+    neither merged nor pushed again, and a new one under its name is new work.
+    """
+    from .gitctx import known_branches
+
+    present = known_branches(ctx)
+    if present is None:
+        return 0
+    kept = {_record_name(branch) for branch in present} | {_record_name(ctx.branch)}
+    gone = 0
+    for name in (GREEN_DIR, RUN_FILE):
+        directory = store.tier_b(ctx, name)
+        for path in sorted(directory.glob("*.json")) if directory.is_dir() else []:
+            if path.stem not in kept:
+                path.unlink(missing_ok=True)
+                gone += 1
+    return gone
 
 
 def tree_hash(ctx: GitContext) -> str:
@@ -2425,8 +2456,7 @@ RUN_FILE = "runs"
 
 def _run_path(ctx: GitContext, branch: str = ""):
     """Where "a suite ran here" is written, beside "and it passed". Tier B, per branch."""
-    name = re.sub(r"[^A-Za-z0-9._-]", "-", branch or ctx.branch or "detached") or "detached"
-    return store.tier_b(ctx, RUN_FILE, f"{name}.json")
+    return store.tier_b(ctx, RUN_FILE, f"{_record_name(branch or ctx.branch)}.json")
 
 
 def _lasted(stamp: object) -> str:

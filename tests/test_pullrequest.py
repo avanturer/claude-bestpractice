@@ -2704,6 +2704,7 @@ class TestTheBoardStopsSayingThereIsNone(PRCase):
         self.assertFalse(self.said_none())
 
     def test_another_branchs_is_left_standing(self):
+        git(["branch", "feat/y"], self.repo)
         board.add_open_item(self.ctx(), item_id=f"{pullrequest.MISSING_ITEM}feat/y-1",
                             text="NO PULL REQUEST for finished work on feat/y", branch="feat/y",
                             session_id="s1", subject_paths=[])

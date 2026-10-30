@@ -397,7 +397,7 @@ def _spawn(ctx: GitContext, argv: list[str], env: dict[str, str] | None,
            where: Path | None, limit: float) -> subprocess.CompletedProcess | None:
     try:
         return run_bounded(argv, where or ctx.worktree_root, {**os.environ, **(env or {})}, limit,
-                           cpus_for(ctx))
+                           cpus_for(ctx), places_for(ctx))
     except OSError:
         return None
 
@@ -412,8 +412,65 @@ def cpus_for(ctx: GitContext) -> int:
         return 0
 
 
+PLACES_DIR = "witness-places"
+# How often a run waiting for its place looks again, and listens for the founder.
+_WAIT_EVERY = 2.0
+
+
+def places_for(ctx: GitContext) -> Path:
+    """Where the clone's places to run a suite are held, one lock file each."""
+    from . import store
+
+    return store.tier_b(ctx, PLACES_DIR)
+
+
+def _places(cpus: int) -> int:
+    """How many suites the gates of one clone run at once: as many as fit in half the CPUs this
+    process may use at `cpus` each, the other half left to the sessions; one where `cpus` is
+    every CPU."""
+    getter = getattr(os, "sched_getaffinity", None)
+    try:
+        total = len(getter(0)) if getter is not None else (os.cpu_count() or 1)
+    except OSError:
+        total = os.cpu_count() or 1
+    return max(1, total // (2 * cpus)) if cpus > 0 else 1
+
+
 @contextlib.contextmanager
-def _at_most(cpus: int):
+def _a_place(places: Path | None, cpus: int, limit: float, deadline: float):
+    """Hold one of the clone's places to run a suite, waiting while every one is taken. Yields
+    the place's number, or -1 where there is no queue to wait in.
+
+    Each session's Stop ran its suites the moment its turn ended. Six to twelve sessions on one
+    24-thread machine finished together, the load reached 30 to 44, suites that pass alone
+    failed under it, and the machine went down twice in a day. A place is held for the run and
+    let go when it ends; a holder that died gives its place up at once.
+    """
+    if places is None:
+        yield -1
+        return
+    from . import store
+
+    while True:
+        for number in range(_places(cpus)):
+            with contextlib.ExitStack() as held:
+                try:
+                    held.enter_context(store.file_lock(
+                        places / f"{number}.lock", timeout=0,
+                        stale_after=max(deadline - time.monotonic(), 0) + 300))
+                except store.LockTimeout:
+                    continue
+                yield number
+                return
+        if _spoken():
+            raise FounderSpoke()
+        if time.monotonic() >= deadline:
+            raise RanOutOfTime(limit)
+        time.sleep(_WAIT_EVERY)
+
+
+@contextlib.contextmanager
+def _at_most(cpus: int, place: int = -1):
     """Start processes inside this on at most `cpus` of the CPUs this one may use.
 
     A suite's runner sizes its pool by the CPUs it is allowed, not by the machine: jest takes
@@ -423,32 +480,41 @@ def _at_most(cpus: int):
     one WSL machine took its memory to 4 GB of 47 (#267). The mask bounds every runner at
     once, where a `--maxWorkers` would have to be known, and accepted, by each.
 
-    Which CPUs turns on this process's id, so the gates of several sessions spread over the
-    machine instead of all queueing on its first few. Where the mask cannot be read or set —
-    macOS and Windows have no such call — the run is started as it always was.
+    Which CPUs turns on the place the run holds, so runs at once never share one, or on this
+    process's id where it holds none. Where the mask cannot be read or set — macOS and
+    Windows have no such call — the run is started as it always was.
     """
-    getter = getattr(os, "sched_getaffinity", None)
-    setter = getattr(os, "sched_setaffinity", None)
-    allowed: list[int] = []
-    if cpus > 0 and getter is not None and setter is not None:
-        with contextlib.suppress(OSError):
-            allowed = sorted(getter(0))
+    allowed = _narrowable(cpus)
     pinned = False
     if len(allowed) > cpus:
-        start = os.getpid() % len(allowed)
+        start = (place * cpus if place >= 0 else os.getpid()) % len(allowed)
         with contextlib.suppress(OSError):
-            setter(0, {allowed[(start + step) % len(allowed)] for step in range(cpus)})
+            os.sched_setaffinity(0, {allowed[(start + step) % len(allowed)]
+                                     for step in range(cpus)})
             pinned = True
     try:
         yield
     finally:
         if pinned:
             with contextlib.suppress(OSError):
-                setter(0, allowed)
+                os.sched_setaffinity(0, allowed)
+
+
+def _narrowable(cpus: int) -> list[int]:
+    """The CPUs this process may use, where `cpus` narrows them and the mask can be read and
+    set; empty anywhere else."""
+    getter = getattr(os, "sched_getaffinity", None)
+    if cpus <= 0 or getter is None or getattr(os, "sched_setaffinity", None) is None:
+        return []
+    try:
+        return sorted(getter(0))
+    except OSError:
+        return []
 
 
 def run_bounded(argv: list[str], where: Path, env: dict[str, str],
-                limit: float, cpus: int = 0) -> subprocess.CompletedProcess:
+                limit: float, cpus: int = 0, places: Path | None = None
+                ) -> subprocess.CompletedProcess:
     """Run a suite this gate started, for at most `limit` seconds, on at most `cpus` CPUs, and
     leave none of it running.
 
@@ -464,24 +530,28 @@ def run_bounded(argv: list[str], where: Path, env: dict[str, str],
     open, and when it ends — finished, killed at the limit, or stopped because the founder
     typed — whatever is left of its process group is killed with it. Raises `RanOutOfTime`
     at the limit, `FounderSpoke` for the founder (`until_spoken`), and OSError when the
-    program cannot be started. `cpus` is `witness_cpus`; see `_at_most`.
+    program cannot be started. `cpus` is `witness_cpus`; see `_at_most`. `places` is the
+    clone's queue (`places_for`), and the time spent waiting in it counts against `limit`.
     """
     if _spoken():
         raise FounderSpoke()
-    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
-        with _at_most(cpus):
+    deadline = time.monotonic() + limit
+    with _a_place(places, cpus, limit, deadline) as place, \
+            tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        with _at_most(cpus, place):
             proc = subprocess.Popen(argv, cwd=str(where), stdout=out, stderr=err, env=env,
                                     start_new_session=True)
         try:
-            _wait(proc, limit)
+            _wait(proc, limit, deadline)
         finally:
             _end(proc)
         return subprocess.CompletedProcess(argv, proc.returncode, _read(out), _read(err))
 
 
-def _wait(proc: subprocess.Popen, limit: float) -> None:
-    """Wait for a run to end, for at most `limit` seconds, and only while the founder is quiet."""
-    deadline = time.monotonic() + limit
+def _wait(proc: subprocess.Popen, limit: float, deadline: float | None = None) -> None:
+    """Wait for a run to end, for at most `limit` seconds or until `deadline` where the run
+    waited for its place first, and only while the founder is quiet."""
+    deadline = time.monotonic() + limit if deadline is None else deadline
     while True:
         left = deadline - time.monotonic()
         if left <= 0:
