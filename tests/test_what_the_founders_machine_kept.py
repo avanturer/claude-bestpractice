@@ -101,8 +101,13 @@ class TestWhatGrewWithoutLimit(RepoCase):
         box.mkdir(parents=True, exist_ok=True)
         old = [{"text": "a fact", "created_at": time.time() - inbox.RETENTION_SECONDS - 60}]
         store.write_json(box / "gone-session.json", old)
+        store.write_json(box / "just-put-back.json", [{"text": "no time on it"}])
         store.write_json(box / f"{sessions.safe_id('live-session')}.json", old)
+        long_ago = time.time() - inbox.RETENTION_SECONDS - 60
+        for name in ("gone-session.json", f"{sessions.safe_id('live-session')}.json"):
+            os.utime(box / name, (long_ago, long_ago))
         self.assertEqual(1, inbox.drop_unread_boxes(ctx))
+        self.assertTrue((box / "just-put-back.json").exists(), "a box written today is kept")
         self.assertFalse((box / "gone-session.json").exists())
         self.assertTrue((box / f"{sessions.safe_id('live-session')}.json").exists())
 

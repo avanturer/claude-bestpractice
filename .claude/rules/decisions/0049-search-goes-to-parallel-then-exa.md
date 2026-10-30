@@ -5,14 +5,15 @@ date: 2026-10-30
 ---
 
 ## Decision
-**The plugin ships Parallel's and Exa's search servers** (`plugin/.mcp.json`, keyless), and
+**The plugin ships Parallel's Search MCP and Exa's** (`plugin/.mcp.json`, keyless), and
 answers the harness's WebSearch with Parallel's `web_search`; with Exa's when Parallel returns
 nothing; with WebSearch itself only when neither answers. The answer names Exa for what
 Parallel's results miss.
 
 **Exa waits for Parallel.** A call to Exa's search from a loop that has not searched through
-Parallel in fifteen minutes is sent back to it. **Every query is scanned before it leaves**, by
-whichever tool: a credential in it is refused. Parallel's and Exa's tools run without a prompt.
+Parallel in fifteen minutes is sent back to it. **A query is scanned before it leaves**, through
+WebSearch, Parallel or Exa: a credential in it is refused. Parallel's and Exa's tools then run
+without a prompt; WebFetch keeps asking per host, as the harness has it.
 `route_search off` leaves every search tool as the harness has it.
 
 ## Why
@@ -29,7 +30,10 @@ at describing one page.
 - **Exa first.** A pinpoint engine on every broad question.
 - **Keys in the plugin's config.** Both servers are free without one; a project's own server
   at the same address wins over the plugin's.
+- **Parallel's newer `mcp.parallel.ai`.** The same two tools for 156 more always-on tokens, and
+  beside a project that connects `search.parallel.ai` already, as Fuddy does, both: +758 there.
 
 ## Cost accepted
-A routed search can return more text than WebSearch's summary. A founder who also connects
-Parallel at its legacy address (`search.parallel.ai`) has its tools twice.
+About 780 tokens of tool names and server instructions in every session of a project that does
+not connect these servers itself; none in one that does. Parallel calls this endpoint legacy: if
+it goes, search falls through to Exa and WebSearch until a release moves it.

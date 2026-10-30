@@ -81,7 +81,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "^(Write|Edit|MultiEdit|NotebookEdit|Bash|EnterWorktree|Agent|Task|WebSearch|WebFetch)$|__((create|merge|update)_pull_request|enable_pr_auto_merge|pull_request_read|web_search(_advanced)?(_exa)?|web_fetch(_exa)?|web_decisions)$",
+        "matcher": "^(Write|Edit|MultiEdit|NotebookEdit|Bash|EnterWorktree|Agent|Task|WebSearch)$|__((create|merge|update)_pull_request|enable_pr_auto_merge|pull_request_read|web_search(_advanced)?(_exa)?|web_fetch(_exa)?|web_decisions)$",
         "hooks": [
           {
             "type": "command",

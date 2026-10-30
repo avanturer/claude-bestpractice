@@ -19,10 +19,10 @@ EXA = "mcp__plugin_bestpractice_exa__web_search_exa"
 
 class TestWhatIsJudged(RepoCase):
     def test_the_search_and_page_tools_of_every_kind_are_judged(self):
-        for tool in ("WebSearch", "WebFetch", PARALLEL, EXA, "mcp__Parallel_Search__web_fetch",
+        for tool in ("WebSearch", PARALLEL, EXA, "mcp__Parallel_Search__web_fetch",
                      "mcp__Exa__web_fetch_exa", "mcp__exa__web_search_advanced_exa"):
             self.assertTrue(search.judged(tool), tool)
-        for tool in ("Bash", "Read", "mcp__github__search_code", "mcp__x__web_searcher"):
+        for tool in ("Bash", "Read", "WebFetch", "mcp__github__search_code", "mcp__x__web_searcher"):
             self.assertFalse(search.judged(tool), tool)
 
     def test_only_parallel_and_exa_run_unasked(self):
@@ -34,7 +34,7 @@ class TestWhatIsJudged(RepoCase):
     def test_the_hook_is_wired_for_every_one_of_them(self):
         hooks = json.loads((REPO_ROOT / "plugin" / "hooks" / "hooks.json").read_text())
         matcher = hooks["hooks"]["PreToolUse"][0]["matcher"]
-        for tool in ("WebSearch", "WebFetch", PARALLEL, EXA, "mcp__Exa__web_fetch_exa"):
+        for tool in ("WebSearch", PARALLEL, EXA, "mcp__Exa__web_fetch_exa"):
             self.assertTrue(harness_matches(matcher, tool), tool)
 
 

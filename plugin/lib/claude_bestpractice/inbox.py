@@ -246,13 +246,22 @@ def drop_unread_boxes(ctx: GitContext) -> int:
     now = time.time()
     gone = 0
     for box in store.tier_b(ctx, DIRNAME).glob("*.json"):
-        if sessions.get(ctx, box.stem) is not None:
+        if sessions.get(ctx, box.stem) is not None or _written_within(box, now):
             continue
         if _pruned(_notes(store.read_json(box, default=[])), now):
             continue
         box.unlink(missing_ok=True)
         gone += 1
     return gone
+
+
+def _written_within(box, now: float) -> bool:
+    """Whether a box was written in the last `RETENTION_SECONDS`: one a repair has just put back
+    holds notes that never carried a time, and is nobody's to judge yet."""
+    try:
+        return now - box.stat().st_mtime < RETENTION_SECONDS
+    except OSError:
+        return True
 
 
 def carried(ctx: GitContext) -> dict[str, int]:

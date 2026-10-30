@@ -53,7 +53,7 @@ _READERS = frozenset({
     "cat", "bat", "batcat", "less", "more", "head", "tail", "nl", "xxd", "od", "hexdump",
     "jq", "yq", "diff", "grep", "egrep", "fgrep", "rg", "ag", "ack", "find", "fd", "ls",
     "tree", "wc", "sort", "uniq", "cut", "awk", "sed", "column", "file", "stat", "env",
-    "printenv", "psql", "sqlite3", "curl", "wget", "claude-bp-out",
+    "printenv", "psql", "sqlite3", "curl", "wget",
 })
 _GIT_READS = frozenset({
     "show", "diff", "log", "blame", "grep", "ls-files", "ls-tree", "cat-file", "status",

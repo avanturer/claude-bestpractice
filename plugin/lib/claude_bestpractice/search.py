@@ -14,8 +14,9 @@ from typing import Any
 
 from . import redact
 
-# The harness's own tools that send text to a search engine or a page's host.
-_HARNESS = frozenset({"WebSearch", "WebFetch"})
+# The harness's own search, which this plugin routes. Its page fetch asks the founder per host,
+# and a process start on every one of them is a cost no other read here pays.
+_HARNESS = frozenset({"WebSearch"})
 
 # An MCP server's search and page tools, by the names Parallel and Exa give them: the plugin's
 # own servers (`mcp__plugin_bestpractice_parallel__web_search`), a connector, a project's.

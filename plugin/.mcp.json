@@ -2,7 +2,7 @@
   "mcpServers": {
     "parallel": {
       "type": "http",
-      "url": "https://mcp.parallel.ai/mcp"
+      "url": "https://search.parallel.ai/mcp"
     },
     "exa": {
       "type": "http",

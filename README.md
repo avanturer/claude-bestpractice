@@ -676,6 +676,11 @@ claude-bestpractice holds **~332 tokens** of always-on context across four compo
 self-imposed ceiling of 400. `make check` fails the build if it goes over, and the
 ceiling has been held by trimming descriptions rather than by raising it — twice.
 
+The two search servers it ships are counted apart, because they are tools rather than text:
+about 780 tokens of tool names and instructions in a project that does not connect Parallel's
+Search MCP and Exa itself, and nothing in one that does, where the project's own copy is used.
+In return a passing test run of 2.5 MB costs 2,600 characters instead of the window.
+
 Everything else the plugin knows is loaded on demand: skills only when their trigger
 fires, the board only at session start, the work ledger only when asked for. The budget
 exists because the cost is itemised in your own usage view while the benefit is
