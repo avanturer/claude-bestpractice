@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from helpers import BIN, RepoCase, sid
 
@@ -67,7 +68,7 @@ class TestTheAnswerTheModuleGets(RepoCase):
         first, _, body = said["stdout"].partition("\n")
         kept = first.split("the whole output is in ")[1].split(" — ")[0]
         self.assertIn("4000 passed", body)
-        self.assertEqual(VERBOSE_RUN, open(kept, encoding="utf-8").read())
+        self.assertEqual(VERBOSE_RUN, Path(kept).read_text(encoding="utf-8"))
         self.assertIn("/.claude/claude-bestpractice/out/", kept)
         status = subprocess.run(["git", "status", "--porcelain"], cwd=self.repo,
                                 capture_output=True, text=True).stdout

@@ -441,9 +441,9 @@ def _a_place(places: Path | None, cpus: int, limit: float, deadline: float):
     """Hold one of the clone's places to run a suite, waiting while every one is taken. Yields
     the place's number, or -1 where there is no queue to wait in.
 
-    Each session's Stop ran its suites the moment its turn ended. Six to twelve sessions on one
-    24-thread machine finished together, the load reached 30 to 44, suites that pass alone
-    failed under it, and the machine went down twice in a day. A place is held for the run and
+    Each session's Stop ran its suites the moment its turn ended. With six to twelve sessions on
+    one 24-thread machine the load reached 30 to 44, suites that pass alone failed under it,
+    and the machine went down twice in a day. A place is held for the run and
     let go when it ends; a holder that died gives its place up at once.
     """
     if places is None:
