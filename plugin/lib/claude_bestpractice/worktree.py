@@ -621,6 +621,52 @@ def _within(path: Path, directory: Path) -> bool:
         return False
 
 
+def level_with_the_trunk(ctx: GitContext, others: list) -> str:
+    """Fast-forward the main checkout to the trunk it lags, from a session starting in it.
+    What was done or why it was not, for the board; "" where nothing needed doing.
+
+    Nothing else moves that tree: sessions work in their own trees and merge on GitHub, so a
+    founder's main checkout stood 107 commits behind `origin/main` while every session started
+    in it read, and was told to fix, code the trunk had replaced. Only from the tree itself,
+    only where no other live session is in it, only on the trunk's own branch, and only
+    `--ff-only`, which makes no commit and which git refuses over anything uncommitted it
+    would touch. Nothing is fetched: the trunk is as the clone last saw it.
+    """
+    from . import gitpolicy
+
+    main = main_checkout(ctx).resolve()
+    trunk = f"origin/{ctx.branch}"
+    if ctx.worktree_root.resolve() != main or ctx.branch not in gitpolicy.TRUNK_NAMES \
+            or any(Path(record.worktree).resolve() == main for record in others):
+        return ""
+    ahead, behind = _lag(main, trunk)
+    if not behind:
+        return ""
+    if ahead:
+        return (f"the main checkout has {ahead} commit(s) {trunk} does not, and is {behind} "
+                f"behind it: nothing here moves it")
+    merged = subprocess.run(["git", "merge", "--ff-only", "--quiet", trunk], cwd=str(main),
+                            capture_output=True, encoding="utf-8", errors="surrogateescape",
+                            timeout=60)
+    if merged.returncode == 0:
+        return f"the main checkout was {behind} commit(s) behind {trunk}, and now is level with it"
+    reason = next((line for line in merged.stderr.splitlines() if line.strip()), "git refused")
+    return (f"the main checkout is {behind} commit(s) behind {trunk}, and `git -C {main} merge "
+            f"--ff-only {trunk}` was refused: {reason.strip()[:160]}")
+
+
+def _lag(tree: Path, trunk: str) -> tuple[int, int]:
+    """(commits the tree has that `trunk` lacks, commits `trunk` has that the tree lacks);
+    (0, 0) where git cannot say."""
+    from .gitctx import _status
+
+    code, counted = _status(["rev-list", "--left-right", "--count", f"HEAD...{trunk}"], tree)
+    numbers = counted.split()
+    if code != 0 or len(numbers) != 2 or not all(number.isdigit() for number in numbers):
+        return 0, 0
+    return int(numbers[0]), int(numbers[1])
+
+
 def main_checkout(ctx: GitContext) -> Path:
     """The tree everything is provisioned under, from whichever tree is asking.
 

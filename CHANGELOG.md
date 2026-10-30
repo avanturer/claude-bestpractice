@@ -48,6 +48,9 @@ Code put in the background. The pull-request log held 1,016 rows for 281 branche
 items 1,298 rows for 848, three in four about deleted branches; 256 of 290 green records were for
 branches gone after their merge; and every gated write read 700 cards to learn what one session
 held. «checkpoint save/restore» in a rule was reported on every start as a file that is not here.
+And the main checkout stood 107 commits behind `origin/main`, since nothing moved it. Auditing
+it, copying the plugin's logs out to `/tmp` was refused as a write to them, twice, while `cp -t
+<the plugin's state> x` would have written there unseen.
 
 **Six to twelve sessions on one machine.** Each Stop started its suites the moment its turn
 ended; the load reached 30 to 44 on 24 threads, suites that pass alone were filed red, and the
@@ -105,6 +108,12 @@ work another tree had stashed, since every tree of a clone shares one stash list
 - A tool an MCP server offers that writes files, the reference filesystem server's and Serena's,
   is judged as the `Write` of the file it names, and a move as `mv`; the gate never approves one
   in its server's place (decision 0060).
+- A copy is read off the words the shell hands it. `cp <file> "$W/copy/"` and `cp -t /tmp <file>`
+  are no longer refused as writes to the file they only read; `cp -t <dir> x`, and a `cp` whose
+  operands are all quoted, are judged as the writes they are; and `mv` counts the sources it
+  takes away.
+- A session starting in the main checkout fast-forwards it to the trunk it lags, before its
+  baseline is taken, where no other live session is in it; a refusal is named (decision 0061).
 - Every field the gates read is held against the hook payloads Claude Code 2.1.314 sends, and
   `make payloads` captures them again after an upgrade; the always-on budget counts a command
   the model is shown.

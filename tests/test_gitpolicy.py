@@ -334,6 +334,31 @@ class TestTheRuleIsAboutTheTargetNotTheSession(PolicyCase):
         )
         self.assertEqual(_verdict(proc)[0], "deny")
 
+    def test_a_copy_reads_its_sources_whichever_way_its_destination_is_named(self):
+        """Off the text with quoted spans blanked, `cp <state> "$W/copy/"` lost its
+        destination and was refused as a write to the state it only copies, and so was
+        `cp -t /tmp/x <state>`: a founder's audit copying the plugin's logs out to read them."""
+        mine = self.worktree("feat/mine")
+        state = self.repo / ".git" / "claude-bestpractice"
+        for command in (f'W=$(mktemp -d); cp -a {state}/a.jsonl {state}/green "$W/copy/"',
+                        f"cp -a -t /tmp/copy {state}/a.jsonl {state}/green",
+                        f"cp --target-directory=/tmp/copy {state}/a.jsonl"):
+            self.assertNotEqual(self.shell_in(mine, command), "deny", command)
+
+    def test_where_t_points_is_written_and_a_move_takes_its_sources(self):
+        mine = self.worktree("feat/mine")
+        for command in (f"cp -t {self.repo} .env", f"cp -at {self.repo} .env",
+                        f'cp "{self.repo / ".env"}.new" "{self.repo / ".env"}"',
+                        f"mv {self.repo / '.env'} /tmp/env-copy",
+                        f"mv -t /tmp/elsewhere {self.repo / '.env'}"):
+            self.assertEqual(self.shell_in(mine, command), "deny", command)
+
+    def shell_in(self, tree, command: str):
+        """What pre-tool decides about a shell line run in `tree`."""
+        return _verdict(self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+            "tool_input": {"command": command}, "cwd": str(tree)}, cwd=tree))[0]
+
     def test_a_heredoc_body_is_data_not_shell(self):
         """`where n_live_tup > 0` inside a heredoc looked like a redirect to a file named
         `0`, and the guard refused a write to `<cwd>/0` — a path that does not exist and

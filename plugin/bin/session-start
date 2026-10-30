@@ -520,6 +520,13 @@ def main() -> None:
     running = sessions.running()
     reaped = sessions.reap(ctx, exclude=event.session_id, live=running)
 
+    # Before the baseline is taken, so a session starting in the main checkout starts on the
+    # trunk as the clone last fetched it, and its diff is measured from there.
+    leveled = worktree.level_with_the_trunk(
+        ctx, sessions.live_sessions(ctx, exclude=event.session_id, live=running))
+    if leveled:
+        ctx = hookio.repo(event.cwd or os.getcwd())
+
     me = build_record(ctx, event)
     sessions.register(ctx, me)
     sessions.learn_names(ctx, running)
@@ -579,6 +586,7 @@ def main() -> None:
     body += _config_line(ctx, complaints)
     body += _armed_line(ctx)
     body += _swept_line(swept)
+    body += f"\n{leveled}" if leveled else ""
     body += _reclaimed_line(returned)
     body += _stranded_line(ctx)
     # Both empty in the steady state, and the steady state is what the removal above

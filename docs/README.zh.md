@@ -159,6 +159,7 @@ health: 3 live session(s), 1 reaped, 4 open item(s), 1 stale (suppressed)
 分支的工作已按祖先、补丁或内容进入主干（squash 合并留下的正是这种状态）的 worktree，会被看板
 列为已完成；需要时，`claude-bp sweep` 以同样的方式、同样的证据删除它们。worktree 删除后，仍在
 其中运行的进程——开发服务器、Metro、uvicorn——会在删除它的数据库之前被停止，删除记录会列出它们。
+在主 checkout 中启动的会话，会在其中没有其他会话时把它快进到它落后的主干，免得有人读到主干已替换的代码。
 
 每个会话都以 `SendMessage` 寻址它的名字出现：在看板上、在 `claude-bp status` 里、作为
 卡片的持有者、在拉取请求那一行，以及每一条把一个会话指向另一个会话的拒绝里。名字在每次

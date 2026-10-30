@@ -392,7 +392,8 @@ A tree counts as finished when its branch's work is in the trunk by ancestry, by
 content, which is what a squash merge leaves; asked for, `claude-bp sweep` removes the trees
 the board names, the same way and on the same proofs. Once a tree is gone, the processes still
 running in it — a dev server, Metro, uvicorn — are stopped before its database is dropped, and
-the removal names them.
+the removal names them. And a session that starts in the main checkout fast-forwards it to the
+trunk it lags, where no other session is in it, so nobody reads code the trunk has replaced.
 
 ### The three things that wait for your word
 

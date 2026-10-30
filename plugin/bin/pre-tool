@@ -739,7 +739,7 @@ BASH_REMOVES = re.compile(
 # bytes came FROM and the destination was inside our own tree. Reading a sibling checkout —
 # an `.env`, a shared key, a diff — is routine. Reported as issue #42.
 BASH_COPIES = re.compile(
-    _RUNS + r"(?:mv|cp|install|ln)\b(?P<args>(?:\s+(?:-\S+|[\w./@+~${}-]+))+)"
+    _RUNS + r"(?P<verb>mv|cp|install|ln)\b(?P<args>(?:\s+(?:-\S+|[\w./@+~${}-]+))*)"
 )
 
 # A heredoc body is DATA. `select … where n_live_tup > 0` inside one looks exactly like a
@@ -1315,7 +1315,7 @@ def bash_writes(command: str, cwd: Path) -> tuple[list[Path], str]:
     known: dict[str, str | None] = {}
     for segment, literal, here, start in _segments_with_cwd(scannable, cwd, command, known):
         carried = _writes_its_words(segment, literal, here, known)
-        for path in carried + _writes_by_moving(segment, here, known):
+        for path in carried + _writes_by_moving(segment, literal, here, known):
             if path not in out:
                 out.append(path)
         if carried:
@@ -1340,7 +1340,8 @@ def _writes_its_words(segment: str, literal: str, here: Path,
             if path is not None]
 
 
-def _writes_by_moving(segment: str, here: Path, known: dict[str, str | None]) -> list[Path]:
+def _writes_by_moving(segment: str, literal: str, here: Path,
+                      known: dict[str, str | None]) -> list[Path]:
     """The files this segment removes, or copies and moves others onto."""
     raws: list[str] = []
     # ...and every path a destructive verb names. `rm` is not a redirect, so none of
@@ -1349,13 +1350,43 @@ def _writes_by_moving(segment: str, here: Path, known: dict[str, str | None]) ->
     for match in BASH_REMOVES.finditer(segment):
         raws += [a for a in _OPERAND.findall(match.group("args")) if not a.startswith("-")]
 
-    # Destination only. The sources are reads, and refusing a read is how a guard
-    # stops being about safety and starts being about obedience.
+    # Destination only, and a move's sources, which it takes away. The other sources are
+    # reads, and refusing a read is how a guard stops being about safety and starts being
+    # about obedience. Read off the words the shell hands the command: off the text with
+    # quoted spans blanked, `cp <state> "$W/copy/"` lost its destination and was refused
+    # as a write to the state it copies, and `cp -t <state> x` wrote there unseen.
     for match in BASH_COPIES.finditer(segment):
+        words = shellcmd.segments(literal[match.start("verb"):])
+        if words:
+            raws += _copied_onto(shellcmd.without_redirections(words[0]))
+            continue
         operands = [a for a in _OPERAND.findall(match.group("args")) if not a.startswith("-")]
-        if operands:
-            raws.append(operands[-1])
+        raws += operands[-1:]
     return [path for path in (_named(raw, here, known) for raw in raws) if path is not None]
+
+
+def _copied_onto(argv: list[str]) -> list[str]:
+    """What a `cp`, `mv`, `install` or `ln` writes: where `-t` points, or its last operand,
+    and for `mv` the sources it takes away. Nothing for any other command."""
+    if not argv:
+        return []
+    operands: list[str] = []
+    into = ""
+    words = iter(argv[1:])
+    for word in words:
+        if word == "--":
+            operands += list(words)
+        elif word in ("-t", "--target-directory") or (word[:1] == "-" and word[-1:] == "t"
+                                                       and word[1:2] != "-"):
+            into = next(words, "")
+        elif word.startswith("--target-directory="):
+            into = word.split("=", 1)[1]
+        elif not word.startswith("-"):
+            operands.append(word)
+    if not into and operands:
+        into = operands.pop()
+    taken = operands if argv[0].rsplit("/", 1)[-1] == "mv" else []
+    return [into, *taken] if into else taken
 
 
 def _named(raw: str, here: Path, known: dict[str, str | None]) -> Path | None:
