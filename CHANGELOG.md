@@ -3,10 +3,13 @@
 ## v2.7.0
 
 Context economy without losing what matters, search through the plugin's own Parallel and Exa,
-and the founder's word read where they write it. A long successful test, build or install
-reaches the model as a digest with the whole kept on disk; WebSearch is answered by Parallel
-first and Exa next; `+merge` and `+release` count in an ordinary sentence and together in one
-message; and what an audit of a founder's machine found the plugin had left there is cleaned up.
+the founder's word read where they write it, and a plugin that stays true and bounded with many
+sessions on one clone. A long successful test, build or install reaches the model as a digest
+with the whole kept on disk; WebSearch is answered by Parallel first and Exa next; `+merge` and
+`+release` count in an ordinary sentence and together in one message. A pull request GitHub
+merged is settled by the number in the trunk's history, the plugin's logs keep only what is
+read, the gates' suites take turns on one machine, another tree's stash is not taken, and what
+audits of a founder's clone and machine found the plugin had left there is cleaned up.
 
 ### What broke
 
