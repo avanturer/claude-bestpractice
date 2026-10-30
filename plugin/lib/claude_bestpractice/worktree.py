@@ -948,22 +948,44 @@ def _delivered(tree: Path, trunk: str) -> bool:
     return not delivery.carries_its_own(here, trunk.split("/", 1)[-1])
 
 
-def sweep_named(ctx: GitContext) -> tuple[list[str], list[str]]:
+def sweep_named(ctx: GitContext) -> tuple[list[str], list[str], list[tuple[str, str]]]:
     """Remove the trees `needs_a_decision` names as losing nothing, as the plugin removes its
     own: `git worktree remove` without `--force`, and a branch only on proof its work is in
-    the trunk. Returns (trees removed, branches kept for work only they carry).
+    the trunk. Returns (trees removed, branches kept for work only they carry, trees left
+    with why).
 
     Run when somebody asks for it, never by a session start: the trees are another tool's,
-    and decision 0019 leaves that call to whoever runs this.
+    and decision 0019 leaves that call to whoever runs this. A tree the board named and this
+    leaves is said with its reason: "nothing to remove" over six named trees told the founder
+    nothing of the ignored files that kept every one of them (#285).
     """
     removed: list[str] = []
     kept: list[str] = []
+    left: list[tuple[str, str]] = []
     for path, branch, said in needs_a_decision(ctx):
-        if said or not branch:
-            continue
-        if _release(ctx, (path, branch), Path(), kept=kept):
+        why = _why_it_stays(ctx, Path(path), branch, said)
+        if why:
+            left.append((path, why))
+        elif _release(ctx, (path, branch), Path(), kept=kept):
             removed.append(path)
-    return removed, kept
+        else:
+            left.append((path, f"git refused to remove it; `git -C {path} status` says why"))
+    return removed, kept, left
+
+
+def _why_it_stays(ctx: GitContext, tree: Path, branch: str, said: str) -> str:
+    """Why the sweep leaves a tree the board names, by what is in it; "" for one it removes."""
+    if said == IGNORED:
+        lost = lost_with(ctx, tree) or []
+        more = f" (+{len(lost) - 3} more)" if len(lost) > 3 else ""
+        return ("holds ignored files no other tree has, which `worktree remove` would delete: "
+                f"{', '.join(lost[:3]) or 'git would not list them'}{more}")
+    if said == SUBMODULES:
+        return "holds a submodule, which `git worktree remove` refuses without --force"
+    if said == GONE:
+        return (f"its directory is gone already; `git -C {main_checkout(ctx)} worktree prune` "
+                "forgets it")
+    return "" if branch else "is on a detached HEAD, so what was committed there is on no branch"
 
 
 def _what_removal_takes(ctx: GitContext, tree: Path) -> str:
@@ -1492,12 +1514,17 @@ def _nothing_left_in(ctx: GitContext, tree: Path) -> bool:
 
 
 # What a removal this plugin decides on may take with a tree, because any tree grows it back:
-# dependency trees, bytecode and tool caches, matched as a whole path component.
+# dependency trees, bytecode and tool caches, matched as a whole path component. Build output
+# is built again from the tree's own sources, and a log is what a run printed while it ran:
+# kept for them, five of six finished trees of a founder's clone stayed over `backend/logs/`,
+# `logs/` and Android `build/` alone (#285).
 _REGROWS = frozenset({
     "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".venv",
     "venv", ".tox", ".nox", ".expo", ".gradle", ".next", ".turbo", ".parcel-cache",
+    "build", "dist", "target", ".cxx", "Pods", "DerivedData", "coverage", "htmlcov",
+    "logs", "log",
 })
-_REGROWS_SUFFIXES = (".pyc", ".pyo", ".egg-info")
+_REGROWS_SUFFIXES = (".pyc", ".pyo", ".egg-info", ".log")
 
 # A wholly ignored directory counts as a copy only where every file in it is byte-identical
 # in the main checkout, compared up to this many files. Past that it is kept rather than read.
@@ -1521,13 +1548,28 @@ def lost_with(ctx: GitContext, tree: Path) -> list[str] | None:
     main = main_checkout(ctx)
     seeded = _seeded_envs(ctx, main, tree)
     return [rel for rel in listed
-            if not _regrows(rel) and not rel.startswith(f"{store.TIER_A_DIRNAME}/")
+            if not _regrows_in(tree, rel) and not rel.startswith(f"{store.TIER_A_DIRNAME}/")
             and not _held_in(main, tree, rel) and not _seeded_here(tree, rel, seeded)]
 
 
 def _regrows(rel: str) -> bool:
     parts = [part for part in rel.split("/") if part]
     return any(part in _REGROWS or part.endswith(_REGROWS_SUFFIXES) for part in parts)
+
+
+def _regrows_in(tree: Path, rel: str) -> bool:
+    """Whether an ignored entry grows back: by its name, or, for a directory git reports whole
+    because nothing in it is tracked, by everything in it. Read down to the first file that
+    does not, never into a directory that does."""
+    if _regrows(rel):
+        return True
+    if not rel.endswith("/"):
+        return False
+    for _where, dirs, files in os.walk(tree / rel):
+        dirs[:] = [name for name in dirs if not _regrows(name)]
+        if not all(_regrows(name) for name in files):
+            return False
+    return True
 
 
 def _held_in(main: Path, tree: Path, rel: str) -> bool:

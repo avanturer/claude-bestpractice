@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-2.7.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.7.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-2541%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -390,7 +390,7 @@ the steady state, which is the state the removal produces.
 
 A tree counts as finished when its branch's work is in the trunk by ancestry, by patch or by
 content, which is what a squash merge leaves; asked for, `claude-bp sweep` removes the trees
-the board names, the same way and on the same proofs. Once a tree is gone, the processes still
+the board names, the same way and on the same proofs, and names each one it keeps with why. Once a tree is gone, the processes still
 running in it — a dev server, Metro, uvicorn — are stopped before its database is dropped, and
 the removal names them. And a session that starts in the main checkout fast-forwards it to the
 trunk it lags, where no other session is in it, so nobody reads code the trunk has replaced.

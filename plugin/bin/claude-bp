@@ -326,12 +326,14 @@ def cmd_sweep(ctx) -> int:
     """
     from claude_bestpractice import worktree
 
-    removed, kept = worktree.sweep_named(ctx)
+    removed, kept, left = worktree.sweep_named(ctx)
     for path in removed:
         print(f"removed {path}")
     for branch in kept:
         print(f"kept the branch {branch}: it carries work the trunk does not have")
-    if not removed:
+    for path, why in left:
+        print(f"kept {path}: {why}")
+    if not removed and not left:
         print("nothing to remove: every tree is in use, holds work, or was touched lately")
     return 0
 

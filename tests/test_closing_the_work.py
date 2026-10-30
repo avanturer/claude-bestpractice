@@ -14,9 +14,11 @@ So the founder's instruction, in their words: "когда из ворктри у
 from __future__ import annotations
 
 import re
+import subprocess
+import sys
 import unittest
 
-from helpers import RepoCase, git, session_record_for, sid
+from helpers import BIN, RepoCase, git, session_record_for, sid
 
 from claude_bestpractice import plan, pullrequest, worktree
 from claude_bestpractice.gitctx import resolve
@@ -515,12 +517,65 @@ class TestTheBoardNamesWhatNobodyWillComeBackTo(TreeCase):
         git(["add", "-A"], working)
         git(["commit", "-qm", "wip"], working)
         self.left_alone(working)
-        removed, kept = worktree.sweep_named(self.ctx())
+        removed, kept, left = worktree.sweep_named(self.ctx())
         self.assertEqual([str(named)], removed)
         self.assertFalse(named.exists())
         self.assertTrue(working.is_dir())
-        self.assertEqual([], kept)
+        self.assertEqual(([], []), (kept, left))
         self.assertNotIn("agent-done", git(["branch", "--format=%(refname:short)"], self.repo))
+
+    def test_sweep_says_why_it_keeps_each_tree_the_board_named(self):
+        """It said "nothing to remove" over six named trees, and every one was kept for
+        ignored files the message never mentioned (#285)."""
+        tree = self.a_squashed_tree_nobody_made_for_us("agent-export")
+        self.an_ignored_export(tree)
+        self.left_alone(tree)
+        detached = self.add_worktree("was-a-branch")
+        git(["checkout", "-q", "--detach"], detached)
+        self.left_alone(detached)
+
+        removed, _kept, left = worktree.sweep_named(self.ctx())
+        self.assertEqual([], removed)
+        said = dict(left)
+        self.assertIn("holds ignored files no other tree has", said[str(tree)])
+        self.assertIn("data/", said[str(tree)])
+        self.assertIn("detached HEAD", said[str(detached)])
+        out = subprocess.run([sys.executable, str(BIN / "claude-bp"), "sweep"], cwd=self.repo,
+                             capture_output=True, text=True, timeout=300).stdout
+        self.assertIn(f"kept {tree}: holds ignored files", out)
+        self.assertNotIn("nothing to remove", out)
+
+    def test_build_output_and_logs_do_not_keep_a_finished_tree(self):
+        """Five of six finished trees of a founder's clone stayed over `backend/logs/`,
+        `logs/` and Android `build/` alone (#285): built again, or printed by a run."""
+        tree = self.a_squashed_tree_nobody_made_for_us("agent-built")
+        exclude = self.repo / ".git" / "info" / "exclude"
+        with exclude.open("a", encoding="utf-8") as handle:
+            handle.write("logs/\nbuild/\n*.log\n")
+        for rel in ("backend/logs/scrape.txt", "logs/app.txt", "mobile/android/app/build/a.dex",
+                    "server.log"):
+            (tree / rel).parent.mkdir(parents=True, exist_ok=True)
+            (tree / rel).write_bytes(b"output\n")
+        self.left_alone(tree)
+
+        self.assertEqual([], worktree.lost_with(self.ctx(), tree))
+        removed, _kept, _left = worktree.sweep_named(self.ctx())
+        self.assertEqual([str(tree)], removed)
+
+    def test_a_directory_git_reports_whole_is_read_down_to_what_is_in_it(self):
+        """Nothing tracked in `backend/`, so git reports it whole: logs under it regrow, a
+        photo under it does not."""
+        tree = self.a_squashed_tree_nobody_made_for_us("agent-whole")
+        exclude = self.repo / ".git" / "info" / "exclude"
+        with exclude.open("a", encoding="utf-8") as handle:
+            handle.write("logs/\nexports/\n")
+        (tree / "backend" / "logs").mkdir(parents=True)
+        (tree / "backend" / "logs" / "run.txt").write_bytes(b"ran\n")
+        self.assertEqual([], worktree.lost_with(self.ctx(), tree))
+
+        (tree / "backend" / "exports").mkdir()
+        (tree / "backend" / "exports" / "listing.jpg").write_bytes(b"\xff\xd8")
+        self.assertIn("backend/exports/", worktree.lost_with(self.ctx(), tree))
 
     def test_a_detached_tree_is_named_with_no_branch(self):
         """Its commits are on no branch, so the directory is the only thing holding them."""
