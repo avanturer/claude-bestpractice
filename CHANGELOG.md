@@ -35,6 +35,12 @@ had grown to 10.9 MB; 170 tokens of killed runs and 362 inboxes of gone sessions
 compaction read a 1.1 GB transcript whole to find the founder's last messages, taking a tool's
 result for one of them.
 
+**What a founder's clone had piled up.** 24 trees, 22 GB, stood over branches whose pull
+requests had been squash-merged, and the board named none of them, since ancestry never says a
+squashed branch is in the trunk. Ten migration numbers were held twice over, each pair by two
+sessions that took "the next number" from the same trunk. And a subagent's map was ranked by
+reading every source file of the repository on every spawn, the same generic map for every task.
+
 ### What changed
 
 - The plugin is a mod too: `hooks/hooks.json` names `hooks/bestpractice.ts`, which runs inside
@@ -64,6 +70,14 @@ result for one of them.
 - A red record older than a day, about other code than the tree it is read in, is shown as
   unconfirmed and asks for a run instead of stopping new work.
 - `/plan`, `/review` and `/status` are the founder's to type and are no longer listed to the model.
+- A tree nobody is in is named as finished when its branch's work is in the trunk by patch or by
+  content too, so trees over squash-merged branches are named; `claude-bp sweep` removes the
+  ones the board names (decision 0054).
+- A merge is refused while the pull request adds a numbered migration under a number the trunk
+  already gave another file, and the refusal names the next free number (decision 0055).
+- A subagent is handed a map ranked for its own task when it is spawned. The map lists files
+  through git and keeps what it read of each blob, so a repository of 2,000 sources is mapped in
+  a third of a second once warm.
 
 Repairs: `0008-collapse-the-decision-inbox` runs again (revision 2) and the inbox now collapses
 itself past 256 KB; `0042-let-go-of-what-dead-runs-and-sessions-left` removes tokens of killed

@@ -185,3 +185,32 @@ class TestGenerate(RepoCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestItScales(RepoCase):
+    """A founder's repository of 2,000 sources took seventeen seconds to map, past the fifteen
+    the subagent hook is given: the walk read all of `node_modules` before it could skip it."""
+
+    def test_an_ignored_dependency_tree_is_never_read(self):
+        self.write(".gitignore", "node_modules/\n")
+        self.write("src/app.py", "def handler():\n    return 1\n")
+        self.write("node_modules/dep/index.js", "export function hidden() {}\n")
+        self.commit("an app beside its dependencies")
+        self.assertEqual(["src/app.py"], [fact.path for fact in repomap.scan(self.ctx())])
+
+    def test_facts_are_kept_per_blob_and_a_new_file_is_read_once(self):
+        from claude_bestpractice import store
+
+        for i in range(3):
+            self.write(f"mod{i}.py", f"def fn{i}():\n    return {i}\n")
+        self.commit("three modules")
+        repomap.generate(self.ctx(), query="fn1")
+        kept = store.read_json(store.tier_b(self.ctx(), repomap.FACTS_FILE))
+        self.assertEqual(3, len(kept["blobs"]))
+        self.write("mod3.py", "def fn3():\n    return 3\n")
+        self.assertIn("mod3.py", repomap.generate(self.ctx(), query="fn3"))
+
+    def test_a_task_map_is_given_only_where_orientation_is_hard(self):
+        self.write("one.py", "def only():\n    return 1\n")
+        self.commit("small")
+        self.assertEqual("", repomap.for_a_task(self.ctx(), "fix only"))

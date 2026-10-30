@@ -872,13 +872,50 @@ def _what_git_says(ctx: GitContext, listed: tuple, trunk: str, skip: set) -> str
         return None
     if state == _PRUNABLE:
         return GONE
-    if branch and not is_ancestor(ctx, branch, trunk):
-        return None
     # Somebody's, whatever the branch says: touched lately, or holding work git would refuse
     # to remove. Neither is a tree "nobody is in", and the line says removing it loses nothing.
-    if not (_left_alone(tree) and _nothing_but_ledger_copies(ctx, tree)):
+    if not _left_alone(tree):
+        return None
+    if branch and not is_ancestor(ctx, branch, trunk) and not _delivered(tree, trunk):
+        return None
+    if not _nothing_but_ledger_copies(ctx, tree):
         return None
     return _what_removal_takes(ctx, tree)
+
+
+def _delivered(tree: Path, trunk: str) -> bool:
+    """Whether everything the tree's branch carries is in the trunk already, by patch or by
+    content, as decision 0041 asks of a branch owed a pull request.
+
+    Ancestry alone never said so in a repository that squash-merges: 24 trees of a founder's
+    clone, 22 GB, stood over branches whose pull requests had merged, and the board named none.
+    """
+    from . import delivery
+    from .gitctx import GitError, resolve
+
+    try:
+        here = resolve(tree)
+    except (GitError, OSError):
+        return False
+    return not delivery.carries_its_own(here, trunk.split("/", 1)[-1])
+
+
+def sweep_named(ctx: GitContext) -> tuple[list[str], list[str]]:
+    """Remove the trees `needs_a_decision` names as losing nothing, as the plugin removes its
+    own: `git worktree remove` without `--force`, and a branch only on proof its work is in
+    the trunk. Returns (trees removed, branches kept for work only they carry).
+
+    Run when somebody asks for it, never by a session start: the trees are another tool's,
+    and decision 0019 leaves that call to whoever runs this.
+    """
+    removed: list[str] = []
+    kept: list[str] = []
+    for path, branch, said in needs_a_decision(ctx):
+        if said or not branch:
+            continue
+        if _release(ctx, (path, branch), Path(), kept=kept):
+            removed.append(path)
+    return removed, kept
 
 
 def _what_removal_takes(ctx: GitContext, tree: Path) -> str:

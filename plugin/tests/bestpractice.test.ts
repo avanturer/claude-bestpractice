@@ -102,3 +102,17 @@ test('a subagent at or above the floor runs on what it named', async ($, on) => 
   await $.agent.spawn({ prompt: 'design it', description: 'design', subagentType: 'Plan', model: 'opus' })
   expect(started).toBe('opus')
 })
+
+test('a subagent is handed the map of its own task', async ($, on) => {
+  inASession(on as On)
+  on('process.run', library({ settings: { enabled: true, subagent_min_model: 'sonnet' },
+    map: { text: '## Where things are for this task\nmobile/src/ota/check.ts: checkForUpdate' } }))
+  let prompt = ''
+  on('agent.spawn', async ($inner: unknown, e: { prompt: string }) => {
+    prompt = e.prompt
+    return { model: 'sonnet' }
+  })
+  await $.agent.spawn({ prompt: 'fix the OTA check', description: 'ota', subagentType: 'general-purpose', model: 'sonnet' })
+  expect(prompt).toContain('fix the OTA check')
+  expect(prompt).toContain('mobile/src/ota/check.ts')
+})

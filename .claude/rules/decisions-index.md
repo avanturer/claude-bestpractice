@@ -1,7 +1,5 @@
 # Decisions
 
-- [0043] A word names what the chat showed, not only what it opened — `decisions/0043-a-word-names-what-the-chat-showed.md`
-- [0044] A founder's message ends the gate's run of the suite — `decisions/0044-a-founders-message-ends-the-gates-run.md`
 - [0045] A call is judged by the repository it acts on, not only where the shell stands — `decisions/0045-a-call-is-judged-where-it-acts.md`
 - [0046] The Stop gate checks after the turn, and the founder can always write — `decisions/0046-the-stop-gate-checks-after-the-turn.md`
 - [0047] The founder's word is read where they write it, and not where it is withheld — `decisions/0047-the-founders-word-is-read-where-they-write-it.md`
@@ -11,4 +9,6 @@
 - [0051] A subagent runs no lower than the founder's floor — `decisions/0051-a-subagent-runs-no-lower-than-the-floor.md`
 - [0052] A review finding shown to the founder is theirs to merge past — `decisions/0052-a-finding-shown-is-the-founders-to-merge-past.md`
 - [0053] The gate runs a project's tests in the project's own environment — `decisions/0053-the-gate-runs-tests-in-the-projects-environment.md`
-- ... 40 older, see `decisions/`
+- [0054] A tree over squash-merged work is named, and swept when asked — `decisions/0054-a-tree-over-squashed-work-is-named-and-swept-on-request.md`
+- [0055] A migration number the trunk already gave is refused at merge — `decisions/0055-a-migration-number-the-trunk-gave-is-refused-at-merge.md`
+- ... 42 older, see `decisions/`

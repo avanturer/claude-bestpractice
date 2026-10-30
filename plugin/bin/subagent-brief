@@ -28,10 +28,6 @@ from claude_bestpractice.gitctx import resolve  # noqa: E402
 # it is the dominant recurring cost in the whole design.
 BRIEF_CHAR_BUDGET = 2_000
 
-# A ranked map only earns its place once orientation is genuinely hard. Below this many
-# files a subagent can just look, and paying for a map would be pure overhead.
-REPOMAP_MIN_FILES = 40
-REPOMAP_TOKEN_BUDGET = 400
 
 
 def main() -> None:
@@ -40,20 +36,16 @@ def main() -> None:
 
     parts = [knowledge.subagent_brief(ctx, max_chars=BRIEF_CHAR_BUDGET)]
 
-    # Query-biased, so each subagent gets a map of what ITS task is about rather than a
-    # generic overview. This is the one thing grep structurally cannot provide.
-    try:
-        facts = repomap.scan(ctx)
-        if len(facts) >= REPOMAP_MIN_FILES:
-            query = " ".join(
-                str(event.raw.get(key, "")) for key in ("agent_type", "description", "prompt")
-            )
-            rendered = repomap.generate(ctx, query=query, budget_tokens=REPOMAP_TOKEN_BUDGET)
-            if rendered:
-                parts.append("## Where things are\n" + rendered)
-    except Exception:  # noqa: BLE001 - a map is a hint; never fail a spawn over one
-        pass
-
+    # The map for the subagent's own task is added by the hooks module when it is spawned,
+    # where its prompt is known (`repomap.for_a_task`). This event carries neither the prompt
+    # nor the description, so a map ranked here was the same generic one for every task, and
+    # on a repository of 2,000 sources it outran this hook's fifteen seconds on every spawn.
+    task = " ".join(str(event.raw.get(key, "")) for key in ("description", "prompt")).strip()
+    if task:
+        try:
+            parts.append(repomap.for_a_task(ctx, task))
+        except Exception:  # noqa: BLE001 - a map is a hint; never fail a spawn over one
+            pass
     brief = "\n\n".join(p for p in parts if p.strip())
     if not brief.strip():
         hookio.emit_silent()

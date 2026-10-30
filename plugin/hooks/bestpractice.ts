@@ -191,11 +191,13 @@ export const register: Register = (on) => {
   }).catch(async ($, e, next) => next(e))
 
   on('agent.spawn', async ($, e, next) => {
-    if (e.fork || !e.model) return next(e)
+    if (e.fork) return next(e)
     const floor = String((await ask($, 'settings', {})).subagent_min_model ?? '')
-    const named = tierOf(e.model)
-    if (named < 0 || named >= TIERS.indexOf(floor)) return next(e)
-    return next({ ...e, model: floor })
+    const named = e.model ? tierOf(e.model) : -1
+    const model = named >= 0 && named < TIERS.indexOf(floor) ? floor : e.model
+    const map = await ask($, 'map', { task: `${e.description}\n${e.prompt}` })
+    const prompt = typeof map.text === 'string' && map.text !== '' ? `${e.prompt}\n\n${map.text}` : e.prompt
+    return next({ ...e, model, prompt })
   }).catch(async ($, e, next) => next(e))
 
   on('session.compact', async ($, e, next) => {

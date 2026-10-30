@@ -299,6 +299,25 @@ def cmd_adopt(ctx, dry_run: bool, restore: bool) -> int:
     return 0
 
 
+def cmd_sweep(ctx) -> int:
+    """Remove the trees nobody is in whose work is in the trunk, as the board names them.
+
+    The trees are other tools' — Claude Code's own for its agents, a session's `git worktree
+    add` — so no session start removes them (decision 0019). Asked for, they go the way the
+    plugin's own do: no `--force`, and a branch only on proof its work is in the trunk.
+    """
+    from claude_bestpractice import worktree
+
+    removed, kept = worktree.sweep_named(ctx)
+    for path in removed:
+        print(f"removed {path}")
+    for branch in kept:
+        print(f"kept the branch {branch}: it carries work the trunk does not have")
+    if not removed:
+        print("nothing to remove: every tree is in use, holds work, or was touched lately")
+    return 0
+
+
 def cmd_dismiss(ctx, detector: str, path: str) -> int:
     """Rule one finding false. The only exit a false positive had before this was to
     rewrite correct code or to stop using the gate (#75)."""
@@ -551,6 +570,8 @@ def main() -> int:
     adopt = sub.add_parser("adopt", help="take over events another tool is contesting")
     adopt.add_argument("--dry-run", action="store_true", help="report without changing anything")
     adopt.add_argument("--restore", action="store_true", help="undo a previous adopt")
+    sub.add_parser(
+        "sweep", help="remove the trees nobody is in whose work is already in the trunk")
     dismiss = sub.add_parser(
         "dismiss", help="rule a review finding false, for good — it stops blocking merges")
     dismiss.add_argument("detector", help="the name in the finding, e.g. sql-interpolation")
@@ -591,6 +612,8 @@ def main() -> int:
         return cmd_init(ctx, args.force)
     if args.command == "dismiss":
         return cmd_dismiss(ctx, args.detector, args.path)
+    if args.command == "sweep":
+        return cmd_sweep(ctx)
     if args.command == "adopt":
         return cmd_adopt(ctx, args.dry_run, args.restore)
     if args.command == "answer":

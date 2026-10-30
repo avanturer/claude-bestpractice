@@ -605,8 +605,11 @@ def blockers(ctx: GitContext, base: str, head: str = "") -> list[str]:
         list(delivery.ready(ctx, base)) if branch == ctx.branch
         else _about_the_pull_request(ctx, base, branch)
     )
+    from . import migration_numbers
+
     problems = _with_the_founders_word(ctx, branch, problems)
     problems.extend(_not_merged_past(ctx, branch, _findings(ctx, base, branch)))
+    problems.extend(migration_numbers.clashes(ctx, base, branch))
     return problems
 
 

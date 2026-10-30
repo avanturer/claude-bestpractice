@@ -315,9 +315,9 @@ def _removable_line(ctx: GitContext) -> str:
     # nobody pulls, and refused the very branches this line had just called merged.
     said = (
         f"\nTREES NOBODY IS IN: {len(merged)} whose branch is already in the trunk — "
-        f"{shown}{more}; nothing in them is unmerged, so `git -C {main} worktree remove "
-        f"<path>` and `git -C {main} branch -D <branch>` lose nothing. This plugin removes "
-        "the trees IT made and leaves these."
+        f"{shown}{more}; nothing in them is unmerged, so `claude-bp sweep` removes them "
+        f"and loses nothing, or one by one `git -C {main} worktree remove <path>`. This plugin "
+        "removes the trees IT made and leaves these to be asked for."
     ) if merged else "\nTREES NOBODY IS IN:"
     if adrift:
         # A detached HEAD is worse than a stale tree and reads the same from outside: the

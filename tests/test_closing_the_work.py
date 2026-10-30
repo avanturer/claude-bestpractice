@@ -487,6 +487,41 @@ class TestTheBoardNamesWhatNobodyWillComeBackTo(TreeCase):
         found = worktree.needs_a_decision(self.ctx())
         self.assertEqual([(str(tree), "hand-rolled", "")], found)
 
+    def a_squashed_tree_nobody_made_for_us(self, name: str) -> object:
+        """A tree over a branch whose work reached the trunk as one squash commit, as this
+        founder's pull requests do: its tip is an ancestor of nothing."""
+        tree = self.add_worktree(name)
+        (tree / "src").mkdir(parents=True, exist_ok=True)
+        (tree / "src" / f"{name}.py").write_text("z = 3\n", encoding="utf-8")
+        git(["add", "-A"], tree)
+        git(["commit", "-qm", "the work"], tree)
+        git(["merge", "--squash", "-q", name], self.repo)
+        git(["commit", "-qm", f"the work (#{len(name)})"], self.repo)
+        self.trunk()
+        self.left_alone(tree)
+        return tree
+
+    def test_a_squash_merged_tree_that_is_not_ours_is_named(self):
+        """24 trees of a founder's clone, 22 GB, stood over squash-merged branches, and the
+        board named none: their tips were an ancestor of nothing."""
+        tree = self.a_squashed_tree_nobody_made_for_us("agent-a5e34e9c")
+        self.assertEqual([(str(tree), "agent-a5e34e9c", "")],
+                         worktree.needs_a_decision(self.ctx()))
+
+    def test_sweep_removes_what_the_board_names_and_nothing_else(self):
+        named = self.a_squashed_tree_nobody_made_for_us("agent-done")
+        working = self.add_worktree("still-working")
+        (working / "wip.py").write_text("q = 1\n", encoding="utf-8")
+        git(["add", "-A"], working)
+        git(["commit", "-qm", "wip"], working)
+        self.left_alone(working)
+        removed, kept = worktree.sweep_named(self.ctx())
+        self.assertEqual([str(named)], removed)
+        self.assertFalse(named.exists())
+        self.assertTrue(working.is_dir())
+        self.assertEqual([], kept)
+        self.assertNotIn("agent-done", git(["branch", "--format=%(refname:short)"], self.repo))
+
     def test_a_detached_tree_is_named_with_no_branch(self):
         """Its commits are on no branch, so the directory is the only thing holding them."""
         tree = self.add_worktree("was-a-branch")
