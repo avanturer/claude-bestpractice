@@ -27,7 +27,7 @@ import json  # noqa: E402
 import re  # noqa: E402
 import shlex  # noqa: E402
 
-from claude_bestpractice import ci, config, evidence, founder, gitpolicy, hookio, inbox, pullrequest, redact, sessions, shellcmd, stage, store, subagents, vouch, worktree  # noqa: E402
+from claude_bestpractice import ci, config, evidence, founder, gitpolicy, hookio, inbox, pullrequest, redact, search, servers, sessions, shellcmd, stage, store, subagents, vouch, worktree  # noqa: E402
 from claude_bestpractice.gitctx import resolve  # noqa: E402
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
@@ -739,7 +739,7 @@ BASH_REMOVES = re.compile(
 # bytes came FROM and the destination was inside our own tree. Reading a sibling checkout —
 # an `.env`, a shared key, a diff — is routine. Reported as issue #42.
 BASH_COPIES = re.compile(
-    _RUNS + r"(?:mv|cp|install|ln)\b(?P<args>(?:\s+(?:-\S+|[\w./@+~${}-]+))+)"
+    _RUNS + r"(?P<verb>mv|cp|install|ln)\b(?P<args>(?:\s+(?:-\S+|[\w./@+~${}-]+))*)"
 )
 
 # A heredoc body is DATA. `select … where n_live_tup > 0` inside one looks exactly like a
@@ -1136,6 +1136,22 @@ def _trees_changed(commands: list[list[str]], here: Path) -> list[tuple[Path | N
     return out
 
 
+def stash_takings(command: str, cwd: Path) -> list[tuple[Path, list[str]]]:
+    """Each `git stash` on this line that takes an entry off the clone's one list, with the
+    tree it runs in and its own arguments."""
+    scannable = _QUOTED.sub(lambda m: " " * len(m.group(0)), command)
+    out: list[tuple[Path, list[str]]] = []
+    for segment, literal, here, _start in _segments_with_cwd(scannable, cwd, command):
+        if not _GIT_VERB.search(segment):
+            continue
+        for argv in _commands_in(literal):
+            pointed, verb, args = gitpolicy.split_git(_launched(argv, "git"))
+            tree = _resolve(here, pointed[-1]) if pointed else here
+            if verb == "stash" and args and args[0] in gitpolicy.STASH_TAKES and tree:
+                out.append((tree, args))
+    return out
+
+
 def _trees_named(rest: str, literal: str, here: Path) -> list[Path | None]:
     """The same, off the text, for a line the tokeniser declines: generous, as before."""
     verbs = GIT_TREE_VERBS & set(_ARG.findall(rest))
@@ -1299,7 +1315,7 @@ def bash_writes(command: str, cwd: Path) -> tuple[list[Path], str]:
     known: dict[str, str | None] = {}
     for segment, literal, here, start in _segments_with_cwd(scannable, cwd, command, known):
         carried = _writes_its_words(segment, literal, here, known)
-        for path in carried + _writes_by_moving(segment, here, known):
+        for path in carried + _writes_by_moving(segment, literal, here, known):
             if path not in out:
                 out.append(path)
         if carried:
@@ -1324,7 +1340,8 @@ def _writes_its_words(segment: str, literal: str, here: Path,
             if path is not None]
 
 
-def _writes_by_moving(segment: str, here: Path, known: dict[str, str | None]) -> list[Path]:
+def _writes_by_moving(segment: str, literal: str, here: Path,
+                      known: dict[str, str | None]) -> list[Path]:
     """The files this segment removes, or copies and moves others onto."""
     raws: list[str] = []
     # ...and every path a destructive verb names. `rm` is not a redirect, so none of
@@ -1333,13 +1350,43 @@ def _writes_by_moving(segment: str, here: Path, known: dict[str, str | None]) ->
     for match in BASH_REMOVES.finditer(segment):
         raws += [a for a in _OPERAND.findall(match.group("args")) if not a.startswith("-")]
 
-    # Destination only. The sources are reads, and refusing a read is how a guard
-    # stops being about safety and starts being about obedience.
+    # Destination only, and a move's sources, which it takes away. The other sources are
+    # reads, and refusing a read is how a guard stops being about safety and starts being
+    # about obedience. Read off the words the shell hands the command: off the text with
+    # quoted spans blanked, `cp <state> "$W/copy/"` lost its destination and was refused
+    # as a write to the state it copies, and `cp -t <state> x` wrote there unseen.
     for match in BASH_COPIES.finditer(segment):
+        words = shellcmd.segments(literal[match.start("verb"):])
+        if words:
+            raws += _copied_onto(shellcmd.without_redirections(words[0]))
+            continue
         operands = [a for a in _OPERAND.findall(match.group("args")) if not a.startswith("-")]
-        if operands:
-            raws.append(operands[-1])
+        raws += operands[-1:]
     return [path for path in (_named(raw, here, known) for raw in raws) if path is not None]
+
+
+def _copied_onto(argv: list[str]) -> list[str]:
+    """What a `cp`, `mv`, `install` or `ln` writes: where `-t` points, or its last operand,
+    and for `mv` the sources it takes away. Nothing for any other command."""
+    if not argv:
+        return []
+    operands: list[str] = []
+    into = ""
+    words = iter(argv[1:])
+    for word in words:
+        if word == "--":
+            operands += list(words)
+        elif word in ("-t", "--target-directory") or (word[:1] == "-" and word[-1:] == "t"
+                                                       and word[1:2] != "-"):
+            into = next(words, "")
+        elif word.startswith("--target-directory="):
+            into = word.split("=", 1)[1]
+        elif not word.startswith("-"):
+            operands.append(word)
+    if not into and operands:
+        into = operands.pop()
+    taken = operands if argv[0].rsplit("/", 1)[-1] == "mv" else []
+    return [into, *taken] if into else taken
 
 
 def _named(raw: str, here: Path, known: dict[str, str | None]) -> Path | None:
@@ -1404,6 +1451,8 @@ def _written(event: hookio.HookEvent, cwd: str) -> list[Path]:
 
 def main() -> None:
     heard = hookio.read_event()
+    # A server's tool that writes files is judged as the write it is (decision 0060).
+    heard = hookio.HookEvent(servers.as_a_write(heard.raw) or heard.raw)
     event = hookio.placed(heard, functools.partial(_written, heard))
     ctx = hookio.repo(event.place)
     cfg = config.load(ctx)
@@ -1433,6 +1482,18 @@ def main() -> None:
         if cfg.manage_pull_requests:
             pullrequest.shown(ctx, event.session_id, pullrequest.numbers_shown(
                 ctx, event.tool_name, "", event.tool_input, event.cwd or str(ctx.worktree_root)))
+        hookio.emit_silent()
+
+    # A query is read by whoever runs the engine it goes to, so a credential in it is refused
+    # before it leaves, whichever tool carries it. Parallel's and Exa's then run unasked: the
+    # plugin ships them and sends the harness's WebSearch through them (decision 0049).
+    if search.judged(event.tool_name):
+        leaked = search.secrets_in(event.tool_input)
+        if leaked:
+            hookio.deny_tool(search.refusal(event.tool_name, leaked) + REFUSAL_IS_YOURS)
+        if search.vouched(event.tool_name):
+            hookio.allow_tool("claude-bestpractice: a search through Parallel or Exa, with no "
+                              "credential in it.")
         hookio.emit_silent()
 
     rec = sessions.get(ctx, event.session_id)
@@ -1708,10 +1769,11 @@ def main() -> None:
                 pr_branch = str(gated.get("branch") or "")
                 # The pull request's own head, not the tree this session is standing in.
                 problems = pullrequest.blockers(here, base, pr_branch)
-                if pullrequest.awaits_the_founder(problems):
-                    # Their word on the finish may be in the transcript and nowhere else: sent
-                    # while the session worked, it reached no hook, and the word already on
-                    # record covered this merge, so `covered` never read it back (#268).
+                if pullrequest.awaits_the_founder(problems) or pullrequest.findings_in(problems):
+                    # Their word on the finish, or on a finding, may be in the transcript and
+                    # nowhere else: sent while the session worked, it reached no hook, and the
+                    # word already on record covered this merge, so `covered` never read it
+                    # back (#268, #283).
                     founder.catch_up(ctx, event.session_id, event.transcript_path)
                     problems = pullrequest.blockers(here, base, pr_branch)
                 if problems:
@@ -2046,6 +2108,14 @@ def main() -> None:
             if path in unforced and gitpolicy.only_this_chat_in(ctx, owner, rec.session_id):
                 continue
             deny(ctx, rec, gitpolicy.foreign_git_refusal(owner, ctx, rec.session_id))
+
+    # In the session's own tree too: the stash list is the clone's, and its top entry is
+    # whichever tree stashed last.
+    if event.tool_name == "Bash":
+        for tree, args in stash_takings(str(ti.get("command", "")), session_cwd):
+            taken = gitpolicy.foreign_stash(tree, args)
+            if taken is not None:
+                deny(ctx, rec, gitpolicy.stash_refusal(args[0], *taken))
 
     # Before the shell takes a step it cannot take back. Claude Code refuses every Bash
     # call whose working directory is inside the protected checkout — judged before the
@@ -2414,7 +2484,8 @@ def main() -> None:
     # Second, never first: a pull request call that any gate above refused never reaches
     # this line, and one that reached it has been judged rather than merely tolerated.
     vouched = vouched or pr_vouch
-    if vouched:
+    # Never in a server's place: its own tools keep the prompt the founder set for them.
+    if vouched and not event.raw.get(servers.SERVED_BY):
         hookio.allow_tool(vouched)
 
     hookio.emit_silent()

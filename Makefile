@@ -1,4 +1,4 @@
-.PHONY: check check-fast test test-fast needs-pytest doctor lint budget docs knowledge slop ratchet shipped manifests clean help
+.PHONY: check check-fast test test-fast needs-pytest doctor lint budget docs knowledge slop ratchet shipped manifests payloads clean help
 
 PY := python3
 
@@ -16,6 +16,7 @@ help:
 	@echo "make manifests - ask the claude CLI on this machine to validate both manifests"
 	@echo "make knowledge - validate the decided layer and refresh its index"
 	@echo "make budget  - assert the always-on context budget is not exceeded"
+	@echo "make payloads - recapture the hook payloads from this Claude Code (a login, a few cents)"
 
 # One definition of done, identical in every session, with no --no-verify path.
 # Eight parallel sessions must not converge on eight notions of finished.
@@ -94,6 +95,11 @@ lint:
 
 budget:
 	@$(PY) tools/check_budget.py
+
+# After a Claude Code upgrade. `tests/test_hook_payloads.py` then holds every field the gates
+# read against what this version sends. One headless session on a throwaway repository.
+payloads:
+	@$(PY) tools/capture_payloads.py
 
 clean:
 	@find . -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true

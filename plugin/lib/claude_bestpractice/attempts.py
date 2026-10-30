@@ -158,11 +158,27 @@ def next_id(ctx: GitContext) -> str:
     """
     from . import plan
 
-    highest = 0
+    names = _on_the_trunk(ctx)
     for root in plan.sibling_worktrees(ctx) or [ctx.worktree_root]:
-        for path in (root / store.TIER_A_DIRNAME / ATTEMPTS_DIR).glob("[0-9][0-9][0-9][0-9]-*.md"):
-            highest = max(highest, int(path.name[:4]))
+        names += [path.name for path in
+                  (root / store.TIER_A_DIRNAME / ATTEMPTS_DIR).glob("[0-9][0-9][0-9][0-9]-*.md")]
+    highest = max((int(name[:4]) for name in names if name[:4].isdigit()), default=0)
     return f"{highest + 1:04d}"
+
+
+def _on_the_trunk(ctx: GitContext) -> list[str]:
+    """The attempt files the trunk holds. A tree cut before a sibling's attempt merged sees
+    none of it, and a founder's trunk carried `0001` twice, from two branches that each
+    counted only what was checked out."""
+    from .gitctx import _status, trunk_ref
+
+    trunk = trunk_ref(ctx)
+    if not trunk:
+        return []
+    code, listed = _status(
+        ["ls-tree", "--name-only", f"{trunk}:{store.TIER_A_DIRNAME}/{ATTEMPTS_DIR}"],
+        ctx.worktree_root)
+    return listed.splitlines() if code == 0 else []
 
 
 def _stamp_path(ctx: GitContext, attempt_file: Path) -> Path:

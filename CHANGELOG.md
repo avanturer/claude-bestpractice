@@ -1,5 +1,139 @@
 # Changelog
 
+## v2.7.0
+
+Context economy without losing what matters, search through the plugin's own Parallel and Exa,
+the founder's word read where they write it, and a plugin that stays true and bounded with many
+sessions on one clone. A long successful test, build or install reaches the model as a digest
+with the whole kept on disk; WebSearch is answered by Parallel first and Exa next; `+merge` and
+`+release` count in an ordinary sentence and together in one message. A pull request GitHub
+merged is settled by the number in the trunk's history, the plugin's logs keep only what is
+read, the gates' suites take turns on one machine, another tree's stash is not taken, and what
+audits of a founder's clone and machine found the plugin had left there is cleaned up.
+
+### What broke
+
+**A passing suite filled the window.** A verbose `pytest` of 10,153 tests printed 2.5 MB, and
+the model read twenty thousand lines of `PASSED` to find one summary line, re-read on every
+turn until a compaction threw it and everything around it away.
+
+**The gate ran pytest outside the project's environment (#282).** A uv project in `backend/`
+was driven with the first `python3` on PATH, and two failing of two were filed over a suite
+`uv run pytest` passed 33 of 33.
+
+**The founder's `+merge` could not take a review finding off a merge (#283).** A new test
+guarded by `skipif(not _db_ok(), …)` was flagged as a skipped test, and after the refusal was
+read and answered with `+merge` the same merge was refused with the same list.
+
+**A word had to be a line of its own.** `+merge +release` on one line granted neither, and
+`всё ок, +merge` granted nothing.
+
+**To message another session, a session asked them all.** The board named sessions once, at a
+session's start, so one started later was a bare name in `ListAgents`.
+
+**What a founder's machine had kept.** A red record a 1.72.0 gate wrote a month earlier told
+every session started in the main checkout "Fix it before new work" over code 103 commits on;
+a session start died on a card a sibling had moved since it was read; the decision-draft inbox
+had grown to 10.9 MB; 170 tokens of killed runs and 362 inboxes of gone sessions stayed; and a
+compaction read a 1.1 GB transcript whole to find the founder's last messages, taking a tool's
+result for one of them.
+
+**What a founder's clone had piled up.** 24 trees, 22 GB, stood over branches whose pull
+requests had been squash-merged, and the board named none of them, since ancestry never says a
+squashed branch is in the trunk. Ten migration numbers were held twice over, each pair by two
+sessions that took "the next number" from the same trunk. And a subagent's map was ranked by
+reading every source file of the repository on every spawn, the same generic map for every task.
+
+**What the plugin's own records said.** Sixteen of the clone's eighteen open pull-request
+records were pull requests GitHub had merged up to ten days before, offered on every board as
+ready to merge; twelve of twenty-two without a number had been opened by a `gh pr create` Claude
+Code put in the background. The pull-request log held 1,016 rows for 281 branches and the open
+items 1,298 rows for 848, three in four about deleted branches; 256 of 290 green records were for
+branches gone after their merge; and every gated write read 700 cards to learn what one session
+held. «checkpoint save/restore» in a rule was reported on every start as a file that is not here.
+And the main checkout stood 107 commits behind `origin/main`, since nothing moved it. Auditing
+it, copying the plugin's logs out to `/tmp` was refused as a write to them, twice, while `cp -t
+<the plugin's state> x` would have written there unseen.
+
+**Six to twelve sessions on one machine.** Each Stop started its suites the moment its turn
+ended; the load reached 30 to 44 on 24 threads, suites that pass alone were filed red, and the
+machine went down twice in a day. And `git stash pop` in one session's tree took the unfinished
+work another tree had stashed, since every tree of a clone shares one stash list.
+
+### What changed
+
+- The plugin is a mod too: `hooks/hooks.json` names `hooks/bestpractice.ts`, which runs inside
+  Claude Code and asks the plugin's library through `claude-bp-mod`. Where mods are off it is
+  not loaded and every hook works as before.
+- A test suite, build or install that succeeded and printed 6,000 characters or more reaches the
+  model as a digest: its summary, every error and warning line, head and tail, and where the
+  whole is kept (`.claude/claude-bestpractice/out/`, out of git, forty for a week). Any other
+  output Claude Code would have cut to 2 KB gets one too; reads and failures never do.
+  `compress_output off` switches it off (decision 0048).
+- The plugin ships Parallel's and Exa's search servers (`plugin/.mcp.json`, no key needed).
+  WebSearch is answered by Parallel, then Exa, then itself; Exa waits for a Parallel search;
+  every query is refused if it carries a credential; Parallel's and Exa's tools run without a
+  prompt. `route_search off` switches it off (decision 0049).
+- `+merge`, `+release` and `+migration` count in a sentence and together, except in a clause
+  that refuses, defers or conditions them, in a question, or quoted (decision 0047).
+- A `+merge` sent after a refusal listed review findings takes them off that pull request's
+  list; `skipif` with a condition is no longer a skipped test (decision 0052).
+- The gate runs pytest through `uv run --frozen` in a uv project, else in the project's own
+  `.venv`; a uv project's detected test command is `uv run --frozen python -m pytest -q`
+  (decision 0053).
+- `ListAgents` says what each other session on the repository is doing, and the board says
+  `SendMessage` reaches each by the name its row starts with (decision 0050).
+- A subagent spawned below `subagent_min_model`, `sonnet` by default, runs on it (decision 0051).
+- Compaction is told to keep the founder's requests and words, the cards, the failing tests and
+  the paths of kept outputs.
+- A red record older than a day, about other code than the tree it is read in, is shown as
+  unconfirmed and asks for a run instead of stopping new work.
+- `/plan`, `/review` and `/status` are the founder's to type and are no longer listed to the model.
+- A tree nobody is in is named as finished when its branch's work is in the trunk by patch or by
+  content too, so trees over squash-merged branches are named; `claude-bp sweep` removes the
+  ones the board names (decision 0054).
+- A merge is refused while the pull request adds a numbered migration under a number the trunk
+  already gave another file, and the refusal names the next free number (decision 0055).
+- A subagent is handed a map ranked for its own task when it is spawned. The map lists files
+  through git and keeps what it read of each blob, so a repository of 2,000 sources is mapped in
+  a third of a second once warm.
+- An open pull request whose number the trunk's history names as merged, `Title (#N)` or `Merge
+  pull request #N`, is settled as merged. One whose number no hook heard is asked of GitHub at
+  the Stop on its branch. The pull-request log and the open items are cut down to what can
+  still be read once they pass a size, under a lock their writers take; an item about a branch
+  that is gone is not shown; a branch's green and run records go with it; and the board reads a
+  card only when it is the copy that answers, in the state asked for (decision 0056).
+- `git stash pop`, `drop`, `clear` and `branch` of an entry another branch stashed are refused,
+  naming `git stash apply`, which leaves it on the list (decision 0057).
+- The suites the Stop gates of one clone start take turns: as many at once as fit in half the
+  CPUs at `witness_cpus` each, each pinned to CPUs of its own (decision 0058).
+- A dead end's number is not one the trunk already holds.
+- A tool an MCP server offers that writes files, the reference filesystem server's and Serena's,
+  is judged as the `Write` of the file it names, and a move as `mv`; the gate never approves one
+  in its server's place (decision 0060).
+- A copy is read off the words the shell hands it. `cp <file> "$W/copy/"` and `cp -t /tmp <file>`
+  are no longer refused as writes to the file they only read; `cp -t <dir> x`, and a `cp` whose
+  operands are all quoted, are judged as the writes they are; and `mv` counts the sources it
+  takes away.
+- `claude-bp status` says what the founder's instructions cost in every turn as Claude Code loads
+  them: `CLAUDE.md` and `CLAUDE.local.md` with what they import, and every rule without `paths:`
+  at any depth, largest first, in rough tokens; a path-scoped rule is counted on its own line.
+- A session starting in the main checkout fast-forwards it to the trunk it lags, before its
+  baseline is taken, where no other live session is in it; a refusal is named (decision 0061).
+- Every field the gates read is held against the hook payloads Claude Code 2.1.314 sends, and
+  `make payloads` captures them again after an upgrade; the always-on budget counts a command
+  the model is shown.
+- Once git has removed a tree, the processes still running in it are stopped, and the removal
+  names them: the founder's own, never the gate, its parents or a Claude Code session; through
+  `/proc`, so nowhere it is missing (decision 0059).
+- A rule's `word/word` is judged as a path only under a directory the tree has or ending in a
+  file name, and a path starting with a dot is read whole.
+
+Repairs: `0008-collapse-the-decision-inbox` runs again (revision 2) and the inbox now collapses
+itself past 256 KB; `0042-let-go-of-what-dead-runs-and-sessions-left` removes tokens of killed
+runs and inboxes of sessions that are gone; `0043-cut-the-logs-down-to-what-is-live` settles the
+pull requests the trunk names as merged and cuts the logs and the records of gone branches.
+
 ## v2.6.0
 
 The Stop gate checks after the turn, in the background: the founder can write to the session the

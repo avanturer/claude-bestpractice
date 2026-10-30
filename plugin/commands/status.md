@@ -1,6 +1,7 @@
 ---
 description: Show what is known, in flight, planned and enforced across every session
 allowed-tools: Bash(claude-bp status)
+disable-model-invocation: true
 ---
 
 !`claude-bp status`

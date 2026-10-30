@@ -4,7 +4,7 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-2.6.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.7.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-2541%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
@@ -118,10 +118,14 @@ mtime 整体重置。当断言的对象被改写时，该断言会被抑制并�
 每个实体都写明其规范标识符和所在文件。一次重命名会**让校验失败**，而不是留下一份
 描述着已不存在之物的记忆。
 
+插件自己的日志只保留还能被读到的内容。日志超过一定大小后，PR 日志压缩为每个分支一行，未关闭
+事项只保留看板能显示的那些；关于克隆中已不存在的分支的事项不再显示，分支的绿色与运行记录随
+分支一起删除。
+
 ### 会话彼此可见
 
 ```
-OTHER LIVE SESSIONS (2) — do not edit files they hold:
+OTHER LIVE SESSIONS (2) — do not edit files they hold; SendMessage reaches each by the name its row starts with:
   - ledger-export-3c (a3f81c22) on feat/export [ledger-export] active 40s ago
       touched: src/billing.js, src/csv.js
       holds: src/billing.js
@@ -142,6 +146,20 @@ health: 3 live session(s), 1 reaped, 4 open item(s), 1 stale (suppressed)
 
 去编辑另一个存活会话正持有的文件会被**拒绝**，并指名持有者。崩溃会话的租约和认领由
 回收器释放——就在持有它们的那个 worktree 里——而不是永远挂在"进行中"。
+
+一个克隆的所有 worktree 共用一个 stash 列表，最上面那条属于最后一次 stash 的那棵树。对另一个
+分支 stash 的条目执行 `git stash pop`、`drop`、`clear` 和 `branch` 会被**拒绝**，并提示
+`git stash apply`：把工作带进来，同时把条目留给创建它的那棵树。MCP 服务器提供的写文件工具——
+参考 filesystem 服务器的、Serena 的——会被当作它实际就是的 `Write` 来审查，并保留它自己的权限提示。
+
+各会话的 Stop 闸门启动的测试套件**轮流运行**：同时运行的数量以机器一半的 CPU、每个按
+`witness_cpus` 计为上限，每个都固定在自己的 CPU 上。以前六到十二个会话在一台 24 线程的机器上
+同时结束、一起启动，单独能通过的测试在负载下被记为失败。
+
+分支的工作已按祖先、补丁或内容进入主干（squash 合并留下的正是这种状态）的 worktree，会被看板
+列为已完成；需要时，`claude-bp sweep` 以同样的方式、同样的证据删除它们。worktree 删除后，仍在
+其中运行的进程——开发服务器、Metro、uvicorn——会在删除它的数据库之前被停止，删除记录会列出它们。
+在主 checkout 中启动的会话，会在其中没有其他会话时把它快进到它落后的主干，免得有人读到主干已替换的代码。
 
 每个会话都以 `SendMessage` 寻址它的名字出现：在看板上、在 `claude-bp status` 里、作为
 卡片的持有者、在拉取请求那一行，以及每一条把一个会话指向另一个会话的拒绝里。名字在每次
@@ -225,19 +243,26 @@ setup、teardown 或收集阶段，且没有任何断言失败——会被单独
 | `+release` | 发布到生产环境 | 一次发布 |
 | `+migration` | 迁移中的破坏性 DDL | 一次迁移 |
 
-**必须独占一行，该行不能有其他内容。** 前面想写什么都行，把这个词放到下一行：
+**写在消息里任何位置，想写几个就写几个。** 可以在句子里、单独一行，或一次写多个：
 
 ```
-看着不错，发吧
-+merge
+看着不错，发吧 +merge +release
 ```
+
+在表示拒绝、推迟或附加条件的分句里、在问句里、在引用里，这个词都不算数：「不要合并，我没说过 +merge」「CI 变绿后 +merge」「可以 +merge 吗？」以及反引号里的 `` `+merge` `` 都不授权，而「+merge，但不要发布」授权合并。
 
 因冲突或检查而失败的合并会为重试保留你的这句话：只有在合并真正完成之后，它才会被用掉，PR 和它的卡片才会关闭；`--auto` 会用掉这句话，但 PR 保持打开，直到它进入主干，通过 GitHub 工具开启的自动合并也一样。执行合并的那一行只合并一个 PR——按编号、按链接或不写——其余命令只能用 `&&` 连接：一行里两次合并、写在循环里或 `sh -c` 后面的合并、管道接到 `tail` 的合并都会被拒绝，并把这次合并单独写成一条命令。你的这句话没有覆盖的合并，闸门会列出它覆盖了哪些 PR，以及这一个为什么不在其中。一个分支若没有任何自己的东西——每个提交都已在主干里（按补丁或按内容），或在另一个 PR 的分支上，比如集成分支——就不会被要求开 PR。
 
+**在 GitHub 上合并的 PR，按 GitHub 写入主干历史的编号结清**：squash 是 `标题 (#N)`，合并提交是
+`Merge pull request #N`——因此仍检出在某处的 squash 分支不再被列为待合并。没有钩子听到编号的 PR
+（被 Claude Code 放到后台的 `gh pr create`）会在该分支的 Stop 时向 GitHub 询问。PR 若新增一个
+编号迁移，而主干已把这个编号给了另一个文件，合并会被拒绝，并给出下一个空闲编号：两个各自取了
+"下一个编号"的会话，在第二个合并之前都是对的。
+
 发布是根据一行命令实际运行的程序来识别的：`vercel --prod`、`fly deploy`、`eas update --channel production`，或名字里带 deploy 且指明生产环境的脚本。项目自己的发布方式两者都不提，所以请在 `config.json` 里按该行运行它时的名字声明它，即 make 目标或脚本：`"release_commands": ["mobile-ota", "deploy_standalone.sh"]`。这样它也会等待 `+release`。
 
-与正文同处一行的令牌，无法与"被谈论的令牌"区分开来，而这个缝隙的方向是错的："我没说过
-`+merge`"——一句拒绝——却批准了合并，两个未经批准的 PR 因此进入了会触发部署的主干。前缀是符号
+脱离上下文读到的令牌，无法与"被谈论的令牌"区分开来，这个缝隙曾经走错方向："我没说过
+`+merge`"——一句拒绝——却批准了合并，两个未经批准的 PR 因此进入了会触发部署的主干。所以由词周围的分句决定它是否算数。前缀是符号
 而非英文单词 "ok"，因为闸门不应取决于你此刻用哪种语言书写。会话写下
 的任何内容都无法代替这些词：只有你自己的发言才能到达记录它们的钩子。这正是关键所在——
 守卫不可逆操作的闸门，不该由它所守卫的那一方来打开。
@@ -298,6 +323,18 @@ claude-bp-ci off        # 移除 pre-push 钩子
 运行。想单次绕过就用 `git push --no-verify`——那是一个有痕迹的、刻意的动作，而被悄悄跳过
 的托管运行没有痕迹。
 
+### 少把上下文窗口花在噪音上
+
+**长结果以它真正说的内容送达模型。** 成功的测试、构建或安装，若输出 6000 个字符以上，会以摘要交给模型：运行器的汇总、每一行像错误或警告的内容、开头和结尾，以及完整输出的路径——完整输出保存在 `.claude/claude-bestpractice/out/`，不进 git。一个真实项目里 10,153 个测试全部通过的 `pytest -v` 输出 2.5 MB，送达模型时是 2600 个字符，包含结论和十条警告。你要求读取的内容和失败的命令保持原样。
+
+**搜索走插件自带的 Parallel 和 Exa。** 两个服务器随插件提供，无需密钥。WebSearch 由 Parallel 回答；Parallel 一无所获时由 Exa 回答；两者都没有结果时才由 WebSearch 自己回答。Exa 用于 Parallel 漏掉的那一件事，在问过 Parallel 之前会被退回。任何看起来像凭据的查询都会在发出前被拒绝。查询会发送给 Parallel（[隐私政策](https://parallel.ai/privacy-policy)）和 Exa（[隐私政策](https://exa.ai/privacy-policy)）；Exa 拒绝部分地区的请求，那里的搜索会转到 WebSearch。
+
+**压缩会保留你说过的话。** 它被要求保留你的请求和决定、每个 `+merge` 及其范围、进行中的卡片、失败的测试和已保存输出的路径，丢弃可以重新读取的日志。
+
+**会话能找到彼此。** 当一个会话列出可以发消息的代理时，仓库里的每个其他会话都会附上它的卡片、分支和工作树，消息因此发给负责那项工作的会话。以低于 `subagent_min_model`（`sonnet`）的级别启动的子代理会以该级别运行。
+
+每一项都是你说出来的开关：`compress_output off`、`route_search off`、`subagent_min_model off`。
+
 ### 它会接管与它冲突的东西
 
 `claude-bp adopt` 会找出争抢本插件所拥有事件的其他工具，把它们的 hook 条目移入一个
@@ -313,6 +350,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 | `claude-bp status` | 会话、计划、知识、记忆健康度、冲突、下一步动作 |
 | `claude-bp init` | 从你的代码推导出知识层 |
 | `claude-bp adopt` | 接管被其他工具争抢的事件 |
+| `claude-bp sweep` | 删除无人使用、工作已进入主干的 worktree |
 | `claude-bp database` | 为这个 worktree 创建它自己的数据库（如果服务器上还没有；需要 `psql`，否则用 `worktree_setup`） |
 | `claude-bp set` | 修改你用自己的话要求过的 gate 开关 |
 | `claude-bp policy` | 告诉 auto mode 这个仓库是什么；指出已经不再生效的规则 |
@@ -464,6 +502,8 @@ claude-bestpractice 的常驻上下文为 **约 332 tokens**，分布在四个�
 其余一切都按需加载：skill 只在触发时加载，board 只在会话开始时加载，工作台账只在被
 问到时加载。这个预算之所以存在，是因为成本会明明白白出现在你自己的用量视图里，而收益
 是反事实的、看不见的——这笔交易理应由创始人自己来审。
+
+它随附的两个搜索服务器单独计算，因为它们是工具而不是文本：在没有自行连接 Parallel 的 Search MCP 和 Exa 的项目里，大约 780 个令牌的工具名和说明；在已经连接的项目里为零，此时使用项目自己的那一份。作为回报，一次 2.5 MB 的测试通过输出只花 2600 个字符，而不是整个窗口。
 
 ---
 

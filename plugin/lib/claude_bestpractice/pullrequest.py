@@ -55,6 +55,20 @@ CLOSED = "closed"
 # to ignore the surface it appears on.
 MAX_AGE_SECONDS = 30 * 24 * 3600
 
+# Past this size the log is rewritten as one row per branch it still has a use for. A row is
+# appended on every open, number, draft and settlement, so one clone's log held 1,016 rows
+# for 281 branches, and every gate that asks about a pull request reads it whole.
+COMPACT_BYTES = 128 * 1024
+# How long a settled record outlives its settlement. It answers "has this branch had one?",
+# which spares a branch merged long ago a demand for another, and names a merged number in a
+# refusal; past three months it does neither for a branch anyone is still on.
+SETTLED_KEPT_SECONDS = 90 * 24 * 3600
+
+# How GitHub writes a merge into the trunk's history: a squash's subject ends in the pull
+# request's number, `Title (#123)`, and a merge commit's starts `Merge pull request #123 from`.
+_SQUASHED = re.compile(r"\(#(\d+)\)\s*$")
+_MERGE_COMMIT = re.compile(r"^Merge pull request #(\d+) from ")
+
 # Tool names, whatever server they arrive from. Claude Code exposes the same GitHub tools
 # under differently-cased prefixes in one session, so the server segment is not matched.
 _OPENS_TOOL = re.compile(r"(?:^|__)create_pull_request$")
@@ -132,7 +146,33 @@ def _records(ctx: GitContext) -> dict[str, dict[str, Any]]:
 
 
 def _write(ctx: GitContext, record: dict[str, Any]) -> None:
-    store.append_jsonl(store.tier_b(ctx, PR_FILE), record)
+    store.append_jsonl(store.tier_b(ctx, PR_FILE), record, locked=True)
+    compact(ctx, COMPACT_BYTES)
+
+
+def compact(ctx: GitContext, past_bytes: int = 0) -> int:
+    """Rewrite the log as one row per branch it still has a use for, once it is larger than
+    `past_bytes`. How many rows went."""
+    return store.compact_jsonl(store.tier_b(ctx, PR_FILE), _of_use, past_bytes)
+
+
+def _of_use(rows: list[Any]) -> list[Any]:
+    """The latest row of each branch, unless it is past `_aged`."""
+    latest: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if isinstance(row, dict) and row.get("branch"):
+            latest[str(row["branch"])] = row
+    now = time.time()
+    return [row for row in latest.values() if not _aged(row, now)]
+
+
+def _aged(record: dict[str, Any], now: float) -> bool:
+    """An open record older than any obligation `outstanding` reads, or a settled one kept
+    `SETTLED_KEPT_SECONDS` past its settlement."""
+    if record.get("state") == OPEN:
+        return now - float(record.get("opened_at") or 0) >= MAX_AGE_SECONDS
+    settled = float(record.get("settled_at") or record.get("opened_at") or 0)
+    return now - settled >= SETTLED_KEPT_SECONDS
 
 
 def opened(ctx: GitContext, branch: str, base: str, session_id: str,
@@ -154,7 +194,9 @@ def opened(ctx: GitContext, branch: str, base: str, session_id: str,
     this branch has no pull request.
     """
     existing = _records(ctx).get(branch, {})
-    if existing.get("state") == OPEN:
+    # One open past every obligation is no pull request anybody waits on, and it hid the one
+    # opened now from every board for as long as it stayed in the log.
+    if existing.get("state") == OPEN and not _aged(existing, time.time()):
         return
     _write(ctx, {
         "branch": branch,
@@ -235,8 +277,51 @@ def learn_number(ctx: GitContext, branch: str, number: int) -> bool:
     if int(record.get("number") or 0) not in (0, number):
         settle(ctx, branch, CLOSED)
         return False
-    _write(ctx, {**record, "number": number})
+    if int(record.get("number") or 0) != number:
+        _write(ctx, {**record, "number": number})
     return True
+
+
+# How long a pull request whose number nothing here heard is asked of GitHub at each Stop on
+# its branch. Past it, a creation that never reached GitHub is not asked about again.
+NUMBER_ASKED_FOR_SECONDS = 30 * 60
+
+
+def learn_missing_number(ctx: GitContext, branch: str) -> int:
+    """The number of this branch's open pull request when no hook here heard it, asked of
+    GitHub. The number learned, or 0.
+
+    `gh pr create` behind a `git push` whose hook runs the suite takes longer than Claude Code
+    waits, the call goes to the background, and the result the hook reads carries no URL:
+    twelve of twenty-two of one clone's pull requests without a number were opened that way.
+    Without it the founder's word cannot name the pull request and the trunk's history cannot
+    settle it. Asked from the Stop gate, after the turn, only for the branch it stands on.
+    """
+    record = _records(ctx).get(branch) or {}
+    if not _number_unheard(record):
+        return 0
+    listed = on_github(ctx, branch)
+    if listed is None:
+        return 0
+    number = _number_against(listed, str(record.get("base") or ""))
+    if number and learn_number(ctx, branch, number):
+        return number
+    if time.time() - float(record.get("opened_at") or 0) > NUMBER_ASKED_FOR_SECONDS:
+        _write(ctx, {**record, "number_asked_at": time.time()})
+    return 0
+
+
+def _number_against(listed: list[dict[str, Any]], base: str) -> int:
+    """The number of the pull request GitHub listed against `base`, any base where none is
+    on record; 0 when it listed none."""
+    return next((_as_number(row.get("number")) for row in listed
+                 if not base or row.get("baseRefName") == base), 0)
+
+
+def _number_unheard(record: dict[str, Any]) -> bool:
+    """An open record whose number nothing here learned, and that GitHub was not given up on."""
+    return (record.get("state") == OPEN and not _as_number(record.get("number"))
+            and not record.get("number_asked_at"))
 
 
 def settle(ctx: GitContext, branch: str, state: str) -> None:
@@ -300,13 +385,21 @@ def reconcile(ctx: GitContext, branch: str = "") -> list[str]:
     leaves behind: a nine-day-old record for a deleted branch was on every session start as
     "no movement" and on the board as "ready to merge", and nothing could clear it. What it
     cannot tell apart is a branch that only ever existed on GitHub and was never fetched.
+
+    So is the number GitHub writes into the trunk's history when it merges one, which is the
+    one answer a squash-merged branch that is still here gives (`_merged_by_number`).
     """
+    from .gitctx import known_branches
+
     settled: list[str] = []
     live = outstanding(ctx)
-    present = _branches_here(ctx) if live else None
+    present = known_branches(ctx) if live else None
+    merged = _merged_by_number(ctx, live)
     for record in live:
         name = str(record.get("branch") or "")
-        if present is not None and name not in present:
+        if _as_number(record.get("number")) in merged:
+            settle(ctx, name, MERGED)
+        elif present is not None and name not in present:
             settle(ctx, name, CLOSED)
         elif (not branch or name == branch) and landed(ctx, record):
             settle(ctx, name, MERGED)
@@ -316,27 +409,46 @@ def reconcile(ctx: GitContext, branch: str = "") -> list[str]:
     return settled
 
 
-def _branches_here(ctx: GitContext) -> set[str] | None:
-    """Every branch name this clone knows, local or remote-tracking. None when git cannot say.
+def _merged_by_number(ctx: GitContext, records: list[dict[str, Any]]) -> set[int]:
+    """The numbers of `records` GitHub has written into their trunk's history as merged.
 
-    One call for every record, and None rather than an empty set on failure: an unreadable
-    ref store must not read as every branch deleted.
+    A squash leaves no ancestor and its branch often stays, so the other tests settled none of
+    them: sixteen of one clone's eighteen numbered records said OPEN over pull requests merged
+    up to ten days before, and every board offered them as ready to merge. One `git log` per
+    base, of the subjects since the oldest of them was opened.
     """
+    found: set[int] = set()
+    for base, since in _oldest_by_base(records).items():
+        found |= _numbers_in_history(ctx, f"origin/{base}", since)
+    return found
+
+
+def _oldest_by_base(records: list[dict[str, Any]]) -> dict[str, float]:
+    """When the oldest record with a number was opened, against each base."""
+    oldest: dict[str, float] = {}
+    for record in records:
+        if _as_number(record.get("number")) > 0:
+            base = str(record.get("base") or "") or "main"
+            opened = float(record.get("opened_at") or 0)
+            oldest[base] = min(oldest.get(base, opened), opened)
+    return oldest
+
+
+def _numbers_in_history(ctx: GitContext, ref: str, since: float) -> set[int]:
+    """The pull request numbers the subjects of `ref` name as merged since `since`, give or
+    take a day of clocks. Empty where git cannot answer."""
     from .gitctx import _status
 
-    code, listed = _status(
-        ["for-each-ref", "--format=%(refname)", "refs/heads/", "refs/remotes/"], ctx.worktree_root
-    )
+    code, log = _status(["log", f"--since={max(int(since) - 86_400, 0)}", "--format=%s", ref, "--"],
+                        ctx.worktree_root)
     if code != 0:
-        return None
-    names: set[str] = set()
-    for ref in listed.splitlines():
-        if ref.startswith("refs/heads/"):
-            names.add(ref[len("refs/heads/"):])
-        elif ref.startswith("refs/remotes/"):
-            # refs/remotes/<remote>/<branch>, and the branch keeps any slashes of its own.
-            names.add(ref.split("/", 3)[-1])
-    return names
+        return set()
+    numbers: set[int] = set()
+    for subject in log.splitlines():
+        match = _SQUASHED.search(subject) or _MERGE_COMMIT.match(subject)
+        if match:
+            numbers.add(int(match.group(1)))
+    return numbers
 
 
 def closes(ctx: GitContext, tool_name: str, command: str, tool_input: dict[str, Any],
@@ -605,8 +717,11 @@ def blockers(ctx: GitContext, base: str, head: str = "") -> list[str]:
         list(delivery.ready(ctx, base)) if branch == ctx.branch
         else _about_the_pull_request(ctx, base, branch)
     )
+    from . import migration_numbers
+
     problems = _with_the_founders_word(ctx, branch, problems)
-    problems.extend(_findings(ctx, base, branch))
+    problems.extend(_not_merged_past(ctx, branch, _findings(ctx, base, branch)))
+    problems.extend(migration_numbers.clashes(ctx, base, branch))
     return problems
 
 
@@ -644,6 +759,13 @@ REFUSED = "refused_at"
 # session it was put to: the chat the founder's next word is said in.
 SHOWN_ON = "unverified_shown_head"
 SHOWN_TO = "shown_to"
+
+# The review findings a refusal or a hand-off last listed, as it listed them, and those the
+# founder's `+merge` after it took off this pull request's list.
+SHOWN_FINDINGS = "findings_shown"
+FINDINGS_ACCEPTED = "findings_accepted"
+# A review finding as `_findings` lists it among a merge's blockers.
+_FINDING = re.compile(r"^\d+ review finding\(s\): ")
 
 
 def _finish_accepted(ctx: GitContext, branch: str, record: dict[str, Any]) -> bool:
@@ -695,6 +817,28 @@ def _accept_its_finish(ctx: GitContext, record: dict[str, Any], said: float) -> 
         _write(ctx, {**record, FINISH_ACCEPTED: said, FINISH_ACCEPTED_ON: head})
 
 
+def _accept_its_findings(ctx: GitContext, branch: str, said: float) -> None:
+    """Record the founder's word, said at `said`, as their decision on the review findings a
+    refusal or a hand-off listed to them before it.
+
+    A finding is a rule's claim about the code, and whether a pull request merges with it
+    standing is the founder's to say, as it is for an UNVERIFIED finish. The refusal promised
+    the merge "as soon as the list above is empty", and nothing but rewriting the code to dodge
+    the rule emptied it: a guard on a new test was flagged, the founder said `+merge` after
+    reading it, and the merge was refused again with the same list (#283). Kept for the pull
+    request, not its commit: a finding is about a file, and merging the base into the branch
+    leaves it where the founder saw it. One the list did not carry is put to them in its turn.
+    """
+    from . import delivery
+
+    record = _records(ctx).get(branch) or {}
+    shown = [str(text) for text in record.get(SHOWN_FINDINGS) or []]
+    seen_at = max(delivery.stamp(record.get("handed_off_at")), delivery.stamp(record.get(REFUSED)))
+    if shown and 0 < seen_at <= said:
+        accepted = sorted({*(str(text) for text in record.get(FINDINGS_ACCEPTED) or []), *shown})
+        _write(ctx, {**record, FINDINGS_ACCEPTED: accepted})
+
+
 def _shown_on(record: dict[str, Any], head: str) -> bool:
     """Whether `head` is the commit the founder was last shown "carries an UNVERIFIED finish" at.
 
@@ -734,10 +878,16 @@ def note_refusal(ctx: GitContext, branch: str, head: str = "", problems: list[st
         _write(ctx, {**record, REFUSED: time.time(), **_shown(head, problems or [], session_id)})
 
 
-def _shown(head: str, problems: list[str], session_id: str) -> dict[str, str]:
+def _shown(head: str, problems: list[str], session_id: str) -> dict[str, Any]:
     """What a refusal or a hand-off put to the founder: the commit, when it listed an UNVERIFIED
-    finish, and the session it reached."""
-    return {SHOWN_ON: head if awaits_the_founder(problems) else "", SHOWN_TO: session_id}
+    finish, the review findings it listed, and the session it reached."""
+    return {SHOWN_ON: head if awaits_the_founder(problems) else "", SHOWN_TO: session_id,
+            SHOWN_FINDINGS: findings_in(problems)}
+
+
+def findings_in(problems: list[str]) -> list[str]:
+    """The review findings among a merge's blockers, which the founder's word can take off it."""
+    return [problem for problem in problems if _FINDING.match(problem)]
 
 
 def awaits_the_founder(problems: list[str]) -> bool:
@@ -791,6 +941,13 @@ def _findings(ctx: GitContext, base: str, branch: str) -> list[str]:
             continue
         out.append(text[:200])
     return out
+
+
+def _not_merged_past(ctx: GitContext, branch: str, findings: list[str]) -> list[str]:
+    """`findings` without those the founder merged past, having been shown them
+    (`_accept_its_findings`)."""
+    accepted = set((_records(ctx).get(branch) or {}).get(FINDINGS_ACCEPTED) or [])
+    return [text for text in findings if text not in accepted]
 
 
 def _all_dismissed(ctx: GitContext, text: str, subjects: list[str]) -> bool:
@@ -915,8 +1072,17 @@ def merge_refusal(record: dict[str, Any], problems: list[str]) -> str:
         "assertion, widen a tolerance, revert the change that surfaced the problem — and "
         "which one is acceptable is the founder's call, not yours.\n"
         "Once they have decided, this gate allows the merge as soon as the list above is "
-        f"empty.{_how_a_finish_is_decided(problems)}"
+        f"empty.{_how_a_finish_is_decided(problems)}{_how_findings_are_decided(problems)}"
     )
+
+
+def _how_findings_are_decided(problems: list[str]) -> str:
+    """The word that takes the review findings a merge's list carries off it."""
+    if not findings_in(problems):
+        return ""
+    return ("\nA review finding listed here is theirs to merge past as it stands: a `+merge` they "
+            "send after seeing this takes it off this pull request's list. One they rule false "
+            "for good is `claude-bp dismiss <rule> <path>`, run when they ask for it.")
 
 
 def _how_a_finish_is_decided(problems: list[str]) -> str:
@@ -1755,6 +1921,7 @@ def accept_merges(ctx: GitContext, approvals: dict[str, str],
     shown_here = {entry for entry, record in still_open.items() if ours(record.get(SHOWN_TO))}
     for entry in sorted(named | shown_here):
         _accept_its_finish(ctx, still_open[entry], said)
+        _accept_its_findings(ctx, str(still_open[entry].get("branch") or ""), said)
     named |= _shown_before(ctx, session_id, said, still_open)
     if not named:
         return approvals

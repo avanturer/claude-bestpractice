@@ -829,6 +829,9 @@ def main() -> None:
         # is then told to report a pull request that was merged and deleted days ago
         # (#205). The trunk is the authority, and settling asks nothing of the network.
         pullrequest.reconcile(ctx, ctx.branch)
+        # A pull request opened in a call Claude Code put in the background left no number for
+        # the hook to read; without one the founder's word cannot name it.
+        pullrequest.learn_missing_number(ctx, ctx.branch)
         # Asked before the record is read as well, because a pull request GitHub has for
         # this branch is recorded by the asking — and is then the one waiting below. It is
         # how an open draft opened elsewhere stopped being "no pull request" (#239).

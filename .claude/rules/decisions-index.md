@@ -1,14 +1,14 @@
 # Decisions
 
-- [0036] A finish is decided on the commit and in the chat it was shown in — `decisions/0036-a-finish-is-decided-where-and-when-it-was-shown.md`
-- [0037] A suite the gate starts gets its share of the machine, not the machine — `decisions/0037-a-suite-the-gate-starts-gets-its-share.md`
-- [0038] A merge is finished by its result, not by its request — `decisions/0038-a-merge-is-finished-by-its-result.md`
-- [0039] A tree holding what nothing else has stays, and a tree just touched is nobody's only later — `decisions/0039-a-tree-holding-what-nothing-else-has-stays.md`
-- [0040] A line that merges is one merge, written so the gate can read it — `decisions/0040-a-line-that-merges-is-one-merge.md`
-- [0041] A pull request is owed for what only the branch carries — `decisions/0041-a-pull-request-is-owed-for-what-only-the-branch-carries.md`
-- [0042] A session that removes the tree it stands in is told the way out — `decisions/0042-a-session-that-removes-the-tree-it-stands-in-is-told-the-way-out.md`
-- [0043] A word names what the chat showed, not only what it opened — `decisions/0043-a-word-names-what-the-chat-showed.md`
-- [0044] A founder's message ends the gate's run of the suite — `decisions/0044-a-founders-message-ends-the-gates-run.md`
-- [0045] A call is judged by the repository it acts on, not only where the shell stands — `decisions/0045-a-call-is-judged-where-it-acts.md`
-- [0046] The Stop gate checks after the turn, and the founder can always write — `decisions/0046-the-stop-gate-checks-after-the-turn.md`
-- ... 33 older, see `decisions/`
+- [0051] A subagent runs no lower than the founder's floor — `decisions/0051-a-subagent-runs-no-lower-than-the-floor.md`
+- [0052] A review finding shown to the founder is theirs to merge past — `decisions/0052-a-finding-shown-is-the-founders-to-merge-past.md`
+- [0053] The gate runs a project's tests in the project's own environment — `decisions/0053-the-gate-runs-tests-in-the-projects-environment.md`
+- [0054] A tree over squash-merged work is named, and swept when asked — `decisions/0054-a-tree-over-squashed-work-is-named-and-swept-on-request.md`
+- [0055] A migration number the trunk already gave is refused at merge — `decisions/0055-a-migration-number-the-trunk-gave-is-refused-at-merge.md`
+- [0056] The trunk settles a pull request it names, and a log keeps what is read — `decisions/0056-the-trunk-settles-what-it-names-and-logs-keep-what-is-read.md`
+- [0057] A stash another branch left is not taken off the list — `decisions/0057-a-stash-another-branch-left-is-not-taken.md`
+- [0058] The suites the gates of one clone run take turns — `decisions/0058-the-gates-suites-take-turns.md`
+- [0059] A removed tree's processes go with it — `decisions/0059-a-removed-trees-processes-go-with-it.md`
+- [0060] A server's tool that writes files is judged as the write it is — `decisions/0060-a-servers-write-is-judged-as-a-write.md`
+- [0061] A session starting in the main checkout brings it level with the trunk — `decisions/0061-the-main-checkout-is-kept-level-with-the-trunk.md`
+- ... 48 older, see `decisions/`

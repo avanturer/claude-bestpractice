@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+"""What the plugin's hooks module asks of the library: one request on stdin, one answer out.
+
+The hooks module (`hooks/bestpractice.ts`) runs inside Claude Code, where there is no Python,
+and asks here through `$.process.run` for what only this plugin's state can answer. The answer
+is JSON, `{}` when there is nothing to change; anything else the module gets back, a failure
+included, leaves the call as it was, so a fault here costs a digest and never a result.
+
+  digest    a successful Bash result -> {"stdout": what the model reads instead} or {}
+  roster    -> {"text": what each other session on the repository is doing} or {}
+  map       -> {"text": the files a subagent's task is about, ranked} or {}
+  settings  -> {"enabled", "compress_output", "route_search": true or false,
+                "subagent_min_model": the least tier a subagent runs on, "" for none}
+
+Asked on the call it is about, never cached by the module, so `enabled off` and the
+`claude-bp set` switches hold from the next call on (decision 0016).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from claude_bestpractice import board, config, hookio, outputs, repomap  # noqa: E402
+from claude_bestpractice.gitctx import GitError, resolve  # noqa: E402
+
+
+def _repository(cwd: str):
+    """The repository `cwd` is in, or None outside every one."""
+    try:
+        return resolve(cwd or os.getcwd())
+    except (GitError, OSError):
+        return None
+
+
+def _settings(ctx) -> dict:
+    """Which of the module's behaviours the founder has left on here, and the subagent floor."""
+    cfg = config.load(ctx) if ctx is not None else config.Config()
+    on = ctx is None or config.enforcing(ctx)[0]
+    return {"enabled": bool(on), "compress_output": bool(on and cfg.compress_output),
+            "route_search": bool(on and cfg.route_search),
+            "subagent_min_model": str(cfg.subagent_min_model or "") if on else ""}
+
+
+def _answer(asked: str, request: dict) -> dict:
+    """The answer to one request of the module's."""
+    cwd = str(request.get("cwd") or "")
+    ctx = _repository(cwd)
+    settings = _settings(ctx)
+    harness = str(request.get("session") or "")
+    if asked == "settings":
+        return settings
+    if not settings["enabled"]:
+        return {}
+    if asked == "digest":
+        mine = hookio.compose_session_id(harness, cwd or os.getcwd()) if harness else ""
+        return outputs.answer(ctx, {**request, "session": mine})
+    if asked == "roster" and ctx is not None:
+        text = board.roster(ctx, harness)
+        return {"text": text} if text else {}
+    if asked == "map" and ctx is not None:
+        text = repomap.for_a_task(ctx, str(request.get("task") or ""))
+        return {"text": text} if text else {}
+    return {}
+
+
+def main(argv: list[str]) -> int:
+    try:
+        request = json.loads(sys.stdin.read() or "{}")
+    except ValueError:
+        request = {}
+    asked = argv[1] if len(argv) > 1 else ""
+    answer = _answer(asked, request if isinstance(request, dict) else {})
+    sys.stdout.write(json.dumps(answer, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

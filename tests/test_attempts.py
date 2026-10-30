@@ -340,6 +340,22 @@ class TestTwoWorktreesFileTwoDeadEnds(RepoCase):
         self.write("billing.py", "rates = {}  # per tenant now\n")
         self.assertIn("rewritten since", attempts.render_for_board(self.ctx(), ["billing.py"]))
 
+    def test_a_number_the_trunk_already_holds_is_not_handed_out_again(self):
+        """A tree cut before a sibling's attempt merged sees none of it: a founder's trunk
+        carried `0001` twice, from two branches that each counted what was checked out."""
+        from helpers import git
+
+        self.file(self.a, "cache fee rates in a module dict", "billing.py")
+        git(["add", "-A"], self.a)
+        git(["commit", "-qm", "the dead end"], self.a)
+        git(["update-ref", "refs/remotes/origin/main", "billing"], self.repo)
+        git(["worktree", "remove", "--force", str(self.a)], self.repo)
+
+        self.file(self.b, "hero video autoplay", "landing.html")
+        from claude_bestpractice.gitctx import resolve
+
+        self.assertEqual(["0002"], [a.id for a in attempts.load_all(resolve(self.b))])
+
     def test_a_stamp_an_older_version_keyed_by_id_is_read_only_for_its_own_files(self):
         """Stamps already on disk keep working — unless a sibling's overwrote them, and
         then they say nothing rather than something about somebody else's file."""

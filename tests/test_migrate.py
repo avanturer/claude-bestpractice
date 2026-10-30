@@ -8,11 +8,16 @@ import shlex
 import subprocess
 import sys
 import contextlib
+import time
 import unittest
 
 from helpers import BIN, RepoCase, git
 
 from claude_bestpractice import limits, migrate, plan, store
+
+# When the pull requests these tests file were opened: within the thirty days an obligation
+# lasts, or the log keeps none of them.
+OPENED = time.time() - 3600
 
 
 class TestAHandoffIsRefusedUntilItIsOne(RepoCase):
@@ -1520,9 +1525,10 @@ class TestANumberCarriedToTheNextPullRequestIsForgotten(RepoCase):
     def filed(self, **row) -> None:
         from claude_bestpractice import pullrequest
 
+        # Opened this week: a record past every obligation is cut from the log (repair 0043).
         store.append_jsonl(store.tier_b(self.ctx(), pullrequest.PR_FILE), {
             "branch": "feat/x", "base": "main", "url": "", "session_id": "s1",
-            "opened_at": 1.0, "handed_off_at": 0.0, **row,
+            "opened_at": OPENED, "handed_off_at": 0.0, **row,
         })
 
     def test_the_inherited_number_is_taken_back(self):
@@ -1556,7 +1562,7 @@ class TestANumberAnotherTreeOpenedIsForgotten(RepoCase):
 
         store.append_jsonl(store.tier_b(self.ctx(), pullrequest.PR_FILE), {
             "branch": "feat/x", "base": "main", "url": "", "session_id": "s1",
-            "opened_at": 1.0, "handed_off_at": 0.0, "state": "open", **row,
+            "opened_at": OPENED, "handed_off_at": 0.0, "state": "open", **row,
         })
 
     def number(self) -> int:
@@ -1585,8 +1591,8 @@ class TestANumberAnotherTreeOpenedIsForgotten(RepoCase):
         second number: that is repair 0024's case, and the one learned last is right."""
         self.filed(number=41)
         self.filed(number=41, state="merged")
-        self.filed(number=41, opened_at=2.0)
-        self.filed(number=42, opened_at=2.0)
+        self.filed(number=41, opened_at=OPENED + 1)
+        self.filed(number=42, opened_at=OPENED + 1)
         migrate.repair(self.ctx())
         self.assertEqual(42, self.number())
 
@@ -1888,6 +1894,8 @@ class TestANoPullRequestItemAPullRequestAnsweredIsClosed(RepoCase):
     def filed(self, branch: str) -> None:
         from claude_bestpractice import board, pullrequest
 
+        # A branch the clone has: the board shows nothing about one that is gone.
+        git(["branch", "-f", branch], self.repo)
         board.add_open_item(self.ctx(), item_id=f"{pullrequest.MISSING_ITEM}{branch}-1",
                             text=f"NO PULL REQUEST for finished work on {branch}",
                             branch=branch, session_id="s1", subject_paths=[])

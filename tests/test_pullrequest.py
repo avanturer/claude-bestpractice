@@ -1203,9 +1203,8 @@ class TestAMergeWaitsForTheFoundersWord(PRCase):
         two pull requests it had been told to leave alone, and one nearly shipped to
         people alongside a neighbouring session's OTA publish (#192).
 
-        No reading of the surrounding words separates these: «всё нравится, +merge» and
-        «я не говорил +merge» are the same shape. So the shape carries the meaning — a
-        grant is a line that is the token and nothing else.
+        Read in a sentence since decision 0047, the token counts only in a clause that does
+        not withhold it: a refusal, a condition or a later time keeps it from granting.
         """
         from claude_bestpractice import config
 
@@ -1255,6 +1254,29 @@ class TestAMergeWaitsForTheFoundersWord(PRCase):
             config.approved(self.ctx(), config.APPROVE_MERGE),
             "the plugin's own voice authorised a merge",
         )
+
+    def test_the_word_in_a_sentence_of_theirs_carries(self):
+        """Decision 0047: the founder writes `+merge` where they write the rest, and both words
+        of one message count. A line of its own cost them a newline they kept forgetting."""
+        from claude_bestpractice import config
+
+        merge, release = config.APPROVE_MERGE, config.APPROVE_RELEASE
+        for said, granted in (("всё отлично, +merge", {merge}),
+                              ("проверил, всё ок +merge и +release", {merge, release}),
+                              ("+merge +release", {merge, release}),
+                              ("+merge, но релиз не надо", {merge}),
+                              ("не надо +release, только +merge", {merge}),
+                              ("looks good +merge", {merge})):
+            self.assertEqual(granted, set(config.approvals_in(said)), said)
+
+    def test_a_question_a_condition_or_a_quotation_grants_nothing(self):
+        from claude_bestpractice import config
+
+        for said in ("+merge? или ещё рано", "можно ли +merge", "я напишу +merge когда посмотрю",
+                     "+merge после ревью", "don't +merge yet", "+merge once CI is green",
+                     "скажи `+merge`, чтобы принять", "он ответил «+merge»",
+                     'the gate said "+merge"', "> +merge"):
+            self.assertEqual({}, config.approvals_in(said), said)
 
     def test_a_symbol_inside_a_word_is_not_the_literal(self):
         """`+` has to start the token. Without that, any word ending in the symbol plus
@@ -2682,6 +2704,7 @@ class TestTheBoardStopsSayingThereIsNone(PRCase):
         self.assertFalse(self.said_none())
 
     def test_another_branchs_is_left_standing(self):
+        git(["branch", "feat/y"], self.repo)
         board.add_open_item(self.ctx(), item_id=f"{pullrequest.MISSING_ITEM}feat/y-1",
                             text="NO PULL REQUEST for finished work on feat/y", branch="feat/y",
                             session_id="s1", subject_paths=[])

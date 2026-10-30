@@ -36,7 +36,6 @@ fails if it is refused.
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 import time
@@ -44,7 +43,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import hookio, provenance, redact, sessions, store  # noqa: E402
+from claude_bestpractice import founder, hookio, provenance, redact, sessions, store  # noqa: E402
 from claude_bestpractice.gitctx import changed_files, resolve  # noqa: E402
 
 MAX_TURN_CHARS = 300
@@ -52,43 +51,17 @@ MAX_TURNS = 3
 
 
 def read_user_turns(transcript_path: str) -> list[str]:
-    """Best-effort extraction of recent user turns. Never raises."""
-    if not transcript_path:
-        return []
-    try:
-        text = Path(transcript_path).read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return []
+    """The founder's recent messages, read from the end of the transcript. Never raises.
 
-    turns: list[str] = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            rec = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(rec, dict) or rec.get("type") != "user":
-            continue
-        if rec.get("isSidechain"):
-            continue
-        message = rec.get("message")
-        content = message.get("content") if isinstance(message, dict) else None
-        if isinstance(content, str):
-            body = content
-        elif isinstance(content, list):
-            body = " ".join(
-                str(part.get("text", ""))
-                for part in content
-                if isinstance(part, dict) and part.get("type") == "text"
-            )
-        else:
-            continue
-        body = body.strip()
-        if body:
-            turns.append(body)
-    return turns
+    Every `user` entry used to count, so a tool's result, a task's notification and this
+    plugin's own refusals were checkpointed as what the founder had asked; and the whole file
+    was read to find them, which on one machine was 1.1 GB at a compaction.
+    """
+    return founder.messages(transcript_path, TRANSCRIPT_TAIL_BYTES)
+
+
+# How much of the transcript's end is read for the founder's words: the checkpoint keeps a few.
+TRANSCRIPT_TAIL_BYTES = 8 * 1024 * 1024
 
 
 # One claimed card, its body and its paths. The section is bounded because the restore

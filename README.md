@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-2.6.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.7.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-2541%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -132,10 +132,14 @@ suppressed and counted, never silently deleted.
 Every entity names a canonical identifier and its file. A rename **fails validation**
 rather than leaving your memory describing something that no longer exists.
 
+The plugin's own logs keep what can still be read. Past a size, the pull-request log is cut to
+one row per branch and the open items to the ones the board can show; an item about a branch
+the clone no longer has is not shown, and a branch's green and run records go with the branch.
+
 ### Sessions that see each other
 
 ```
-OTHER LIVE SESSIONS (2) — do not edit files they hold:
+OTHER LIVE SESSIONS (2) — do not edit files they hold; SendMessage reaches each by the name its row starts with:
   - ledger-export-3c (a3f81c22) on feat/export [ledger-export] active 40s ago
       touched: src/billing.js, src/csv.js
       holds: src/billing.js
@@ -157,6 +161,17 @@ health: 3 live session(s), 1 reaped, 4 open item(s), 1 stale (suppressed)
 Editing a file another live session holds is **denied**, naming the owner. A crashed
 session's leases and claims are released by the reaper — in whichever worktree holds
 them — instead of staying in flight forever.
+
+Every tree of a clone shares one stash list, so its top entry is whichever tree stashed last.
+`git stash pop`, `drop`, `clear` and `branch` of an entry another branch stashed are **denied**,
+naming `git stash apply`, which brings the work in and leaves the entry to the tree that made
+it. A tool an MCP server offers that writes files — the reference filesystem server's,
+Serena's — is judged as the `Write` it is, and keeps its own permission prompt.
+
+The suites the sessions' Stop gates start **take turns**: as many at once as fit in half the
+machine's CPUs at `witness_cpus` each, every one pinned to CPUs of its own. Six to twelve
+sessions finishing on one 24-thread machine used to start them all at once, and suites that
+pass alone were filed red under the load.
 
 Every session is named the way `SendMessage` addresses it: on the board, in
 `claude-bp status`, as a card's owner, on a pull request's row, and in every refusal that
@@ -332,6 +347,14 @@ request, it asks GitHub once through `gh`, and records the one it finds. A branc
 nothing of its own — every commit already in the trunk, by patch or by content, or on another
 pull request's branch, as an integration branch is — is asked for none.
 
+**Merged on GitHub, it is settled by the number GitHub writes into the trunk** — `Title (#N)`
+for a squash, `Merge pull request #N` for a merge — so a squash-merged branch still checked out
+somewhere stops being offered as ready to merge. One whose number no hook heard, a `gh pr
+create` that Claude Code put in the background, is asked of GitHub at the Stop on its branch.
+And a merge is refused while the pull request adds a numbered migration under a number the
+trunk already gave another file, naming the next one free: two sessions that each took "the
+next number" are both right until the second merges.
+
 ### Closing the work, not just doing it
 
 Isolation is the half that works: one tree per session, and in sixty days of three to eight
@@ -365,6 +388,13 @@ A tree another tool created is never removed, because that is not a plugin's cal
 here has seen, and a pull request nothing has moved in a week. All three lines are empty in
 the steady state, which is the state the removal produces.
 
+A tree counts as finished when its branch's work is in the trunk by ancestry, by patch or by
+content, which is what a squash merge leaves; asked for, `claude-bp sweep` removes the trees
+the board names, the same way and on the same proofs. Once a tree is gone, the processes still
+running in it — a dev server, Metro, uvicorn — are stopped before its database is dropped, and
+the removal names them. And a session that starts in the main checkout fast-forwards it to the
+trunk it lags, where no other session is in it, so nobody reads code the trunk has replaced.
+
 ### The three things that wait for your word
 
 Some actions cannot be undone by re-running them, and no amount of green says you wanted
@@ -377,13 +407,17 @@ messages, and each is **spent when it is used**, never a standing grant.
 | `+release` | promoting to production | one promotion |
 | `+migration` | destructive DDL in a migration | one migration |
 
-**On a line of its own, with nothing else on it.** Say whatever you like first, then put
-the word on the next line:
+**Anywhere in your message, as many as you mean.** In a sentence, on a line of its own, or
+two at once:
 
 ```
-looks good, ship it
-+merge
+looks good, ship it +merge +release
 ```
+
+A word does not count in a clause that refuses, defers or conditions it, in a question, or
+quoted: *"не мержи, я не говорил +merge"*, *"+merge when CI is green"*, *"можно ли +merge?"*
+and a `` `+merge` `` in backticks grant nothing, while *"+merge, но релиз не надо"* grants the
+merge.
 
 A promotion is read off the program a line runs: `vercel --prod`, `fly deploy`,
 `eas update --channel production`, a script named for deploying that names production. A
@@ -391,9 +425,10 @@ project's own way to ship names neither, so declare it in `config.json` by the n
 runs it under, a make target or a script: `"release_commands": ["mobile-ota",
 "deploy_standalone.sh"]`. Each then waits for `+release` like the rest.
 
-A token sharing a line with prose cannot be told from a token being talked about, and that
-gap ran the wrong way: *"I never said `+merge`"* — a refusal — authorised the merge, and
-two unapproved pull requests reached a deploying trunk before it was caught. The prefix is a
+A token read without the words around it cannot be told from a token being talked about,
+and that gap once ran the wrong way: *"I never said `+merge`"* — a refusal — authorised the
+merge, and two unapproved pull requests reached a deploying trunk before it was caught. That
+is why the clause around a word decides whether it counts. The prefix is a
 symbol rather than the word "ok" because "ok" is English and the gate should not depend on
 which language you happen to be writing in. Nothing the session writes can stand in for these — only your own turns reach the
 hook that records them, which is the whole point: the gate on an irreversible action must
@@ -462,6 +497,34 @@ repository other people push to still wants the hosted run. Bypass once with
 `git push --no-verify`; that is deliberate and leaves a record, which a silently skipped
 hosted run does not.
 
+### Less of the window spent on noise
+
+**A long result reaches the model as what it says.** A test suite, build or install that
+succeeded and printed 6,000 characters or more is handed over as a digest: the runner's
+summary, every line that looks like an error or a warning, the head and the tail, and the path
+of the whole output, kept under `.claude/claude-bestpractice/out/` and out of git. A passing
+`pytest -v` of 10,153 tests in a real project, 2.5 MB, reached the model as 2,600 characters
+holding its verdict and its ten warnings. Anything you asked to read, and any command that
+failed, is left exactly as it was.
+
+**Search goes through the plugin's own Parallel and Exa.** Both servers ship with the plugin
+and need no key. WebSearch is answered by Parallel's search, by Exa's when Parallel returns
+nothing, and by itself only when neither answers; Exa is for the one thing Parallel's results
+miss, and is sent back until Parallel has been asked. A query carrying anything that reads as a
+credential is refused before it leaves. Queries go to Parallel ([privacy
+policy](https://parallel.ai/privacy-policy)) and Exa ([privacy policy](https://exa.ai/privacy-policy));
+Exa refuses requests from some regions, and there search falls through to WebSearch.
+
+**Compaction keeps what you said.** It is told to keep your requests and decisions, every
+`+merge` and what it covered, the cards in play, the failing tests and the paths of kept
+outputs, and to drop logs that can be read again.
+
+**Sessions find each other.** When a session lists the agents it can message, each other
+session on the repository is named with its card, branch and tree, so a message goes to the
+one whose work it is. A subagent spawned on a tier below `subagent_min_model` (`sonnet`) runs on it.
+
+Each is a switch you say: `compress_output off`, `route_search off`, `subagent_min_model off`.
+
 ### It takes over what fights it
 
 `claude-bp adopt` finds other tools contesting the events this owns, quarantines their
@@ -478,6 +541,7 @@ configuration silently.
 | `claude-bp status` | Sessions, plan, knowledge, memory health, conflicts, next action |
 | `claude-bp init` | Derive the knowledge layer from your code |
 | `claude-bp adopt` | Take over events another tool is contesting |
+| `claude-bp sweep` | Remove the trees nobody is in whose work is already in the trunk |
 | `claude-bp database` | Create this worktree's own database, if the server has not got it (needs `psql`; otherwise `worktree_setup`) |
 | `claude-bp set` | Change a gate switch you asked for in your own words |
 | `claude-bp policy` | Tell auto mode what this repository is; name rules that no longer fire |
@@ -642,6 +706,11 @@ turn, which makes this a number you can compare rather than a claim you have to 
 claude-bestpractice holds **~332 tokens** of always-on context across four components, against a
 self-imposed ceiling of 400. `make check` fails the build if it goes over, and the
 ceiling has been held by trimming descriptions rather than by raising it — twice.
+
+The two search servers it ships are counted apart, because they are tools rather than text:
+about 780 tokens of tool names and instructions in a project that does not connect Parallel's
+Search MCP and Exa itself, and nothing in one that does, where the project's own copy is used.
+In return a passing test run of 2.5 MB costs 2,600 characters instead of the window.
 
 Everything else the plugin knows is loaded on demand: skills only when their trigger
 fires, the board only at session start, the work ledger only when asked for. The budget

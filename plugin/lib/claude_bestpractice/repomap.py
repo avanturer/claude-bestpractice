@@ -24,6 +24,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import re
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -32,6 +33,7 @@ from .discipline import parse_quietly
 from .gitctx import GitContext
 
 CACHE_FILE = "repomap-cache.json"
+FACTS_FILE = "repomap-facts.json"
 CHARS_PER_TOKEN = 3.5
 DEFAULT_BUDGET_TOKENS = 1_000
 MAX_FILES = 2_000
@@ -129,18 +131,8 @@ def extract_generic(text: str) -> tuple[set[str], set[str]]:
 
 def scan(ctx: GitContext, paths: list[str] | None = None) -> list[FileFacts]:
     root = ctx.worktree_root
-    if paths is None:
-        candidates = []
-        for path in root.rglob("*"):
-            if not path.is_file() or path.suffix not in SOURCE_SUFFIXES:
-                continue
-            if SKIP_DIRS & set(path.relative_to(root).parts):
-                continue
-            candidates.append(path)
-            if len(candidates) >= MAX_FILES:
-                break
-    else:
-        candidates = [root / rel for rel in paths if (root / rel).is_file()]
+    listed = list(_sources(ctx)) if paths is None else paths
+    candidates = [root / rel for rel in listed or [] if (root / rel).is_file()]
 
     facts: list[FileFacts] = []
     for path in candidates:
@@ -273,35 +265,88 @@ def render(facts: list[FileFacts], ranks: dict[str, float], budget_tokens: int) 
     return best
 
 
-def _fingerprint(ctx: GitContext) -> str:
-    """Content-addressed cache key over the tracked source files."""
-    digest = hashlib.sha256()
-    root = ctx.worktree_root
-    for path in sorted(root.rglob("*")):
-        if not path.is_file() or path.suffix not in SOURCE_SUFFIXES:
-            continue
-        if SKIP_DIRS & set(path.relative_to(root).parts):
-            continue
-        try:
-            stat = path.stat()
-        except OSError:
-            continue
-        digest.update(path.relative_to(root).as_posix().encode())
-        digest.update(str(stat.st_size).encode())
-    return digest.hexdigest()
+def _sources(ctx: GitContext) -> dict[str, str]:
+    """The tracked source files and their blobs, as `git ls-files -s` lists them, up to
+    `MAX_FILES`.
+
+    Not a walk of the tree: it read every file of `node_modules` and every virtualenv before it
+    could skip them, and on a founder's repository of 2,000 sources a subagent's map took
+    seventeen seconds, past the fifteen its hook is given, on every spawn.
+    """
+    keys: dict[str, str] = {}
+    for entry in _git(ctx, ["ls-files", "-s", "-z"]).split("\0"):
+        head, _, name = entry.partition("\t")
+        fields = head.split()
+        if len(fields) >= 2:
+            keys[name] = fields[1]
+    # What the tree holds that the index does not say: a file changed in place, and a new one
+    # nothing ignores. Keyed by size and time, which is what a session's own work changes.
+    for args in (["ls-files", "-m", "-z"], ["ls-files", "-o", "--exclude-standard", "-z"]):
+        for name in filter(None, _git(ctx, args).split("\0")):
+            keys[name] = _as_it_stands(ctx.worktree_root / name)
+    out: dict[str, str] = {}
+    for name, key in keys.items():
+        if Path(name).suffix in SOURCE_SUFFIXES and not SKIP_DIRS & set(name.split("/")[:-1]):
+            out[name] = key
+            if len(out) >= MAX_FILES:
+                break
+    return out
+
+
+def _as_it_stands(path: Path) -> str:
+    """A key for a file as the tree holds it, rather than as the index does."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return "gone"
+    return f"w:{stat.st_size}:{stat.st_mtime_ns}"
+
+
+def _git(ctx: GitContext, args: list[str]) -> str:
+    """What one git command prints in the tree, "" when it fails."""
+    try:
+        proc = subprocess.run(["git", *args], cwd=str(ctx.worktree_root), capture_output=True,
+                              encoding="utf-8", errors="surrogateescape", timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return proc.stdout if proc.returncode == 0 else ""
+
+
+def _facts(ctx: GitContext, sources: dict[str, str]) -> list[FileFacts]:
+    """`scan`'s answer, kept per blob: a commit re-reads the files it changed, and a map asked
+    for each subagent's own task only ranks them again."""
+    path = store.tier_b(ctx, FACTS_FILE)
+    cached = store.read_json(path, default={}) or {}
+    known = cached.get("blobs", {}) if isinstance(cached, dict) else {}
+    missing = [name for name, blob in sources.items() if blob not in known]
+    read = {fact.path: fact for fact in scan(ctx, missing)} if missing else {}
+    kept: dict[str, list] = {}
+    facts: list[FileFacts] = []
+    for name, blob in sources.items():
+        found = read.get(name)
+        row = [sorted(found.defines), sorted(found.references)] if found else known.get(blob, [[], []])
+        kept[blob] = row
+        if row[0] or row[1]:
+            facts.append(FileFacts(name, set(row[0]), set(row[1])))
+    if missing:
+        store.write_json(path, {"blobs": kept})
+    return facts
 
 
 def generate(
     ctx: GitContext, query: str = "", budget_tokens: int = DEFAULT_BUDGET_TOKENS
 ) -> str:
     """The map, cached by content so a fresh worktree does not force a cold rescan."""
-    key = f"{_fingerprint(ctx)}:{hashlib.sha256(query.encode()).hexdigest()[:12]}:{budget_tokens}"
+    sources = _sources(ctx)
+    content = hashlib.sha256("".join(f"{name}:{blob}\n" for name, blob in sorted(sources.items()))
+                             .encode("utf-8", "surrogateescape")).hexdigest()
+    key = f"{content}:{hashlib.sha256(query.encode()).hexdigest()[:12]}:{budget_tokens}"
     cache_path = store.tier_b(ctx, CACHE_FILE)
     cached = store.read_json(cache_path, default={}) or {}
     if isinstance(cached, dict) and cached.get("key") == key:
         return str(cached.get("map", ""))
 
-    facts = scan(ctx)
+    facts = _facts(ctx, sources)
     if not facts:
         return ""
     graph = build_graph(facts)
@@ -310,3 +355,21 @@ def generate(
 
     store.write_json(cache_path, {"key": key, "map": rendered})
     return rendered
+
+
+# A ranked map earns its place only once orientation is hard: below this many sources a subagent
+# can just look. What one costs, re-paid on every spawn.
+TASK_MAP_MIN_FILES = 40
+TASK_MAP_TOKENS = 400
+
+
+def for_a_task(ctx: GitContext, task: str) -> str:
+    """The files a subagent's task is about, ranked, under a heading; "" in a small repository.
+
+    Asked where the task is known, when the subagent is spawned: `SubagentStart` is handed
+    neither its prompt nor its description, so a map ranked there was the same for every task.
+    """
+    if len(_sources(ctx)) < TASK_MAP_MIN_FILES:
+        return ""
+    rendered = generate(ctx, query=task, budget_tokens=TASK_MAP_TOKENS)
+    return f"## Where things are for this task\n{rendered}" if rendered else ""

@@ -248,33 +248,42 @@ def load_all(ctx: GitContext, state: str = "") -> list[Task]:
     those branches is clean — different slugs, different filenames — and deduping by id
     would silently drop one of two real tasks on every such merge.
     """
-    best: dict[str, Task] = {}
-    # Always every state, even when one was asked for. Scanning only the requested
-    # directory cannot see that a sibling has moved the task on, so the dedup above never
-    # runs: `startable` counted a task this worktree had closed, because it looked in
-    # `next/` alone and found the stale copy (#123).
-    for root in sibling_worktrees(ctx) or [ctx.worktree_root]:
-        label = "" if root.resolve() == ctx.worktree_root.resolve() else root.name
-        for task in _tasks_under(root, list(STATES), label):
-            previous = best.get(task.path.name)
-            if previous is None or _rank(task) > _rank(previous):
-                best[task.path.name] = task
-    resolved = [t for t in best.values() if not state or t.state == state]
+    resolved: list[Task] = []
+    for path, name, label in _answering_copies(ctx):
+        task = _load(path, name) if not state or name == state else None
+        if task:
+            task.worktree = label
+            resolved.append(task)
     return sorted(resolved, key=lambda t: (STATES.index(t.state), t.id, t.title))
 
 
-def _tasks_under(root: Path, states: list[str], label: str) -> list[Task]:
-    """Every task file in one checkout, tagged with which checkout it came from."""
-    out: list[Task] = []
-    for name in states:
+def _answering_copies(ctx: GitContext) -> list[tuple[Path, str, str]]:
+    """The copy that speaks for each card, decided on the listing alone: (path, state, tree).
+
+    Always every state, even when one was asked for. Scanning only the requested directory
+    cannot see that a sibling has moved the task on, so the dedup never runs: `startable`
+    counted a task this worktree had closed, because it looked in `next/` alone and found the
+    stale copy (#123). Only the copies that win are read, and only in the state asked for:
+    `done/` only grows, and reading every card in it to answer "what is this session holding"
+    cost every gated write in one clone 700 files, 561 of them finished.
+    """
+    best: dict[str, tuple[tuple[int, int], Path, str, str]] = {}
+    for root in sibling_worktrees(ctx) or [ctx.worktree_root]:
+        label = "" if root.resolve() == ctx.worktree_root.resolve() else root.name
+        for name, path in _cards_under(root):
+            rank = _rank(name, label)
+            if path.name not in best or rank > best[path.name][0]:
+                best[path.name] = (rank, path, name, label)
+    return [(path, name, label) for _, path, name, label in best.values()]
+
+
+def _cards_under(root: Path) -> list[tuple[str, Path]]:
+    """Every card file in one checkout, with the state its directory says, unread."""
+    out: list[tuple[str, Path]] = []
+    for name in STATES:
         directory = root / store.TIER_A_DIRNAME / PLAN_DIR / name
-        if not directory.is_dir():
-            continue
-        for path in sorted(directory.glob("[0-9][0-9][0-9][0-9]-*.md")):
-            task = _load(path, name)
-            if task:
-                task.worktree = label
-                out.append(task)
+        if directory.is_dir():
+            out.extend((name, path) for path in sorted(directory.glob("[0-9][0-9][0-9][0-9]-*.md")))
     return out
 
 
@@ -293,8 +302,8 @@ def _tasks_under(root: Path, states: list[str], label: str) -> list[Task]:
 _ADVANCEMENT = {DONE: 4, PAUSED: 3, DOING: 2, NEXT: 1}
 
 
-def _rank(task: Task) -> tuple[int, int]:
-    return (_ADVANCEMENT.get(task.state, 0), 0 if task.worktree else 1)
+def _rank(state: str, label: str) -> tuple[int, int]:
+    return (_ADVANCEMENT.get(state, 0), 0 if label else 1)
 
 
 def sibling_worktrees(ctx: GitContext) -> list[Path]:
@@ -616,8 +625,10 @@ def copies(ctx: GitContext, task_id: str) -> list[Task]:
     out: list[Task] = []
     for root in sibling_worktrees(ctx) or [ctx.worktree_root]:
         label = "" if root.resolve() == ctx.worktree_root.resolve() else root.name
-        for task in _tasks_under(root, list(STATES), label):
-            if task.id in (wanted, task_id):
+        for name, path in _cards_under(root):
+            task = _load(path, name) if path.name.split("-", 1)[0] in (wanted, task_id) else None
+            if task:
+                task.worktree = label
                 out.append(task)
     # This tree first, so a caller that reports one file reports the one the reader can see.
     return sorted(out, key=lambda t: (1 if t.worktree else 0, t.worktree, t.path.name))
@@ -639,7 +650,7 @@ def reconcile_copies(ctx: GitContext) -> int:
         for copy in copies(ctx, task.id):
             if STATES.index(copy.state) >= STATES.index(task.state):
                 continue
-            if _move(copy, task.state, owner=copy.owner, branch=copy.branch) is not None:
+            if _move_if_there(copy, task.state, owner=copy.owner, branch=copy.branch) is not None:
                 moved += 1
     return moved
 
@@ -654,7 +665,7 @@ def _move_every(ctx: GitContext, task_id: str, state: str, **kwargs) -> Task | N
     """
     landed: Task | None = None
     for copy in copies(ctx, task_id):
-        moved = _move(copy, state, **kwargs)
+        moved = _move_if_there(copy, state, **kwargs)
         if moved is not None and (landed is None or (landed.worktree and not copy.worktree)):
             landed = moved
     return landed
@@ -817,6 +828,20 @@ def _move(task: Task, state: str, owner: str = "", branch: str = "",
     return moved
 
 
+def _move_if_there(task: Task, state: str, **kwargs) -> Task | None:
+    """`_move`, or None when a sibling moved or removed the card since it was read.
+
+    The sweeps a session start runs read every card first and move some of them after, with
+    no lock: a sibling moving one in between ended the hook with `FileNotFoundError`, on the
+    founder's machine on 2.3.0 and again on 2.6.0, and that session's board never built. The
+    card is the sibling's to have moved; `claim` reads it again instead, under its lock.
+    """
+    try:
+        return _move(task, state, **kwargs)
+    except FileNotFoundError:
+        return None
+
+
 IDLE_HOURS = 24.0
 
 
@@ -879,8 +904,7 @@ def sweep_idle(ctx: GitContext, hours: float = IDLE_HOURS) -> list[Task]:
                 f"queue: claimed by {sessions.called(ctx, task.owner) if task.owner else 'nobody'}"
                 f" and untouched for {int(idle)}h.")
         task.body = f"{task.body}\n\n{note}".strip() if task.body else note
-        _rewrite_body(task)
-        released = _move(task, NEXT)
+        released = _released(task)
         if released:
             moved.append(released)
     return moved
@@ -913,10 +937,19 @@ def sweep_queue(ctx: GitContext, days: float = QUEUE_STALE_DAYS) -> list[Task]:
         if not idle or task.owner:
             continue
         blocker = f"nobody picked this up in {int(idle // 24)}d — resume it if it still matters"
-        parked = _move(task, PAUSED, blocker=blocker)
+        parked = _move_if_there(task, PAUSED, blocker=blocker)
         if parked:
             moved.append(parked)
     return moved
+
+
+def _released(task: Task) -> Task | None:
+    """`task`, with its amended body, back in `next`; None when a sibling moved it first."""
+    try:
+        _rewrite_body(task)
+    except FileNotFoundError:
+        return None
+    return _move_if_there(task, NEXT)
 
 
 def _rewrite_body(task: Task) -> None:

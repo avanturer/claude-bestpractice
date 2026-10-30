@@ -1,0 +1,181 @@
+{
+  "claude_code": "2.1.314",
+  "events": {
+    "PostToolUse": {
+      "keys": [
+        "cwd",
+        "duration_ms",
+        "effort",
+        "hook_event_name",
+        "permission_mode",
+        "prompt_id",
+        "scratchpad_dir",
+        "session_id",
+        "tool_input",
+        "tool_name",
+        "tool_response",
+        "tool_use_id",
+        "transcript_path"
+      ],
+      "tools": {
+        "Agent": {
+          "tool_input": [
+            "description",
+            "prompt",
+            "run_in_background",
+            "subagent_type"
+          ],
+          "tool_response": [
+            "agentId",
+            "agentType",
+            "canContinueAgent",
+            "content",
+            "harnessNoteCount",
+            "harnessSectionHash",
+            "harnessTailCount",
+            "prompt",
+            "resolvedModel",
+            "status",
+            "totalDurationMs",
+            "totalTokens",
+            "totalToolUseCount",
+            "usage"
+          ]
+        },
+        "Bash": {
+          "tool_input": [
+            "command",
+            "description"
+          ],
+          "tool_response": [
+            "interrupted",
+            "isImage",
+            "noOutputExpected",
+            "stderr",
+            "stdout"
+          ]
+        },
+        "Write": {
+          "tool_input": [
+            "content",
+            "file_path"
+          ],
+          "tool_response": [
+            "content",
+            "filePath",
+            "gitDiff",
+            "originalFile",
+            "structuredPatch",
+            "type",
+            "userModified"
+          ]
+        }
+      }
+    },
+    "PreCompact": {
+      "keys": [
+        "custom_instructions",
+        "cwd",
+        "hook_event_name",
+        "prompt_id",
+        "scratchpad_dir",
+        "session_id",
+        "transcript_path",
+        "trigger"
+      ]
+    },
+    "PreToolUse": {
+      "keys": [
+        "cwd",
+        "effort",
+        "hook_event_name",
+        "permission_mode",
+        "prompt_id",
+        "scratchpad_dir",
+        "session_id",
+        "tool_input",
+        "tool_name",
+        "tool_use_id",
+        "transcript_path"
+      ],
+      "tools": {
+        "Agent": {
+          "tool_input": [
+            "description",
+            "prompt",
+            "run_in_background",
+            "subagent_type"
+          ]
+        },
+        "Bash": {
+          "tool_input": [
+            "command",
+            "description"
+          ]
+        },
+        "Write": {
+          "tool_input": [
+            "content",
+            "file_path"
+          ]
+        }
+      }
+    },
+    "SessionStart": {
+      "keys": [
+        "context_tokens",
+        "cwd",
+        "estimated_cache_write_usd",
+        "hook_event_name",
+        "model",
+        "prompt_cache_likely_expired",
+        "prompt_id",
+        "scratchpad_dir",
+        "seconds_since_last_response",
+        "session_id",
+        "source",
+        "transcript_path"
+      ]
+    },
+    "Stop": {
+      "keys": [
+        "background_tasks",
+        "cwd",
+        "effort",
+        "hook_event_name",
+        "last_assistant_message",
+        "permission_mode",
+        "prompt_id",
+        "scratchpad_dir",
+        "session_crons",
+        "session_id",
+        "stop_hook_active",
+        "transcript_path"
+      ]
+    },
+    "SubagentStart": {
+      "keys": [
+        "agent_id",
+        "agent_type",
+        "cwd",
+        "hook_event_name",
+        "prompt_id",
+        "scratchpad_dir",
+        "session_id",
+        "transcript_path"
+      ]
+    },
+    "UserPromptSubmit": {
+      "keys": [
+        "cwd",
+        "hook_event_name",
+        "permission_mode",
+        "prompt",
+        "prompt_id",
+        "scratchpad_dir",
+        "session_id",
+        "transcript_path"
+      ]
+    }
+  }
+}

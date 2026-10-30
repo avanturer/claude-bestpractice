@@ -93,8 +93,7 @@ the body when the subject cannot carry the reason.
 - **Name the tier on every spawn.** `model` is a field on the call, and a call that omits
   it runs the subagent on this session's own model — the most expensive one in the room.
   A tier pinned in the agent's own definition counts and needs nothing on the call.
-    - `haiku` — mechanical work with one right answer: search, extraction, a scripted
-      edit, reading a log.
+    - `haiku` — runs as `sonnet` here unless the founder lowered `subagent_min_model`.
     - `sonnet` — ordinary implementation and review. Most delegated work belongs here.
     - `opus` — design, ambiguity, a judgement the parent cannot make for itself.
     - `fable` — a long autonomous run that has to investigate before it acts.

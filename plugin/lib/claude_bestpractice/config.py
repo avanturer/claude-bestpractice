@@ -17,6 +17,7 @@ import math
 import os
 import re
 import shlex
+import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -105,6 +106,17 @@ class Config:
     # workers of up to 0.9 GB each, beside six to twelve other sessions doing the same (#267).
     # Four is a gate's share of a machine several sessions finish on at once, not a build's.
     witness_cpus: int = 4
+    # A long successful test, build or install output reaches the model as a digest, the
+    # whole of it kept on disk where the session can read it (decision 0048). Off hands every
+    # output over as Claude Code would.
+    compress_output: bool = True
+    # WebSearch goes to the plugin's Parallel server first and its Exa server next, and Exa
+    # waits for Parallel (decision 0049). Off leaves every search tool as the harness has it.
+    route_search: bool = True
+    # The least a subagent runs on: a spawn naming a lower tier runs on this one (decision
+    # 0051). Haiku's answers to a research question were not good enough to act on, and the
+    # founder said so. Empty or `off` lets every spawn run on what it names.
+    subagent_min_model: str = "sonnet"
     # No two live sessions on one database. Worktrees isolate files and nothing else, so
     # one session's open transaction blocks every sibling's tests on its locks (#164).
     isolate_databases: bool = True
@@ -215,6 +227,9 @@ class Config:
             "artifact_globs": self.artifact_globs,
             "witness_exclude": self.witness_exclude,
             "witness_cpus": self.witness_cpus,
+            "compress_output": self.compress_output,
+            "route_search": self.route_search,
+            "subagent_min_model": self.subagent_min_model,
             "isolate_databases": self.isolate_databases,
             "worktree_setup": self.worktree_setup,
             "clean_rerun": self.clean_rerun,
@@ -257,10 +272,28 @@ def detect_test_command(root: Path) -> list[str]:
             continue
         if runner == "make" and not _make_has_test(root):
             continue
-        return list(command)
+        return _in_its_environment(root, list(command))
     if _has_tests(root):
-        return ["python3", "-m", "pytest", "-q"]
+        return _in_its_environment(root, ["python3", "-m", "pytest", "-q"])
     return []
+
+
+# A uv project's tests run in its own environment, which `python3` is not: `backend/` with a
+# `uv.lock` was given `python3 -m pytest -q`, and every test file failed to import its
+# dependencies (#282). The lockfile is the project's, so the command never rewrites it.
+_UV_PYTHON = ["uv", "run", "--frozen", "python"]
+
+
+def _in_its_environment(root: Path, command: list[str]) -> list[str]:
+    """`command`, started through `uv run` where `root` is a uv project and uv is installed.
+
+    A virtual environment's own interpreter is not named here: this command is baked into a
+    hook every worktree of the clone shares, and a path into one tree's `.venv` is wrong in
+    every other. The Stop gate's own run, which happens in one tree, uses it (`witness`).
+    """
+    if command[:1] != ["python3"] or not (root / "uv.lock").is_file() or not shutil.which("uv"):
+        return command
+    return [*_UV_PYTHON, *command[1:]]
 
 
 def _npm_has_test(root: Path) -> bool:
@@ -325,6 +358,9 @@ _EXPECTED: dict[str, type] = {
     "artifact_globs": list,
     "witness_exclude": list,
     "witness_cpus": int,
+    "compress_output": bool,
+    "route_search": bool,
+    "subagent_min_model": str,
     "isolate_databases": bool,
     "worktree_setup": list,
     "clean_rerun": bool,
@@ -489,10 +525,9 @@ def _a_switch(key: str) -> bool:
 # one destructive statement. Each is spent immediately, so none can become a standing
 # grant.
 #
-# Prose is deliberately not read. Decision 0006 rejected that for switches — "a regex
-# judging language would be a gate switched by phrasing" — and acceptance is the higher
-# stake of the two. Nothing the model writes reaches this either: only the founder's own
-# turns pass through `prompt-capture`.
+# Read where the founder writes it, in a sentence of theirs as on a line of its own, and as
+# many of them as they send in one message (decision 0047). Nothing the model writes reaches
+# this: only the founder's own turns pass through `prompt-capture`.
 APPROVE_MERGE = "approve:merge"
 APPROVE_RELEASE = "approve:release"
 APPROVE_MIGRATION = "approve:migration"
@@ -505,24 +540,41 @@ MERGE_POOL = "approve:merge:pool"
 # nothing, and the refusal answered by asking them to say it in English instead. Adding
 # Russian words was the obvious repair and is the wrong one: мерж, мердж, смержи, мержим,
 # and every form missed is a refusal in the face of somebody who is certain they allowed
-# it (#147).
+# it (#147). `+` carries no language. The nouns stay because they are already the words
+# spoken in both — «мерж», «релиз», «миграция» are these words.
 #
-# `+` carries no language. The nouns stay because they are already the words spoken in
-# both — «мерж», «релиз», «миграция» are these words.
-#
-# THE LINE IS THE TOKEN AND NOTHING ELSE. Anchoring to the end of a line was the previous
-# rule and it read a refusal as consent: «пока не вливай, я не говорил +merge» ends with
-# the token, so the sentence withholding the merge authorised it. The founder said almost
-# exactly that, two unapproved changes reached the trunk, and one of them nearly shipped
-# to people alongside a neighbouring session's OTA publish (#192).
-#
-# No amount of reading the words around it fixes that — a grant cannot be inferred from
-# prose it happens to end. So the shape carries the whole meaning: a line whose entire
-# content is `+merge` is a deliberate act and cannot be a sentence about one. It costs
-# the founder a newline before the word; the other direction cost a revert.
-_APPROVAL = re.compile(
-    r"(?im)^\s*\+(?P<subject>merge|release|deploy|migration)\s*[.!]?\s*$"
+# A token of its own: `+merge` and not `+merged`, `a+merge` or `C++merge`.
+_TOKEN = re.compile(r"(?<![\w+])\+(?P<subject>merge|release|deploy|migration)(?![\w-])", re.I)
+
+# What the founder quotes rather than says: code, a quotation, a quoted line, something pasted.
+# This plugin's own messages put every literal in backticks, so one pasted back is code here.
+_QUOTED = re.compile(
+    r"```.*?```|`[^`\n]*`|«[^»\n]*»|“[^”\n]*”|„[^“”\n]*[“”]|\"[^\"\n]*\"|^[ \t]*>[^\n]*"
+    r"|<pasted_content\b.*?</pasted_content>",
+    re.S | re.M,
 )
+
+# A sentence, with the mark that ends it: one ending in `?` asks rather than allows.
+_SENTENCE = re.compile(r"[^.!?…;\n]+[.!?…;]*")
+# Where a sentence turns from one thing to another, so that «+merge, но релиз не надо» is a
+# merge allowed and a release not asked for, rather than both withheld.
+_CLAUSE = re.compile(r"[,:—–]|\s(?:но|а|однако|зато|but|however|though|although)\s", re.I)
+
+# The words that keep a token in their clause from being a grant: a refusal, a condition or a
+# later time, and a question. «пока не вливай, я не говорил +merge» withheld the merge while it
+# ended with the token, and read by the line it allowed one: two unapproved changes reached the
+# trunk, one of them nearly shipped beside a neighbouring session's OTA publish (#192).
+_WITHHELD = re.compile(
+    r"(?<!\w)(?:не|нет|ни|нельзя|рано|стоп|погоди|подожди|отмен\w*|если|когда|после|потом"
+    r"|позже|завтра|сначала|ли|зачем|почему|not|no|never|don'?t|doesn'?t|isn'?t|stop|wait"
+    r"|hold|cancel\w*|if|when|after|later|once|until|unless|before|tomorrow|why|whether)(?!\w)"
+    r"|n't(?!\w)",
+    re.I,
+)
+
+# The word alone on its lines, as the founder types it under something pasted.
+_ONLY_TOKENS = re.compile(
+    r"^\s*(?:\+(?:merge|release|deploy|migration)[\s,;.!/]*)+$", re.I)
 
 _APPROVAL_KEYS = {
     "merge": APPROVE_MERGE,
@@ -535,16 +587,31 @@ _APPROVAL_KEYS = {
 def approvals_in(text: str) -> dict[str, str]:
     """Acceptances the founder gave IN THEIR OWN MESSAGE. Usually empty.
 
+    Each token counts in a clause of theirs that does not withhold it (`_WITHHELD`), in a
+    sentence that does not end in a question, outside anything quoted (`_QUOTED`).
+
     The caller is responsible for handing this the founder's words and nothing else. A
     grant is the one thing in this plugin that the gated party must never be able to
     write, and the plugin's own voice reaches the prompt reader as an ordinary user turn
     — that road produced #106, #118, #166 and v1.52.0, each time on the task statement.
     Here it lands on the grant, which is decision 0008 inverted by the plugin itself.
     """
-    return {
-        _APPROVAL_KEYS[found["subject"].lower()]: "yes"
-        for found in _APPROVAL.finditer(text or "")
-    }
+    said = _QUOTED.sub(lambda quoted: " " * len(quoted.group()), text or "")
+    found: dict[str, str] = {}
+    for sentence in _SENTENCE.finditer(said):
+        if sentence.group().rstrip().endswith("?"):
+            continue
+        for clause in _CLAUSE.split(sentence.group()):
+            if _WITHHELD.search(clause):
+                continue
+            for token in _TOKEN.finditer(clause):
+                found[_APPROVAL_KEYS[token["subject"].lower()]] = "yes"
+    return found
+
+
+def only_approvals(line: str) -> bool:
+    """Whether `line` holds the founder's word and nothing else."""
+    return bool(_ONLY_TOKENS.match(line or ""))
 
 
 def approved(ctx: GitContext, key: str) -> bool:

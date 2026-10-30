@@ -10,8 +10,14 @@
     "    split it in two: every gate exited 127, which blocks nothing and says nothing.",
     "",
     "Verify with `plugin/bin/claude-bp-doctor`, which proves each gate by attempting a",
-    "known-bad action rather than reading this file back."
+    "known-bad action rather than reading this file back.",
+    "",
+    "`modules` is the hooks module, which runs inside Claude Code and is no hook entry: it",
+    "changes what the model reads of a long result, where WebSearch goes and what a listing of",
+    "agents says (decisions 0048, 0049, 0050). Where mods are off it is not loaded, and every",
+    "entry below works as before."
   ],
+  "modules": ["./bestpractice.ts"],
   "hooks": {
     "Setup": [
       {
@@ -75,7 +81,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "^(Write|Edit|MultiEdit|NotebookEdit|Bash|EnterWorktree|Agent|Task)$|__((create|merge|update)_pull_request|enable_pr_auto_merge|pull_request_read)$",
+        "matcher": "^(Write|Edit|MultiEdit|NotebookEdit|Bash|EnterWorktree|Agent|Task|WebSearch)$|__((create|merge|update)_pull_request|enable_pr_auto_merge|pull_request_read|web_search(_advanced)?(_exa)?|web_fetch(_exa)?|web_decisions|write_file|edit_file|create_directory|move_file|create_text_file|replace_content|replace_in_files|insert_at_line|replace_symbol_body|insert_after_symbol|insert_before_symbol|rename_symbol|delete_lines|replace_lines|safe_delete_symbol)$",
         "hooks": [
           {
             "type": "command",

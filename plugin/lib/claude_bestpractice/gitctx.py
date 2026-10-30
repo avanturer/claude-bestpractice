@@ -548,6 +548,27 @@ def trunk_ref(ctx: GitContext) -> str:
     return ""
 
 
+def known_branches(ctx: GitContext) -> set[str] | None:
+    """Every branch name this clone knows, local or remote-tracking. None when git cannot say.
+
+    One call, whatever the branch count, and None rather than an empty set on failure: an
+    unreadable ref store must not read as every branch deleted.
+    """
+    code, listed = _status(
+        ["for-each-ref", "--format=%(refname)", "refs/heads/", "refs/remotes/"], ctx.worktree_root
+    )
+    if code != 0:
+        return None
+    names: set[str] = set()
+    for ref in listed.splitlines():
+        if ref.startswith("refs/heads/"):
+            names.add(ref[len("refs/heads/"):])
+        elif ref.startswith("refs/remotes/"):
+            # refs/remotes/<remote>/<branch>, and the branch keeps any slashes of its own.
+            names.add(ref.split("/", 3)[-1])
+    return names
+
+
 def is_ancestor(ctx: GitContext, maybe_ancestor: str, descendant: str = "HEAD") -> bool:
     proc = subprocess.run(
         ["git", "merge-base", "--is-ancestor", maybe_ancestor, descendant],

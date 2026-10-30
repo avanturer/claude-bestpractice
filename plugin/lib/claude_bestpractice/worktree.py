@@ -26,8 +26,10 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from . import store
@@ -619,6 +621,52 @@ def _within(path: Path, directory: Path) -> bool:
         return False
 
 
+def level_with_the_trunk(ctx: GitContext, others: list) -> str:
+    """Fast-forward the main checkout to the trunk it lags, from a session starting in it.
+    What was done or why it was not, for the board; "" where nothing needed doing.
+
+    Nothing else moves that tree: sessions work in their own trees and merge on GitHub, so a
+    founder's main checkout stood 107 commits behind `origin/main` while every session started
+    in it read, and was told to fix, code the trunk had replaced. Only from the tree itself,
+    only where no other live session is in it, only on the trunk's own branch, and only
+    `--ff-only`, which makes no commit and which git refuses over anything uncommitted it
+    would touch. Nothing is fetched: the trunk is as the clone last saw it.
+    """
+    from . import gitpolicy
+
+    main = main_checkout(ctx).resolve()
+    trunk = f"origin/{ctx.branch}"
+    if ctx.worktree_root.resolve() != main or ctx.branch not in gitpolicy.TRUNK_NAMES \
+            or any(Path(record.worktree).resolve() == main for record in others):
+        return ""
+    ahead, behind = _lag(main, trunk)
+    if not behind:
+        return ""
+    if ahead:
+        return (f"the main checkout has {ahead} commit(s) {trunk} does not, and is {behind} "
+                f"behind it: nothing here moves it")
+    merged = subprocess.run(["git", "merge", "--ff-only", "--quiet", trunk], cwd=str(main),
+                            capture_output=True, encoding="utf-8", errors="surrogateescape",
+                            timeout=60)
+    if merged.returncode == 0:
+        return f"the main checkout was {behind} commit(s) behind {trunk}, and now is level with it"
+    reason = next((line for line in merged.stderr.splitlines() if line.strip()), "git refused")
+    return (f"the main checkout is {behind} commit(s) behind {trunk}, and `git -C {main} merge "
+            f"--ff-only {trunk}` was refused: {reason.strip()[:160]}")
+
+
+def _lag(tree: Path, trunk: str) -> tuple[int, int]:
+    """(commits the tree has that `trunk` lacks, commits `trunk` has that the tree lacks);
+    (0, 0) where git cannot say."""
+    from .gitctx import _status
+
+    code, counted = _status(["rev-list", "--left-right", "--count", f"HEAD...{trunk}"], tree)
+    numbers = counted.split()
+    if code != 0 or len(numbers) != 2 or not all(number.isdigit() for number in numbers):
+        return 0, 0
+    return int(numbers[0]), int(numbers[1])
+
+
 def main_checkout(ctx: GitContext) -> Path:
     """The tree everything is provisioned under, from whichever tree is asking.
 
@@ -692,11 +740,15 @@ _REPORTS_EXCLUDE = "/.claude/claude-bestpractice/test-reports/"
 # `git add -A` took one into the founder's history.
 _REVIEWS_EXCLUDE = "/.claude/claude-bestpractice/reviews/"
 
+# The whole outputs a digest stands for (`outputs.keep`), kept for the session to read.
+_OUTPUTS_EXCLUDE = "/.claude/claude-bestpractice/out/"
+
 _EXCLUDED = (
     (_EXCLUDE_LINE, "worktrees this plugin provisions"),
     (_LEDGER_EXCLUDE, "the task ledger, written by every session and committed by none"),
     (_REPORTS_EXCLUDE, "the test reports the Stop gate asks for and reads"),
     (_REVIEWS_EXCLUDE, "the commit review's reports, read once by the session they woke"),
+    (_OUTPUTS_EXCLUDE, "the whole outputs the digests a session read stand for"),
 )
 
 
@@ -868,13 +920,50 @@ def _what_git_says(ctx: GitContext, listed: tuple, trunk: str, skip: set) -> str
         return None
     if state == _PRUNABLE:
         return GONE
-    if branch and not is_ancestor(ctx, branch, trunk):
-        return None
     # Somebody's, whatever the branch says: touched lately, or holding work git would refuse
     # to remove. Neither is a tree "nobody is in", and the line says removing it loses nothing.
-    if not (_left_alone(tree) and _nothing_but_ledger_copies(ctx, tree)):
+    if not _left_alone(tree):
+        return None
+    if branch and not is_ancestor(ctx, branch, trunk) and not _delivered(tree, trunk):
+        return None
+    if not _nothing_but_ledger_copies(ctx, tree):
         return None
     return _what_removal_takes(ctx, tree)
+
+
+def _delivered(tree: Path, trunk: str) -> bool:
+    """Whether everything the tree's branch carries is in the trunk already, by patch or by
+    content, as decision 0041 asks of a branch owed a pull request.
+
+    Ancestry alone never said so in a repository that squash-merges: 24 trees of a founder's
+    clone, 22 GB, stood over branches whose pull requests had merged, and the board named none.
+    """
+    from . import delivery
+    from .gitctx import GitError, resolve
+
+    try:
+        here = resolve(tree)
+    except (GitError, OSError):
+        return False
+    return not delivery.carries_its_own(here, trunk.split("/", 1)[-1])
+
+
+def sweep_named(ctx: GitContext) -> tuple[list[str], list[str]]:
+    """Remove the trees `needs_a_decision` names as losing nothing, as the plugin removes its
+    own: `git worktree remove` without `--force`, and a branch only on proof its work is in
+    the trunk. Returns (trees removed, branches kept for work only they carry).
+
+    Run when somebody asks for it, never by a session start: the trees are another tool's,
+    and decision 0019 leaves that call to whoever runs this.
+    """
+    removed: list[str] = []
+    kept: list[str] = []
+    for path, branch, said in needs_a_decision(ctx):
+        if said or not branch:
+            continue
+        if _release(ctx, (path, branch), Path(), kept=kept):
+            removed.append(path)
+    return removed, kept
 
 
 def _what_removal_takes(ctx: GitContext, tree: Path) -> str:
@@ -1202,7 +1291,8 @@ def _release(ctx: GitContext, tree: tuple, record_path: Path, notes: list[str] |
     """
     path, branch = tree
     where = main_checkout(ctx)
-    if Path(path).resolve() == where.resolve():
+    standing = Path(path).resolve()
+    if standing == where.resolve():
         return False
     ours = _database_of_ours(ctx, Path(path))
     # `--force` is never this plugin's idea: it is passed only where the session typed it
@@ -1230,13 +1320,110 @@ def _release(ctx: GitContext, tree: tuple, record_path: Path, notes: list[str] |
         with contextlib.suppress(OSError):
             record_path.unlink()
 
-    _carry_the_rest(ctx, where, branch, ours, notes if notes is not None else [])
+    _carry_the_rest(ctx, (where, standing), branch, ours, notes if notes is not None else [])
     return True
 
 
-def _carry_the_rest(ctx: GitContext, where: Path, branch: str,
+# How long a process left running in a removed tree has to stop before it is killed.
+STOP_GRACE_SECONDS = 5.0
+
+
+def stop_what_ran_in(tree: Path) -> list[str]:
+    """Stop the processes still running in a tree that was just removed. Their names.
+
+    A dev server started in a tree outlives `git worktree remove`: Metro, expo and uvicorn
+    went on holding the tree's port and its database, serving code no longer on disk, until
+    somebody went looking. This user's only, only those whose directory was in the tree, and
+    never this process, its parents or a Claude Code session. Where processes cannot be read
+    that way, macOS and Windows among them, nothing is stopped.
+    """
+    found = _running_in(tree)
+    _signal(found, signal.SIGTERM)
+    deadline = time.monotonic() + STOP_GRACE_SECONDS
+    while time.monotonic() < deadline and any(_alive(pid) for pid in found):
+        time.sleep(0.1)
+    _signal([pid for pid in found if _alive(pid)], signal.SIGKILL)
+    return sorted(set(found.values()))
+
+
+def _running_in(tree: Path) -> dict[int, str]:
+    """This user's processes whose directory is `tree` or under it, by pid, with their names."""
+    procs = Path("/proc")
+    if not procs.is_dir():
+        return {}
+    spared = _this_and_its_parents()
+    found: dict[int, str] = {}
+    for entry in procs.iterdir():
+        if not entry.name.isdigit() or int(entry.name) in spared:
+            continue
+        try:
+            if entry.stat().st_uid != os.getuid():
+                continue
+            where = os.readlink(entry / "cwd").removesuffix(" (deleted)")
+            argv = (entry / "cmdline").read_bytes().split(b"\0")
+            name = (entry / "comm").read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            continue
+        if Path(where).is_relative_to(tree) and not _a_claude_session(argv):
+            found[int(entry.name)] = name
+    return found
+
+
+def _this_and_its_parents() -> set[int]:
+    """This process and every process above it, read off `/proc/<pid>/stat`."""
+    chain: set[int] = set()
+    pid = os.getpid()
+    while pid > 1 and pid not in chain:
+        chain.add(pid)
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
+            pid = int(stat.rsplit(")", 1)[1].split()[1])
+        except (OSError, IndexError, ValueError):
+            break
+    return chain
+
+
+def _a_claude_session(argv: list[bytes]) -> bool:
+    """Whether a command line is Claude Code's own, run as `claude` or through node."""
+    return any(Path(os.fsdecode(word)).name in ("claude", "claude.exe") or b"claude-code" in word
+               for word in argv[:2])
+
+
+def _signal(pids, sent: int) -> None:
+    for pid in pids:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.kill(pid, sent)
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return not _a_zombie(pid)
+
+
+def _a_zombie(pid: int) -> bool:
+    """A child that exited and was not yet reaped answers `kill 0`, and is stopped already."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return stat.rsplit(")", 1)[-1].split()[:1] == ["Z"]
+
+
+def _carry_the_rest(ctx: GitContext, trees: tuple[Path, Path], branch: str,
                     ours: tuple | None, notes: list[str]) -> None:
-    """Everything the tree was given that is not the tree: the database, and the siblings."""
+    """Everything the tree was given that is not the tree: what still ran in it, the database,
+    and the siblings. `trees` is the main checkout and the tree that went.
+
+    What ran there goes first: a server holding the database keeps it from being dropped."""
+    where, gone = trees
+    stopped = stop_what_ran_in(gone)
+    if stopped:
+        notes.append(f"{len(stopped)} process(es) still running there: {', '.join(stopped[:4])}")
     dropped = drop_database(*ours) if ours else ""
     if dropped:
         notes.append(f"the database {dropped}")

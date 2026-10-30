@@ -259,9 +259,10 @@ def _ready(ctx: GitContext, report: Path) -> Path:
 
 
 # A gate that tells a Node project to run pytest is a gate the agent learns to ignore.
-# `{report}` is filled with `report_path`; Cargo, Maven and Gradle write where their build puts
-# reports, so their lines name that place instead.
-_PYTEST = "python3 -m pytest --junitxml={report}"
+# `{report}` is filled with `report_path`, and `{python}` with how the suite's own project starts
+# Python (`witness.python_for`); Cargo, Maven and Gradle write where their build puts reports, so
+# their lines name that place instead.
+_PYTEST = "{python} -m pytest --junitxml={report}"
 # go-junit-report reads `go test -v`: without `-v` a passing test prints nothing for it to
 # count, and the report it wrote said no test had run.
 _GO = "go test -v ./... 2>&1 | go-junit-report -iocopy -out {report}"
@@ -290,13 +291,16 @@ def artifact_hint(ctx: GitContext, suite=None, runner: str = "") -> str:
     markers were read at the top of the tree, so a `backend/` suite got no command and no path
     at all (#261).
     """
+    from . import witness
+
     root = _root_of(ctx, suite)
     report = shlex.quote(str(_ready(ctx, report_path(ctx, suite))))
     command = _DRIVEN.get(runner) or next(
         (line for marker, line in _ARTIFACT_HINTS if (root / marker).exists()), "")
     if not command:
         return f"run your test suite with a JUnit XML reporter writing {report}, then finish"
-    return f"cd {shlex.quote(str(root))} && {command.format(report=report)}"
+    python = shlex.join(witness.python_for(root, ctx.worktree_root))
+    return f"cd {shlex.quote(str(root))} && {command.format(report=report, python=python)}"
 
 
 def newest_source_mtime(root: Path, relpaths: list[str]) -> float:
@@ -387,11 +391,34 @@ def _issue_nonce(ctx: GitContext) -> str:
     """
     nonce = hashlib.sha256(os.urandom(32)).hexdigest()[:32]
     store.atomic_write(store.tier_b(ctx, NONCE_DIR, nonce), "", mode=0o600)
+    retire_stale_nonces(ctx)
     return nonce
 
 
 def _retire_nonce(ctx: GitContext, nonce: str) -> None:
     store.tier_b(ctx, NONCE_DIR, nonce).unlink(missing_ok=True)
+
+
+# Past this a token names no run in flight: a Stop hook's whole budget is an hour.
+NONCE_LIFETIME = 2 * 3600
+
+
+def retire_stale_nonces(ctx: GitContext) -> int:
+    """Remove the tokens of runs killed before they could retire their own. Returns how many.
+
+    A run killed with its Stop hook never reaches its `finally`, and since decision 0046 that
+    is how a run the founder interrupts ends: one machine kept 170 of them.
+    """
+    now = time.time()
+    gone = 0
+    for token in store.tier_b(ctx, NONCE_DIR).glob("*"):
+        try:
+            if now - token.stat().st_mtime > NONCE_LIFETIME:
+                token.unlink()
+                gone += 1
+        except OSError:
+            continue
+    return gone
 
 
 def _inside_our_own_run(ctx: GitContext) -> bool:
@@ -438,7 +465,7 @@ def run_suite(ctx: GitContext, command: list[str], where: Path | None = None,
     limit = witness.timeout_for() if seconds is None else max(1.0, seconds)
     try:
         proc = witness.run_bounded(command, where or ctx.worktree_root, env, limit,
-                                   witness.cpus_for(ctx))
+                                   witness.cpus_for(ctx), witness.places_for(ctx))
     except FileNotFoundError:
         return -1, f"test command not found: {command[0]}"
     except OSError as exc:
@@ -1645,7 +1672,8 @@ def _rerun_committed(ctx: GitContext, command: list[str], where: Path, until: fl
     env = dict(os.environ)
     env[VERIFYING_ENV] = _issue_nonce(ctx)
     try:
-        proc = witness.run_bounded(command, where, env, left, witness.cpus_for(ctx))
+        proc = witness.run_bounded(command, where, env, left, witness.cpus_for(ctx),
+                                   witness.places_for(ctx))
     finally:
         _retire_nonce(ctx, env[VERIFYING_ENV])
     if proc.returncode == 0:
@@ -2196,6 +2224,9 @@ def _shared_environment(ctx: GitContext, previous: dict) -> str:
 GREEN_FILE = "last-green.json"
 
 
+GREEN_DIR = "green"
+
+
 def _green_path(ctx: GitContext, branch: str = ""):
     """One file per branch, in the git common dir.
 
@@ -2211,8 +2242,35 @@ def _green_path(ctx: GitContext, branch: str = ""):
     a green run on `feat/a` answered for `feat/b` — the same defect `_unverified_here` was
     fixed for, still open here in the permissive direction.
     """
-    name = re.sub(r"[^A-Za-z0-9._-]", "-", branch or ctx.branch or "detached") or "detached"
-    return store.tier_b(ctx, "green", f"{name}.json")
+    return store.tier_b(ctx, GREEN_DIR, f"{_record_name(branch or ctx.branch)}.json")
+
+
+def _record_name(branch: str) -> str:
+    """The file name a branch's green and run records are kept under."""
+    return re.sub(r"[^A-Za-z0-9._-]", "-", branch or "detached") or "detached"
+
+
+def forget_gone_branches(ctx: GitContext) -> int:
+    """Drop the green and run records of branches this clone no longer has. How many went.
+
+    One file per branch, written on every run and removed by nothing: 256 of one clone's 290
+    green records were about branches deleted after their merge. A branch that is gone is
+    neither merged nor pushed again, and a new one under its name is new work.
+    """
+    from .gitctx import known_branches
+
+    present = known_branches(ctx)
+    if present is None:
+        return 0
+    kept = {_record_name(branch) for branch in present} | {_record_name(ctx.branch)}
+    gone = 0
+    for name in (GREEN_DIR, RUN_FILE):
+        directory = store.tier_b(ctx, name)
+        for path in sorted(directory.glob("*.json")) if directory.is_dir() else []:
+            if path.stem not in kept:
+                path.unlink(missing_ok=True)
+                gone += 1
+    return gone
 
 
 def tree_hash(ctx: GitContext) -> str:
@@ -2398,8 +2456,7 @@ RUN_FILE = "runs"
 
 def _run_path(ctx: GitContext, branch: str = ""):
     """Where "a suite ran here" is written, beside "and it passed". Tier B, per branch."""
-    name = re.sub(r"[^A-Za-z0-9._-]", "-", branch or ctx.branch or "detached") or "detached"
-    return store.tier_b(ctx, RUN_FILE, f"{name}.json")
+    return store.tier_b(ctx, RUN_FILE, f"{_record_name(branch or ctx.branch)}.json")
 
 
 def _lasted(stamp: object) -> str:
@@ -2756,7 +2813,34 @@ def red_line(ctx: GitContext) -> str:
             f"shares its database with {shared}, so the failure may be the neighbours "
             "rather than the code. A run where the database is nobody else's decides it."
         )
+    if _unconfirmed(ctx, entry):
+        return (
+            f"RED SUITE on {entry.get('branch', '?')}, unconfirmed: `{ran}` last failed "
+            f"{_lasted(entry.get('last_seen') or entry.get('first_seen'))} ago, on other code "
+            "than this tree holds, and nothing has run it here since. Run it once before "
+            "taking it as true."
+        )
     return (
         f"RED SUITE on {entry.get('branch', '?')} — failing for {lasted}. "
         f"`{ran}` does not pass. Fix it before new work."
     )
+
+
+# How long a failure stays news without being seen again. A record is written where a suite
+# failed and cleared where it next passes, and a checkout nobody runs a suite in keeps it:
+# a founder's main checkout, where every session starts, said "failing for 29d … Fix it
+# before new work" over a run a 1.72.0 gate made on the first of the month, on code the tree
+# had moved 103 commits past since.
+UNCONFIRMED_AFTER = 24 * 3600
+
+
+def _unconfirmed(ctx: GitContext, entry: dict) -> bool:
+    """Whether a red record is older than `UNCONFIRMED_AFTER` and about other code than the tree
+    it is read in: history to rerun, rather than the state of this tree."""
+    try:
+        seen = float(entry.get("last_seen") or entry.get("first_seen") or 0)
+    except (TypeError, ValueError):
+        seen = 0.0
+    if time.time() - seen < UNCONFIRMED_AFTER:
+        return False
+    return str(entry.get("tree_hash") or "") != tree_hash(ctx)
