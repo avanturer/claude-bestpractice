@@ -112,6 +112,9 @@ work another tree had stashed, since every tree of a clone shares one stash list
   are no longer refused as writes to the file they only read; `cp -t <dir> x`, and a `cp` whose
   operands are all quoted, are judged as the writes they are; and `mv` counts the sources it
   takes away.
+- `claude-bp status` says what the founder's instructions cost in every turn as Claude Code loads
+  them: `CLAUDE.md` and `CLAUDE.local.md` with what they import, and every rule without `paths:`
+  at any depth, largest first, in rough tokens; a path-scoped rule is counted on its own line.
 - A session starting in the main checkout fast-forwards it to the trunk it lags, before its
   baseline is taken, where no other live session is in it; a refusal is named (decision 0061).
 - Every field the gates read is held against the hook payloads Claude Code 2.1.314 sends, and

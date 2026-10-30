@@ -138,10 +138,8 @@ def cmd_status(ctx) -> int:
     # always-on basis this plugin holds itself to 400 tokens for (#112).
     theirs = knowledge.existing_rules(ctx)
     if theirs:
-        names = ", ".join(path.name for path in theirs[:6])
-        more = f" (+{len(theirs) - 6} more)" if len(theirs) > 6 else ""
-        print(f"  {len(theirs)} instruction file(s) already here, "
-              f"{knowledge.instruction_bytes(ctx)} bytes in every turn: {names}{more}")
+        for line in _instruction_cost(ctx, theirs):
+            print(f"  {line}")
     for stale in knowledge.stale_rules(ctx):
         print(f"  out of date: {stale}")
     if gaps:
@@ -297,6 +295,26 @@ def cmd_adopt(ctx, dry_run: bool, restore: bool) -> int:
         for conflict in plugins:
             print(f"  claude plugin disable {conflict.where}")
     return 0
+
+
+def _instruction_cost(ctx, theirs: list) -> list[str]:
+    """What the founder's instruction files cost: what loads into every turn, largest first,
+    and what loads only beside the files it names. A rough token count, three characters to
+    a token, because a real tokeniser is a dependency and this one errs on the side of more."""
+    from claude_bestpractice import knowledge
+
+    launch = sorted(knowledge.at_launch(ctx), key=lambda path: -path.stat().st_size)
+    scoped = [path for path in theirs if knowledge.path_scoped(path)]
+    chars = sum(len(path.read_text(encoding="utf-8", errors="replace")) for path in launch)
+    largest = ", ".join(f"{path.name} {path.stat().st_size / 1024:.0f} KB" for path in launch[:3])
+    lines = [f"{len(launch)} instruction file(s) load into every turn: ~{chars // 3:,} tokens, "
+             f"{knowledge.instruction_bytes(ctx) / 1024:.0f} KB" + (f" (largest: {largest})"
+                                                                if largest else "")]
+    if scoped:
+        size = f"{sum(path.stat().st_size for path in scoped) / 1024:.0f}"
+        lines.append(f"{len(scoped)} more, {size} KB, load only beside the files their "
+                     "`paths:` name")
+    return lines
 
 
 def cmd_sweep(ctx) -> int:

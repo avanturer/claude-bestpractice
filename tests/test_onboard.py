@@ -235,7 +235,28 @@ class TestALayerInAnotherShapeIsNotAnAbsentOne(RepoCase):
         under 400 tokens. The files it sits beside were counted for `CLAUDE.md` alone."""
         self.theirs()
         self.assertGreater(knowledge.instruction_bytes(self.ctx()), 0)
-        self.assertIn("bytes in every turn", self.cli("status").stdout)
+        self.assertIn("9 instruction file(s) load into every turn", self.cli("status").stdout)
+
+    def test_a_rule_scoped_to_paths_loads_only_beside_them(self):
+        """Claude Code loads a rule with `paths` only when it reads a file it names, so
+        counting it in every turn overstated what scoping a rule saves."""
+        self.theirs(count=1)
+        self.write(".claude/rules/testing.md", "---\npaths:\n  - backend/**\n---\nTest it.\n")
+        scoped = self.repo / ".claude" / "rules" / "testing.md"
+
+        self.assertTrue(knowledge.path_scoped(scoped))
+        self.assertNotIn(scoped, knowledge.at_launch(self.ctx()))
+        out = self.cli("status").stdout
+        self.assertIn("1 more, 0 KB, load only beside the files their `paths:` name", out)
+
+    def test_a_rule_a_directory_down_and_a_file_claude_md_imports_load_too(self):
+        self.write("CLAUDE.md", "# Project\n\nOps are in @docs/ops.md, not in `@docs/old.md`.\n")
+        self.write("docs/ops.md", "Always page the on-call.\n")
+        self.write("docs/old.md", "Never page anyone.\n")
+        self.write(".claude/rules/backend/api.md", "Always validate input.\n")
+
+        names = sorted(path.name for path in knowledge.at_launch(self.ctx()))
+        self.assertEqual(["CLAUDE.md", "api.md", "ops.md"], names)
 
     def test_a_layer_that_was_never_built_here_is_not_reported_as_broken(self):
         self.theirs()

@@ -152,15 +152,14 @@ def existing_rules(ctx: GitContext) -> list[Path]:
     a repository that has them has been through `init`.
     """
     root = ctx.worktree_root
-    found: list[Path] = []
-    project = root / "CLAUDE.md"
-    if project.is_file():
-        found.append(project)
+    found = [path for path in (root / "CLAUDE.md", root / "CLAUDE.local.md") if path.is_file()]
     rules = root / RULES_DIR
     if not rules.is_dir():
         return found
     try:
-        listed = sorted(p for p in rules.glob("*.md") if p.name not in _OURS)
+        # Every level down, as Claude Code finds them; the decisions are this plugin's.
+        listed = sorted(p for p in rules.rglob("*.md") if p.name not in _OURS
+                        and Path(DECISIONS_DIR).name not in p.relative_to(rules).parts[:-1])
     except OSError:
         # An unreadable rules directory is not an empty one, and the caller's next move
         # differs: `CLAUDE.md` alone is still a layer, and claiming none is here is the
@@ -178,13 +177,57 @@ def instruction_bytes(ctx: GitContext) -> int:
     — loaded into the same window, by the same harness, on the same every-turn basis —
     were counted only for `CLAUDE.md` and only against a size threshold.
     """
-    total = 0
-    for path in existing_rules(ctx):
-        try:
-            total += path.stat().st_size
-        except OSError:
-            continue
-    return total
+    return sum(_size(path) for path in at_launch(ctx))
+
+
+def at_launch(ctx: GitContext) -> list[Path]:
+    """The founder's instruction files Claude Code loads into every turn: `CLAUDE.md` and
+    `CLAUDE.local.md` with what they import, and every rule without a `paths` field.
+
+    A rule with one loads only beside the files it names, and counting it in every turn
+    overstated the cost a founder could cut by scoping a rule, while a rule a directory
+    down and a file `CLAUDE.md` imports were not counted at all.
+    """
+    found = [path for path in existing_rules(ctx) if not path_scoped(path)]
+    for path in list(found):
+        if path.name.startswith("CLAUDE"):
+            found += [extra for extra in _imported(path, 4) if extra not in found]
+    return found
+
+
+def path_scoped(path: Path) -> bool:
+    """Whether a rule names the files it is for, and so loads only beside them."""
+    if path.name.startswith("CLAUDE"):
+        return False
+    head = _read(path)[:4096]
+    if not head.startswith("---"):
+        return False
+    block = head.split("---", 2)[1] if head.count("---") >= 2 else ""
+    return re.search(r"(?m)^paths\s*:\s*\S|^paths\s*:\s*\n\s+-", block) is not None
+
+
+# `@path` in a `CLAUDE.md`, outside code, is a file Claude Code loads with it.
+_IMPORT = re.compile(r"(?:^|\s)@(?P<path>[~\w./-]*[\w/])")
+
+
+def _imported(path: Path, hops: int) -> list[Path]:
+    """The files `path` imports and theirs, `hops` deep, as Claude Code follows them."""
+    if hops <= 0:
+        return []
+    text = re.sub(r"(?ms)^```.*?^```|`[^`\n]*`", "", _read(path))
+    found: list[Path] = []
+    for match in _IMPORT.finditer(text):
+        target = (path.parent / Path(match["path"]).expanduser()).resolve()
+        if target.is_file() and target not in found:
+            found += [target, *_imported(target, hops - 1)]
+    return found
+
+
+def _size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
 
 
 # What the size measurement above cannot see: the DERIVATIVE. An instruction layer is
