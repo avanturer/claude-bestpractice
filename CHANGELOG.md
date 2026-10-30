@@ -1,5 +1,29 @@
 # Changelog
 
+## v2.7.1
+
+`claude-bp sweep` says why it keeps each tree the board named, and build output and logs no
+longer keep a finished tree.
+
+### What broke
+
+**The sweep was silent about why it removed nothing (#285).** It printed `nothing to remove`
+over six trees the board had named as finished. Every one was kept for ignored files no other
+tree had, and in five of them those were only `backend/logs/`, `logs/` and Android `build/`
+directories: decision 0039 counted build output as regrowing, and the code never did.
+
+### What changed
+
+- `claude-bp sweep` prints `kept <path>: <why>` for each tree the board named and it leaves:
+  the ignored files no other tree has, a submodule, a directory already gone, a detached HEAD,
+  or git's refusal.
+- Build output and logs regrow: `build`, `dist`, `target`, `.cxx`, `Pods`, `DerivedData`,
+  `coverage`, `htmlcov`, `logs`, `log` and `*.log`. A directory git reports whole, because
+  nothing in it is tracked, regrows when everything in it does (decision 0062).
+
+No `migrate._REPAIRS` step: nothing on disk changes meaning; the next sweep or finished turn
+reads the trees as they are.
+
 ## v2.7.0
 
 Context economy without losing what matters, search through the plugin's own Parallel and Exa,

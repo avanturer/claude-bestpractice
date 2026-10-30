@@ -4,7 +4,7 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-2.7.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.7.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-2541%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
@@ -157,7 +157,7 @@ health: 3 live session(s), 1 reaped, 4 open item(s), 1 stale (suppressed)
 同时结束、一起启动，单独能通过的测试在负载下被记为失败。
 
 分支的工作已按祖先、补丁或内容进入主干（squash 合并留下的正是这种状态）的 worktree，会被看板
-列为已完成；需要时，`claude-bp sweep` 以同样的方式、同样的证据删除它们。worktree 删除后，仍在
+列为已完成；需要时，`claude-bp sweep` 以同样的方式、同样的证据删除它们，并说明保留每一棵的原因。worktree 删除后，仍在
 其中运行的进程——开发服务器、Metro、uvicorn——会在删除它的数据库之前被停止，删除记录会列出它们。
 在主 checkout 中启动的会话，会在其中没有其他会话时把它快进到它落后的主干，免得有人读到主干已替换的代码。
 
