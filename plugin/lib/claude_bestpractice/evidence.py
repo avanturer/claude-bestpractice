@@ -1080,11 +1080,13 @@ def _verify_by_reading(ctx: GitContext, globs: list[str], changed: list[str], su
     )
 
 
-def _declared(ctx: GitContext, root: Path) -> int:
+def _declared(ctx: GitContext, root: Path, runner: str = "") -> int:
     """The tests the tree under `root` declares, less what the gate's own run leaves out —
     what the founder excluded and the test files git ignores (`witness.left_out`) — so the
-    count expects their absence."""
-    return testcount.count_tree(root, witness.left_out(ctx, root))
+    count expects their absence. Only those `runner` runs where one of the gate's own is
+    named (`witness.SUFFIX`), every language otherwise."""
+    suffix = witness.SUFFIX.get(runner)
+    return testcount.count_tree(root, witness.left_out(ctx, root), {suffix} if suffix else None)
 
 
 def _verify_by_running(
@@ -1186,21 +1188,8 @@ def _judge_witnessed(ctx: GitContext, seen: witness.Witnessed, suite=None, tree:
             f"{seen.runner} ran and executed NOTHING — every test skipped, or none "
             f"collected. A run that asserts nothing is not evidence.\n{seen.tail}",
         )
-    # The tree-count floor applies HERE TOO. It was written for the weak fallback path
-    # and never wired into this one, so the strongest path became the one asking the
-    # fewest questions: it checked that a run passed and never that the run was this
-    # tree's suite. One line of `addopts = -k "not price"` therefore walked straight
-    # through the path built to stop exactly that.
-    declared = _declared(ctx, root)
-    if declared and not testcount.plausible(declared, seen.executed):
-        return Verdict(
-            True,
-            f"{seen.runner} passed {seen.executed} test(s), but this tree declares "
-            f"{declared}. Something narrowed the run — an `addopts` filter, a `testpaths` "
-            f"entry, a marker — so this is not a witnessed pass of your suite.\n{seen.tail}",
-            unverified=True,
-        )
-
+    # Before the count: a run of code that is not this tree's clears no record, and the
+    # count may clear one (`_short_of_the_tree`).
     shadow = _shadowed_package(root, env)
     if shadow:
         name, elsewhere = shadow
@@ -1212,11 +1201,69 @@ def _judge_witnessed(ctx: GitContext, seen: witness.Witnessed, suite=None, tree:
             "editable install: `pip install -e .` from this directory fixes it.",
             unverified=True,
         )
+    short = _short_of_the_tree(ctx, seen, suite)
+    if short is not None:
+        return short
 
     if clear_red(ctx, command, seen.executed, suite) or red(ctx) is None:
         record_green(ctx, command, suite)
     return Verdict(True, f"{seen.executed} test(s) run by the gate itself via {seen.runner}"
                          + _recovered(seen))
+
+
+def _short_of_the_tree(ctx: GitContext, seen: witness.Witnessed, suite=None) -> Verdict | None:
+    """Why a pass of the gate's own run is not a witnessed pass of the suite; None when it is.
+
+    The tree-count floor applies HERE TOO. It was written for the weak fallback path and never
+    wired into this one, so the strongest path became the one asking the fewest questions: it
+    checked that a run passed and never that the run was this tree's suite. One line of
+    `addopts = -k "not price"` therefore walked straight through the path built to stop exactly
+    that.
+
+    Held to the tests its runner runs, a run that falls short of the tree is narrowed, or whole
+    for those in a tree that also declares tests of another runner. Counted over every language,
+    the second read as the first: 27 pytest tests passing beside 1,338 Vitest ones were "narrowed",
+    and no pass of the run that had gone red could clear its record (#290). It is that run
+    passing, so it clears it; the Vitest tests ran nowhere, so it is no witnessed pass of the
+    suite and writes no green, which a push would skip its own run on.
+    """
+    root = _root_of(ctx, suite)
+    declared = _declared(ctx, root)
+    if not declared or testcount.plausible(declared, seen.executed):
+        return None
+    own = _declared(ctx, root, seen.runner)
+    if not own or not testcount.plausible(own, seen.executed):
+        held = f" in {witness.SUFFIX[seen.runner]} files" if own else ""
+        return Verdict(
+            True,
+            f"{seen.runner} passed {seen.executed} test(s), but this tree declares "
+            f"{own or declared}{held}. Something narrowed the run — an `addopts` filter, a "
+            f"`testpaths` entry, a marker — so this is not a witnessed pass of your suite."
+            f"\n{seen.tail}",
+            unverified=True,
+        )
+    cleared = clear_red(ctx, [seen.runner], seen.executed, suite)
+    record = (": the run that went red has passed, and its red record is cleared" if cleared
+              else "")
+    return Verdict(
+        True,
+        f"{seen.runner} passed {seen.executed} test(s), and this tree declares {own} in "
+        f"{witness.SUFFIX[seen.runner]} files{record}. The tree also declares "
+        f"{_tests_it_does_not_run(ctx, root, seen.runner)}, which {seen.runner} does not run "
+        f"and nothing here witnessed, so this is not a witnessed pass of your suite.\n{seen.tail}",
+        unverified=True,
+    )
+
+
+def _tests_it_does_not_run(ctx: GitContext, root: Path, runner: str) -> str:
+    """The tests under `root` that `runner` does not run, as a verdict names them: how many, and
+    in which files."""
+    others = {suffix: count for suffix, count
+              in testcount.per_suffix(root, witness.left_out(ctx, root)).items()
+              if suffix != witness.SUFFIX.get(runner)}
+    if not others:
+        return "tests in other languages"
+    return f"{sum(others.values())} test(s) in {', '.join(sorted(others))} files"
 
 
 def _recovered(seen: witness.Witnessed) -> str:
@@ -2147,16 +2194,9 @@ def record_red(ctx: GitContext, command: list[str], tail: str, suite=None, tree:
     if not isinstance(previous, dict):
         previous = {}
 
-    # The HIGH-WATER MARK of tests seen executing on this branch, in this suite, not just
-    # this run's. This is what makes the record hard to clear by shrinking the suite: the
-    # agent can rewrite `command`, rewrite a Makefile recipe behind an unchanged command, or
-    # delete the failing test outright — but it cannot make a narrower run look like it
-    # executed more tests than the wider one did.
     if executed is None:
         executed = max(_executed_from_output(tail), 0)
-    declared = _declared(ctx, _root_of(ctx, suite))
-    mine = _this_suites_record(previous, suite)
-    counted = int(mine.get("executed") or 0) if _counted_by_this_gate(mine) else 0
+    mine = _this_suites_record(previous, suite, ctx.branch)
     store.write_json(
         path,
         {
@@ -2167,11 +2207,7 @@ def record_red(ctx: GitContext, command: list[str], tail: str, suite=None, tree:
             # on an older record, which reads as the whole repository on an unknown tree.
             "path": "" if suite is None else suite.path,
             "tree_hash": tree,
-            "executed": max(executed, counted),
-            # What the TREE declared when it went red, counted by this gate rather
-            # than reported by the run. Deleting the failing test to go green has to
-            # get past this number, and stdout cannot move it.
-            "declared": max(declared, int(mine.get("declared") or 0)),
+            **_the_bar(ctx, command, suite, mine, executed),
             "first_seen": mine.get("first_seen", time.time()),
             "last_seen": time.time(),
             # Which gate reached this verdict: see `_counted_by_this_gate`.
@@ -2200,16 +2236,57 @@ def _persistable(output: str) -> str:
     return redact.scrub(output)[-1_200:]
 
 
-def _this_suites_record(previous: dict, suite) -> dict:
-    """The earlier red record when it was about this same suite, and nothing when it was not.
+def _this_suites_record(previous: dict, suite, branch: str) -> dict:
+    """The earlier red record when it was about this same suite on this same branch, and nothing
+    when it was not.
 
     Its high-water marks and its start date are that suite's own. Carried onto a record about
     another suite, `web/`'s two tests inherited `backend/`'s six: `web/` then passed both on
     every turn and could never clear its own record, and the board said how long a suite had
-    been failing by the date a different one broke.
+    been failing by the date a different one broke. Another branch's is the same mistake: a tree
+    keeps the record of the branch it was on, and carried onto the next branch's, a count of
+    tests that branch may not have stood over every pass of its own (#290).
     """
     same = str(previous.get("path") or "") == ("" if suite is None else suite.path)
-    return previous if same else {}
+    ours = str(previous.get("branch") or branch) == branch
+    return previous if same and ours else {}
+
+
+def _the_bar(ctx: GitContext, command: list[str], suite, mine: dict, executed: int) -> dict:
+    """What a pass has to reach to clear a red record of `command`: the tests it executed and
+    the tests the tree declared, each the highest seen for this suite on this branch (`mine`).
+
+    The HIGH-WATER MARK of tests seen executing, not just this run's. This is what makes the
+    record hard to clear by shrinking the suite: the agent can rewrite `command`, rewrite a
+    Makefile recipe behind an unchanged command, or delete the failing test outright — but it
+    cannot make a narrower run look like it executed more tests than the wider one did. And
+    what the TREE declared when it went red, counted by this gate rather than reported by the
+    run: deleting the failing test to go green has to get past that number, and stdout cannot
+    move it.
+
+    Both in the languages the run is held to: a run of the gate's own, its runner's
+    (`declared_in`); any other command, every language. A mark taken in other languages is not
+    this run's to reach. Carried from a record counted over every language, the 1,365 tests a
+    tree declared would have stood over the 27 Python ones pytest runs there, and no pass of
+    pytest could have cleared the record again (#290).
+    """
+    runner = command[0] if _witnessed(command) else ""
+    held = [witness.SUFFIX[runner]] if runner else []
+    earlier = mine if _declared_in(mine) == (set(held) or None) else {}
+    counted = int(earlier.get("executed") or 0) if _counted_by_this_gate(earlier) else 0
+    bar = {"executed": max(executed, counted),
+           "declared": max(_declared(ctx, _root_of(ctx, suite), runner),
+                           int(earlier.get("declared") or 0))}
+    return {**bar, "declared_in": held} if held else bar
+
+
+def _declared_in(entry: dict) -> set[str] | None:
+    """The languages a red record's `declared` was counted in, by file suffix. None for every
+    language: how a record of any command but the gate's own run is counted, and how every
+    record was before #290."""
+    held = entry.get("declared_in")
+    suffixes = {str(s) for s in held if str(s).startswith(".")} if isinstance(held, list) else set()
+    return suffixes or None
 
 
 def _shared_environment(ctx: GitContext, previous: dict) -> str:
@@ -2647,8 +2724,10 @@ def _shed_tests(ctx: GitContext, entry: dict) -> tuple[int, int] | None:
         return None
     # In the subtree the record was written for, or the comparison is between two different
     # things: a scoped suite's count against the whole repository's is always a shortfall,
-    # and a red record for `mobile/` could then never be cleared by anything (#206).
-    now = testcount.count_tree(ctx.worktree_root / str(entry.get("path") or ""))
+    # and a red record for `mobile/` could then never be cleared by anything (#206). And in
+    # the languages it was counted in, for the same reason (#290).
+    now = testcount.count_tree(ctx.worktree_root / str(entry.get("path") or ""),
+                               suffixes=_declared_in(entry))
     return (now, was) if now < was else None
 
 
@@ -2665,8 +2744,10 @@ def _why_nothing_clears_it(ctx: GitContext, entry: dict) -> str:
     shed = _shed_tests(ctx, entry)
     if shed is None:
         return ""
-    return (f"{path or 'the tree'} declares {shed[0]} test(s) where it declared {shed[1]} when "
-            "it went red, and a suite that has shed tests does not go green")
+    held = _declared_in(entry)
+    files = f" in {', '.join(sorted(held))} files" if held else ""
+    return (f"{path or 'the tree'} declares {shed[0]} test(s){files} where it declared {shed[1]} "
+            "when it went red, and a suite that has shed tests does not go green")
 
 
 def _on_this_branch(ctx: GitContext, entry: dict) -> bool:
@@ -2723,7 +2804,7 @@ def clear_red(
 
 
 # How the witness records a run it drove itself: the bare runner, never a recipe.
-_WITNESSED_RUNNERS = ("pytest", "go")
+_WITNESSED_RUNNERS = tuple(witness.SUFFIX)
 
 
 def _answers_for(ctx: GitContext, entry: dict, command: list[str] | None, suite) -> bool:
@@ -2894,7 +2975,7 @@ def verify_now(ctx: GitContext) -> tuple[str, Verdict | None, bool]:
 
     Only for a record, and only one about this tree's branch. With none there is nothing to
     clear, and a run here would answer for a plan nobody made; a record of another branch is
-    that branch's code to clear, not this one's.
+    that branch's code to clear, not this one's, and it stands in no way of this one's (#290).
     """
     from . import config
 
@@ -2905,9 +2986,10 @@ def verify_now(ctx: GitContext) -> tuple[str, Verdict | None, bool]:
         return ("nothing is on record as red in this tree, so there is nothing for it to clear",
                 None, False)
     if not _on_this_branch(ctx, entry):
-        return (f"the red record here is about `{entry.get('branch')}`, and this tree is on "
-                f"`{ctx.branch}`: a run here would judge other code. Check `{entry.get('branch')}` "
-                "out here first", None, False)
+        theirs = entry.get("branch")
+        return (f"the red record here is about `{theirs}`, and this tree is on `{ctx.branch}`: "
+                f"it does not stand in `{ctx.branch}`'s way, and a run here would judge other "
+                f"code. With `{theirs}` checked out here, this clears it", None, False)
     blocked = _why_nothing_clears_it(ctx, entry)
     if blocked:
         return f"no run clears the red record while {blocked}", None, False

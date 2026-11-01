@@ -302,7 +302,10 @@ def ready(ctx: GitContext, base: str) -> list[str]:
         problems.append(f"a {state.kind} is unfinished")
     if not commits_since(ctx, base):
         problems.append(f"no commits on top of {base}")
-    said = evidence.red_problem(ctx)
+    # This branch's record only. A tree keeps the record of the branch it was on, and asked
+    # about every branch, a `pytest` that went red on `A` refused the merge of `B` checked out
+    # after it, while the run that clears it was `A`'s to make (#290).
+    said = evidence.red_problem(ctx, ctx.branch)
     if said:
         problems.append(said)
     unproven = evidence.unproven(ctx)

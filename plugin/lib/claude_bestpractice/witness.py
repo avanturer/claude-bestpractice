@@ -210,6 +210,12 @@ def _has_pytest(python: list[str]) -> bool:
     return probe.returncode == 0
 
 
+# The test files each runner this gate drives runs, by suffix, and the only ones its run is
+# held to. The tree's other tests are some other runner's: counted against a pytest run, the
+# 1,338 Vitest tests beside 27 pytest ones made every pass of it read as a narrowed run (#290).
+SUFFIX = {"pytest": ".py", "go": ".go"}
+
+
 def detect(root: Path) -> str:
     """Which runner this gate can drive directly. Empty when none is available.
 
@@ -320,7 +326,7 @@ def _has_python_tests(root: Path) -> bool:
     """
     if any(_carries_pytest(root, name) for name in _PYTEST_SECTIONS):
         return True
-    return testcount.declares(root, ".py")
+    return testcount.declares(root, SUFFIX["pytest"])
 
 
 def run(ctx: GitContext, env: dict[str, str] | None = None,
@@ -734,7 +740,8 @@ def projects(root: Path, skip: list[str] | None = None) -> list[Path]:
     the reason `_pytest_config` pins a file at all.
     """
     known: dict[Path, Path] = {}
-    found = {_owner(test.parent, root, known) for test in testcount.files(root, ".py", skip)}
+    found = {_owner(test.parent, root, known)
+             for test in testcount.files(root, SUFFIX["pytest"], skip)}
     return [root, *sorted(found - {root})]
 
 
