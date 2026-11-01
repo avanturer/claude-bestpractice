@@ -2,9 +2,9 @@
 
 ## v2.9.0
 
-One `+merge` covers a stack's pull request that GitHub closed and that was opened again on the
-same branch and commit, and a merge the word does not cover is told what the word said in that
-chat was used on, never another chat's word.
+The founder's `+merge` covers a stack's pull request that GitHub closed and that was opened again
+on the same branch and commit, and a merge the word does not cover is told what the word said in
+that chat was used on, never another chat's word.
 
 ### What broke
 
