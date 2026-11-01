@@ -573,6 +573,19 @@ def _log(ctx: GitContext) -> list[dict[str, Any]]:
     return rows
 
 
+def last_said(ctx: GitContext, session_id: str, key: str) -> float:
+    """When the founder last gave `key` in the chat `session_id` belongs to, as the log of words
+    heard has it: 0.0 where it has none there. Reads the log and never begins it."""
+    from . import hookio
+    from .delivery import stamp
+
+    harness = hookio.harness_of(session_id, str(ctx.worktree_root))
+    rows = store.read_jsonl(store.tier_b(ctx, WORDS))
+    return max((stamp(row.get("at")) for row in rows
+                if isinstance(row, dict) and row.get("harness") == harness
+                and key in (row.get("kinds") or [])), default=0.0)
+
+
 def writes_the_record(target: Path, transcript_path: str) -> bool:
     """Would writing `target` change what the founder's word is read back from?
 

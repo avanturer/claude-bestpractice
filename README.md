@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-2.8.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.9.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-2541%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -322,15 +322,20 @@ ones it opened before a `--resume`, which is the same chat. It also covers each 
 of this repository the chat showed you by number since your previous message (looked at with `gh pr view`,
 `checks` or `diff`, or a merge of it refused), Dependabot's or another chat's included, so
 "close the hanging ones" takes one word too. It never covers one opened after the word, or
-another chat's it did not show you. Each is judged as itself, from whichever tree the merge is run:
-`cd <tree> && gh pr merge` is that tree's pull request, not the one the session stands on.
+another chat's it did not show you — with one exception: a pull request of a stack GitHub closed
+when the branch below it was merged and deleted, opened again on the same branch and commit into
+another branch, is still the work you looked at, and the word covers it. Each is judged as
+itself, from whichever tree the merge is run: `cd <tree> && gh pr merge` is that tree's pull
+request, not the one the session stands on.
 A merge that fails on a conflict or a check keeps your word for its retry: it is spent, and
 the pull request and its cards are closed, only once the merge has run; `--auto` spends it
 and leaves the pull request open until it lands, and so does auto-merge through the GitHub
 tool. A line that merges runs one merge, named by number, URL or nothing and joined to the
 rest with `&&` only: two merges on one line, a merge in a loop or behind `sh -c`, or one piped
 into `tail` is refused with the merge written out to run on its own. A merge your word does
-not cover is told which pull requests it does cover, and why this one is not among them.
+not cover is told which pull requests it does cover, and why this one is not among them; once
+the word you said in that chat has been used, it is told what it was used on, never another
+chat's word.
 Say it from the terminal or the phone, between turns or in the middle of one: a message sent
 while the session works reaches no hook, so the gate reads it back from the conversation's
 transcript before it refuses — and a session may not write that transcript.
