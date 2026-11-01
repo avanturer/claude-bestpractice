@@ -4,7 +4,7 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-2.7.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.8.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-2541%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
@@ -217,6 +217,16 @@ Stop gate **丢弃智能体的自述文字**，自己去运行你的测试套件
 被重新援引而不是重新运行：同一次拒绝只花一秒，而不是再跑一遍整个套件。此后写下的一份
 套件通过的报告会让它重新运行；报告本身什么也不清除。
 
+**只有本插件亲眼看到的运行才能清除红色套件。** 会话自己 shell 里的 `pytest` 不算，无论它
+打印什么；每一次因红色套件而起的拒绝都会说明这一点，并点名算数的那次运行：`claude-bp verify`
+立即执行它——如果你声明过自己的 `test_command` 或该套件在 `test_commands` 里的条目，就完全
+按你写的方式运行，否则就是 gate 对该套件自己的运行。它通过时，在同样的测试数量检查下清除
+记录，而且只在通过能清除记录的地方才运行：没有记录时不运行，另一个分支留在这棵树里的记录
+也不在这里运行——要把这棵树切回那个分支再清除。已经不存在、或自变红以来丢掉了测试的套件，
+任何运行都清除不了；拒绝信息会如实说明，并把决定留给你。你的 `test_command` 也为 gate 仅仅
+推断出来的套件负责，就像在任何推断之前那样。Stop gate 在判定一轮结束时仍然亲自驱动
+runner：你的配方是会话可以编辑的文件。
+
 **机器繁忙不等于代码坏了。** 在 gate 自己的 pytest 运行中以 ERROR 结束的测试——坏在
 setup、teardown 或收集阶段，且没有任何断言失败——会被单独再跑一次；届时通过的会被点名，
 不算作代码失败。失败的断言绝不会被问第二次。红色的运行会点名第一个出错的测试，并把报告
@@ -351,6 +361,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 | `claude-bp init` | 从你的代码推导出知识层 |
 | `claude-bp adopt` | 接管被其他工具争抢的事件 |
 | `claude-bp sweep` | 删除无人使用、工作已进入主干的 worktree |
+| `claude-bp verify` | 在插件看得到的地方执行能清除红色套件记录的那次运行：如果你声明了测试命令，就用你自己的 |
 | `claude-bp database` | 为这个 worktree 创建它自己的数据库（如果服务器上还没有；需要 `psql`，否则用 `worktree_setup`） |
 | `claude-bp set` | 修改你用自己的话要求过的 gate 开关 |
 | `claude-bp policy` | 告诉 auto mode 这个仓库是什么；指出已经不再生效的规则 |

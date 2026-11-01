@@ -135,16 +135,17 @@ class TestTheFoundersCommandAnswersForTheGatesRun(RepoCase):
         self.assertIn("cleared the recorded failure", proc.stdout, proc.stdout + proc.stderr)
 
     def test_the_refusal_names_their_command(self):
+        """And the run that makes it, where this plugin watches it (#287)."""
         self.configure(test_command=["make", "test"])
         said = evidence.red_problem(self.ctx())
         self.assertIn("recorded for `pytest`", said)
-        self.assertIn("so does `make test`", said)
+        self.assertIn("`claude-bp verify` runs `make test`, the test_command in config.json", said)
 
     def test_a_command_only_detected_does_not(self):
         """`make test` found by looking at the Makefile is this plugin's guess, not their word."""
         self.assertFalse(evidence.record_green(self.ctx(), ["make", "test"]))
         self.assertIsNotNone(evidence.red(self.ctx()))
-        self.assertNotIn("so does", evidence.red_problem(self.ctx()))
+        self.assertNotIn("runs `make test`", evidence.red_problem(self.ctx()))
 
     def test_another_recipe_does_not(self):
         self.configure(test_command=["make", "test"])

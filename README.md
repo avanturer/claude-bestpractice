@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-2.7.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.8.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-2541%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -256,6 +256,18 @@ outside the repository. A failure
 already observed on exactly this tree is then re-asserted rather than re-run: the same refusal
 costs a second instead of another full run of the suite. A report of the suite passing written
 since sends it back to be run instead; the report itself clears nothing.
+
+**Only a run this plugin watches clears a red suite.** A `pytest` in the session's own shell is
+not one, whatever it prints, and every refusal over a red suite says so and names the run that
+is: `claude-bp verify` makes it now — your own `test_command`, or the suite's `test_commands`
+entry, where you declared one, run exactly as you wrote it, and the gate's own run of that suite
+where you did not. Its pass clears the record under the same count guards, and it runs only
+where a pass could: not with nothing on record, and not for a record another branch left in the
+tree, which is cleared with that branch checked out. A suite that is gone, or has shed tests
+since it went red, no pass clears at all; the refusal says so, and that it is yours to decide.
+Your `test_command` also answers for a suite the gate only detected, as it did before anything
+was guessed. The Stop gate itself still drives the runner for a finish: your recipe is a file a
+session can edit.
 
 **A busy machine is not broken code.** Tests that ERROR in the gate's own pytest run, in
 setup, teardown or collection with nothing failing an assertion, are run once more on their
@@ -542,6 +554,7 @@ configuration silently.
 | `claude-bp init` | Derive the knowledge layer from your code |
 | `claude-bp adopt` | Take over events another tool is contesting |
 | `claude-bp sweep` | Remove the trees nobody is in whose work is already in the trunk |
+| `claude-bp verify` | Make, where the plugin watches it, the run that clears a red suite record: your own test command where you declared one |
 | `claude-bp database` | Create this worktree's own database, if the server has not got it (needs `psql`; otherwise `worktree_setup`) |
 | `claude-bp set` | Change a gate switch you asked for in your own words |
 | `claude-bp policy` | Tell auto mode what this repository is; name rules that no longer fire |
