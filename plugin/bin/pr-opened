@@ -84,7 +84,8 @@ def main() -> None:
         # record alone, so a call pre-tool did see is filed once.
         base = str(event.tool_input.get("base") or "") or gitpolicy.default_branch(ctx) or "main"
         pullrequest.opened(ctx, head, base, event.session_id, number=number,
-                           draft=pullrequest.drafted(event.tool_name, command, event.tool_input))
+                           draft=pullrequest.drafted(event.tool_name, command, event.tool_input),
+                           into=pullrequest.base_of(event.tool_name, command, event.tool_input))
     hookio.emit_silent()
 
 

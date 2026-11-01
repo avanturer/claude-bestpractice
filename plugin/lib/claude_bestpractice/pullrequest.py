@@ -176,7 +176,7 @@ def _aged(record: dict[str, Any], now: float) -> bool:
 
 
 def opened(ctx: GitContext, branch: str, base: str, session_id: str,
-           number: int = 0, url: str = "", draft: bool = False) -> None:
+           number: int = 0, url: str = "", draft: bool = False, into: str = "") -> None:
     """Record that this branch now has a pull request waiting on it.
 
     Recorded when the call is ALLOWED to proceed rather than after it returns, because a
@@ -192,13 +192,17 @@ def opened(ctx: GitContext, branch: str, base: str, session_id: str,
     `draft` is whether it was opened as one, which is what keeps paused work out of every
     demand until `redraft` hears it was marked ready (#239). And the board stops saying
     this branch has no pull request.
+
+    `into` is the base the call named, `base` where it named none. `base` is what a merge is
+    judged against, the trunk where a hook filed it before GitHub said otherwise; `into` is only
+    where the founder's word goes when GitHub closes a stack's pull request (`_carried`).
     """
     existing = _records(ctx).get(branch, {})
     # One open past every obligation is no pull request anybody waits on, and it hid the one
     # opened now from every board for as long as it stayed in the log.
     if existing.get("state") == OPEN and not _aged(existing, time.time()):
         return
-    _write(ctx, {
+    record = {
         "branch": branch,
         "base": base,
         "number": number,
@@ -208,8 +212,60 @@ def opened(ctx: GitContext, branch: str, base: str, session_id: str,
         "state": OPEN,
         "draft": draft,
         "handed_off_at": 0.0,
-    })
+        "into": into or base,
+    }
+    carried = _carried(ctx, existing, into or base)
+    _write(ctx, {**record, MERGE_ACCEPTED_ON: carried} if carried else record)
+    if carried:
+        _pool_instead(ctx, _entry(existing), _entry(record))
     close_answered(ctx, branch)
+
+
+# The commit a pull request's branch stood at when the founder's `+merge` named it. GitHub closes
+# a pull request whose base branch is deleted, as merging the one below it in a stack does, and
+# the same branch and commit are then opened as a new one: what the founder looked at, under a
+# number the word never named (#293).
+MERGE_ACCEPTED_ON = "merge_accepted_head"
+
+
+def _carried(ctx: GitContext, existing: dict[str, Any], into: str) -> str:
+    """The commit the founder's word was said about, where it carries from `existing` to a pull
+    request opened now on its branch into `into`; "" where it does not.
+
+    It carries from one closed, that the word still names, opened into another branch, whose own
+    stands at the commit it stood at when they said it. GitHub closes a pull request whose base
+    branch is deleted and never reopens it, so the same work comes back into another branch. One
+    into the same branch is what a branch opens once its pull request merged where nothing here
+    heard it, or once the founder closed it, and either reads as closed: new to them (#279). A
+    branch that moved since the word is new work as well, and so is one whose record never said
+    what it was opened into.
+    """
+    head = str(existing.get(MERGE_ACCEPTED_ON) or "")
+    was = str(existing.get("into") or "")
+    if existing.get("state") != CLOSED or not head or not was or was == into:
+        return ""
+    if _entry(existing) not in _pool(ctx):
+        return ""
+    return head if _tip(ctx, str(existing.get("branch") or "")) == head else ""
+
+
+def _pool_instead(ctx: GitContext, old: str, new: str) -> None:
+    """Put `new` in the pool of the founder's word where `old` is."""
+    pooled = [new if entry == old else entry for entry in _pool(ctx)]
+    config.record_switches(ctx, {config.MERGE_POOL: " ".join(pooled)})
+
+
+def _tip(ctx: GitContext, branch: str) -> str:
+    """The commit `branch` stands at as its pull request has it: the remote's copy where this
+    clone has one, its own otherwise. "" where git cannot say."""
+    from .gitctx import _status
+
+    for ref in (f"refs/remotes/origin/{branch}", f"refs/heads/{branch}"):
+        code, found = _status(["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+                              ctx.worktree_root)
+        if code == 0 and found:
+            return found
+    return ""
 
 
 def drafted(tool_name: str, command: str, tool_input: dict[str, Any]) -> bool:
@@ -1587,16 +1643,33 @@ def head_of(tool_name: str, command: str, tool_input: dict[str, Any], cwd: str =
     """
     if _OPENS_TOOL.search(tool_name):
         return str(tool_input.get("head") or "")
+    return _create_option(command, "--head", "-H") or _branch_where(command, "create", cwd)
 
+
+def base_of(tool_name: str, command: str, tool_input: dict[str, Any]) -> str:
+    """The branch the pull request is opened INTO, as the call names it; "" where it names none,
+    which is the repository's default branch.
+
+    A stack's pull request is opened into the branch below it, and only the trunk was on
+    record: a pull request GitHub closed when that branch went, opened again into the trunk,
+    read as one into the branch it had always been opened into (#293).
+    """
+    if _OPENS_TOOL.search(tool_name):
+        return str(tool_input.get("base") or "")
+    return _create_option(command, "--base", "-B")
+
+
+def _create_option(command: str, long: str, short: str) -> str:
+    """What a `gh pr create` on this line gives an option, `--head` or `-H`; "" where none."""
     from . import shellcmd
 
     for argv in shellcmd.runs(command, "gh", "pr", "create"):
         for index, token in enumerate(argv):
-            if token in ("--head", "-H") and index + 1 < len(argv):
+            if token in (long, short) and index + 1 < len(argv):
                 return argv[index + 1]
-            if token.startswith("--head="):
+            if token.startswith(f"{long}="):
                 return token.split("=", 1)[1]
-    return _branch_where(command, "create", cwd)
+    return ""
 
 
 def opened_from(ctx: GitContext, tool_name: str, command: str, tool_input: dict[str, Any],
@@ -1923,12 +1996,26 @@ def accept_merges(ctx: GitContext, approvals: dict[str, str],
         _accept_its_finish(ctx, still_open[entry], said)
         _accept_its_findings(ctx, str(still_open[entry].get("branch") or ""), said)
     named |= _shown_before(ctx, session_id, said, still_open)
+    _note_the_commits(ctx, named, still_open)
     if not named:
         return approvals
     settled = _settled_numbers(ctx)
     kept = {entry for entry in _pool(ctx) if _may_still_merge(entry, still_open, settled)}
     rest = {key: value for key, value in approvals.items() if key != config.APPROVE_MERGE}
     return {**rest, config.MERGE_POOL: " ".join(sorted(kept | named))}
+
+
+def _note_the_commits(ctx: GitContext, named: set[str],
+                      still_open: dict[str, dict[str, Any]]) -> None:
+    """Record, on each pull request the founder's word names, the commit its branch is at as
+    the one the word was said about (`MERGE_ACCEPTED_ON`). Read back from the record as it is
+    now, so what the word decided on it a moment ago stays."""
+    for entry in sorted(named & still_open.keys()):
+        branch = str(still_open[entry].get("branch") or "")
+        head = _tip(ctx, branch)
+        latest = _records(ctx).get(branch) or {}
+        if head and _entry(latest) == entry and latest.get(MERGE_ACCEPTED_ON) != head:
+            _write(ctx, {**latest, MERGE_ACCEPTED_ON: head})
 
 
 # The pull requests a chat put in front of the founder by number in the turn before they spoke:
@@ -2079,15 +2166,50 @@ def _chat_key(ctx: GitContext, session_id: str) -> str:
     return hookio.harness_of(session_id, str(ctx.worktree_root)) or f"id:{session_id}"
 
 
+def _chat(ctx: GitContext, session_id: str) -> dict[str, Any]:
+    """This chat's notes: what it showed the founder, and what their word was used on."""
+    found = store.read_json(store.tier_b(ctx, SHOWN), default={})
+    chat = found.get(_chat_key(ctx, session_id)) if isinstance(found, dict) else None
+    return chat if isinstance(chat, dict) else {}
+
+
+# How many of a chat's merges on the founder's word its notes keep: what a refusal names.
+_USED_KEPT = 8
+
+
+def _note_used(ctx: GitContext, session_id: str, merge: dict[str, Any]) -> None:
+    """Note, in the chat that made it, a merge the founder's word was used on, by the name a
+    refusal gives it. Nothing kept it: once the word ran out, the refusal named the pool other
+    chats' words had left, and said it was said to them (#293)."""
+    named = merge.get("named") if isinstance(merge.get("named"), dict) else {}
+    number = _as_number(merge.get("number")) or _as_number(named.get("number"))
+    called = f"#{number}" if number else str(named.get("branch") or "")
+    if not called:
+        return
+    now = time.time()
+
+    def note(chat: dict[str, Any]) -> None:
+        chat["used"] = [*(chat.get("used") or [])[1 - _USED_KEPT:], [called, now]]
+    _rewrite_shown(ctx, session_id, note)
+
+
+def _used_since(ctx: GitContext, session_id: str, said: float) -> list[str]:
+    """The merges this chat's word, said at `said`, was used on, oldest first."""
+    from .delivery import stamp
+
+    rows = (_chat(ctx, session_id).get("used") or []) if said else []
+    return [str(row[0]) for row in rows
+            if isinstance(row, list) and len(row) == 2 and stamp(row[1]) >= said]
+
+
 def _shown_before(ctx: GitContext, session_id: str, said: float,
                   still_open: dict[str, dict[str, Any]]) -> set[str]:
     """What this chat showed the founder between their previous message and the word, as the
     pool names it: a recorded pull request by its entry, and any other by `#<number>`. Not a
     draft, nor one recorded here as merged or closed: a word naming only what cannot merge
     would have taken away the one merge it allows."""
-    found = store.read_json(store.tier_b(ctx, SHOWN), default={})
-    chat = found.get(_chat_key(ctx, session_id)) if isinstance(found, dict) else None
-    if not isinstance(chat, dict):
+    chat = _chat(ctx, session_id)
+    if not chat:
         return set()
     # The word's own message is noted after it is heard, so the latest before it is the last one.
     since = max((when for when in chat.get("prompts", []) if when < said), default=0.0)
@@ -2175,15 +2297,34 @@ def uncovered(ctx: GitContext, record: dict[str, Any] | None, number: int,
     cover, beside a word naming three other pull requests. #967 was refused that way after
     every `+merge` sent, and nothing said what the word did name, or why #967 was not in it
     (#272).
+
+    Once the word said in this chat has been used, that is what it says first: what it was used
+    on, and what of this chat's it still names. The pool alone is the clone's, so a stack merged
+    on one word was refused naming what other chats' words had left there, as said to them (#293).
     """
+    from . import founder
+
+    said = founder.last_said(ctx, session_id, config.APPROVE_MERGE)
+    used = _used_since(ctx, session_id, said)
+    open_now = {_entry(row): row for row in outstanding(ctx)}
+    why = _why_not_named(ctx, record, number, session_id, said)
+    if used:
+        ours = _the_chats(ctx, session_id)
+        left = [_called(row, entry) for entry, row in open_now.items()
+                if entry in _pool(ctx) and ours(row.get("session_id"))]
+        still = f", and still names {_listed(left)}" if left else ""
+        return (f"the founder's `+merge` in this chat was used on {_listed(used)}{still}, and not "
+                f"this merge{why}.")
     pooled = _pool(ctx)
     if not pooled:
         return ""
-    open_now = {_entry(row): row for row in outstanding(ctx)}
     names = [_called(open_now.get(entry), entry) for entry in pooled]
-    shown = ", ".join(names[:4]) + (f" and {len(names) - 4} more" if len(names) > 4 else "")
-    why = _why_not_named(ctx, record, number, session_id)
-    return f"the founder's `+merge` on record names {shown}, and not this merge{why}."
+    return f"the founder's `+merge` on record names {_listed(names)}, and not this merge{why}."
+
+
+def _listed(names: list[str]) -> str:
+    """Pull requests as a refusal lists them: four, then how many more."""
+    return ", ".join(names[:4]) + (f" and {len(names) - 4} more" if len(names) > 4 else "")
 
 
 def _called(record: dict[str, Any] | None, entry: str) -> str:
@@ -2193,12 +2334,13 @@ def _called(record: dict[str, Any] | None, entry: str) -> str:
 
 
 def _why_not_named(ctx: GitContext, record: dict[str, Any] | None, number: int,
-                   session_id: str) -> str:
+                   session_id: str, said: float = 0.0) -> str:
     """Why a `+merge` naming a chat's open pull requests did not name this one, as `: why`, or
     "" where the records do not say.
 
-    Only what the records hold: when the word was said, and which of its merges were already
-    used, they do not, and a reason guessed from neither was the false one (#272).
+    Only what the records hold. Which of its merges were used, and when a word was said, they
+    did not, and a reason guessed from neither was the false one (#272). `said` is when the word
+    was last said in this chat, as the log of words heard has it, 0.0 where it never was here.
     """
     if record is None:
         return _not_open(ctx, number)
@@ -2211,7 +2353,25 @@ def _why_not_named(ctx: GitContext, record: dict[str, Any] | None, number: int,
     if not ours(opener):
         return (f": it was opened by {sessions.called(ctx, opener)}, not this chat"
                 if opener else ": it was found on GitHub, opened by no session here")
-    elsewhere = _said_elsewhere(ctx, ours)
+    return _why_not_this_chats(ctx, record, ours, said)
+
+
+def _why_not_this_chats(ctx: GitContext, record: dict[str, Any], ours: Callable[[Any], bool],
+                        said: float) -> str:
+    """Why the word did not name a pull request this chat opened, as `: why`, or "".
+
+    A word said in another chat is the reason only where none was said in this one: here, the
+    word to explain is this chat's own (#293).
+    """
+    from .delivery import stamp
+
+    branch = str(record.get("branch") or "")
+    if any(entry.rsplit("@", 1)[0] == branch and entry != _entry(record) for entry in _pool(ctx)):
+        return (f": it names the pull request {branch} had before this one, and carries to one "
+                "opened since only where the branch is still at the commit they said it about")
+    if said and stamp(record.get("opened_at")) > said:
+        return ": this one was opened after they said it"
+    elsewhere = "" if said else _said_elsewhere(ctx, ours)
     return (f": it was said to {elsewhere}, about the pull requests open there, not to this chat"
             if elsewhere else "")
 
@@ -2337,6 +2497,7 @@ def complete(ctx: GitContext, session_id: str, merge: dict[str, Any]) -> None:
     from . import inbox, plan
 
     spend(ctx, merge.get("named"), str(merge.get("cover", "")), _as_number(merge.get("number")))
+    _note_used(ctx, str(merge.get("session") or session_id), merge)
     branch = str(merge.get("branch", ""))
     if not branch or merge.get("queued"):
         return

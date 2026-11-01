@@ -103,9 +103,9 @@ class PRCase(RepoCase):
         })
         return opened
 
-    def open_pr(self, number: int, head: str, session_id: str = "s1") -> None:
+    def open_pr(self, number: int, head: str, session_id: str = "s1", base: str = "main") -> None:
         """The request and the response, as `open_a_pr` does, for a branch of its own."""
-        tool_input = {"owner": "o", "repo": "r", "title": "t", "head": head, "base": "main"}
+        tool_input = {"owner": "o", "repo": "r", "title": "t", "head": head, "base": base}
         self.tool("mcp__github__create_pull_request", tool_input, session_id)
         self.gate("pr-opened", {
             "session_id": session_id, "hook_event_name": "PostToolUse",
@@ -2881,16 +2881,29 @@ class TestARefusalSaysWhatTheWordOnRecordNames(PRCase):
         self.assertEqual("deny", self.decision(proc))
         return self.reason(proc)
 
-    def test_one_the_records_say_nothing_of_is_given_no_reason(self):
-        """When the word was said is not on record, so "it was opened after the founder said
-        it" was a guess, and the reviewer of this release found it false twice."""
+    def test_one_opened_after_the_word_is_said_to_be(self):
+        """The log of words heard says when the word was said in this chat, so this is read
+        off the records. Before it, "it was opened after the founder said it" was a guess, and
+        the reviewer of 2.4.0 found it false twice (#293)."""
         self.green()
         self.open_a_pr()
         self.accept()
         self.open_pr(49, "feat/y")
         said = self.merging(49)
-        self.assertIn(f"names #{self.PR_NUMBER}, and not this merge. No word", said)
+        self.assertIn(f"names #{self.PR_NUMBER}, and not this merge: this one was opened after "
+                      "they said it", said)
         self.assertNotIn("no `+merge` from the founder is on record", said)
+
+    def test_one_the_records_say_nothing_of_is_given_no_reason(self):
+        """A word on record from before the log of words heard began: when it was said is not
+        on record, and no reason is guessed."""
+        self.green()
+        self.open_a_pr()
+        named = pullrequest._entry(pullrequest._records(self.ctx())["feat/x"])
+        config.record_switches(self.ctx(), {config.MERGE_POOL: named})
+        self.open_pr(49, "feat/y")
+        said = self.merging(49)
+        self.assertIn(f"names #{self.PR_NUMBER}, and not this merge. No word", said)
 
     def test_a_word_said_to_another_chat_is_named_as_that_chats(self):
         self.green()

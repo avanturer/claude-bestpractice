@@ -1816,8 +1816,11 @@ def main() -> None:
             # when the session coordinates from the main checkout (#79).
             head = pullrequest.opened_from(ctx, event.tool_name, command, ti, str(session_cwd))
             if head:
+                # And the one the call opens it INTO, a stack's being the branch below it,
+                # which decides where the founder's word goes once GitHub closes it (#293).
                 pullrequest.opened(ctx, head, base, event.session_id,
-                                   draft=pullrequest.drafted(event.tool_name, command, ti))
+                                   draft=pullrequest.drafted(event.tool_name, command, ti),
+                                   into=pullrequest.base_of(event.tool_name, command, ti))
             if pullrequest.about_this_repository(ctx, event.tool_name, ti, command):
                 pr_vouch = vouch.PULL_REQUEST
         else:
