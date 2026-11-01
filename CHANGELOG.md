@@ -1,5 +1,64 @@
 # Changelog
 
+## v2.8.1
+
+A pass of the gate's own pytest clears its red record in a tree that also holds Vitest tests, a
+red record another branch left in a tree no longer refuses the merge of the branch checked out
+there, and an error from Parallel lets a search go on to Exa and WebSearch.
+
+### What broke
+
+**A red pytest record that no pass of pytest could clear, beside a Vitest suite (#290).** The
+repository held 27 pytest tests in one folder and a large Vitest suite. The Stop gate's own
+`pytest` went red on branch A, and the test was fixed. On A, `claude-bp verify` ran pytest, 27
+passed, and the verdict was `pytest passed 27 test(s), but this tree declares 1365`, "something
+narrowed the run", UNVERIFIED, with the record still on. The count a run of the gate's own is
+held to was taken over every language, so the Vitest tests read as tests pytest had been kept
+from, and no pass of pytest could reach it.
+
+**Another branch's record refused this branch's merge (#290).** On branch B, checked out in the
+same tree after A and with its CI green, `+merge` was refused over A's record, and `claude-bp
+verify` there ran nothing and named A: the merge check asked about every record in the tree,
+the command about this branch's.
+
+**A red record carried a bar that was not its own.** The marks it keeps — the tests its run
+executed, the tests the tree declared — came from the record before it whatever branch that was
+about, so a branch with fewer tests than the one before it could never clear its own. And a
+record counted over every language, as every record was, would have carried its 1,365 onto the
+next pytest record of the same suite.
+
+**Search was left with no tool once Parallel hit its free-tier limit (#291).** Exa waits until
+its loop has searched through Parallel, and only a search Parallel answered with results counted.
+Its rate-limit error did not, so Exa was sent back to Parallel, and WebSearch, which goes from
+Parallel to Exa, was refused with the same "search with Parallel first" when its call to Exa was.
+Research subagents had no search for the rest of the run.
+
+### What changed
+
+- A run of the gate's own is held to the tests its runner runs: pytest to the tree's `.py` test
+  files, `go` to its `.go` ones. A pass that reaches them is the run that went red passing, and
+  clears its record. Where the tree also declares tests in other languages, which nothing the
+  gate drove ran, the finish stays unverified as before, writes no green record (a push would
+  skip its own run on one), and the verdict names those tests instead of a narrowed run
+  (decision 0064).
+- A red record of the gate's own run counts the tree's tests in its runner's language and says
+  so (`declared_in`), and a suite that has shed tests is judged in that language: Vitest tests
+  added do not hide a Python test deleted, and Vitest tests deleted do not hold a pytest record.
+- A red record keeps the bar of its own suite on its own branch: nothing is carried from another
+  branch's record, or from one counted in other languages.
+- A red record another branch left in the tree no longer refuses the pull request or the merge
+  of the branch checked out there, and `claude-bp verify` there exits 0, saying the record is
+  that branch's and is cleared with it checked out (decision 0064).
+- A search Parallel answered with an error, its rate limit among them, counts as a search
+  through Parallel: Exa is let through, and WebSearch goes on to Exa and then to itself
+  (decision 0049). The refusal that sends Exa back says so.
+
+No `migrate._REPAIRS` step. A record an older gate wrote carries no `declared_in`, is read as
+counted over every language, as it was, and is cleared by a pass of the gate's own run under the
+rule above; the next record a gate writes counts in its runner's language. A record that already
+carries another branch's count keeps it: where that branch declared more tests than this one,
+the refusal says no run clears it, and that it is the founder's to decide.
+
 ## v2.8.0
 
 A red suite record says which run clears it, and `claude-bp verify` makes that run on request,

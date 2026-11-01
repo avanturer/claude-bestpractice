@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-2.8.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.8.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-2541%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -238,7 +238,10 @@ your source tree itself** and compares. A run that executes a fraction of what t
 declares is recorded as unverified rather than green, and a red suite cannot be cleared by
 a tree that has shed tests — deleting the failing test is the move a blocking gate most
 invites, and it was the cheapest way out. Moving that number means writing real tests,
-which is a price this plugin is content to charge.
+which is a price this plugin is content to charge. Where the gate drives the runner itself, the
+count is of the tests that runner runs: a pytest run is held to the Python tests, never to a
+Vitest suite beside them. Its pass clears the record of its own red run; tests of another
+language that nothing the gate drove ran keep the finish unverified, and the verdict names them.
 
 Past prototype stage it additionally re-runs against a clean checkout of the committed
 tree, which catches the green-here-red-there class — an uncommitted file, a local
@@ -263,7 +266,8 @@ is: `claude-bp verify` makes it now — your own `test_command`, or the suite's 
 entry, where you declared one, run exactly as you wrote it, and the gate's own run of that suite
 where you did not. Its pass clears the record under the same count guards, and it runs only
 where a pass could: not with nothing on record, and not for a record another branch left in the
-tree, which is cleared with that branch checked out. A suite that is gone, or has shed tests
+tree, which is cleared with that branch checked out and stands in no way of the branch the tree
+is on now — not its pull request, not its merge. A suite that is gone, or has shed tests
 since it went red, no pass clears at all; the refusal says so, and that it is yours to decide.
 Your `test_command` also answers for a suite the gate only detected, as it did before anything
 was guessed. The Stop gate itself still drives the runner for a finish: your recipe is a file a
@@ -522,8 +526,9 @@ failed, is left exactly as it was.
 **Search goes through the plugin's own Parallel and Exa.** Both servers ship with the plugin
 and need no key. WebSearch is answered by Parallel's search, by Exa's when Parallel returns
 nothing, and by itself only when neither answers; Exa is for the one thing Parallel's results
-miss, and is sent back until Parallel has been asked. A query carrying anything that reads as a
-credential is refused before it leaves. Queries go to Parallel ([privacy
+miss, and is sent back until Parallel has been asked. An error from Parallel, its free-tier rate
+limit among them, counts as asking it, so the search goes on to Exa and WebSearch. A query
+carrying anything that reads as a credential is refused before it leaves. Queries go to Parallel ([privacy
 policy](https://parallel.ai/privacy-policy)) and Exa ([privacy policy](https://exa.ai/privacy-policy));
 Exa refuses requests from some regions, and there search falls through to WebSearch.
 
