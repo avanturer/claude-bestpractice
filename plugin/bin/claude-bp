@@ -338,6 +338,35 @@ def cmd_sweep(ctx) -> int:
     return 0
 
 
+def cmd_verify(ctx) -> int:
+    """Make, now, the run that clears this tree's red record, where this plugin watches it.
+
+    Only a run the plugin makes is evidence, and the only such runs were a Stop's and a push's:
+    the merge was refused over the gate's own `pytest` in `backend/`, the session ran `pytest`,
+    `pytest -n auto` and `make test` there, 10969 passed each time, and the record stood (#287).
+    With nothing on record, the repository's suite, so a merge waiting on a green has one now.
+    """
+    from claude_bestpractice import evidence
+
+    named, verdict, cleared = evidence.verify_now(ctx)
+    if verdict is None:
+        print(f"claude-bp verify: nothing was run — {named}")
+        return 1
+    passed = verdict.ok and not verdict.unverified
+    state = "passed" if passed else "UNVERIFIED" if verdict.ok else "FAILED"
+    print(f"claude-bp verify: ran {named}, where this plugin watched it — {state}")
+    for line in verdict.reason.strip().splitlines():
+        print(f"  {line}")
+    if cleared:
+        print("the red record is cleared: a merge no longer stops on it")
+    elif evidence.red(ctx):
+        print(f"still on record: {evidence.red_problem(ctx)}")
+        if passed:
+            print("  a pass clears it only by running at least the tests the red run did, in a "
+                  "tree that has shed none of them")
+    return 0 if passed else 1
+
+
 def cmd_dismiss(ctx, detector: str, path: str) -> int:
     """Rule one finding false. The only exit a false positive had before this was to
     rewrite correct code or to stop using the gate (#75)."""
@@ -592,6 +621,9 @@ def main() -> int:
     adopt.add_argument("--restore", action="store_true", help="undo a previous adopt")
     sub.add_parser(
         "sweep", help="remove the trees nobody is in whose work is already in the trunk")
+    sub.add_parser(
+        "verify", help="run, now and where this plugin watches it, the run that clears this "
+                       "tree's red suite record — or with none, the repository's suite")
     dismiss = sub.add_parser(
         "dismiss", help="rule a review finding false, for good — it stops blocking merges")
     dismiss.add_argument("detector", help="the name in the finding, e.g. sql-interpolation")
@@ -634,6 +666,8 @@ def main() -> int:
         return cmd_dismiss(ctx, args.detector, args.path)
     if args.command == "sweep":
         return cmd_sweep(ctx)
+    if args.command == "verify":
+        return cmd_verify(ctx)
     if args.command == "adopt":
         return cmd_adopt(ctx, args.dry_run, args.restore)
     if args.command == "answer":

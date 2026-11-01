@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-2.7.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.8.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-2541%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -257,6 +257,15 @@ already observed on exactly this tree is then re-asserted rather than re-run: th
 costs a second instead of another full run of the suite. A report of the suite passing written
 since sends it back to be run instead; the report itself clears nothing.
 
+**Only a run this plugin watches clears a red suite.** A `pytest` in the session's own shell is
+not one, whatever it prints, and every refusal over a red suite says so and names the run that
+is: `claude-bp verify` makes it now — your own `test_command`, or the suite's `test_commands`
+entry, where you declared one, run exactly as you wrote it, and the gate's own run of that suite
+where you did not. Its pass clears the record under the same count guards, so a suite that has
+shed tests still clears nothing. Your `test_command` also answers for a suite the gate only
+detected, as it did before anything was guessed. The Stop gate itself still drives the runner
+for a finish: your recipe is a file a session can edit.
+
 **A busy machine is not broken code.** Tests that ERROR in the gate's own pytest run, in
 setup, teardown or collection with nothing failing an assertion, are run once more on their
 own; those that pass then are named and not counted as the code failing. A failed assertion
@@ -271,8 +280,9 @@ hook holds the turn used to keep you out for the whole suite. When the gate has 
 refuse, or a question to ask, it wakes the session with it. Your message, or the session going
 back to work for any other reason, stops a run within a second. A message that is only a paste
 or a code block does not count as you speaking. A run stopped that way proves nothing either
-way, so a merge waits until one finishes, at the session's next finish or on `git push` where
-the pre-push hook is installed, unless the suite already passed on exactly that tree. A
+way, so a merge waits until one finishes, at the session's next finish, on `git push` where
+the pre-push hook is installed, or on `claude-bp verify`, unless the suite already passed on
+exactly that tree. A
 `claude -p` whose process ends with its turn takes the check with it: its work is judged where
 it lands, by the green a merge needs.
 
@@ -542,6 +552,7 @@ configuration silently.
 | `claude-bp init` | Derive the knowledge layer from your code |
 | `claude-bp adopt` | Take over events another tool is contesting |
 | `claude-bp sweep` | Remove the trees nobody is in whose work is already in the trunk |
+| `claude-bp verify` | Make, where the plugin watches it, the run that clears a red suite record: your own test command where you declared one |
 | `claude-bp database` | Create this worktree's own database, if the server has not got it (needs `psql`; otherwise `worktree_setup`) |
 | `claude-bp set` | Change a gate switch you asked for in your own words |
 | `claude-bp policy` | Tell auto mode what this repository is; name rules that no longer fire |

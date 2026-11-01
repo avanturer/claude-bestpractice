@@ -72,10 +72,9 @@ def main() -> int:
         if cleared:
             print("  cleared the recorded failure for this branch")
         elif evidence.red(ctx):
-            entry = evidence.red(ctx)
-            print(f"  a recorded failure REMAINS: {' '.join(entry.get('command') or [])} "
-                  f"on {entry.get('branch') or '?'} — only that same command passing "
-                  "clears it")
+            # The one sentence every surface says it with, which names the run that clears
+            # it: "only that same command passing" named none a session could make (#287).
+            print(f"  a recorded failure REMAINS: {evidence.red_problem(ctx)}")
         return 0
 
     if args.command == "record-run":

@@ -1,5 +1,52 @@
 # Changelog
 
+## v2.8.0
+
+A red suite record says which run clears it, and `claude-bp verify` makes that run on request,
+where the plugin watches it: the founder's own test command where they declared one. Their
+`test_command` now clears the record of a suite the gate only detected.
+
+### What broke
+
+**A red record that no green run cleared blocked the merge (#287).** The Stop gate's own `pytest`
+in `backend/` ran on the shared database at 5432, met 137 dropped connections behind Docker's
+proxy on WSL, and was recorded red. In the same tree the session then ran `pytest` from
+`backend/`, `pytest -n auto` and `make test`: 10969 passed each time, exit 0. The record did not
+change, and `gh pr merge` went on refusing with "that same command passing clears it".
+
+Only a run this plugin makes is evidence, and nothing said so: a Stop's and a push's were the
+only such runs, and neither could be asked for. The Stop gate repeats a failure it has seen on an
+unchanged tree for an hour (decision 0013), and the session at the merge had been told to stop.
+The pre-push hook records the repository's suite, never `backend/`'s. And `backend/` was a suite
+the gate had only detected, so the founder's `test_command` could not clear its record, as it
+would have before the guess; a `test_commands` entry for the path was named as clearing it, and
+nothing ever ran one where its pass would.
+
+### What changed
+
+- `claude-bp verify` makes, now, the run whose pass clears this tree's red record, where the
+  plugin watches it: the founder's `test_command` or `test_commands` entry where it answers for
+  the gate's own run (decision 0035), run as written, `make test` with whatever it sets up
+  included; the run that went red otherwise. With nothing on record it runs the repository's
+  suite, which gives a branch the green a merge waits on. It is recorded as the Stop gate records
+  its runs, under the same count guards, and the failure remembered for the tree does not answer
+  it. The plugin's own command, so it needs no permission prompt (decision 0063).
+- The merge refusal, the board, the Stop gate's red verdict, a failure repeated from memory and
+  the pre-push hook's report each name that run, and say a run in a session's own shell is not
+  watched and clears nothing. A record of the gate's own run is called that, with its suite.
+- A merge waiting on a green, for a run never seen, a failed one or one stopped for the founder,
+  names `claude-bp verify` in the branch's own tree beside the finish and the push.
+- The founder's `test_command` passing clears the record of the gate's own run in a suite the gate
+  only detected, as it did before suites were detected (decision 0012). A suite they named in
+  `test_commands` is still its own command's to clear.
+
+The Stop gate still drives the runner itself for a finish: the project's recipe is a session's to
+edit, and the witness exists because recipes were forged. `claude-bp verify` running their
+command is decision 0035's clearing route, made something that can be asked for.
+
+No `migrate._REPAIRS` step: no state an older version wrote changes meaning, and a 2.7.1 red
+record is cleared by `claude-bp verify` or the founder's command like any other.
+
 ## v2.7.1
 
 `claude-bp sweep` says why it keeps each tree the board named, and build output and logs no
