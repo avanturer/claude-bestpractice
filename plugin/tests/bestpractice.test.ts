@@ -71,6 +71,49 @@ test('Exa before any search through Parallel is sent back to Parallel', async ($
   expect((ran as { deny?: string }).deny).toContain('search with Parallel first')
 })
 
+// What Parallel's free tier answers once a run of research agents has used it up (#291).
+const LIMITED = { isError: true as const, result: 'Free tier rate limit exceeded', text: 'Free tier rate limit exceeded' }
+
+function answers(text: string) {
+  return async () => ({ result: { content: [{ type: 'text', text }] } })
+}
+
+test('Exa after a search Parallel answered with its rate limit is let through', async ($, on) => {
+  inASession(on as On)
+  on('process.run', library({ settings: { enabled: true, route_search: true } }))
+  on('tool.list', tools([PARALLEL, EXA]))
+  on('tool.call', { tool: PARALLEL }, async () => LIMITED)
+  on('tool.call', { tool: EXA }, answers('from Exa'))
+  await $.tool.call({ tool: PARALLEL, objective: 'q', search_queries: ['q'], agentId: 'researcher' })
+  const ran = await $.tool.call({ tool: EXA, query: 'q', objective: 'q', agentId: 'researcher' })
+  expect((ran as { deny?: string }).deny).toBeUndefined()
+  expect(JSON.stringify((ran as { result: unknown }).result)).toContain('from Exa')
+})
+
+test('WebSearch goes on to Exa when Parallel answers with its rate limit', async ($, on) => {
+  inASession(on as On)
+  on('process.run', library({ settings: { enabled: true, route_search: true } }))
+  on('tool.list', tools(['WebSearch', PARALLEL, EXA]))
+  on('tool.call', { tool: PARALLEL }, async () => LIMITED)
+  on('tool.call', { tool: EXA }, answers('uv run --frozen keeps the lockfile'))
+  const ran = await $.tool.call({ tool: 'WebSearch', query: 'uv run frozen', agentId: 'researcher' })
+  expect((ran as { deny?: string }).deny).toBeUndefined()
+  const results = (ran as { result: { results: string[] } }).result.results
+  expect(results[0]).toContain('uv run --frozen keeps the lockfile')
+  expect(results[0]).toContain(`sent this WebSearch to ${EXA}`)
+})
+
+test('WebSearch goes on to itself when Parallel and Exa both answer with errors', async ($, on) => {
+  inASession(on as On)
+  on('process.run', library({ settings: { enabled: true, route_search: true } }))
+  on('tool.list', tools(['WebSearch', PARALLEL, EXA]))
+  on('tool.call', { tool: PARALLEL }, async () => LIMITED)
+  on('tool.call', { tool: EXA }, async () => LIMITED)
+  on('tool.call', { tool: 'WebSearch' }, async () => ({ result: { query: 'q', results: ['from the harness'], durationSeconds: 1 } }))
+  const ran = await $.tool.call({ tool: 'WebSearch', query: 'q', agentId: 'researcher' })
+  expect((ran as { result: { results: string[] } }).result.results[0]).toBe('from the harness')
+})
+
 test('a listing of agents says what each session is doing', async ($, on) => {
   inASession(on as On)
   on('process.run', library({ roster: { text: '  - fuddy-71: 0012 OTA banner (branch feat/ota)' } }))

@@ -34,6 +34,19 @@ class TestCounting(RepoCase):
         self.write("src/lib.rs", "#[test]\nfn a() {}\n")
         self.assertEqual(testcount.count_tree(self.repo), 6)
 
+    def test_it_counts_one_language_when_asked(self):
+        """What a run of one runner is held to: pytest runs no Vitest test (#290)."""
+        self.write("tests/test_a.py", "def test_x():\n    pass\n")
+        self.write("web/app.test.ts", "it('works', () => {})\ntest('also', () => {})\n")
+        self.assertEqual(testcount.count_tree(self.repo, suffixes={".py"}), 1)
+        self.assertEqual(testcount.count_tree(self.repo, suffixes={".ts"}), 2)
+
+    def test_it_says_which_languages_declare_how_many(self):
+        self.write("tests/test_a.py", "def test_x():\n    pass\n")
+        self.write("web/app.test.ts", "it('works', () => {})\ntest('also', () => {})\n")
+        self.write("web/empty.test.js", "// nothing yet\n")
+        self.assertEqual(testcount.per_suffix(self.repo), {".py": 1, ".ts": 2})
+
     def test_a_docstring_mentioning_a_test_is_not_a_test(self):
         """Anchored to a declaration, or prose inflates the number that guards the gate."""
         self.write("tests/test_a.py", '"""call def test_fake() here"""\ndef test_real():\n    pass\n')

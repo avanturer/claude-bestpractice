@@ -116,6 +116,14 @@ function ourRefusal(ran: ToolCallResult): string {
   return 'deny' in ran && typeof ran.deny === 'string' && ran.deny.startsWith('claude-bestpractice') ? ran.deny : ''
 }
 
+// Whether a call to Parallel's search was its turn, so the order goes on to Exa: answered, answered
+// with an error (its free-tier limit among them), or refused by anything but this plugin's check of
+// what the query carries, which refuses it to Exa too. Counted only on results, a limit error sent
+// Exa and WebSearch back to a Parallel that could not answer, for the rest of the run (#291).
+function parallelHadItsTurn(ran: ToolCallResult): boolean {
+  return ourRefusal(ran) === ''
+}
+
 export const register: Register = (on) => {
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const ran = await next(e)
@@ -148,10 +156,8 @@ export const register: Register = (on) => {
         tool: parallel, objective: e.query, search_queries: searchQueries(e.query, e.allowed_domains),
       })
       if (ourRefusal(found)) return { deny: ourRefusal(found) }
-      if (textOf(found).trim()) {
-        searchedThroughParallel.set(loopOf(e), Date.now())
-        return routed(e.query, textOf(found), parallel, exa, started)
-      }
+      if (parallelHadItsTurn(found)) searchedThroughParallel.set(loopOf(e), Date.now())
+      if (textOf(found).trim()) return routed(e.query, textOf(found), parallel, exa, started)
     }
     if (exa) {
       const found = await $.tool.call({ tool: exa, query: e.query, objective: e.query, numResults: 8 })
@@ -163,7 +169,7 @@ export const register: Register = (on) => {
 
   on('tool.call', { tool: PARALLEL_SEARCH }, async ($, e, next) => {
     const ran = await next(e)
-    if (succeeded(ran)) searchedThroughParallel.set(loopOf(e), Date.now())
+    if (parallelHadItsTurn(ran)) searchedThroughParallel.set(loopOf(e), Date.now())
     return ran
   }).catch(async ($, e, next) => next(e))
 
@@ -176,7 +182,8 @@ export const register: Register = (on) => {
     return {
       deny: `claude-bestpractice: search with Parallel first, through WebSearch (this plugin sends it there) or ${parallel}. `
         + 'Exa is for the one thing Parallel\'s results miss: call it again after that search, '
-        + 'with the page you want described rather than keywords.',
+        + 'with the page you want described rather than keywords. A search Parallel answers with '
+        + 'an error, its rate limit among them, counts as that search.',
     }
   }).catch(async ($, e, next) => next(e))
 

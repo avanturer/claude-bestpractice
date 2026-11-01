@@ -115,7 +115,8 @@ class TestTheRefusalNamesTheRunThatClearsIt(BackendCase):
         self.gate_went_red(self.a_backend())
         self.shed_five_tests()
         said = evidence.red_problem(self.ctx())
-        self.assertIn("no run clears it while backend/ declares 1 test(s) where it declared 6", said)
+        self.assertIn("no run clears it while backend/ declares 1 test(s) in .py files where it "
+                      "declared 6", said)
         self.assertIn("the founder's to decide", said)
         self.assertNotIn("claude-bp verify", said)
         self.assertNotIn("claude-bp verify", evidence.red_line(self.ctx()))
@@ -248,12 +249,14 @@ class TestVerifyMakesTheRunThatClearsIt(BackendCase):
         self.assertIsNotNone(evidence.red(self.ctx()))
 
     def test_a_record_about_another_branch_is_not_cleared_by_this_branchs_code(self):
-        """Run on `main`, `feat/x`'s failure would have gone without its code ever running."""
+        """Run on `main`, `feat/x`'s failure would have gone without its code ever running. Nor
+        does it stand in `main`'s way, so the status that `&& gh pr merge` reads says so (#290)."""
         self.on_another_branch()
         proc = self.verify()
-        self.assertEqual(1, proc.returncode, proc.stdout + proc.stderr)
-        self.assertIn("the red record here is about `feat/x`, and this tree is on `main`",
-                      proc.stdout)
+        self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
+        self.assertIn("the red record here is about `feat/x`, and this tree is on `main`: it "
+                      "does not stand in `main`'s way", proc.stdout)
+        self.assertNotIn("still on record", proc.stdout)
         self.assertEqual("feat/x", (evidence.red(self.ctx()) or {}).get("branch"))
 
     def test_with_nothing_on_record_nothing_is_run_and_no_green_is_written(self):

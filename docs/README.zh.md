@@ -4,7 +4,7 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-2.8.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.8.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-2541%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
@@ -202,7 +202,9 @@ Stop gate **丢弃智能体的自述文字**，自己去运行你的测试套件
 一次只执行了树中所声明的一小部分的运行，会被记为"未经验证"而不是绿色；而一棵掉了测试
 的树无法清掉红色套件的记录——"删掉那个失败的测试"正是一个会拦人的 gate 最容易诱导出
 的动作，而它此前是最便宜的出路。要挪动这个数字就得写真正的测试，这个代价本插件很乐意
-收取。
+收取。当 gate 亲自驱动 runner 时，只数这个 runner 会运行的测试：pytest 的运行只按 Python
+测试来衡量，从不按旁边的 Vitest 套件。它通过时会清除它自己那次红色运行的记录；而 gate 驱动的
+任何运行都没跑到的其他语言的测试，会让这一轮保持"未经验证"，判定会点名它们。
 
 在原型之后的阶段，它还会针对已提交树的干净检出再跑一次，用来抓"我这儿是绿的、别处是
 红的"那一类问题——某个未提交的文件，或某个本地环境变量。
@@ -222,7 +224,8 @@ Stop gate **丢弃智能体的自述文字**，自己去运行你的测试套件
 立即执行它——如果你声明过自己的 `test_command` 或该套件在 `test_commands` 里的条目，就完全
 按你写的方式运行，否则就是 gate 对该套件自己的运行。它通过时，在同样的测试数量检查下清除
 记录，而且只在通过能清除记录的地方才运行：没有记录时不运行，另一个分支留在这棵树里的记录
-也不在这里运行——要把这棵树切回那个分支再清除。已经不存在、或自变红以来丢掉了测试的套件，
+也不在这里运行——要把这棵树切回那个分支再清除，而它也不妨碍这棵树当前所在的分支：既不挡它的
+pull request，也不挡它的合并。已经不存在、或自变红以来丢掉了测试的套件，
 任何运行都清除不了；拒绝信息会如实说明，并把决定留给你。你的 `test_command` 也为 gate 仅仅
 推断出来的套件负责，就像在任何推断之前那样。Stop gate 在判定一轮结束时仍然亲自驱动
 runner：你的配方是会话可以编辑的文件。
@@ -337,7 +340,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 
 **长结果以它真正说的内容送达模型。** 成功的测试、构建或安装，若输出 6000 个字符以上，会以摘要交给模型：运行器的汇总、每一行像错误或警告的内容、开头和结尾，以及完整输出的路径——完整输出保存在 `.claude/claude-bestpractice/out/`，不进 git。一个真实项目里 10,153 个测试全部通过的 `pytest -v` 输出 2.5 MB，送达模型时是 2600 个字符，包含结论和十条警告。你要求读取的内容和失败的命令保持原样。
 
-**搜索走插件自带的 Parallel 和 Exa。** 两个服务器随插件提供，无需密钥。WebSearch 由 Parallel 回答；Parallel 一无所获时由 Exa 回答；两者都没有结果时才由 WebSearch 自己回答。Exa 用于 Parallel 漏掉的那一件事，在问过 Parallel 之前会被退回。任何看起来像凭据的查询都会在发出前被拒绝。查询会发送给 Parallel（[隐私政策](https://parallel.ai/privacy-policy)）和 Exa（[隐私政策](https://exa.ai/privacy-policy)）；Exa 拒绝部分地区的请求，那里的搜索会转到 WebSearch。
+**搜索走插件自带的 Parallel 和 Exa。** 两个服务器随插件提供，无需密钥。WebSearch 由 Parallel 回答；Parallel 一无所获时由 Exa 回答；两者都没有结果时才由 WebSearch 自己回答。Exa 用于 Parallel 漏掉的那一件事，在问过 Parallel 之前会被退回。Parallel 返回的错误（包括免费额度的速率限制）也算问过它，搜索会继续走向 Exa 和 WebSearch。任何看起来像凭据的查询都会在发出前被拒绝。查询会发送给 Parallel（[隐私政策](https://parallel.ai/privacy-policy)）和 Exa（[隐私政策](https://exa.ai/privacy-policy)）；Exa 拒绝部分地区的请求，那里的搜索会转到 WebSearch。
 
 **压缩会保留你说过的话。** 它被要求保留你的请求和决定、每个 `+merge` 及其范围、进行中的卡片、失败的测试和已保存输出的路径，丢弃可以重新读取的日志。
 

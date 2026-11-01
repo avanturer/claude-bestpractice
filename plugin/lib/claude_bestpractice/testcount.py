@@ -166,7 +166,8 @@ def _declarations(path: Path) -> int:
     return count_in_text(text, path.suffix)
 
 
-def count_tree(root: Path, skip: list[str] | None = None) -> int:
+def count_tree(root: Path, skip: list[str] | None = None,
+               suffixes: set[str] | None = None) -> int:
     """Test declarations under `root`. Zero when there are none, never an exception.
 
     Bounded on both file count and file size: this runs inside a Stop gate, and a gate
@@ -177,8 +178,24 @@ def count_tree(root: Path, skip: list[str] | None = None) -> int:
     guard against a NARROWED run fired and every finish came back "something narrowed the
     run — not a witnessed pass". The guard is right in general and wrong here, because the
     narrowing was authored in a file the session cannot write (#158).
+
+    `suffixes` counts those languages alone, every language without it. A run of one runner
+    is held to the tests that runner runs: counted over every language, 27 pytest tests
+    passing in a tree that also held 1,338 Vitest tests read as a run narrowed to a fiftieth
+    of the suite, and its pass could clear nothing (#290).
     """
-    return sum(_declarations(path) for path in _test_files(root, _clean(skip)))
+    return sum(_declarations(path) for path in _test_files(root, _clean(skip), suffixes))
+
+
+def per_suffix(root: Path, skip: list[str] | None = None) -> dict[str, int]:
+    """Test declarations under `root` by the suffix of the file declaring them, from the walk
+    `count_tree` makes: which languages a tree's tests are written in, and how many of each."""
+    found: dict[str, int] = {}
+    for path in _test_files(root, _clean(skip)):
+        declared = _declarations(path)
+        if declared:
+            found[path.suffix] = found.get(path.suffix, 0) + declared
+    return found
 
 
 def declares(root: Path, suffix: str) -> bool:

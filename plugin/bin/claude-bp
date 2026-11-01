@@ -340,14 +340,16 @@ def cmd_sweep(ctx) -> int:
 
 def cmd_verify(ctx) -> int:
     """Make, now, the run that clears this tree's red record, where this plugin watches it.
-    0 when no red record stands here afterwards, 1 while one does.
+    0 when no red record of this branch stands here afterwards, 1 while one does.
 
     Only a run the plugin makes is evidence, and the only such runs were a Stop's and a push's:
     the merge was refused over the gate's own `pytest` in `backend/`, the session ran `pytest`,
     `pytest -n auto` and `make test` there, 10969 passed each time, and the record stood (#287).
 
     The status is the record's, not the run's: a pass that clears nothing leaves the merge
-    refused, and `claude-bp verify && gh pr merge` must not walk into that refusal.
+    refused, and `claude-bp verify && gh pr merge` must not walk into that refusal. Nor stop
+    short of a merge nothing refuses: a record another branch left in this tree does not stand
+    in this branch's way (#290).
     """
     from claude_bestpractice import evidence
 
@@ -366,8 +368,9 @@ def cmd_verify(ctx) -> int:
         elif passed and evidence.red(ctx):
             print("  its pass cleared nothing: a pass clears the record only by running at least "
                   "the tests the red run did")
-    if evidence.red(ctx):
-        print(f"still on record: {evidence.red_problem(ctx)}")
+    standing = evidence.red_problem(ctx, ctx.branch)
+    if standing:
+        print(f"still on record: {standing}")
         return 1
     return 0
 

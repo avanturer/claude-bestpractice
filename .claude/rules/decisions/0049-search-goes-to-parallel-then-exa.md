@@ -11,7 +11,8 @@ nothing; with WebSearch itself only when neither answers. The answer names Exa f
 Parallel's results miss.
 
 **Exa waits for Parallel.** A call to Exa's search from a loop that has not searched through
-Parallel in fifteen minutes is sent back to it. **A query is scanned before it leaves**, through
+Parallel in fifteen minutes is sent back to it. A search Parallel answered with an error, its
+free-tier limit among them, is such a search (#291). **A query is scanned before it leaves**, through
 WebSearch, Parallel or Exa: a credential in it is refused. Parallel's and Exa's tools then run
 without a prompt; WebFetch keeps asking per host, as the harness has it.
 `route_search off` leaves every search tool as the harness has it.
@@ -36,4 +37,5 @@ at describing one page.
 ## Cost accepted
 About 780 tokens of tool names and server instructions in every session of a project that does
 not connect these servers itself; none in one that does. Parallel calls this endpoint legacy: if
-it goes, search falls through to Exa and WebSearch until a release moves it.
+it goes, search falls through to Exa and WebSearch until a release moves it. A loop whose
+Parallel answers only errors asks it once more every fifteen minutes before Exa.
