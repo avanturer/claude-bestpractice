@@ -1,5 +1,45 @@
 # Changelog
 
+## v2.9.0
+
+One `+merge` covers a stack's pull request that GitHub closed and that was opened again on the
+same branch and commit, and a merge the word does not cover is told what the word said in that
+chat was used on, never another chat's word.
+
+### What broke
+
+**A refusal after the word ran out pointed at other chats (#293).** The founder said
+`+merge +release` once for a stack of four pull requests, none of them open yet: the one merge
+decision 0010 makes of a word said with none open. A later merge of the stack was refused with
+"the founder's `+merge` on record names #1108, feat/growth-after-value, #1044, and not this
+merge: it was said to …". Those were other chats' pull requests, left by their words in the pool
+the clone keeps, while the word said in this chat had gone on its own merges. Nothing kept what
+a word was used on.
+
+**A stack's pull request opened again was not covered (#293).** The word then named #1120 and
+#1121. #1120 merged with its branch deleted, so GitHub closed #1121, whose base it was, and it
+never reopens such a one: the same branch and commit came back as #1124. The word names a pull
+request by the moment it was opened, so #1124 was new to it, and its merge was refused by number
+and by branch.
+
+### What changed
+
+- A `+merge` records, on each pull request it names, the commit its branch is at. A pull request
+  opened on a branch whose one named by the word was closed is covered by that word where it is
+  opened into another branch than the closed one was, and the branch is still at that commit
+  (decision 0065). One opened into the same branch is what a branch opens once its pull request
+  merged where no hook heard it, or once the founder closed it, and is put to them again (#279).
+- A pull request's record keeps the branch the call that opened it named as its base (`into`:
+  `--base` or `-B`, or the tool's `base`). What a merge is judged against stays as it was.
+- A merge the word does not cover is told what the word said in this chat was used on, and
+  what of this chat's it still names. Another chat's word is the reason given only where none
+  was said in this one, and a pull request opened after the word is said to be, read off the
+  log of words heard.
+
+No `migrate._REPAIRS` step: a record or a word from before this version carries no commit and no
+`into`, and the word carries nothing for it, as before. A refusal names what a word was used on
+from the first merge after the upgrade.
+
 ## v2.8.1
 
 A pass of the gate's own pytest clears its red record in a tree that also holds Vitest tests, a

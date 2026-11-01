@@ -4,7 +4,7 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-2.8.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.9.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-2541%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
@@ -264,7 +264,7 @@ setup、teardown 或收集阶段，且没有任何断言失败——会被单独
 
 在表示拒绝、推迟或附加条件的分句里、在问句里、在引用里，这个词都不算数：「不要合并，我没说过 +merge」「CI 变绿后 +merge」「可以 +merge 吗？」以及反引号里的 `` `+merge` `` 都不授权，而「+merge，但不要发布」授权合并。
 
-因冲突或检查而失败的合并会为重试保留你的这句话：只有在合并真正完成之后，它才会被用掉，PR 和它的卡片才会关闭；`--auto` 会用掉这句话，但 PR 保持打开，直到它进入主干，通过 GitHub 工具开启的自动合并也一样。执行合并的那一行只合并一个 PR——按编号、按链接或不写——其余命令只能用 `&&` 连接：一行里两次合并、写在循环里或 `sh -c` 后面的合并、管道接到 `tail` 的合并都会被拒绝，并把这次合并单独写成一条命令。你的这句话没有覆盖的合并，闸门会列出它覆盖了哪些 PR，以及这一个为什么不在其中。一个分支若没有任何自己的东西——每个提交都已在主干里（按补丁或按内容），或在另一个 PR 的分支上，比如集成分支——就不会被要求开 PR。
+因冲突或检查而失败的合并会为重试保留你的这句话：只有在合并真正完成之后，它才会被用掉，PR 和它的卡片才会关闭；`--auto` 会用掉这句话，但 PR 保持打开，直到它进入主干，通过 GitHub 工具开启的自动合并也一样。执行合并的那一行只合并一个 PR——按编号、按链接或不写——其余命令只能用 `&&` 连接：一行里两次合并、写在循环里或 `sh -c` 后面的合并、管道接到 `tail` 的合并都会被拒绝，并把这次合并单独写成一条命令。你的这句话没有覆盖的合并，闸门会列出它覆盖了哪些 PR，以及这一个为什么不在其中；当你在这个对话里说的那句话已经用完时，闸门会说它用在了哪些 PR 上，而不是指向另一个对话的那句话。堆叠中的某个 PR，在它下面的分支合并并被删除时被 GitHub 关闭，随后以同一分支、同一提交向另一分支重新打开——这仍是你看过的那份工作，这句话覆盖它。一个分支若没有任何自己的东西——每个提交都已在主干里（按补丁或按内容），或在另一个 PR 的分支上，比如集成分支——就不会被要求开 PR。
 
 **在 GitHub 上合并的 PR，按 GitHub 写入主干历史的编号结清**：squash 是 `标题 (#N)`，合并提交是
 `Merge pull request #N`——因此仍检出在某处的 squash 分支不再被列为待合并。没有钩子听到编号的 PR
