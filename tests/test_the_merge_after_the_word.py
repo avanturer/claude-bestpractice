@@ -145,7 +145,7 @@ class TestTheFoundersCommandAnswersForTheGatesRun(RepoCase):
         """`make test` found by looking at the Makefile is this plugin's guess, not their word."""
         self.assertFalse(evidence.record_green(self.ctx(), ["make", "test"]))
         self.assertIsNotNone(evidence.red(self.ctx()))
-        self.assertNotIn("so does", evidence.red_problem(self.ctx()))
+        self.assertNotIn("runs `make test`", evidence.red_problem(self.ctx()))
 
     def test_another_recipe_does_not(self):
         self.configure(test_command=["make", "test"])

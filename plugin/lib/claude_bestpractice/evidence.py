@@ -2597,10 +2597,6 @@ def unproven(ctx: GitContext, branch: str = "") -> str:
 
     One sentence for the three surfaces that used to compose their own, because they were
     composing the same false one: absence of a green was reported as absence of a run.
-
-    Each ends on the run that answers it now. Every one named only runs that wait — the next
-    finish, the next push — so a merge refused on one of them, with the session told to stop,
-    had nothing anybody could do about it in the meantime (#287).
     """
     stopped = cut_short(ctx, branch)
     if last_green(ctx, branch) and stopped is None:
@@ -2612,18 +2608,12 @@ def unproven(ctx: GitContext, branch: str = "") -> str:
                 f"({_lasted(stopped.get('at'))}) because the founder wrote, or the session went "
                 "back to work, while it ran, and nothing has passed on that work since: it runs "
                 "again at the session's next finish, and on `git push` where the pre-push hook "
-                f"is installed (`claude-bp-ci status`); {VERIFY_NOW}")
+                "is installed (`claude-bp-ci status`)")
     if not seen:
-        return f"no test run has ever been observed{where}; {VERIFY_NOW}"
+        return f"no test run has ever been observed{where}"
     ran = " ".join(seen.get("command") or ["?"])
     return (f"the last run observed{where} FAILED ({_lasted(seen.get('at'))}) — `{ran}`; "
-            f"nothing has passed since; {VERIFY_NOW}")
-
-
-# The run anybody can ask for, in the words a merge refusal ends an item on. In the branch's
-# own tree, because that is the code it runs: asked from the main checkout about `feat/x`, it
-# would judge the main checkout.
-VERIFY_NOW = "`claude-bp verify`, in the branch's own tree, runs it now where this plugin watches it"
+            "nothing has passed since")
 
 
 def _covers_the_red_run(ctx: GitContext, entry: dict, executed: int | None) -> bool:
@@ -2646,12 +2636,44 @@ def _covers_the_red_run(ctx: GitContext, entry: dict, executed: int | None) -> b
     reached = int(entry.get("executed") or 0) if _counted_by_this_gate(entry) else 0
     if executed is not None and executed < reached:
         return False
+    return _shed_tests(ctx, entry) is None
+
+
+def _shed_tests(ctx: GitContext, entry: dict) -> tuple[int, int] | None:
+    """(declared now, declared when it went red) where the tree under the record's suite declares
+    fewer tests than it did then, which no pass of any run can make up for; None otherwise."""
     was = int(entry.get("declared") or 0)
+    if not was:
+        return None
     # In the subtree the record was written for, or the comparison is between two different
     # things: a scoped suite's count against the whole repository's is always a shortfall,
     # and a red record for `mobile/` could then never be cleared by anything (#206).
-    here = ctx.worktree_root / str(entry.get("path") or "")
-    return not (was and testcount.count_tree(here) < was)
+    now = testcount.count_tree(ctx.worktree_root / str(entry.get("path") or ""))
+    return (now, was) if now < was else None
+
+
+def _why_nothing_clears_it(ctx: GitContext, entry: dict) -> str:
+    """Why no run made here can clear `entry`, or "" when one can: its suite's directory is gone
+    from the tree, or the tree there has shed tests since it went red (`_shed_tests`).
+
+    Said in place of a run to make. Named as clearing it, `claude-bp verify` would be the promise
+    #287 was about: a run nobody can make, or one whose pass changes nothing.
+    """
+    path = str(entry.get("path") or "")
+    if path and not (ctx.worktree_root / path).is_dir():
+        return f"{path} is no longer in this tree"
+    shed = _shed_tests(ctx, entry)
+    if shed is None:
+        return ""
+    return (f"{path or 'the tree'} declares {shed[0]} test(s) where it declared {shed[1]} when "
+            "it went red, and a suite that has shed tests does not go green")
+
+
+def _on_this_branch(ctx: GitContext, entry: dict) -> bool:
+    """Whether `entry` is about the branch this tree has checked out, so a run here is of its
+    code. A record of another branch stays in a tree that moved on: run on this branch's code,
+    its pass would have cleared a failure nobody ran again."""
+    return str(entry.get("branch") or ctx.branch) == ctx.branch
 
 
 def clear_red(
@@ -2814,53 +2836,54 @@ def red_problem(ctx: GitContext, branch: str = "") -> str:
     # repository with a backend and a mobile app names neither, and the reader then cannot
     # tell whether it is about the code in front of them.
     scoped = f" for {entry['path']}" if entry.get("path") else ""
-    _, clears, _ = _clearing_run(ctx, entry)
     return (f"the test suite is red{scoped} — recorded for `{ran}`{gates}{_ago(entry)}{where}; "
-            "a run in a session's own shell does not clear it, and one this plugin watches "
+            f"{_how_it_clears(ctx, entry)}")
+
+
+def _how_it_clears(ctx: GitContext, entry: dict) -> str:
+    """The end of a refusal over `entry`: the run that clears it and where it can be made, or
+    why none can — never a run that `verify_now` would then decline to make."""
+    if not _on_this_branch(ctx, entry):
+        _, clears, _ = _clearing_run(ctx, entry)
+        return ("a run in a session's own shell does not clear it, and one this plugin watches "
+                f"does: `claude-bp verify` runs {clears} with `{entry.get('branch')}` checked "
+                "out in this tree, where the record is, and its pass clears it")
+    blocked = _why_nothing_clears_it(ctx, entry)
+    if blocked:
+        return f"no run clears it while {blocked}: that is the founder's to decide"
+    _, clears, _ = _clearing_run(ctx, entry)
+    return ("a run in a session's own shell does not clear it, and one this plugin watches "
             f"does: `claude-bp verify` runs {clears}, and its pass clears it")
 
 
-def _clearing_run(ctx: GitContext, entry: dict | None) -> tuple[suites.Suite | None, str, bool]:
+def _clearing_run(ctx: GitContext, entry: dict) -> tuple[suites.Suite, str, bool]:
     """(suite, how it is named, whether it runs as its command): the run whose pass clears
-    `entry`, or with nothing on record the repository's suite. What `verify_now` makes, and
-    what a refusal names, so the two can never disagree about it.
+    `entry`. What `verify_now` makes, and what a refusal names, so the two never disagree.
 
     A record of a command is that command's to clear. A record of the gate's own run (`pytest`,
     `go`) is the founder's command to clear where they declared one for its suite (`_answers_for`),
     and that run's again where they did not. As its command means `suite.command` is what runs,
     never the runner the gate would drive in its place: their `make test` is the project's own
     run, which is what was asked for, and not a bare `pytest` on the database beside it (#287).
-    The suite is None where there is nothing to run at all.
     """
-    path = str(entry.get("path") or "") if entry else ""
-    recorded = list(entry.get("command") or []) if entry else []
-    if entry and not _witnessed(recorded):
+    from . import config
+
+    path = str(entry.get("path") or "")
+    recorded = list(entry.get("command") or [])
+    if not _witnessed(recorded):
         return suites.Suite(path, tuple(recorded), True), f"`{shlex.join(recorded)}` again", True
     founders = _founders_suite(ctx, path)
     if founders is not None:
         return founders, f"`{shlex.join(founders.command)}`, {_whose(founders)}", True
-    return _the_gates_own_run(ctx, path, recorded)
-
-
-def _the_gates_own_run(ctx: GitContext, path: str,
-                       recorded: list[str]) -> tuple[suites.Suite | None, str, bool]:
-    """`_clearing_run` where nobody declared a command for the suite at `path`: the gate's own run
-    of it, again where `recorded` is the run of it that went red. The suite is None where the
-    repository has nothing of its own to run."""
-    from . import config
-
-    suite = _suite_at(ctx, config.load(ctx), path)
-    if recorded:
-        return suite, f"the gate's own `{recorded[0]}`{f' in {path}' if path else ''} again", False
-    if not suite.command and not witness.detect(ctx.worktree_root):
-        return None, "this repository has no suite of its own to run", False
-    return suite, "the repository's suite, as the Stop gate runs it", False
+    where = f" in {path}" if path else ""
+    return (_suite_at(ctx, config.load(ctx), path),
+            f"the gate's own `{recorded[0]}`{where} again", False)
 
 
 def verify_now(ctx: GitContext) -> tuple[str, Verdict | None, bool]:
-    """Make, now, the run that clears this tree's red record (`_clearing_run`), or with nothing on
-    record the repository's suite: (how it was named, its verdict, whether it cleared the record).
-    The verdict is None where nothing was run, and the name is then why.
+    """Make, now, the run that clears this tree's red record (`_clearing_run`): (how it was named,
+    its verdict, whether it cleared the record). The verdict is None where nothing was run, and
+    the name is then why.
 
     `claude-bp verify`. A red record is cleared only by a run this plugin watches, and the only
     ones were a Stop's and a push's: refused at a merge over the gate's own `pytest` in
@@ -2868,15 +2891,27 @@ def verify_now(ctx: GitContext) -> tuple[str, Verdict | None, bool]:
     could ask for cleared it (#287). Recorded the way the Stop gate records its runs, under the
     same count guards — and never answered from the failure remembered for this tree (decision
     0013): asking for a run is the point, as a report of the suite passing buys one (0034).
+
+    Only for a record, and only one about this tree's branch. With none there is nothing to
+    clear, and a run here would answer for a plan nobody made; a record of another branch is
+    that branch's code to clear, not this one's.
     """
     from . import config
 
     if _inside_our_own_run(ctx):
         return "this is inside a run the gate started, and such a run starts no other", None, False
     entry = red(ctx)
+    if not entry:
+        return ("nothing is on record as red in this tree, so there is nothing for it to clear",
+                None, False)
+    if not _on_this_branch(ctx, entry):
+        return (f"the red record here is about `{entry.get('branch')}`, and this tree is on "
+                f"`{ctx.branch}`: a run here would judge other code. Check `{entry.get('branch')}` "
+                "out here first", None, False)
+    blocked = _why_nothing_clears_it(ctx, entry)
+    if blocked:
+        return f"no run clears the red record while {blocked}", None, False
     suite, named, as_command = _clearing_run(ctx, entry)
-    if suite is None:
-        return named, None, False
     globs = list(config.load(ctx).artifact_globs)
     tree = tree_hash(ctx)
     try:
@@ -2886,7 +2921,7 @@ def verify_now(ctx: GitContext) -> tuple[str, Verdict | None, bool]:
         verdict = _too_long_to_witness(ctx, globs, [], killed.seconds, suite)
     if verdict is None:
         return f"{named} could not be started here", None, False
-    return named, verdict, bool(entry) and red(ctx) is None
+    return named, verdict, red(ctx) is None
 
 
 def _whose(suite: suites.Suite) -> str:
@@ -2954,23 +2989,30 @@ def red_line(ctx: GitContext) -> str:
             f"RED SUITE on {entry.get('branch', '?')}, unconfirmed: `{ran}` last failed "
             f"{_lasted(entry.get('last_seen') or entry.get('first_seen'))} ago, on other code "
             "than this tree holds, and nothing has run it here since. Run it once before "
-            "taking it as true: `claude-bp verify`."
+            f"taking it as true{_verify_here(ctx, entry, ': `claude-bp verify`')}."
         )
-    return _standing_red_line(entry, lasted)
+    return _standing_red_line(ctx, entry, lasted)
 
 
-def _standing_red_line(entry: dict, lasted: str) -> str:
+def _standing_red_line(ctx: GitContext, entry: dict, lasted: str) -> str:
     """The board's line for a failure that stands: which run, of which suite, and the run that
     clears it. "`pytest` does not pass" was read by a session that then ran `pytest` and watched
     it pass; what had not passed was the Stop gate's own run of one suite (#287)."""
     ran = " ".join(entry.get("command") or [])
     scoped = f" in {entry['path']}" if entry.get("path") else ""
     gates = " (the Stop gate's own run)" if _witnessed(list(entry.get("command") or [])) else ""
+    again = "; `claude-bp verify` runs it again where this plugin watches it"
     return (
         f"RED SUITE on {entry.get('branch', '?')} — failing for {lasted}. "
-        f"`{ran}`{scoped}{gates} does not pass. Fix it before new work; `claude-bp verify` runs "
-        "it again where this plugin watches it."
+        f"`{ran}`{scoped}{gates} does not pass. Fix it before new work"
+        f"{_verify_here(ctx, entry, again)}."
     )
+
+
+def _verify_here(ctx: GitContext, entry: dict, said: str) -> str:
+    """`said` where `claude-bp verify` in this tree would make a run that can clear `entry`, and
+    "" where it would decline: a board that names it must not send anybody to a refusal."""
+    return said if _on_this_branch(ctx, entry) and not _why_nothing_clears_it(ctx, entry) else ""
 
 
 # How long a failure stays news without being seen again. A record is written where a suite

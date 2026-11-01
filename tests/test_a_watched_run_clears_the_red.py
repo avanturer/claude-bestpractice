@@ -15,12 +15,14 @@ is not the project's — its `make test` sets up what bare `pytest` does not.
 
 from __future__ import annotations
 
+import signal
 import subprocess
 import sys
+import time
 
-from helpers import BIN, RepoCase
+from helpers import BIN, RepoCase, git, process_gone
 
-from claude_bestpractice import config, evidence, suites, vouch, witness
+from claude_bestpractice import evidence, suites, vouch, witness
 
 SIX = "".join(f"def test_{n}():\n    assert True\n\n\n" for n in range(6))
 # What the project's own command gives the suite and a bare `pytest` does not: here a variable,
@@ -44,10 +46,22 @@ class BackendCase(RepoCase):
         self.assertTrue(backend, "precondition: backend/ is a suite the gate detects")
         return backend[0]
 
-    def gate_went_red(self, suite, command: tuple = ("pytest",)) -> None:
+    def gate_went_red(self, suite, command: tuple = ("pytest",), executed: int = 6) -> None:
         """The record the Stop gate writes when its own run of `suite` fails, on this tree."""
         evidence.record_red(self.ctx(), list(command), "137 errors in 41.2s", suite,
-                            evidence.tree_hash(self.ctx()), executed=6)
+                            evidence.tree_hash(self.ctx()), executed=executed)
+
+    def shed_five_tests(self) -> None:
+        self.write("backend/tests/test_api.py", "def test_0():\n    assert True\n")
+        self.commit("drop five tests")
+
+    def on_another_branch(self) -> None:
+        """The record stays in the tree, which has moved on to another branch holding the same
+        suite: only the branch says the record is not about the code checked out here."""
+        backend = self.a_backend()
+        git(["checkout", "-q", "-b", "feat/x"], self.repo)
+        self.gate_went_red(backend)
+        git(["checkout", "-q", "main"], self.repo)
 
     def verify(self) -> subprocess.CompletedProcess:
         return subprocess.run([sys.executable, str(BIN / "claude-bp"), "verify"],
@@ -95,8 +109,27 @@ class TestTheRefusalNamesTheRunThatClearsIt(BackendCase):
         self.assertNotIn("the answer cannot differ", said)
         self.assertIn("`claude-bp verify`", said)
 
-    def test_a_branch_with_no_green_is_told_the_run_it_can_have_now(self):
-        self.assertIn("`claude-bp verify`", evidence.unproven(self.ctx()))
+    def test_a_record_nothing_can_clear_says_so_and_names_no_run(self):
+        """Six declared when it went red and one now: no pass clears that (decision 0013's
+        floor), so a refusal naming a run to make would be #287's promise again."""
+        self.gate_went_red(self.a_backend())
+        self.shed_five_tests()
+        said = evidence.red_problem(self.ctx())
+        self.assertIn("no run clears it while backend/ declares 1 test(s) where it declared 6", said)
+        self.assertIn("the founder's to decide", said)
+        self.assertNotIn("claude-bp verify", said)
+        self.assertNotIn("claude-bp verify", evidence.red_line(self.ctx()))
+
+    def test_a_record_about_another_branch_names_where_it_is_cleared(self):
+        self.on_another_branch()
+        self.assertIn("with `feat/x` checked out in this tree",
+                      evidence.red_problem(self.ctx(), "feat/x"))
+        self.assertNotIn("claude-bp verify", evidence.red_line(self.ctx()))
+
+    def test_a_branch_with_no_green_is_not_sent_to_a_run_that_clears_nothing(self):
+        """With nothing on record `claude-bp verify` runs nothing, so a merge waiting on a green
+        is told only of the runs that give one."""
+        self.assertNotIn("claude-bp verify", evidence.unproven(self.ctx()))
 
     def test_the_pre_push_hooks_report_names_it_too(self):
         self.gate_went_red(self.a_backend())
@@ -148,8 +181,7 @@ class TestTheirCommandAnswersForASuiteTheGateGuessed(BackendCase):
     def test_a_suite_that_has_shed_tests_still_clears_nothing(self):
         self.configure(test_command=["make", "test"])
         self.gate_went_red(self.a_backend())
-        self.write("backend/tests/test_api.py", "def test_0():\n    assert True\n")
-        self.commit("drop five tests")
+        self.shed_five_tests()
         self.assertFalse(evidence.record_green(self.ctx(), ["make", "test"]))
         self.assertIsNotNone(evidence.red(self.ctx()))
 
@@ -193,39 +225,87 @@ class TestVerifyMakesTheRunThatClearsIt(BackendCase):
         self.assertIn("still on record", proc.stdout)
         self.assertIsNotNone(evidence.red(self.ctx()))
 
-    def test_a_pass_over_fewer_tests_than_went_red_clears_nothing(self):
+    def test_a_pass_of_fewer_tests_than_the_red_run_clears_nothing_and_exits_so(self):
+        """The gate's run executed twelve, their recipe six: it passes, and the merge it would
+        be chained to with `&&` is still refused, so the status is the record's."""
         self.configure(test_command=["make", "test"])
-        self.gate_went_red(self.a_backend())
-        self.write("backend/tests/test_api.py", "def test_0():\n    assert True\n")
-        self.commit("drop five tests")
-        proc = self.verify()
-        self.assertIn("still on record", proc.stdout, proc.stdout + proc.stderr)
-        self.assertIsNotNone(evidence.red(self.ctx()))
-
-    def test_with_nothing_on_record_the_repositorys_suite_gives_the_branch_its_green(self):
-        self.a_backend()
-        self.assertIn("no test run has ever been observed", evidence.unproven(self.ctx()))
-        proc = self.verify()
-        self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
-        self.assertIn("the repository's suite, as the Stop gate runs it", proc.stdout)
-        self.assertEqual("", evidence.unproven(self.ctx()))
-
-    def test_a_repository_with_nothing_to_run_is_told_so(self):
-        self.assertEqual([], config.founders_test_command(self.ctx()))
-        proc = self.verify()
-        self.assertEqual(1, proc.returncode, proc.stdout)
-        self.assertIn("nothing was run", proc.stdout)
-
-    def test_a_record_of_a_suite_no_longer_here_has_nothing_to_start(self):
-        """Its directory gone, nothing drives a runner there and it has no command of its own:
-        said so, rather than an empty command line handed to the shell."""
-        evidence.record_red(self.ctx(), ["pytest"], "1 failed",
-                            suites.Suite("mobile/", ("pytest",), False))
+        self.gate_went_red(self.a_backend(), executed=12)
         proc = self.verify()
         self.assertEqual(1, proc.returncode, proc.stdout + proc.stderr)
-        self.assertIn("the gate's own `pytest` in mobile/ again could not be started here",
+        self.assertIn("passed", proc.stdout)
+        self.assertIn("its pass cleared nothing", proc.stdout)
+        self.assertIn("still on record", proc.stdout)
+        self.assertIsNotNone(evidence.red(self.ctx()))
+
+    def test_a_suite_that_has_shed_tests_is_not_run_for_a_pass_that_cannot_count(self):
+        self.configure(test_command=["make", "test"])
+        self.gate_went_red(self.a_backend())
+        self.shed_five_tests()
+        proc = self.verify()
+        self.assertEqual(1, proc.returncode, proc.stdout + proc.stderr)
+        self.assertIn("nothing was run — no run clears the red record while backend/ declares 1",
                       proc.stdout)
         self.assertIsNotNone(evidence.red(self.ctx()))
+
+    def test_a_record_about_another_branch_is_not_cleared_by_this_branchs_code(self):
+        """Run on `main`, `feat/x`'s failure would have gone without its code ever running."""
+        self.on_another_branch()
+        proc = self.verify()
+        self.assertEqual(1, proc.returncode, proc.stdout + proc.stderr)
+        self.assertIn("the red record here is about `feat/x`, and this tree is on `main`",
+                      proc.stdout)
+        self.assertEqual("feat/x", (evidence.red(self.ctx()) or {}).get("branch"))
+
+    def test_with_nothing_on_record_nothing_is_run_and_no_green_is_written(self):
+        """Not the repository's suite in place of a plan nobody made, and never a green out of
+        their recipe where nothing was red: here the recipe only says it passed."""
+        self.configure(test_command=["make", "test"])
+        self.a_backend(makefile="test:\n\t@echo '6 passed in 0.1s'\n")
+        proc = self.verify()
+        self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
+        self.assertIn("nothing is on record as red in this tree", proc.stdout)
+        self.assertIsNone(evidence.last_green(self.ctx()))
+
+    def test_a_record_of_a_suite_no_longer_here_has_nothing_to_start(self):
+        """Its directory gone, nothing can run there: said so, rather than an empty command
+        line handed to the shell, and the refusal names no run either."""
+        evidence.record_red(self.ctx(), ["pytest"], "1 failed",
+                            suites.Suite("mobile/", ("pytest",), False))
+        self.assertIn("no run clears it while mobile/ is no longer in this tree",
+                      evidence.red_problem(self.ctx()))
+        proc = self.verify()
+        self.assertEqual(1, proc.returncode, proc.stdout + proc.stderr)
+        self.assertIn("mobile/ is no longer in this tree", proc.stdout)
+        self.assertIsNotNone(evidence.red(self.ctx()))
+
+    def test_a_record_of_a_suite_with_nothing_to_start_says_so(self):
+        """Its directory is here, but no runner is drivable there and nothing plans a command for
+        it: said so, rather than an empty command line handed to the shell."""
+        self.write("web/index.js", "module.exports = 1\n")
+        self.commit("a web app with no suite")
+        evidence.record_red(self.ctx(), ["pytest"], "1 failed",
+                            suites.Suite("web/", ("pytest",), False))
+        proc = self.verify()
+        self.assertEqual(1, proc.returncode, proc.stdout + proc.stderr)
+        self.assertIn("the gate's own `pytest` in web/ again could not be started here", proc.stdout)
+        self.assertIsNotNone(evidence.red(self.ctx()))
+
+    def test_ending_verify_ends_the_suite_it_started(self):
+        """The suite runs in a session of its own; ended by a signal, the command takes it down
+        rather than leaving it on the database with nothing waiting for it."""
+        pidfile = self.tmp / "suite.pid"
+        self.configure(test_command=["sh", "-c", f"echo $$ > {pidfile}; exec sleep 120"])
+        self.gate_went_red(self.a_backend())
+        cli = subprocess.Popen([sys.executable, str(BIN / "claude-bp"), "verify"],
+                               cwd=str(self.repo), stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL)
+        until = time.time() + 60
+        while not (pidfile.is_file() and pidfile.read_text().strip()) and time.time() < until:
+            time.sleep(0.1)
+        self.assertTrue(pidfile.is_file(), "precondition: the suite has to have started")
+        cli.send_signal(signal.SIGTERM)
+        self.assertEqual(130, cli.wait(timeout=30))
+        self.assertTrue(process_gone(int(pidfile.read_text())), "the suite outlived the command")
 
 
 if __name__ == "__main__":

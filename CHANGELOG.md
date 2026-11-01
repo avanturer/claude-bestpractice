@@ -27,15 +27,18 @@ nothing ever ran one where its pass would.
 - `claude-bp verify` makes, now, the run whose pass clears this tree's red record, where the
   plugin watches it: the founder's `test_command` or `test_commands` entry where it answers for
   the gate's own run (decision 0035), run as written, `make test` with whatever it sets up
-  included; the run that went red otherwise. With nothing on record it runs the repository's
-  suite, which gives a branch the green a merge waits on. It is recorded as the Stop gate records
-  its runs, under the same count guards, and the failure remembered for the tree does not answer
-  it. The plugin's own command, so it needs no permission prompt (decision 0063).
+  included; the run that went red otherwise. It is recorded as the Stop gate records its runs,
+  under the same count guards, and the failure remembered for the tree does not answer it. Its
+  exit status is the record's: 0 once none stands, 1 while one does. Ended by `SIGTERM` or
+  `SIGHUP`, it ends the suite it started. The plugin's own command, so it needs no permission
+  prompt (decision 0063).
+- It runs only for a record it can clear. With nothing on record it runs nothing and writes no
+  green. A record of another branch, left in a tree that moved on, is that branch's code to
+  clear, and is named so. A record whose suite is gone from the tree, or has shed tests since it
+  went red, no pass can clear: the refusal says why and that it is the founder's to decide.
 - The merge refusal, the board, the Stop gate's red verdict, a failure repeated from memory and
   the pre-push hook's report each name that run, and say a run in a session's own shell is not
   watched and clears nothing. A record of the gate's own run is called that, with its suite.
-- A merge waiting on a green, for a run never seen, a failed one or one stopped for the founder,
-  names `claude-bp verify` in the branch's own tree beside the finish and the push.
 - The founder's `test_command` passing clears the record of the gate's own run in a suite the gate
   only detected, as it did before suites were detected (decision 0012). A suite they named in
   `test_commands` is still its own command's to clear.

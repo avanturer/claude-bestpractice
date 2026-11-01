@@ -261,10 +261,13 @@ since sends it back to be run instead; the report itself clears nothing.
 not one, whatever it prints, and every refusal over a red suite says so and names the run that
 is: `claude-bp verify` makes it now — your own `test_command`, or the suite's `test_commands`
 entry, where you declared one, run exactly as you wrote it, and the gate's own run of that suite
-where you did not. Its pass clears the record under the same count guards, so a suite that has
-shed tests still clears nothing. Your `test_command` also answers for a suite the gate only
-detected, as it did before anything was guessed. The Stop gate itself still drives the runner
-for a finish: your recipe is a file a session can edit.
+where you did not. Its pass clears the record under the same count guards, and it runs only
+where a pass could: not with nothing on record, and not for a record another branch left in the
+tree, which is cleared with that branch checked out. A suite that is gone, or has shed tests
+since it went red, no pass clears at all; the refusal says so, and that it is yours to decide.
+Your `test_command` also answers for a suite the gate only detected, as it did before anything
+was guessed. The Stop gate itself still drives the runner for a finish: your recipe is a file a
+session can edit.
 
 **A busy machine is not broken code.** Tests that ERROR in the gate's own pytest run, in
 setup, teardown or collection with nothing failing an assertion, are run once more on their
@@ -280,9 +283,8 @@ hook holds the turn used to keep you out for the whole suite. When the gate has 
 refuse, or a question to ask, it wakes the session with it. Your message, or the session going
 back to work for any other reason, stops a run within a second. A message that is only a paste
 or a code block does not count as you speaking. A run stopped that way proves nothing either
-way, so a merge waits until one finishes, at the session's next finish, on `git push` where
-the pre-push hook is installed, or on `claude-bp verify`, unless the suite already passed on
-exactly that tree. A
+way, so a merge waits until one finishes, at the session's next finish or on `git push` where
+the pre-push hook is installed, unless the suite already passed on exactly that tree. A
 `claude -p` whose process ends with its turn takes the check with it: its work is judged where
 it lands, by the green a merge needs.
 
