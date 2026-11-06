@@ -578,7 +578,7 @@ def _branch_named(ctx: GitContext, found, command: str, cwd: str, verb: str) -> 
     selector = _selector(found)
     if not selector:
         return (_branch_where(command, verb, cwd)
-                or ("" if _moved_to(command, verb) else ctx.branch))
+                or ("" if _elsewhere_on_the_line(command, verb, cwd) else ctx.branch))
     number = int(selector) if selector.isdigit() else number_in(selector)
     return _numbered(ctx, number) if number else selector
 
@@ -1269,7 +1269,7 @@ def close_answered(ctx: GitContext, branch: str = "") -> int:
 _GH_LOOK_SECONDS = 10
 
 
-def missing(ctx: GitContext) -> tuple[str, bool] | None:
+def missing(ctx: GitContext, session_id: str = "") -> tuple[str, bool] | None:
     """What the checked-out branch's finished work lacks a pull request against: (base,
     whether GitHub was asked). None when nothing is missing.
 
@@ -1281,6 +1281,9 @@ def missing(ctx: GitContext) -> tuple[str, bool] | None:
     another clone was answered with "no pull request against main" and an order to open a
     second one (#239). Asked once per branch, and only here, where the alternative is a
     demand.
+
+    Recorded as `session_id`'s where that chat ran the call that opened it, in this tree, as
+    `_opened_by_the_chat` reads it; as no session's otherwise.
     """
     branch = ctx.branch
     if known(ctx, branch) or demanded(ctx, branch):
@@ -1294,11 +1297,65 @@ def missing(ctx: GitContext) -> tuple[str, bool] | None:
     if not listed:
         return base, listed is not None
     found = next((row for row in listed if row.get("baseRefName") == base), listed[0])
-    # Opened by no session here, so no chat's `+merge` names it (decision 0023).
-    opened(ctx, branch, str(found.get("baseRefName") or base), "",
+    # Opened by no session here, so no chat's `+merge` names it (decision 0023), unless the
+    # chat whose turn this is opened it where no hook could tell which branch it was for.
+    opened(ctx, branch, str(found.get("baseRefName") or base),
+           _opened_by_the_chat(ctx, session_id, found),
            number=_as_number(found.get("number")), url=str(found.get("url") or ""),
            draft=found.get("isDraft") is True)
     return None
+
+
+# How far GitHub's clock and this machine's may disagree, and how long after a chat runs
+# `gh pr create` the pull request may appear: behind a `git push` whose hook runs the suite, the
+# call outlives the time Claude Code waits for it and goes on in the background.
+_CLOCKS_SECONDS = 120.0
+_OPENING_SECONDS = 3600.0
+
+
+def note_opening(ctx: GitContext, session_id: str, command: str, cwd: str) -> None:
+    """Note that this chat ran a call that opens a pull request, in the tree of this clone the
+    line runs it in, now: what `missing` reads when GitHub has a pull request no hook filed."""
+    there = _tree_at(ctx, _moved_to(command, "create"), cwd)
+    if there is None:
+        return
+    tree, now = str(there.worktree_root), time.time()
+
+    def note(chat: dict[str, Any]) -> None:
+        kept = chat.get("openings") if isinstance(chat.get("openings"), dict) else {}
+        recent = {key: when for key, when in kept.items()
+                  if isinstance(when, (int, float)) and now - when < _OPENING_SECONDS}
+        chat["openings"] = {**recent, tree: now}
+    _rewrite_shown(ctx, session_id, note)
+
+
+def _opened_by_the_chat(ctx: GitContext, session_id: str, found: dict[str, Any]) -> str:
+    """`session_id` where its chat ran `gh pr create` in this tree shortly before GitHub says
+    `found` was created; "" otherwise.
+
+    The session opened #1140 itself, minutes before, from its own tree, and the pull request
+    went on record as found on GitHub and opened by no session here: on a line that made the
+    branch before opening it, the hook that files the opening had read the branch the session
+    stood on, which had its own. The founder's `+merge` then named it nowhere (#295).
+    """
+    if not session_id:
+        return ""
+    openings = _chat(ctx, session_id).get("openings")
+    at = openings.get(str(ctx.worktree_root)) if isinstance(openings, dict) else None
+    created = _github_time(found.get("createdAt"))
+    if not isinstance(at, (int, float)) or not created:
+        return ""
+    return session_id if at - _CLOCKS_SECONDS <= created <= at + _OPENING_SECONDS else ""
+
+
+def _github_time(raw: Any) -> float:
+    """A moment as GitHub writes it, `2026-11-03T10:46:04Z`, in seconds; 0.0 where it is not one."""
+    from datetime import datetime
+
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def on_github(ctx: GitContext, branch: str) -> list[dict[str, Any]] | None:
@@ -1318,7 +1375,7 @@ def on_github(ctx: GitContext, branch: str) -> list[dict[str, Any]] | None:
     try:
         proc = subprocess.run(
             [gh, "pr", "list", "--head", branch, "--state", "open",
-             "--json", "number,url,isDraft,baseRefName"],
+             "--json", "number,url,isDraft,baseRefName,createdAt"],
             cwd=str(ctx.worktree_root), stdin=subprocess.DEVNULL, capture_output=True,
             encoding="utf-8", errors="surrogateescape", timeout=_GH_LOOK_SECONDS,
         )
@@ -1677,10 +1734,11 @@ def opened_from(ctx: GitContext, tool_name: str, command: str, tool_input: dict[
     """The branch a pull request this call opens is recorded on. "" when it cannot be told.
 
     The session's own branch only when the call names no other place: on a line that moves
-    into a tree this cannot name, that branch is the one certainly wrong answer (#248).
+    into a tree this cannot name, that branch is the one certainly wrong answer (#248), and so
+    it is on a line that switches to a branch this cannot name (#295).
     """
     head = head_of(tool_name, command, tool_input, cwd)
-    return head if head or _moved_to(command, "create") else ctx.branch
+    return head if head or _elsewhere_on_the_line(command, "create", cwd) else ctx.branch
 
 
 def merged_in(ctx: GitContext, command: str, cwd: str) -> GitContext | None:
@@ -1729,8 +1787,106 @@ def unplaceable(command: str) -> str:
 
 def _branch_where(command: str, verb: str, cwd: str) -> str:
     """The branch checked out where this line runs `gh pr <verb>`. "" when that place cannot be
-    named, rather than the branch of the one the line left."""
+    named, rather than the branch of the one the line left.
+
+    The branch the line switches to before it, where it does, in the place it runs: a hook
+    reads the line before it runs, and `git checkout -b fix/timeout && … && gh pr create`
+    opened the pull request of a branch git did not have yet, filed under the branch the
+    session stood on (#295)."""
+    switched = _switched_to(command, verb, cwd)
+    if switched is not None:
+        return switched
     return _branch_of(_where(command, verb, cwd) or "")
+
+
+def _elsewhere_on_the_line(command: str, verb: str, cwd: str) -> bool:
+    """Does this line run `gh pr <verb>` anywhere but on the branch the session stands on: after
+    a `cd`, or after switching branches?"""
+    return bool(_moved_to(command, verb)) or _switched_to(command, verb, cwd) is not None
+
+
+# `git checkout` and `git switch` naming the branch they make or move to, by the flag before it.
+_NEW_BRANCH_FLAGS = frozenset({"-b", "-B", "--orphan", "-c", "-C", "--create", "--force-create"})
+
+
+def _switched_to(command: str, verb: str, cwd: str) -> str | None:
+    """The branch this line switches to before `gh pr <verb>`, where that runs. None when it
+    switches none there; "" when it switches to one this cannot name, as `git checkout -` or
+    `git switch "$B"` do.
+
+    A `cd` after the switch leaves the tree it was made in, so only a switch made where the
+    call then runs counts.
+    """
+    from . import shellcmd
+
+    moved = ""
+    switched: str | None = None
+    for argv in shellcmd.commands(command):
+        if _is_the_call(argv, verb):
+            return switched
+        if argv[0] == "cd" and len(argv) > 1:
+            moved = os.path.join(moved, os.path.expanduser(argv[1]))
+            switched = None
+        elif argv[0].rsplit("/", 1)[-1] == "git" and argv[1:2] in (["checkout"], ["switch"]):
+            switched = _switch_target(argv[2:], os.path.join(cwd, moved) if moved else cwd)
+    return None
+
+
+def _is_the_call(argv: list[str], verb: str) -> bool:
+    """Is this command the `gh pr <verb>` a line is read up to? A merge only as `_merges` has it."""
+    return (argv[0].rsplit("/", 1)[-1] == "gh" and argv[1:3] == ["pr", verb]
+            and (verb != "merge" or _merges(argv)))
+
+
+def _switch_target(words: list[str], where: str) -> str | None:
+    """The branch one `git checkout` or `git switch` moves to, given the words after the verb
+    and the directory it runs in. None for a checkout of files; "" for a branch this cannot
+    name."""
+    made = _new_branch(words)
+    if made is not None:
+        return _nameable(made)
+    if "--" in words:
+        return None
+    if {"--detach", "-d", "-"} & set(words):
+        return ""
+    plain = [word for word in words if not word.startswith("-")]
+    if len(plain) != 1:
+        return None
+    if not _nameable(plain[0]):
+        return ""
+    return plain[0] if _is_branch(plain[0], where) else None
+
+
+def _new_branch(words: list[str]) -> str | None:
+    """The branch `-b`, `-c` or their kin make, `--create=<name>` included; "" where the flag
+    has nothing after it, None where there is no such flag."""
+    for index, word in enumerate(words):
+        if word in _NEW_BRANCH_FLAGS:
+            return words[index + 1] if index + 1 < len(words) else ""
+        flag, given, value = word.partition("=")
+        if given and flag in _NEW_BRANCH_FLAGS:
+            return value
+    return None
+
+
+def _nameable(name: str) -> str:
+    """`name`, or "" where only the shell can say what it is."""
+    return "" if "$" in name or "`" in name else name
+
+
+def _is_branch(name: str, where: str) -> bool:
+    """Is `name` a branch of the repository at `where`, here or on a remote git checks it out
+    from?"""
+    from .gitctx import _status
+
+    for ref in (f"refs/heads/{name}", f"refs/remotes/origin/{name}"):
+        try:
+            code, _ = _status(["rev-parse", "--verify", "--quiet", ref], where)
+        except (OSError, ValueError):
+            return False
+        if code == 0:
+            return True
+    return False
 
 
 def _where(command: str, verb: str, cwd: str) -> str | None:
@@ -1755,8 +1911,7 @@ def _moved_to(command: str, verb: str) -> str:
 
     moved = ""
     for argv in shellcmd.commands(command):
-        if argv[0].rsplit("/", 1)[-1] == "gh" and argv[1:3] == ["pr", verb] and \
-                (verb != "merge" or _merges(argv)):
+        if _is_the_call(argv, verb):
             return moved
         if argv[0] == "cd" and len(argv) > 1:
             moved = os.path.join(moved, os.path.expanduser(argv[1]))
@@ -2099,6 +2254,37 @@ def _about_here(ctx: GitContext, argv: list[str], command: str, moved: str, cwd:
     if named:
         return named <= _remote_names(ctx)
     return _tree_at(ctx, moved, cwd) is not None
+
+
+# A pull request of this repository the session's message to the founder names: by a link to it,
+# or as `#<n>` (`owner/repo#<n>`) where a pull request on record here, open, carries the number.
+# A bare number is as often an issue, and a word naming only an issue would have taken away the
+# one merge a word allows when it names nothing.
+_LINKED = re.compile(
+    r"https?://[^/\s]+/(?P<owner>[^/\s]+)/(?P<repo>[^/\s]+)/pull/(?P<number>\d+)\b")
+_HASHED = re.compile(r"(?<![\d/#&])(?:(?P<owner>[\w.-]+)/(?P<repo>[\w.-]+))?#(?P<number>\d+)\b")
+
+
+def named_in_message(ctx: GitContext, text: str) -> list[int]:
+    """The pull requests of this repository a message the session wrote to the founder names by
+    number, which their answer to it is about.
+
+    The session opened #1139 and #1140, named both by number and link in its message, and was
+    answered `+merge`. The word counted what a `gh pr view` had put in front of them and not
+    what the message they answered had: #1139 merged, #1140 was refused, and the refusal itself
+    had said the word covers "every one you showed them by number" (#295).
+    """
+    if "#" not in text and "/pull/" not in text:
+        return []
+    here = _remote_names(ctx)
+    found = {int(match["number"]) for match in _LINKED.finditer(text)
+             if f"{match['owner']}/{match['repo']}".lower() in here}
+    recorded = {_as_number(record.get("number")) for record in outstanding(ctx)} - {0}
+    for match in _HASHED.finditer(text):
+        named = f"{match['owner']}/{match['repo']}".lower() if match["owner"] else ""
+        if int(match["number"]) in recorded and (not named or named in here):
+            found.add(int(match["number"]))
+    return sorted(found)
 
 
 def put_to_the_founder(ctx: GitContext, session_id: str, tool_name: str, command: str,

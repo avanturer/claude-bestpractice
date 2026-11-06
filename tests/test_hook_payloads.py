@@ -26,7 +26,7 @@ READS = {
                     "tool_use_id"},
     "SubagentStart": {"cwd"},
     "PreCompact": {"session_id", "cwd", "transcript_path", "trigger"},
-    "Stop": {"session_id", "cwd", "transcript_path", "stop_hook_active"},
+    "Stop": {"session_id", "cwd", "transcript_path", "stop_hook_active", "last_assistant_message"},
 }
 # And inside a call, what the gates read of its input and of its result.
 PARTS = {

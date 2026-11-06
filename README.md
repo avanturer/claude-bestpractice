@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-2.9.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.10.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-2541%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -276,7 +276,10 @@ session can edit.
 **A busy machine is not broken code.** Tests that ERROR in the gate's own pytest run, in
 setup, teardown or collection with nothing failing an assertion, are run once more on their
 own; those that pass then are named and not counted as the code failing. A failed assertion
-is never asked twice. A red run names its first broken test and keeps its report under
+is never asked twice. Tests that ERROR because the connection to a database or service they
+use was lost or refused, and do again, are no verdict on the code either way: nothing is filed
+red or green, and the finish is UNVERIFIED, for your `+merge` to decide. A red run names its
+first broken test and keeps its report under
 `.claude/claude-bestpractice/test-reports/`, out of git. Every suite the gate starts runs on
 at most `witness_cpus` CPUs, four unless you say otherwise (`0` is all of them), so one Stop
 does not start a jest worker per core while the other sessions on the machine run theirs.
@@ -318,10 +321,13 @@ told it is waiting for you rather than the other way round.
 **Merged, by the session that opened it.** Once you say `+merge`, it opens, checks and
 merges on its own without asking again. One `+merge` covers every pull request that chat has
 open when you say it, so ten finished pull requests take one word, not ten — including the
-ones it opened before a `--resume`, which is the same chat. It also covers each pull request
-of this repository the chat showed you by number since your previous message (looked at with `gh pr view`,
-`checks` or `diff`, or a merge of it refused), Dependabot's or another chat's included, so
-"close the hanging ones" takes one word too. It never covers one opened after the word, or
+ones it opened before a `--resume`, which is the same chat. One it opened on a line that made
+its branch first, or that only GitHub knew of once the turn ended, is still that chat's. It also
+covers each pull request of this repository the chat put in front of you since your previous
+message: named in the message you answer, by its link or by a `#<number>` on record here (a bare
+number nothing here records is as often an issue, and is not read as one), looked at with
+`gh pr view`, `checks` or `diff`, or a merge of it refused. Dependabot's or another chat's
+included, so "close the hanging ones" takes one word too. It never covers one opened after the word, or
 another chat's it did not show you — with one exception: a pull request of a stack GitHub closed
 when the branch below it was merged and deleted, opened again on the same branch and commit into
 another branch, is still the work you looked at, and the word covers it. Each is judged as
@@ -424,7 +430,7 @@ messages, and each is **spent when it is used**, never a standing grant.
 
 | You type | It allows | Once |
 | --- | --- | --- |
-| `+merge` | merging the pull requests this chat has open, and those it showed you by number since your last message, drafts aside | each of them once; with none of either, the next merge |
+| `+merge` | merging the pull requests this chat has open, and those it named to you or showed you by number since your last message, drafts aside | each of them once; with none of either, the next merge |
 | `+release` | promoting to production | one promotion |
 | `+migration` | destructive DDL in a migration | one migration |
 

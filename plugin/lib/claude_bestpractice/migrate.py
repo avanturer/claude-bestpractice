@@ -1297,6 +1297,51 @@ def _forget_a_red_suite_that_never_ran(ctx: GitContext) -> str:
             "installed, so that run never reached the code")
 
 
+def _forget_a_red_suite_of_lost_connections(ctx: GitContext) -> str:
+    """A red record of the gate's own pytest whose every broken test ERRORed on a connection to
+    a server it uses, lost or refused.
+
+    Until this release such a run was filed red: behind Docker's proxy on WSL the shared database
+    dropped connections, 146 tests ERRORed at setup in different files on every run, and the
+    record held a merge the founder had said `+merge` to (#289). The gate files no such record
+    now, and the one already written could be cleared only by a pass on that same database.
+
+    Read off the reports the gate kept of that run, under `test-reports/<suite>/gate-run/`, the
+    first run and the second run of its errors alike. Only where every test that broke in them
+    ERRORed that way; a record whose reports are gone, or say anything else, stays as it was.
+    """
+    from . import evidence
+
+    entry = evidence.red(ctx)
+    if not entry or [str(part) for part in entry.get("command") or []] != ["pytest"]:
+        return ""
+    if not _every_break_a_lost_connection(_kept_reports(ctx, str(entry.get("path") or ""))):
+        return ""
+    store.tier_a(ctx, evidence.RED_SUITE_FILE).unlink(missing_ok=True)
+    suite = f" in {entry['path']}" if entry.get("path") else ""
+    return (f"dropped the red-suite record of the gate's pytest{suite}: every test that broke "
+            "had lost its connection to a server, so the run never reached the code")
+
+
+def _kept_reports(ctx: GitContext, suite: str) -> list:
+    """The reports the gate kept of its last run of the suite at `suite` that broke, each as
+    `evidence.parse_artifact` reads it: None for one it cannot."""
+    from . import evidence, witness
+
+    where = [part for part in Path(suite).parts if part not in ("", ".")]
+    kept = store.tier_a(ctx, evidence.REPORTS_DIR, *where, witness.KEPT_DIR)
+    return [evidence.parse_artifact(path) for path in sorted(kept.glob("*.xml"))]
+
+
+def _every_break_a_lost_connection(reports: list) -> bool:
+    """Do these reports, every one readable, hold a test that broke, and was each test that broke
+    an ERROR on a lost or refused connection?"""
+    if not reports or None in reports:
+        return False
+    return (all(report.failed == report.errors == report.disconnected for report in reports)
+            and any(report.failed for report in reports))
+
+
 # What make prints when this repository's own `needs-pytest` guard stops `make test`.
 _THE_PYTEST_GUARD_STOPPED_MAKE = re.compile(r"\[Makefile:\d+: needs-pytest\] Error \d+")
 
@@ -1814,6 +1859,7 @@ _REPAIRS = {
     "0041-forget-a-red-suite-the-pytest-guard-left": (1, _forget_a_red_suite_the_pytest_guard_left),
     "0042-let-go-of-what-dead-runs-and-sessions-left": (1, _let_go_of_what_dead_runs_left),
     "0043-cut-the-logs-down-to-what-is-live": (1, _cut_the_logs_down_to_what_is_live),
+    "0044-forget-a-red-suite-of-lost-connections": (1, _forget_a_red_suite_of_lost_connections),
 }
 
 

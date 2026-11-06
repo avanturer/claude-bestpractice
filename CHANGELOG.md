@@ -1,5 +1,61 @@
 # Changelog
 
+## v2.10.0
+
+The founder's `+merge` covers the pull requests the message it answers names, a pull request a
+chat opened stays that chat's however its record was filed, and a database that drops connections
+no longer files the code as red.
+
+### What broke
+
+**One `+merge` merged the first of two pull requests the session had opened and named (#295).**
+The session opened #1139 and #1140 itself with `gh pr create`, named both by number and link in
+its message, and was answered `+merge`. #1139 merged. #1140 was refused, "it was found on GitHub,
+opened by no session here", and the founder had to say the word again. The refusal had promised
+the word allows "every pull request you have open, and every one you showed them by number since
+their last message". #1140 was both, and the word counted it as neither:
+
+- A pull request named in the message counted for nothing. Only one looked at with `gh pr view`,
+  read with the GitHub tool or refused to the founder did, though those are the ones the founder
+  may never see.
+- A line that makes its branch and opens the pull request in one go, `git checkout -b fix/timeout
+  && … && gh pr create`, is read by the hook before it runs, on the branch the session stood on.
+  That branch already had its pull request, so nothing was filed for the new one. Whenever the
+  call's result never came back, the Stop gate then found #1140 on GitHub and filed it as nobody's.
+
+**The gate's pytest on a database that dropped connections was filed as the code failing (#289).**
+Behind Docker's proxy on WSL the shared database at 5432 dropped connections. Whole files ERRORed
+at setup with `psycopg.OperationalError: server closed the connection unexpectedly`, in different
+files on every run, and the second run of the errors (decision 0034) met the same proxy. The red
+record held a merge the founder had said `+merge` to, and only a pass on that database could clear
+it. The project's own `make test`, on a database of its own, passed 11162.
+
+### What changed
+
+- The Stop gate reads the message that ended the turn (`last_assistant_message`) and notes the
+  pull requests it names: a link to one of this repository's, or `#<number>` where a pull request
+  open on record here carries it. The founder's next `+merge` names them, as it names one the chat
+  looked at (decision 0066). A bare number nothing here records names nothing, since it is as often
+  an issue, and a word naming only an issue would lose the one merge it allows.
+- A `git checkout` or `git switch` before `gh pr create` on the same line decides which branch the
+  pull request is opened from, and one this cannot name (`git checkout "$B"`, `git checkout -`)
+  files it under no branch rather than the one the session stood on. The same holds for
+  `gh pr close` and `gh pr ready` that name no pull request.
+- A pull request GitHub has and no hook filed is recorded as the chat's whose turn it is where that
+  chat ran `gh pr create` in this tree shortly before GitHub created it (`createdAt`).
+- The merge refusal says what the word allows: what the chat has open, and what it put in front of
+  the founder since their last message, named in the message they answer by its link or by a
+  `#<number>` on record here, looked at with `gh pr view`, or refused to them.
+- A run of the gate's own pytest in which every test that broke ERRORed on a connection to a
+  server, lost or refused, and did again on its own, is no verdict on the code: nothing is filed
+  red or green, and the finish is UNVERIFIED, for the founder's `+merge` to decide (decision 0067).
+  What counts is the error's message, as the driver or the socket says it; a failed assertion, or
+  any other error beside it, keeps the run red.
+
+`migrate._REPAIRS` step 0044 drops a red record of the gate's own pytest whose kept reports say
+every test that broke lost its connection. A pull request already filed as nobody's stays so;
+named in the message the founder answers, the word covers it.
+
 ## v2.9.0
 
 The founder's `+merge` covers a stack's pull request that GitHub closed and that was opened again
