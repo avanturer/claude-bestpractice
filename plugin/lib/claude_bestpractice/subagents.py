@@ -13,7 +13,8 @@ Two things are asked here, and only the two that a gate can actually decide.
 THE TIER IS NAMED. Either in the call or pinned in the agent's own definition, which is
 the founder's file and their choice to make once. `inherit` counts from a definition and
 not from a call: in a file it is a decision somebody wrote down, in a call it is the
-default spelled out.
+default spelled out. A fork names nothing and is not asked to: it runs on the session's
+own model whatever the call says (`FORK`).
 
 THE COUNT IS BOUNDED. Parallel agents are the cheapest-looking way to go faster and the
 most expensive way to be wrong: each one pays for its own context, and four searching
@@ -43,6 +44,18 @@ SPAWN_TOOLS = ("Agent", "Task")
 # would refuse a spelling the harness accepts, which is a gate that blocks correct work.
 TIERS = ("haiku", "sonnet", "opus", "fable")
 INHERIT = "inherit"
+
+# The spawn that copies this session instead of starting an agent. Claude Code runs it on the
+# parent's model and ignores `model` on the call, because the fork reads the parent's prompt
+# cache and another model would throw that cache away. So nobody defaulted into anything, and
+# the tier refusal asked a fork for a field the harness discards: one more round trip on every
+# fork, which 2.1.302 turned on by default in VS Code, the desktop app and `claude -p`.
+FORK = "fork"
+
+
+def is_a_fork(subagent_type: str) -> bool:
+    """Is this spawn a fork of the session, which runs on its model whatever the call names?"""
+    return (subagent_type or "").strip().lower() == FORK
 
 # A pinned full model id is a named tier too — `claude-sonnet-5`, `claude-opus-5`. The
 # point is that somebody chose, not that they chose from a list of four.

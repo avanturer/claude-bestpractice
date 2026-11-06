@@ -111,6 +111,23 @@ class TierIsNamed(SpawnCase):
         self.assertEqual(subagents.pinned_tier(self.ctx(), "../../etc/passwd"), "")
         self.assertEqual(subagents.pinned_tier(self.ctx(), ""), "")
 
+    def test_a_fork_is_not_asked_for_a_tier(self):
+        """Claude Code runs a fork on the parent's model and ignores `model` on the call.
+
+        Refused, the session added a field the harness throws away and spawned again: a round
+        trip on every fork, which is on by default in VS Code since 2.1.302.
+        """
+        self.start()
+        decision, why = self.decision(self.gate({"subagent_type": "fork", "prompt": "try the other half"}))
+        self.assertNotEqual(decision, "deny", why)
+        self.assertEqual(self.record().spawns_this_turn, 1)
+
+    def test_only_the_fork_is_spared(self):
+        """An agent of the founder's named `forked-review` is an agent like any other."""
+        self.start()
+        decision, _ = self.decision(self.gate({"subagent_type": "forked-review", "prompt": "review"}))
+        self.assertEqual(decision, "deny")
+
 
 class CountIsBounded(SpawnCase):
     def spawn(self, n: int, first: int = 0) -> list[tuple[str, str]]:
@@ -154,6 +171,14 @@ class CountIsBounded(SpawnCase):
         ))
         self.assertEqual(decision, "deny")
         self.assertIn("ceiling is 1", why)
+
+    def test_a_fork_counts_toward_the_ceiling(self):
+        """Spared the tier, not the count: a fork is still one more agent working at once."""
+        self.start()
+        self.spawn(3)
+        decision, why = self.decision(self.gate({"subagent_type": "fork", "prompt": "a fourth way"}))
+        self.assertEqual(decision, "deny")
+        self.assertIn("ceiling is 3", why)
 
     def test_zero_switches_the_ceiling_off(self):
         self.configure(subagent_fanout=0)
