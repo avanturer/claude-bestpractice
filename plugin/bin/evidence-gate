@@ -264,7 +264,7 @@ def _allow(ctx, rec: sessions.SessionRecord, cfg, opener: str, shell: str,
 
     None of the three while `at_work` names agents of this session still running: the card
     is the work they were sent to do, the leases cover what they write, and the tree is where
-    they stand. Each is handed back at the finish after their reports (decision 0068).
+    they stand. Each is handed back at the finish after their reports (decision 0070).
     """
     from claude_bestpractice import plan
 
@@ -276,7 +276,7 @@ def _allow(ctx, rec: sessions.SessionRecord, cfg, opener: str, shell: str,
     sessions.release_all(ctx, rec.session_id)
     said, held = _closed_the_tree(ctx, rec, cfg, shell)
     # And the trees this chat's agents ran in, which Claude Code leaves to the hook that made
-    # them (decision 0075). Never what keeps the turn from ending well.
+    # them (decision 0077). Never what keeps the turn from ending well.
     if cfg.remove_finished_trees:
         with contextlib.suppress(Exception):
             spent = worktree.release_agents_trees(ctx, opener)
@@ -753,7 +753,7 @@ def _agents_at_work(event) -> list[str]:
 
 # How many refusals in a row a pause has to come after when its blocker is not the founder's
 # words: by then the condition it names has held across tries. DeepSeek Harness rejects a goal's
-# `blocked` until three rounds have passed and lets a person stop it at once (decision 0073).
+# `blocked` until three rounds have passed and lets a person stop it at once (decision 0075).
 PAUSE_AFTER_REFUSALS = 2
 
 # How much of the transcript's end is read for the founder's words a blocker quotes.
@@ -896,7 +896,7 @@ def main() -> None:
     if paused is not None and not _spares_the_finish(event, paused, blocked):
         paused, unspared = None, paused
     # And a turn that ends to wait for its own agents is not one either: what they were sent
-    # to do is still being done (decision 0068).
+    # to do is still being done (decision 0070).
     at_work = _agents_at_work(event)
     if event.stop_hook_active and blocked >= evidence.MAX_CONSECUTIVE_BLOCKS and paused is None \
             and not at_work:

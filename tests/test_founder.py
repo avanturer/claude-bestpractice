@@ -71,7 +71,7 @@ class TestWhatTheyDidNotSend(TranscriptCase):
         """Claude Code writes that summary as a `user` entry with `isCompactSummary` and no
         `origin`, the shape of a turn from before the harness marked its sender, which is read
         by its text. Told to keep the founder's words, the summary keeps them, and a `+merge`
-        it repeated was a new grant nobody gave (decision 0071). arXiv 2610.29869 measured the
+        it repeated was a new grant nobody gave (decision 0073). arXiv 2610.29869 measured the
         same laundering in harnesses that flatten roles: 87–100% of forged approvals survived."""
         summary = {"type": "user", "uuid": "s-1", "timestamp": stamped(time.time()),
                    "isCompactSummary": True, "isVisibleInTranscriptOnly": True,

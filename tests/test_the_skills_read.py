@@ -1,4 +1,4 @@
-"""How often this plugin's skills are read (decision 0078).
+"""How often this plugin's skills are read (decision 0080).
 
 A skill loads only when the model chooses it, and its description rides in every request either
 way. Ponytail's skill, tested alone, was chosen in none of ten sessions. The count starts at a

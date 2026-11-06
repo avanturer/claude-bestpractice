@@ -1,4 +1,4 @@
-"""The commit reviewer names the moves that make a red suite read green (decision 0072).
+"""The commit reviewer names the moves that make a red suite read green (decision 0074).
 
 None of them touches the code under test. A test command that cannot fail, an object equal to
 everything, a test that exits with the code it chooses, a pytest hook that rewrites a report:

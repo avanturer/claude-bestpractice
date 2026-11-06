@@ -1752,7 +1752,7 @@ class TestCheckpoint(GateCase):
 
     def test_the_summary_is_told_what_to_keep(self):
         """Claude Code hands this hook's stdout to the compaction summary as its instructions
-        (decision 0069). The JSON it printed before told the summary nothing: on PreCompact
+        (decision 0071). The JSON it printed before told the summary nothing: on PreCompact
         `continue` and `systemMessage` are discarded."""
         self.start()
         card = self.claim_a_task("s1", "src/invoice.py")
@@ -2837,7 +2837,7 @@ class TestAPauseIsNotAFinish(GateCase):
         self.card = self.claim_a_task("s1", "feature.py")
         self.write("feature.py", "def total(prices, tax):\n    return sum(prices) * tax\n")
         self.commit("total takes the tax rate; its tests are next")
-        # Where the founder said it: a pause ends a turn on their words (decision 0073).
+        # Where the founder said it: a pause ends a turn on their words (decision 0075).
         from helpers import turn
 
         self.transcript = self.tmp / "transcript.jsonl"
@@ -2892,7 +2892,7 @@ class TestAPauseIsNotAFinish(GateCase):
 
         self.pause(command=named[0])
         # Run as printed, the placeholder is no words of the founder's, and a pause that is the
-        # first answer to a red suite has to carry theirs (decision 0073); the refusal says so.
+        # first answer to a red suite has to carry theirs (decision 0075); the refusal says so.
         again = self.stop(stop_hook_active=True)
         self.assertEqual(2, again.returncode)
         self.assertIn(f"The pause of {self.card.id} did not end this turn", again.stderr)
@@ -2901,7 +2901,7 @@ class TestAPauseIsNotAFinish(GateCase):
 
     def test_a_blocker_of_its_own_is_not_the_first_answer_to_a_red_suite(self):
         """DeepSeek Harness rejects a goal's `blocked` until three rounds have passed. Here a pause
-        had only to say twelve characters, and the red suite was not asked again (decision 0073)."""
+        had only to say twelve characters, and the red suite was not asked again (decision 0075)."""
         self.assertEqual(2, self.stop().returncode)
         self.pause(command=f"claude-bp-plan pause {self.card.id} --blocker '{self.OWN_BLOCKER}'")
 

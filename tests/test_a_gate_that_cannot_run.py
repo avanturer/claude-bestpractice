@@ -1,4 +1,4 @@
-"""A gate that cannot run refuses, rather than letting every call through (decision 0067).
+"""A gate that cannot run refuses, rather than letting every call through (decision 0069).
 
 `hookio.guard` turns any failure inside a gate into a refusal, but it can only catch what
 happens once it holds the gate. A library that does not import, an interpreter that is not

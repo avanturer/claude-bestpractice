@@ -82,43 +82,43 @@ beside a `git rev-list --count` for a number nothing read.
 ### What changed
 
 - `subagent_type: "fork"` names no tier and is not refused for it; it still counts toward
-  `subagent_fanout` (decision 0066).
+  `subagent_fanout` (decision 0068).
 - The `pre-tool` entry says `"onFailure": "block"`: Claude Code 2.1.295 and later refuse the
-  call when the gate cannot start, crashes before its guard or times out (decision 0067).
+  call when the gate cannot start, crashes before its guard or times out (decision 0069).
 - A Stop whose `background_tasks` names a running subagent, workflow, teammate or cloud session
   runs no suite, files nothing, demands no pull request, and keeps the card, the leases and the
   tree; what the other sessions are owed is still asked. A background shell or monitor spares
-  nothing (decision 0068).
+  nothing (decision 0070).
 - The checkpoint prints the keep-list as plain text, with this session's claimed cards by id,
-  title and condition; the hooks module's `session.compact` is gone (decision 0069).
+  title and condition; the hooks module's `session.compact` is gone (decision 0071).
 - `CronCreate`, `ScheduleWakeup` and `SendMessage` are refused when their text would grant
   `+merge`, `+release` or `+migration` or throw a gate switch. A word in backticks is named, not
-  given, and goes through (decision 0070).
+  given, and goes through (decision 0072).
 - A transcript entry marked `isCompactSummary` or `isVisibleInTranscriptOnly` is never read as
   the founder's message. The summary is told to keep their words in backticks, the agents still
-  running, and to merge an earlier summary rather than copy it forward (decisions 0071, 0069).
+  running, and to merge an earlier summary rather than copy it forward (decisions 0073, 0071).
 - The commit reviewer reports six more classes: a test command that cannot fail, an `__eq__`
   answering True, and, in test files, a test that exits, a hook that rewrites a result, an
   assertion that cannot fail and a return before the assertion. Focused and skipped tests are
-  read in more runners' spellings. Reported, never blocked (decision 0072).
+  read in more runners' spellings. Reported, never blocked (decision 0074).
 - A pause ends a turn without what a finish owes when its blocker quotes a message of the
   founder's, or after the Stop gate has refused the session twice in a row; any other pause is
-  judged as a finish, and the refusal says why (decision 0073).
+  judged as a finish, and the refusal says why (decision 0075).
 - The hooks module keeps a status line of the other live sessions, the pull requests waiting
   for `+merge`, the blocked ones and a red suite, and `/sessions` opens a pane with a row each.
-  Read at every turn's end and once a minute, at no token cost (decision 0074).
+  Read at every turn's end and once a minute, at no token cost (decision 0076).
 - A Stop the gate lets end, with none of the chat's agents at work, removes the trees made for
   them that nobody stands in, with an empty `git status` and their work in the trunk;
-  `remove_finished_trees` switches it off with the rest (decision 0075).
+  `remove_finished_trees` switches it off with the rest (decision 0077).
 - A subagent's brief names the cards its session holds: id, title, condition and files
-  (decision 0076).
-- The board's header states that held files are refused to every other session, where it said
-  not to edit them (decision 0077).
-- `claude-bp status` says how often each of this plugin's skills was read since the count began
   (decision 0078).
+- The board's header states that held files are refused to every other session, where it said
+  not to edit them (decision 0079).
+- `claude-bp status` says how often each of this plugin's skills was read since the count began
+  (decision 0080).
 - A gate resolving the stage skips what cannot move the stage the ratchet holds: nothing is
   probed at revenue, migrations are not read at traction, and commits are not counted at all.
-  `claude-bp status` still probes everything (decision 0079).
+  `claude-bp status` still probes everything (decision 0081).
 
 No `migrate._REPAIRS` step. None of the fourteen leaves state behind: a card an older gate
 withdrew under running agents cannot be told from one no work followed, and stays withdrawn;

@@ -35,7 +35,7 @@ CARD_CHARS = 400
 
 def the_card_it_works_under(ctx, session_id: str) -> str:
     """The card the session that started this agent holds, as facts: what the work is, when it
-    is done, the files it names (decision 0076). "" where the session holds none.
+    is done, the files it names (decision 0078). "" where the session holds none.
 
     An agent is handed a task and nothing of the work it is part of: the files that work names
     are what the session's finish measures drift against, and an agent that cannot see them

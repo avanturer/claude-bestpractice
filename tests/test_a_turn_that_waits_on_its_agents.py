@@ -1,4 +1,4 @@
-"""A turn that ends to wait for its own agents is not a finish (decision 0068).
+"""A turn that ends to wait for its own agents is not a finish (decision 0070).
 
 Claude Code has run a spawned agent in the background by default since 2.1.232, and a session
 that hands work to three of them ends its turn to wait for their reports. The Stop gate judged

@@ -292,7 +292,7 @@ def glance(ctx: GitContext, harness_id: str) -> dict[str, Any]:
 
     Drawn by the hooks module and never put in front of the model, so it costs no tokens, and it
     is read by the one person who decides what every session does next: who else is working on
-    what, which pull requests wait for their word, whether the suite is red (decision 0074).
+    what, which pull requests wait for their word, whether the suite is red (decision 0076).
     Live by pid, as the reaper reads them, never by `claude agents --json`, which this would ask
     every minute of every session.
     """

@@ -312,7 +312,7 @@ def instruct_the_compaction(instructions: str) -> NoReturn:
     summary. As plain text: JSON there is read for its fields, and this event discards
     `continue` and `systemMessage`, so the `emit_silent` the checkpoint printed told the summary
     nothing, and what to keep reached it only through the hooks module, which is off wherever
-    mods are (decision 0069).
+    mods are (decision 0071).
     """
     sys.stdout.write(instructions.strip()[:COMPACTION_CHARS] + "\n")
     sys.stdout.flush()

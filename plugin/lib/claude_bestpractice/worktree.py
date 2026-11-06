@@ -1796,7 +1796,7 @@ def release_agents_trees(ctx: GitContext, harness_id: str) -> list[str]:
     Claude Code keeps the tree a WorktreeCreate hook made for a subagent with `isolation:
     worktree` or for a workflow agent, and never runs a removal for it: "Remove those worktrees
     yourself when the work is done." This plugin's hook makes every such tree, and recorded it
-    for no session the reaper reads, so each one an agent ran in stayed (decision 0075).
+    for no session the reaper reads, so each one an agent ran in stayed (decision 0077).
 
     Only a tree nobody stands in, with `git status` empty, whose branch is in the trunk: an
     agent's committed work that never reached it stays, its branch with it. The Stop gate asks

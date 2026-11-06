@@ -219,7 +219,7 @@ if __name__ == "__main__":
 
 class TheAgentIsToldItsCard(SpawnCase):
     """An agent was handed a task and nothing of the work it is part of: the files the session's
-    finish measures drift against were invisible to it (decision 0076)."""
+    finish measures drift against were invisible to it (decision 0078)."""
 
     def brief(self) -> str:
         proc = subprocess.run(

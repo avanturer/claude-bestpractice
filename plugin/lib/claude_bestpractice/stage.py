@@ -115,7 +115,7 @@ def _migrations(root: Path, sig: StageSignals, held: str | None) -> None:
     A users table makes traction and nothing more, so a stage held at traction or above is not
     scanned for one, and the reason says so. On a project whose migrations never spell `create
     table` — Django's `CreateModel`, Alembic's `create_table(` — every migration was read on
-    every tool call (decision 0079).
+    every tool call (decision 0081).
     """
     dirs = [root / rel for rel in _MIGRATION_DIRS if (root / rel).is_dir()]
     if not dirs:
@@ -135,7 +135,7 @@ def _migrations(root: Path, sig: StageSignals, held: str | None) -> None:
 
 def probe(ctx: GitContext, held: str | None = None) -> StageSignals:
     """The signals the repository shows now. `held` is the stage the ratchet already holds: a
-    scan that could only find what that stage already is is not run (decision 0079)."""
+    scan that could only find what that stage already is is not run (decision 0081)."""
     root = ctx.worktree_root
     sig = StageSignals()
 
@@ -247,7 +247,7 @@ def current(
 
     The gates still record — they are the ones with a mandate to change state — and they
     resolve the stage on every tool call, so their probe skips what cannot move the stage
-    the ratchet holds, and at the top it is not run (decision 0079).
+    the ratchet holds, and at the top it is not run (decision 0081).
     """
     previous = recorded_stage(ctx)
     if not record:

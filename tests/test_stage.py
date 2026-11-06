@@ -165,7 +165,7 @@ class TestRatchet(RepoCase):
 
 
 class TestAHeldStageIsNotProbedForWhatCannotMoveIt(RepoCase):
-    """The gates resolve the stage on every tool call (decision 0079). A users table only ever
+    """The gates resolve the stage on every tool call (decision 0081). A users table only ever
     makes traction, and a Django or Alembic project never spells `create table` in its
     migrations, so every one of them was read on every call of a project already held there."""
 

@@ -1499,7 +1499,7 @@ def main() -> None:
     # A prompt this session schedules, or a message it sends another session, comes back as a
     # turn that the hook hearing the founder cannot tell from one they typed. So no word of
     # theirs rides in one: a scheduled `+merge` was a grant the gated session wrote for itself,
-    # and a scheduled `enabled off` a switch it threw (decision 0070).
+    # and a scheduled `enabled off` a switch it threw (decision 0072).
     if event.tool_name in founder.TURN_TEXT:
         carried = founder.written_for_a_turn(event.tool_name, event.tool_input)
         if carried:

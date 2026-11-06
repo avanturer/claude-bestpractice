@@ -201,7 +201,7 @@ def founders_word(prompt: str) -> str:
 # The tools whose text Claude Code later hands a session as a turn of its own, by the field the
 # text is in: a scheduled prompt fires into this session, a message starts a turn in another.
 # UserPromptSubmit fires for each and carries nothing that tells it from a message the founder
-# typed, so a `+merge` in one was a grant the gated session wrote for itself (decision 0070).
+# typed, so a `+merge` in one was a grant the gated session wrote for itself (decision 0072).
 TURN_TEXT = {"CronCreate": "prompt", "ScheduleWakeup": "prompt", "SendMessage": "message"}
 
 # Each grant as a refusal names it: in backticks, as every message of this plugin's names the
@@ -365,7 +365,7 @@ def _from_a_person(entry: dict[str, Any]) -> tuple[str, str, float] | None:
 
     The summary carries no `origin`, so it read as a turn from before the harness marked its
     sender, and a summary told to keep the founder's words keeps them: a `+merge` it repeated
-    was a new word, given by nobody (decision 0071).
+    was a new word, given by nobody (decision 0073).
     """
     if any(entry.get(flag) for flag in _NOBODY_TYPED):
         return None

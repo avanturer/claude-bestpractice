@@ -1,4 +1,4 @@
-"""The tree a chat's agent ran in is put away once it is spent (decision 0075).
+"""The tree a chat's agent ran in is put away once it is spent (decision 0077).
 
 Claude Code keeps the tree a WorktreeCreate hook made for a subagent with `isolation: worktree`
 or for a workflow agent, and runs no removal for it: "Remove those worktrees yourself when the

@@ -57,7 +57,7 @@ CHECKS: list[tuple[str, re.Pattern[str], str]] = [
     # isitdone publishes them (102 of 103 caught on its corpus, none of 89 honest changes
     # flagged) and as arXiv 2610.12822 found them passed between agents: a test command that
     # cannot fail, an object equal to everything, an exit the test chooses, a report rewritten
-    # in a pytest hook (decision 0072). Each is a shape no honest test needs.
+    # in a pytest hook (decision 0074). Each is a shape no honest test needs.
     ("defused-test-command", re.compile(
         r"(?im)\b(?:pytest|jest|vitest|mocha|go\s+test|cargo\s+test|(?:npm|yarn|pnpm)\s+(?:run\s+)?test"
         r"|make\s+test|unittest|rspec|phpunit)\b[^\n]*?\|\|\s*(?:true|exit\s+0|:)(?![\w-])"

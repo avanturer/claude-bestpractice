@@ -4,7 +4,7 @@ A skill is chosen by the model: its description rides in every request, and its 
 when Claude picks it. Ponytail's skill, tested alone, "self-activated zero times" across ten
 sessions (JetBrains, July 2026), and a description no request reaches is always-on context
 bought for nothing. The hooks module tells this module each time one of this plugin's skills is
-expanded; `claude-bp status` says what each came to, and since when (decision 0078). The count
+expanded; `claude-bp status` says what each came to, and since when (decision 0080). The count
 starts at a session start, so a skill never read shows as read none.
 """
 

@@ -1,5 +1,5 @@
 """A prompt a session schedules, or a message it sends, carries no word of the founder's
-(decision 0070).
+(decision 0072).
 
 Claude Code fires UserPromptSubmit for a scheduled task coming due, a `/loop` iteration and a
 message from another session, and the event carries nothing that tells such a turn from one the

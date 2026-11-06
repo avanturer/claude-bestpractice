@@ -532,7 +532,7 @@ def main() -> None:
     me = build_record(ctx, event)
     sessions.register(ctx, me)
     sessions.learn_names(ctx, running)
-    # From here a skill of this plugin's that nobody reads shows as read none (decision 0078).
+    # From here a skill of this plugin's that nobody reads shows as read none (decision 0080).
     with contextlib.suppress(Exception):
         skilluse.counting(ctx)
     me = sessions.get(ctx, me.session_id) or me

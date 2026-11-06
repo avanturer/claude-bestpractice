@@ -10,7 +10,7 @@ has already collapsed, which recovers nothing.
 
 What it prints is the other half: Claude Code hands the stdout of this hook to the summary
 as its instructions, so the summary is told what to keep, this session's card among it,
-before anything is lost (decision 0069).
+before anything is lost (decision 0071).
 
 Extraction is deliberately cheap — no summarisation, no model. A stateful model
 reducer in front of a durable queue is a trap: you persist the fragments and lose the
@@ -55,7 +55,7 @@ MAX_TURNS = 3
 
 # What the compaction summary is told to keep, by the hook that saves the window first. The
 # hooks module used to say it, through `session.compact`; the hook's own stdout is the way
-# Claude Code documents, and it holds where mods are off (decision 0069).
+# Claude Code documents, and it holds where mods are off (decision 0071).
 KEEP = (
     "Keep, word for word: the founder's requests and decisions, every `+merge`, `+release` and "
     "`+migration` they gave, in backticks as written here, and what it covered, the task card "

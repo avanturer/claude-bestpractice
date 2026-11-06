@@ -5,7 +5,7 @@
 // harness's WebSearch is answered by Parallel and then Exa (decision 0049), a listing of the
 // agents a session can message says what each session on the repository is doing (decision
 // 0050), a subagent runs no lower than the founder's floor (decision 0051), and the founder sees
-// the board beside the chat, a status line and a pane the model is never sent (decision 0074).
+// the board beside the chat, a status line and a pane the model is never sent (decision 0076).
 // What any of
 // that should be is asked of the plugin's Python library through
 // `bin/claude-bp-mod`; whatever goes wrong here leaves the call as Claude Code made it.
@@ -233,7 +233,7 @@ export const register: Register = (on) => {
   }).catch(async ($, e, next) => next(e))
 
   // Each time one of this plugin's skills is read, counted where `claude-bp status` reports it:
-  // a skill nobody's request reaches is always-on context bought for nothing (decision 0078).
+  // a skill nobody's request reaches is always-on context bought for nothing (decision 0080).
   on('skill.prompt', async ($, e, next) => {
     const expanded = await next(e)
     if (e.pluginName === $.plugin.name) void ask($, 'skill', { skill: e.skill })

@@ -1,4 +1,4 @@
-"""What the founder sees beside the chat: the board as one status line and a pane (decision 0074).
+"""What the founder sees beside the chat: the board as one status line and a pane (decision 0076).
 
 The hooks module draws it under the prompt, in the terminal and in VS Code, and never sends it
 to the model. The library answers what it says, through `bin/claude-bp-mod board`.
