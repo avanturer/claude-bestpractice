@@ -235,8 +235,10 @@ def _sessions_block(ctx: GitContext, others: list[SessionRecord], leases: dict,
     if not others:
         return ["OTHER LIVE SESSIONS: none. This session is alone on the repository."]
 
-    out = [f"OTHER LIVE SESSIONS ({len(others)}) — do not edit files they hold; SendMessage "
-           "reaches each by the name its row starts with:"]
+    # Facts, never an order: the block is fenced as data, and Claude Code's hooks reference warns
+    # that injected text framed as a command trips the model's prompt-injection defences.
+    out = [f"OTHER LIVE SESSIONS ({len(others)}) — files they hold are refused to every other "
+           "session; SendMessage reaches each by the name its row starts with:"]
     for rec in sorted(others, key=lambda r: r.heartbeat_at, reverse=True):
         out.append(
             f"  - {sessions.label(rec)} on {rec.branch} "

@@ -61,9 +61,11 @@ KEEP = (
     "`+migration` they gave, in backticks as written here, and what it covered, the task card "
     "ids and titles in play, the files "
     "changed and why, each failing test by name with its first error line, and what was tried "
-    "and failed. Keep the path a claude-bestpractice digest names for its whole output instead "
-    "of the output. Drop passing test lists, install and build logs, and file contents that can "
-    "be read again."
+    "and failed, and the agents and background commands still running, by what they were sent "
+    "to do. Keep the path a claude-bestpractice digest names for its whole output instead of the "
+    "output. Where an earlier summary is in the conversation, do not copy it forward: keep what "
+    "is still true, drop what is stale, and merge it into this one. Drop passing test lists, "
+    "install and build logs, and file contents that can be read again."
 )
 
 # Cards named to the summary, and how much of each. The ledger holds the rest, and the restore

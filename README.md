@@ -139,7 +139,7 @@ the clone no longer has is not shown, and a branch's green and run records go wi
 ### Sessions that see each other
 
 ```
-OTHER LIVE SESSIONS (2) — do not edit files they hold; SendMessage reaches each by the name its row starts with:
+OTHER LIVE SESSIONS (2) — files they hold are refused to every other session; SendMessage reaches each by the name its row starts with:
   - ledger-export-3c (a3f81c22) on feat/export [ledger-export] active 40s ago
       touched: src/billing.js, src/csv.js
       holds: src/billing.js

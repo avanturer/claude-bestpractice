@@ -7,9 +7,10 @@ date: 2026-11-06
 ## Decision
 **The checkpoint prints what the compaction summary keeps, as plain text**, which Claude Code
 uses as the summary's instructions: the founder's words and every `+merge` with what it covered,
-the cards in play, the failing tests, and this session's claimed cards by id, title and
-condition. Under two thousand characters; Claude Code cuts at ten thousand. The hooks module no
-longer says it.
+the cards in play, the failing tests, the agents still running, and this session's claimed cards
+by id, title and condition. An earlier summary is merged, not copied forward: what is still true
+kept, what is stale dropped, as DeepSeek Harness instructs its own. Under two thousand
+characters; Claude Code cuts at ten thousand. The hooks module no longer says it.
 
 ## Why
 > изучи что такое самый новые deepseek harness о котором говорят, самые современные статьи и
