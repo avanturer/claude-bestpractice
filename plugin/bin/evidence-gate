@@ -275,6 +275,13 @@ def _allow(ctx, rec: sessions.SessionRecord, cfg, opener: str, shell: str,
     _bump_blocks(ctx, rec, 0)
     sessions.release_all(ctx, rec.session_id)
     said, held = _closed_the_tree(ctx, rec, cfg, shell)
+    # And the trees this chat's agents ran in, which Claude Code leaves to the hook that made
+    # them (decision 0075). Never what keeps the turn from ending well.
+    if cfg.remove_finished_trees:
+        with contextlib.suppress(Exception):
+            spent = worktree.release_agents_trees(ctx, opener)
+            if spent:
+                said = f"{said} Removed {len(spent)} finished agent tree(s).".strip()
     if held:
         # Held in a tree that is gone, its next git command is refused and so is the next
         # task's first, so it is asked to leave while the turn is still open (#271).
