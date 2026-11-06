@@ -190,22 +190,37 @@ class TestAHeldStageIsNotProbedForWhatCannotMoveIt(RepoCase):
     def test_held_at_the_top_nothing_is_probed(self):
         from unittest import mock
 
+        from claude_bestpractice import store
+
         self.held_at(stage.REVENUE)
         with mock.patch.object(stage, "probe", side_effect=AssertionError("probed")):
-            self.assertEqual(stage.REVENUE, stage.current(self.ctx())[0])
+            resolved, sig = stage.current(self.ctx())
+        self.assertEqual(stage.REVENUE, resolved)
+        self.assertIn("not probed", " ".join(sig.reasons))
+        # Still written: `reindex` rebuilds the signals file through this call.
+        recorded = store.read_json(store.tier_b(self.ctx(), stage.SIGNALS_FILE), default={})
+        self.assertEqual(stage.REVENUE, recorded.get("stage"))
 
-    def test_the_gates_count_no_commits_and_status_does(self):
+    def test_status_still_reads_what_a_gate_skips(self):
+        """`claude-bp status` shows the reasons: a gate's "probe said prototype" over migrations
+        it never read would be a claim nobody checked."""
+        self.write("migrations/0001_initial.sql", "CREATE TABLE users (id serial);\n")
+        self.held_at(stage.TRACTION)
+        _, shown = stage.current(self.ctx(), record=False)
+        self.assertIn("user-shaped table in 0001_initial.sql", shown.reasons)
+        _, gated = stage.current(self.ctx())
+        self.assertIn("not read", " ".join(gated.reasons))
+        self.assertNotIn("user-shaped table in 0001_initial.sql", gated.reasons)
+
+    def test_resolving_the_stage_starts_no_process(self):
+        """It ran `git rev-list --count` on every tool call, for a number nothing read."""
+        import subprocess
         from unittest import mock
 
-        from claude_bestpractice import gitctx
-
-        asked = []
-        real = gitctx._run
-        with mock.patch.object(gitctx, "_run", side_effect=lambda args, *rest, **kw: asked.append(args) or real(args, *rest, **kw)):
-            stage.current(self.ctx())
-            self.assertFalse(any("rev-list" in args for args in asked))
-            stage.current(self.ctx(), record=False)
-            self.assertTrue(any("rev-list" in args for args in asked))
+        ctx = self.ctx()
+        with mock.patch.object(subprocess, "Popen", side_effect=AssertionError("a process ran")):
+            stage.current(ctx)
+            stage.current(ctx, record=False)
 
 
 class TestGates(unittest.TestCase):

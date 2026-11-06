@@ -11,6 +11,7 @@ it is ignored. Deleting a CI file must not silently disable the gates it turned 
 
 from __future__ import annotations
 
+import itertools
 import json
 import re
 import time
@@ -59,6 +60,7 @@ _PAYMENT_DEPS = (
 _AUTH_DEPS = ("next-auth", "authlib", "passport", "devise", "supabase", "clerk", "auth0", "firebase")
 _LIVE_KEY = re.compile(r"\b(?:sk|pk|rk)_live_[A-Za-z0-9]{8,}")
 _MIGRATION_DIRS = ("migrations", "db/migrate", "prisma/migrations", "alembic/versions")
+_MIGRATIONS_READ = 200
 _USER_TABLE = re.compile(r"(?i)\bcreate\s+table\s+(?:if\s+not\s+exists\s+)?[\"`']?(users?|accounts?|sessions?)\b")
 
 
@@ -72,7 +74,6 @@ class StageSignals:
     has_payment_dep: bool = False
     has_live_key_shape: bool = False
     has_error_tracking: bool = False
-    commits: int = 0
     reasons: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -85,7 +86,6 @@ class StageSignals:
             "has_payment_dep": self.has_payment_dep,
             "has_live_key_shape": self.has_live_key_shape,
             "has_error_tracking": self.has_error_tracking,
-            "commits": self.commits,
             "reasons": self.reasons,
         }
 
@@ -109,7 +109,31 @@ def _manifest_text(root: Path) -> str:
     return "\n".join(chunks)
 
 
-def probe(ctx: GitContext, held: str | None = None, count_commits: bool = True) -> StageSignals:
+def _migrations(root: Path, sig: StageSignals, held: str | None) -> None:
+    """Whether the repository has migrations, and below traction whether one makes a users table.
+
+    A users table makes traction and nothing more, so a stage held at traction or above is not
+    scanned for one, and the reason says so. On a project whose migrations never spell `create
+    table` — Django's `CreateModel`, Alembic's `create_table(` — every migration was read on
+    every tool call (decision 0079).
+    """
+    dirs = [root / rel for rel in _MIGRATION_DIRS if (root / rel).is_dir()]
+    if not dirs:
+        return
+    sig.has_migrations = True
+    if ORDER.get(held or "", 0) >= ORDER[TRACTION]:
+        sig.reasons.append(f"migrations directory present, not read: the ratchet holds {held}")
+        return
+    sig.reasons.append("migrations directory present")
+    files = (path for found in dirs for path in found.rglob("*") if path.is_file())
+    for path in itertools.islice(files, _MIGRATIONS_READ):
+        if _USER_TABLE.search(_read(path, 40_000)):
+            sig.has_user_table = True
+            sig.reasons.append(f"user-shaped table in {path.name}")
+            return
+
+
+def probe(ctx: GitContext, held: str | None = None) -> StageSignals:
     """The signals the repository shows now. `held` is the stage the ratchet already holds: a
     scan that could only find what that stage already is is not run (decision 0079)."""
     root = ctx.worktree_root
@@ -125,25 +149,7 @@ def probe(ctx: GitContext, held: str | None = None, count_commits: bool = True) 
             sig.reasons.append(f"deploy config {name}")
             break
 
-    # A users table makes traction and nothing more, so a stage held at traction or above is
-    # not scanned for one. On a project whose migrations never spell `create table` — Django's
-    # `CreateModel`, Alembic's `create_table(` — every migration was read on every tool call.
-    scan = ORDER.get(held or "", 0) < ORDER[TRACTION]
-    migration_files: list[Path] = []
-    for rel in _MIGRATION_DIRS:
-        d = root / rel
-        if d.is_dir():
-            sig.has_migrations = True
-            if scan:
-                migration_files.extend([p for p in d.rglob("*") if p.is_file()][:200])
-    if sig.has_migrations:
-        sig.reasons.append("migrations directory present")
-
-    for path in migration_files[:200]:
-        if _USER_TABLE.search(_read(path, 40_000)):
-            sig.has_user_table = True
-            sig.reasons.append(f"user-shaped table in {path.name}")
-            break
+    _migrations(root, sig, held)
 
     manifest = _manifest_text(root)
     if any(dep in manifest for dep in _AUTH_DEPS):
@@ -164,13 +170,6 @@ def probe(ctx: GitContext, held: str | None = None, count_commits: bool = True) 
             sig.has_live_key_shape = True
             sig.reasons.append(f"live-mode key shape in {name}")
             break
-
-    # Shown by `claude-bp status`, read by no gate: a process a tool call does not need.
-    if count_commits:
-        from .gitctx import _run
-
-        count = _run(["rev-list", "--count", "HEAD"], root, check=False)
-        sig.commits = int(count) if count.isdigit() else 0
     return sig
 
 
@@ -200,50 +199,66 @@ def recorded_stage(ctx: GitContext) -> str | None:
     return max(reached, key=lambda name: ORDER[name]) if reached else None
 
 
+def _resolve(sig: StageSignals, previous: str | None, override: str | None) -> str:
+    """The stage `sig` shows, raised by an override and held by the ratchet, never lowered.
+
+    An override is honoured upward but not downward: the point of the ratchet is that
+    a deleted CI file cannot silently switch off the gates it enabled. Where the ratchet
+    holds, it says so among `sig`'s reasons.
+    """
+    detected = classify(sig)
+    if override and override in ORDER:
+        detected = override if ORDER[override] > ORDER[detected] else detected
+    if previous in ORDER and ORDER[previous] > ORDER[detected]:
+        sig.reasons.append(f"ratchet held at {previous} (probe said {detected})")
+        return previous
+    return detected
+
+
+def _record(ctx: GitContext, resolved: str, sig: StageSignals) -> None:
+    """The ratchet's marker for `resolved`, written once, and the signals that resolved it."""
+    marker = _reached_path(ctx, resolved)
+    # Never for the floor. `prototype` is order 0, so a `reached-prototype.json` cannot
+    # prevent a regression — there is nothing below it to regress to — and writing one
+    # put an untracked file into the working tree of every repository that merely
+    # started a session. Reported from a real install where `git status` must be clean.
+    # A marker above the floor is real state, and is yours to commit.
+    if ORDER[resolved] > 0 and not marker.exists():
+        # A constant, and deliberately so: anything varying here — a timestamp, a
+        # host, a signal dump — reintroduces the conflict this shape exists to remove.
+        store.write_json(marker, {"stage": resolved}, mode=0o644)
+
+    store.write_json(
+        store.tier_b(ctx, SIGNALS_FILE),
+        {"stage": resolved, "observed_at": time.time(), "signals": sig.to_dict()},
+    )
+
+
 def current(
     ctx: GitContext, override: str | None = None, record: bool = True
 ) -> tuple[str, StageSignals]:
     """Resolve the stage, applying the ratchet so it never regresses.
 
-    An override is honoured upward but not downward: the point of the ratchet is that
-    a deleted CI file cannot silently switch off the gates it enabled.
-
     `record=False` resolves without writing anything. `claude-bp status` needs that: it
     was creating `.claude/claude-bestpractice/stage/reached-<stage>.json` in the working
     tree and leaving it untracked, so merely *looking* at the repository dirtied it. A
-    command named `status` must not mutate what it reports on. The gates still record —
-    they are the ones with a mandate to change state.
+    command named `status` must not mutate what it reports on, and it shows every signal,
+    so it probes them all.
+
+    The gates still record — they are the ones with a mandate to change state — and they
+    resolve the stage on every tool call, so their probe skips what cannot move the stage
+    the ratchet holds, and at the top it is not run (decision 0079).
     """
     previous = recorded_stage(ctx)
-    # Held at the top, nothing a probe finds can move it: the gates ask on every tool call.
-    if record and previous == REVENUE:
-        return REVENUE, StageSignals(reasons=[f"ratchet held at {REVENUE}"])
-    sig = probe(ctx, held=previous, count_commits=not record)
-    detected = classify(sig)
-    if override and override in ORDER:
-        detected = override if ORDER[override] > ORDER[detected] else detected
-
-    resolved = detected
-    if previous in ORDER and ORDER[previous] > ORDER[detected]:
-        resolved = previous
-        sig.reasons.append(f"ratchet held at {previous} (probe said {detected})")
-
-    if record:
-        marker = _reached_path(ctx, resolved)
-        # Never for the floor. `prototype` is order 0, so a `reached-prototype.json` cannot
-        # prevent a regression — there is nothing below it to regress to — and writing one
-        # put an untracked file into the working tree of every repository that merely
-        # started a session. Reported from a real install where `git status` must be clean.
-        # A marker above the floor is real state, and is yours to commit.
-        if ORDER[resolved] > 0 and not marker.exists():
-            # A constant, and deliberately so: anything varying here — a timestamp, a
-            # host, a signal dump — reintroduces the conflict this shape exists to remove.
-            store.write_json(marker, {"stage": resolved}, mode=0o644)
-
-        store.write_json(
-            store.tier_b(ctx, SIGNALS_FILE),
-            {"stage": resolved, "observed_at": time.time(), "signals": sig.to_dict()},
-        )
+    if not record:
+        sig = probe(ctx)
+        return _resolve(sig, previous, override), sig
+    if previous == REVENUE:
+        resolved, sig = REVENUE, StageSignals(reasons=[f"ratchet held at {REVENUE}, the top: not probed"])
+    else:
+        sig = probe(ctx, held=previous)
+        resolved = _resolve(sig, previous, override)
+    _record(ctx, resolved, sig)
     return resolved, sig
 
 
