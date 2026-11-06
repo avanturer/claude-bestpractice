@@ -219,3 +219,19 @@ test('a board the library has nothing for clears the line, as enabled off does',
   await $.command.run({ command: 'sessions', args: '' })
   expect(shown).toEqual([undefined])
 })
+
+test('a read of one of this plugin\'s skills is counted, and another plugin\'s is not', async ($, on) => {
+  inASession(on as On)
+  const asked: string[] = []
+  on('process.run', async ($$: unknown, e: { argv: readonly string[] }) => {
+    asked.push(e.argv[e.argv.length - 1])
+    return { value: { exitCode: 0, stdout: '{}', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('skill.prompt', async (_: unknown, e: { text: string }) => ({ text: e.text }))
+  const skill = (pluginName: string, name: string) => $.skill.prompt({
+    skill: name, text: 'the skill', frontmatter: {}, source: 'plugin', pluginName,
+  } as never)
+  await skill('bestpractice', 'llm-first-code')
+  await skill('superpowers', 'brainstorming')
+  expect(asked.filter((what) => what === 'skill').length).toBe(1)
+})

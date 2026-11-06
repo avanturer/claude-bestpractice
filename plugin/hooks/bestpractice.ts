@@ -232,6 +232,14 @@ export const register: Register = (on) => {
     return h(Box, { flexDirection: 'column' }, ...rows.map((row) => h(Text, null, row)))
   }).catch(async ($, e, next) => next(e))
 
+  // Each time one of this plugin's skills is read, counted where `claude-bp status` reports it:
+  // a skill nobody's request reaches is always-on context bought for nothing (decision 0078).
+  on('skill.prompt', async ($, e, next) => {
+    const expanded = await next(e)
+    if (e.pluginName === $.plugin.name) void ask($, 'skill', { skill: e.skill })
+    return expanded
+  }).catch(async ($, e, next) => next(e))
+
   on('agent.spawn', async ($, e, next) => {
     if (e.fork) return next(e)
     const floor = String((await ask($, 'settings', {})).subagent_min_model ?? '')
