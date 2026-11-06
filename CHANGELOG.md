@@ -1,5 +1,62 @@
 # Changelog
 
+## v2.10.0
+
+What current Claude Code and DeepSeek Harness showed this plugin missing: a fork is no longer
+asked for a tier, a gate that cannot run refuses, a turn that waits on its own agents is not
+judged as a finish, the compaction summary is told what to keep by the hook that saves the
+window, and a prompt a session schedules carries no word of the founder's.
+
+### What broke
+
+Found by reading Claude Code's hook reference and changelog through 2.1.319 against what this
+plugin does, beside DeepSeek Harness (`dsh`, August 2026), whose compaction and goal loop take
+the same questions on.
+
+**Every fork was refused once.** Claude Code runs forks by default, in VS Code and the desktop
+app since 2.1.302, on the session's own model whatever the call names. The tier rule looked a
+fork up as an agent called `fork`, found nothing pinning a model, and refused it, so the session
+added a `model` the harness discards and spawned again.
+
+**A gate that could not run let every call through.** Claude Code runs a tool on any exit but 2.
+`hookio.guard` turns a failure inside `pre-tool` into a refusal, and nothing turned one before
+it: a library that does not import, a missing `python3`, the fifteen-second timeout.
+
+**A turn waiting for its agents was judged as finished.** Agents run in the background by
+default since 2.1.232, and a session that hands work to three of them ends its turn to wait.
+The Stop gate ran the suite over files they were still writing, filed UNVERIFIED for work not
+done, withdrew the card a message had opened as unplanned, and handed back the leases and the
+tree under them. Stop carries `background_tasks` for exactly this; nothing read it.
+
+**The checkpoint told the compaction summary nothing.** Claude Code uses a PreCompact hook's
+stdout as the summary's instructions. This one printed `{"continue": true, "suppressOutput":
+true}`, fields the event discards; the keep-list reached the summary only through the hooks
+module, which is off wherever mods are.
+
+**A scheduled prompt could carry the founder's word.** Claude Code fires UserPromptSubmit for a
+scheduled task, a `/loop` iteration and a message from another session, with nothing telling
+such a turn from one the founder typed, and `prompt-capture` records `+merge` and gate switches
+from that event. A session could schedule `+merge` a minute out.
+
+### What changed
+
+- `subagent_type: "fork"` names no tier and is not refused for it; it still counts toward
+  `subagent_fanout` (decision 0066).
+- The `pre-tool` entry says `"onFailure": "block"`: Claude Code 2.1.295 and later refuse the
+  call when the gate cannot start, crashes before its guard or times out (decision 0067).
+- A Stop whose `background_tasks` names a running subagent, workflow, teammate or cloud session
+  runs no suite, files nothing, demands no pull request, and keeps the card, the leases and the
+  tree; what the other sessions are owed is still asked. A background shell or monitor spares
+  nothing (decision 0068).
+- The checkpoint prints the keep-list as plain text, with this session's claimed cards by id,
+  title and condition; the hooks module's `session.compact` is gone (decision 0069).
+- `CronCreate`, `ScheduleWakeup` and `SendMessage` are refused when their text would grant
+  `+merge`, `+release` or `+migration` or throw a gate switch. A word in backticks is named, not
+  given, and goes through (decision 0070).
+
+No `migrate._REPAIRS` step. None of the five leaves state behind: a card an older gate withdrew
+under running agents cannot be told from one no work followed, and stays withdrawn.
+
 ## v2.9.0
 
 The founder's `+merge` covers a stack's pull request that GitHub closed and that was opened again

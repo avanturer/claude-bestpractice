@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-2.9.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.10.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-2541%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -302,6 +302,14 @@ unverified, and no demand for a card. The paused card says what the work is and 
 on. The suite is asked for again when the card is claimed and the work finished, and a merge
 still needs a green run.
 
+**Waiting for its own agents is not a finish either.** Claude Code runs a spawned agent in the
+background by default, and a session that hands work to three of them ends its turn to wait for
+their reports. While one of them is still at work — a subagent, a workflow, a teammate — the gate
+runs no suite over the files they are writing, files nothing as unverified, demands no pull
+request, and keeps the card, the leases and the tree they work in. What the other sessions are
+owed is still asked, and the finish after the reports is judged in full. A background shell or
+a monitor spares nothing: a dev server left running never reports back.
+
 ### A pull request is an obligation, not a notification
 
 The failure this closes is a session that agrees the change, opens the pull request, and
@@ -453,7 +461,10 @@ is why the clause around a word decides whether it counts. The prefix is a
 symbol rather than the word "ok" because "ok" is English and the gate should not depend on
 which language you happen to be writing in. Nothing the session writes can stand in for these — only your own turns reach the
 hook that records them, which is the whole point: the gate on an irreversible action must
-not be openable by the party it gates.
+not be openable by the party it gates. That includes the turns a session can start for
+itself: a prompt it schedules (`CronCreate`, `/loop`) or a message it sends another session
+reaches that hook as a turn, so one carrying a word of yours, or a gate switch, is refused
+before it is sent. Written in backticks, a word is named rather than given, and goes through.
 
 ### Slop caught mechanically — in your repository
 
@@ -537,13 +548,16 @@ carrying anything that reads as a credential is refused before it leaves. Querie
 policy](https://parallel.ai/privacy-policy)) and Exa ([privacy policy](https://exa.ai/privacy-policy));
 Exa refuses requests from some regions, and there search falls through to WebSearch.
 
-**Compaction keeps what you said.** It is told to keep your requests and decisions, every
-`+merge` and what it covered, the cards in play, the failing tests and the paths of kept
-outputs, and to drop logs that can be read again.
+**Compaction keeps what you said.** The hook that saves the window before a compaction tells
+the summary what to keep: your requests and decisions, every `+merge` and what it covered, the
+cards in play — this session's own by id, title and condition — the failing tests and the paths
+of kept outputs, and to drop logs that can be read again.
 
 **Sessions find each other.** When a session lists the agents it can message, each other
 session on the repository is named with its card, branch and tree, so a message goes to the
 one whose work it is. A subagent spawned on a tier below `subagent_min_model` (`sonnet`) runs on it.
+A fork is never asked for a tier: Claude Code runs it on the session's own model whatever the
+call names.
 
 Each is a switch you say: `compress_output off`, `route_search off`, `subagent_min_model off`.
 
@@ -590,12 +604,12 @@ In a session: `/bestpractice:status` · `/bestpractice:plan` · `/bestpractice:r
 | `setup` | Setup | fails open | Derives the knowledge layer, creates the plan, seeds the stage |
 | `session-start` | SessionStart | fails open | Reaps the dead, registers, injects board + plan + stage |
 | `prompt-capture` | UserPromptSubmit | fails open | Records the verbatim task. **Injects nothing** |
-| `pre-tool` | PreToolUse | **fails closed** | Call ceiling, loop break, secret pre-write scan, leases, migration and deploy gating, subagent tier and fan-out |
+| `pre-tool` | PreToolUse | **fails closed**, even when it cannot start (`onFailure`) | Call ceiling, loop break, secret pre-write scan, leases, migration and deploy gating, subagent tier and fan-out, no founder's word in a scheduled prompt or message |
 | `review-commit` | `if: Bash(git commit:*)` | async rewake | Reviews this turn's diff; wakes you only when there is something to say |
 | `worktree-create` | WorktreeCreate | fails open | Names it, seeds trust, derives a private port and database |
 | `subagent-brief` | SubagentStart | fails open | Non-goals, entities and a query-biased map to agents that inherit no rules |
-| `checkpoint` | PreCompact | fails open | Extractive checkpoint, zero model calls, secrets scrubbed. **Never refuses a compaction** — a refusal there reaches the founder, never the model (decision 0021) |
-| `evidence-gate` | Stop | **fails closed** | Scope drift, test evidence, clean re-run, a turn ending on an unanswered block; harvests decision drafts; asks once for what only this window knows; puts a finished worktree away |
+| `checkpoint` | PreCompact | fails open | Extractive checkpoint, zero model calls, secrets scrubbed; tells the summary what to keep. **Never refuses a compaction** — a refusal there reaches the founder, never the model (decision 0021) |
+| `evidence-gate` | Stop | **fails closed** | Scope drift, test evidence, clean re-run, a turn ending on an unanswered block; harvests decision drafts; asks once for what only this window knows; puts a finished worktree away; waits while the session's own agents work |
 | `pr-opened` | PostToolUse `.*(create\|update\|merge)_pull_request`, and `Bash` if it runs `gh pr` | fails open | Files the pull request just opened and learns its number, so the merge gate can tell its own from somebody else's; settles one closed through the tool; finishes a merge once it has run |
 | `permission-denied` | PermissionDenied | fails open | Records what auto mode refused, so a repeated prompt can be traced to its rule; never overturns one |
 

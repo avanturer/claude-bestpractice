@@ -4,7 +4,7 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-2.9.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.10.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-2541%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
@@ -244,6 +244,12 @@ setup、teardown 或收集阶段，且没有任何断言失败——会被单独
 这一轮就此结束：不运行测试套件，不记录"未经验证的完成"，也不要求再领一张卡片。暂停的卡片写明
 这是什么工作、在等什么。卡片被重新领取、工作完成时，才会再次要求测试套件；合并仍然需要一次绿色的运行。
 
+**等待自己的代理也不是完成。** Claude Code 默认在后台运行派出的代理，把工作交给三个代理的会话会结束
+这一轮来等它们的报告。只要其中还有一个在工作——子代理、workflow、teammate——闸门就不会在它们正在写的
+文件上运行测试套件，不记录未经验证的完成，不要求 PR，并保留卡片、租约和它们所在的工作树。其他会话应得
+的检查照常进行，报告回来之后的那次完成会被完整评判。后台 shell 或 monitor 不算：一直开着的 dev 服务器
+永远不会回报。
+
 ### 三件需要你亲口许可的事
 
 有些操作无法通过重跑来撤销，而且再多的绿色也不能说明那正是你想要的。每一件都在等待**你
@@ -278,7 +284,9 @@ setup、teardown 或收集阶段，且没有任何断言失败——会被单独
 `+merge`"——一句拒绝——却批准了合并，两个未经批准的 PR 因此进入了会触发部署的主干。所以由词周围的分句决定它是否算数。前缀是符号
 而非英文单词 "ok"，因为闸门不应取决于你此刻用哪种语言书写。会话写下
 的任何内容都无法代替这些词：只有你自己的发言才能到达记录它们的钩子。这正是关键所在——
-守卫不可逆操作的闸门，不该由它所守卫的那一方来打开。
+守卫不可逆操作的闸门，不该由它所守卫的那一方来打开。会话自己能发起的轮次也一样：它排定的提示
+（`CronCreate`、`/loop`）或发给另一个会话的消息，会作为一轮到达这个钩子，所以带有你的词或闸门开关的
+这类文本在发出之前就会被拒绝。写在反引号里的词只是被提及，而不是被给出，可以通过。
 
 ### 机械地抓住垃圾代码——在你的仓库里
 
@@ -342,9 +350,9 @@ claude-bp-ci off        # 移除 pre-push 钩子
 
 **搜索走插件自带的 Parallel 和 Exa。** 两个服务器随插件提供，无需密钥。WebSearch 由 Parallel 回答；Parallel 一无所获时由 Exa 回答；两者都没有结果时才由 WebSearch 自己回答。Exa 用于 Parallel 漏掉的那一件事，在问过 Parallel 之前会被退回。Parallel 返回的错误（包括免费额度的速率限制）也算问过它，搜索会继续走向 Exa 和 WebSearch。任何看起来像凭据的查询都会在发出前被拒绝。查询会发送给 Parallel（[隐私政策](https://parallel.ai/privacy-policy)）和 Exa（[隐私政策](https://exa.ai/privacy-policy)）；Exa 拒绝部分地区的请求，那里的搜索会转到 WebSearch。
 
-**压缩会保留你说过的话。** 它被要求保留你的请求和决定、每个 `+merge` 及其范围、进行中的卡片、失败的测试和已保存输出的路径，丢弃可以重新读取的日志。
+**压缩会保留你说过的话。** 压缩前保存上下文窗口的那个钩子会告诉摘要要保留什么：你的请求和决定、每个 `+merge` 及其范围、进行中的卡片（本会话的卡片带编号、标题和完成条件）、失败的测试和已保存输出的路径，并丢弃可以重新读取的日志。
 
-**会话能找到彼此。** 当一个会话列出可以发消息的代理时，仓库里的每个其他会话都会附上它的卡片、分支和工作树，消息因此发给负责那项工作的会话。以低于 `subagent_min_model`（`sonnet`）的级别启动的子代理会以该级别运行。
+**会话能找到彼此。** 当一个会话列出可以发消息的代理时，仓库里的每个其他会话都会附上它的卡片、分支和工作树，消息因此发给负责那项工作的会话。以低于 `subagent_min_model`（`sonnet`）的级别启动的子代理会以该级别运行。fork 不需要指定级别：无论调用里写了什么，Claude Code 都在会话自己的模型上运行它。
 
 每一项都是你说出来的开关：`compress_output off`、`route_search off`、`subagent_min_model off`。
 
@@ -390,12 +398,12 @@ claude-bp-ci off        # 移除 pre-push 钩子
 | `setup` | Setup | 失败放行 | 推导知识层，创建计划，播种阶段 |
 | `session-start` | SessionStart | 失败放行 | 回收死会话，注册自身，注入看板 + 计划 + 阶段 |
 | `prompt-capture` | UserPromptSubmit | 失败放行 | 逐字记录任务。**不注入任何东西** |
-| `pre-tool` | PreToolUse | **失败拦截** | 调用上限、循环打断、写入前密钥扫描、租约、迁移与部署管控、子智能体的档位与数量 |
+| `pre-tool` | PreToolUse | **失败拦截**，无法启动时也拦截（`onFailure`） | 调用上限、循环打断、写入前密钥扫描、租约、迁移与部署管控、子智能体的档位与数量、排定的提示或消息中不得有创始人的词 |
 | `review-commit` | `if: Bash(git commit:*)` | 异步唤醒 | 审查本轮的 diff；只在确实有话要说时才叫醒你 |
 | `worktree-create` | WorktreeCreate | 失败放行 | 命名、播种信任、推导私有端口与数据库 |
 | `subagent-brief` | SubagentStart | 失败放行 | 把非目标、实体和按查询偏置的代码图交给不继承任何规则的子智能体 |
-| `checkpoint` | PreCompact | 失败放行 | 抽取式检查点，零模型调用，密钥已清洗。**从不拒绝压缩** —— 该事件上的拒绝只有创始人看得到，模型看不到（决策 0021） |
-| `evidence-gate` | Stop | **失败拦截** | 范围漂移、测试证据、干净重跑、以未处理的拦截收场的一轮；顺带收割决策草稿；就只有这个上下文窗口知道的东西索要一次记录；收走已完成的 worktree |
+| `checkpoint` | PreCompact | 失败放行 | 抽取式检查点，零模型调用，密钥已清洗；告诉摘要要保留什么。**从不拒绝压缩** —— 该事件上的拒绝只有创始人看得到，模型看不到（决策 0021） |
+| `evidence-gate` | Stop | **失败拦截** | 范围漂移、测试证据、干净重跑、以未处理的拦截收场的一轮；顺带收割决策草稿；就只有这个上下文窗口知道的东西索要一次记录；收走已完成的 worktree；会话自己的代理还在工作时等待 |
 | `pr-opened` | PostToolUse `.*(create\|update\|merge)_pull_request`，以及运行 `gh pr` 的 `Bash` | 失败放行 | 登记刚打开的 pull request 并记下它的编号，让合并门区分自己的和别人的；通过工具关闭的会被结清；合并真正完成后才收尾 |
 | `permission-denied` | PermissionDenied | 失败放行 | 记录 auto mode 拒绝了什么，让重复出现的询问能追溯到规则；从不推翻拒绝 |
 
