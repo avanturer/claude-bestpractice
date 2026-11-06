@@ -77,6 +77,10 @@ class Artifact:
     # was, and the report that did was deleted with the gate's temp directory (#266).
     errors: int = 0
     first: str = ""
+    # How many of `errors` broke because a connection to a server the test uses was lost or
+    # refused, as the driver or the socket said it (`DISCONNECTED`): the database or service
+    # before any of the code under test answered (#289).
+    disconnected: int = 0
 
 
 @dataclass
@@ -137,7 +141,38 @@ def _parse_junit(path: Path, mtime: float) -> Artifact | None:
     passed = executed > 0 and failed == 0
     detail = _detail(executed, failed, skipped)
     return Artifact(path, mtime, passed, total, failed, detail, skipped,
-                    failures=_junit_failures(root), errors=errors, first=_junit_first(root))
+                    failures=_junit_failures(root), errors=errors, first=_junit_first(root),
+                    disconnected=_junit_disconnected(root))
+
+
+# What a database driver or a socket says when the connection a test was given is lost or never
+# made: libpq's words (psycopg, asyncpg's server messages, SQLAlchemy wrapping either), MySQL's,
+# and the OS's. Behind Docker's proxy on WSL the shared database at 5432 dropped connections, and
+# 146 tests ERRORed at setup with the first of these, in different files on every run (#289).
+DISCONNECTED = re.compile(
+    r"(?i)server closed the connection unexpectedly|connection refused|could not connect to server"
+    r"|connection reset by peer|SSL SYSCALL error: EOF detected"
+    r"|connection to server (?:at|on socket) .{1,200}? failed"
+    r"|lost connection to MySQL server|MySQL server has gone away"
+    r"|\bConnection(?:Refused|Reset)Error\b")
+
+
+def _junit_disconnected(root: "ET.Element") -> int:
+    """How many test cases ERRORed on a lost or refused connection (`DISCONNECTED`).
+
+    Read off the error's message, where pytest puts the exception it failed on, or the last line
+    of its text where a writer leaves the message out: never the traceback above it, whose
+    source lines may say anything.
+    """
+    count = 0
+    for case in root.iter("testcase"):
+        error = case.find("error")
+        if error is None:
+            continue
+        said = error.get("message") or (error.text or "").strip().rsplit("\n", 1)[-1]
+        if DISCONNECTED.search(said):
+            count += 1
+    return count
 
 
 def _junit_failures(root: "ET.Element") -> tuple[str, ...]:
@@ -1174,6 +1209,8 @@ def _judge_witnessed(ctx: GitContext, seen: witness.Witnessed, suite=None, tree:
     """
     command = [seen.runner]
     root = _root_of(ctx, suite)
+    if seen.lost_connection:
+        return _lost_its_connection(ctx, seen)
     if not seen.ran_nothing and (seen.failed or seen.returncode != 0):
         record_red(ctx, command, seen.tail, suite, tree, executed=seen.executed)
         return Verdict(
@@ -1209,6 +1246,33 @@ def _judge_witnessed(ctx: GitContext, seen: witness.Witnessed, suite=None, tree:
         record_green(ctx, command, suite)
     return Verdict(True, f"{seen.executed} test(s) run by the gate itself via {seen.runner}"
                          + _recovered(seen))
+
+
+def _lost_its_connection(ctx: GitContext, seen: witness.Witnessed) -> Verdict:
+    """The gate's own run, in which every test that broke ERRORed on a connection to a server it
+    uses, lost or refused, and did again when run on its own: no verdict on the code.
+
+    Filed red, it held a merge the founder had said `+merge` to, and only a pass on a database
+    that kept dropping connections could clear it: three runs of the same tree broke 1, 150 and
+    146 times, in different files each time, and the project's own run on its own database
+    passed 11162 (#289). Nothing is filed red and nothing green: those tests ran nowhere, so the
+    finish is UNVERIFIED, which the founder's `+merge` decides (decision 0010).
+    """
+    again = (", and broke the same way when the gate ran them again on their own"
+             if seen.reproduced else "")
+    first = f"\n  first: {seen.first}" if seen.first else ""
+    kept = f"\n  the gate's report: {seen.kept}" if seen.kept else ""
+    return Verdict(
+        True,
+        f"{seen.runner} could not judge the code: all {seen.errors} test(s) that broke ERRORed "
+        f"before they ran, because a connection to a server they use was lost or refused"
+        f"{again}. {seen.executed - seen.failed} of {seen.executed} passed.{first}{kept}\n"
+        "That is the database or service, not the code, so no red record is filed. Those tests "
+        "ran nowhere, so this finish is UNVERIFIED and the founder's `+merge` decides it. Once "
+        "the server answers, a later finish runs them again."
+        + behind_the_trunk(ctx) + f"\n{seen.tail}",
+        unverified=True,
+    )
 
 
 def _short_of_the_tree(ctx: GitContext, seen: witness.Witnessed, suite=None) -> Verdict | None:

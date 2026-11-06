@@ -127,8 +127,9 @@ class TestAnErrorThatDoesNotComeBackIsNotTheCode(GateRunCase):
 
     def test_without_a_second_run_the_errors_stand(self):
         """No time left for it, or a second run that could not be read: what the first run
-        saw is the verdict."""
-        self.project(FLAKY_SETUP)
+        saw is the verdict. An error of the database that is not a lost connection, which is
+        no verdict on the code with a second run or without one (#289)."""
+        self.project(FLAKY_SETUP.replace("could not connect to server", "deadlock detected"))
         with mock.patch.object(witness, "_once_more", lambda *args: args[-1]):
             verdict = self.judge()
         self.assertFalse(verdict.ok)
