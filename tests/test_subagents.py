@@ -215,3 +215,30 @@ class TheMatcherCarriesTheTool(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheAgentIsToldItsCard(SpawnCase):
+    """An agent was handed a task and nothing of the work it is part of: the files the session's
+    finish measures drift against were invisible to it (decision 0076)."""
+
+    def brief(self) -> str:
+        proc = subprocess.run(
+            [sys.executable, str(BIN / "subagent-brief")],
+            input=json.dumps({"cwd": str(self.repo), "session_id": "s1", "agent_id": "a1",
+                              "hook_event_name": "SubagentStart", "agent_type": "general-purpose"}),
+            capture_output=True, text=True, cwd=str(self.repo), timeout=60,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        return json.loads(proc.stdout).get("hookSpecificOutput", {}).get("additionalContext", "") \
+            if proc.stdout.strip() else ""
+
+    def test_the_card_of_the_session_that_started_it_is_in_its_brief(self):
+        self.start()
+        card = self.claim_a_task("s1", "src/invoice.py")
+        body = self.brief()
+        self.assertIn(f"works under card {card.id}", body)
+        self.assertIn("src/invoice.py", body)
+
+    def test_a_session_that_holds_no_card_hands_none(self):
+        self.start()
+        self.assertNotIn("works under card", self.brief())

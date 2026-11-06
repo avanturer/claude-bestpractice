@@ -28,6 +28,32 @@ from claude_bestpractice.gitctx import resolve  # noqa: E402
 # it is the dominant recurring cost in the whole design.
 BRIEF_CHAR_BUDGET = 2_000
 
+# The cards of the spawning session an agent is told of, and how much of each.
+CARDS_TOLD = 2
+CARD_CHARS = 400
+
+
+def the_card_it_works_under(ctx, session_id: str) -> str:
+    """The card the session that started this agent holds, as facts: what the work is, when it
+    is done, the files it names (decision 0076). "" where the session holds none.
+
+    An agent is handed a task and nothing of the work it is part of: the files that work names
+    are what the session's finish measures drift against, and an agent that cannot see them
+    edits beside them. DeepSeek Harness gives a worker its ticket's scope for the same reason.
+    """
+    from claude_bestpractice import plan, redact, sessions
+
+    rec = sessions.get(ctx, session_id)
+    lines = []
+    for card in plan.held_by(ctx, rec.session_id if rec else session_id)[:CARDS_TOLD]:
+        said = f"This agent works under card {card.id}, \"{card.title}\""
+        if card.done_when:
+            said += f", done when {card.done_when}"
+        if card.paths:
+            said += f". Its files: {', '.join(card.paths[:12])}; files beyond them count as drift"
+        lines.append(redact.scrub(redact.strip_control(said))[:CARD_CHARS] + ".")
+    return "\n".join(lines)
+
 
 
 def main() -> None:
@@ -35,6 +61,10 @@ def main() -> None:
     ctx = hookio.repo(event.cwd or os.getcwd())
 
     parts = [knowledge.subagent_brief(ctx, max_chars=BRIEF_CHAR_BUDGET)]
+    try:
+        parts.append(the_card_it_works_under(ctx, event.session_id))
+    except Exception:  # noqa: BLE001 - the card is a hint; never fail a spawn over one
+        pass
 
     # The map for the subagent's own task is added by the hooks module when it is spawned,
     # where its prompt is known (`repomap.for_a_task`). This event carries neither the prompt
