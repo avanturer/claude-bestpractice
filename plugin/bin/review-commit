@@ -139,6 +139,8 @@ def review(root: Path, baseline: str) -> list[tuple[str, str, int, str]]:
         base = baseline_text(root, baseline, path)
 
         for name, pattern, message in CHECKS:
+            if not reviewrules.reads(name, path):
+                continue
             match = pattern.search(current)
             if not match or pattern.search(base):
                 continue  # absent, or pre-existing and therefore not this turn's doing

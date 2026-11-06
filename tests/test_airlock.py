@@ -439,7 +439,7 @@ class TestReviewCommit(GateCase):
         self.write("tests/test_fixtures.py", fixtures)
         self.commit("the fixtures")
         self.start()
-        self.write("tests/test_fixtures.py", fixtures + "\n\ndef test_more():\n    assert True\n")
+        self.write("tests/test_fixtures.py", fixtures + "\n\ndef test_more():\n    assert len(\"abc\") == 3\n")
         self.assertEqual(0, self.review().returncode, "a pre-existing credential was blamed")
 
         self.write("tests/test_fixtures.py",
