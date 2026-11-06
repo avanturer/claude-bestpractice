@@ -4,6 +4,9 @@
     "",
     "PROTOCOL, because these are the cheap ways to ship a gate that enforces nothing:",
     "  - Exit 2 blocks. Exit 1 is a NON-blocking error and the tool RUNS.",
+    "  - So does a gate that cannot start, dies before `hookio.guard` holds it, or times out:",
+    "    the tool RUNS, unless the entry says `\"onFailure\": \"block\"` (Claude Code 2.1.295 and",
+    "    later). `pre-tool` says it; a background hook cannot (decision 0067).",
     "  - The event arrives on STDIN as JSON. TOOL_NAME / TOOL_INPUT env vars do not exist.",
     "  - type 'http' fails OPEN on non-2xx, timeout and connection error. Never use it for a gate.",
     "  - Quote ${CLAUDE_PLUGIN_ROOT}. The command goes to sh, and an install path holding a space",
@@ -86,7 +89,8 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/pre-tool\"",
-            "timeout": 15
+            "timeout": 15,
+            "onFailure": "block"
           },
           {
             "type": "command",
