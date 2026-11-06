@@ -11,4 +11,4 @@
 - [0079] What the plugin puts in front of the model states facts, never orders — `decisions/0079-what-the-model-is-shown-states-facts.md`
 - [0080] How often each of this plugin's skills is read is counted, and a skill nobody reads shows it — `decisions/0080-a-skill-nobody-reads-is-counted-as-read-none.md`
 - [0081] A stage the ratchet holds is not probed on every tool call for what cannot move it — `decisions/0081-a-held-stage-is-not-probed-for-what-cannot-move-it.md`
-- ... 66 older, see `decisions/`
+- ... 68 older, see `decisions/`

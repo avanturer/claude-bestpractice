@@ -4,7 +4,7 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-2.10.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.11.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-2871%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
@@ -241,7 +241,9 @@ runner：你的配方是会话可以编辑的文件。
 
 **机器繁忙不等于代码坏了。** 在 gate 自己的 pytest 运行中以 ERROR 结束的测试——坏在
 setup、teardown 或收集阶段，且没有任何断言失败——会被单独再跑一次；届时通过的会被点名，
-不算作代码失败。失败的断言绝不会被问第二次。红色的运行会点名第一个出错的测试，并把报告
+不算作代码失败。失败的断言绝不会被问第二次。因为与所用数据库或服务的连接断开或被拒绝而以
+ERROR 结束、再跑一次仍然如此的测试，对代码既不算失败也不算通过：不记红也不记绿，这次结束标为
+UNVERIFIED，由你的 `+merge` 决定。红色的运行会点名第一个出错的测试，并把报告
 保存在 `.claude/claude-bestpractice/test-reports/` 下，不进入 git。gate 启动的每个套件最多
 使用 `witness_cpus` 个 CPU——除非你另有指定，默认为四个（`0` 表示全部）——这样一次 Stop
 就不会在机器上其他会话跑各自套件时，为每个核心启动一个 jest worker。
@@ -269,7 +271,7 @@ setup、teardown 或收集阶段，且没有任何断言失败——会被单独
 
 | 你输入 | 允许的操作 | 次数 |
 | --- | --- | --- |
-| `+merge` | 合并本对话已打开的 PR，以及自你上一条消息以来本对话按编号展示给你的 PR（草稿除外）| 每个一次；两者都没有时，则下一次合并 |
+| `+merge` | 合并本对话已打开的 PR，以及自你上一条消息以来本对话按编号向你提到或展示的 PR（草稿除外）| 每个一次；两者都没有时，则下一次合并 |
 | `+release` | 发布到生产环境 | 一次发布 |
 | `+migration` | 迁移中的破坏性 DDL | 一次迁移 |
 

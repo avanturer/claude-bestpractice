@@ -169,6 +169,9 @@ class Witnessed:
     recovered: int = 0
     # ERRORs that did happen again, so the second run is no excuse for them.
     reproduced: bool = False
+    # How many of `errors` were a connection to a server lost or refused, in this run and, where
+    # one was made, in the second run of them as well (`evidence.DISCONNECTED`, #289).
+    disconnected: int = 0
     # Where the report of a run that broke was kept, from the top of the tree. The gate's
     # reports were written to a temp directory deleted with the run, so the one thing that
     # could tell a database under load from a broken fixture was gone before anybody read it.
@@ -188,6 +191,13 @@ class Witnessed:
         """
         return (self.runner == "pytest" and self.returncode == 1
                 and 0 < self.errors == self.failed)
+
+    @property
+    def lost_connection(self) -> bool:
+        """Every test that broke ERRORed on a connection to a server it uses, lost or refused,
+        and a second run of them did not pass: the database or service, before any of the code
+        under test answered (#289)."""
+        return self.errors_only and self.disconnected == self.errors
 
     @property
     def ran_nothing(self) -> bool:
@@ -829,7 +839,10 @@ def _once_more(ctx: GitContext, argv: list[str], report: Path, env: dict[str, st
         return seen
     rerun = _reported(proc, report)
     if rerun is None or not rerun.passed or rerun.executed < seen.errors:
-        return replace(seen, reproduced=rerun is not None and rerun.failed > 0)
+        # Still a lost connection only where whatever broke the second time broke that way too.
+        lost = rerun is None or rerun.failed == rerun.disconnected
+        return replace(seen, reproduced=rerun is not None and rerun.failed > 0,
+                       disconnected=seen.disconnected if lost else 0)
     return replace(seen, returncode=0, failed=0, errors=0, recovered=seen.errors)
 
 
@@ -873,7 +886,8 @@ def _reported(proc: subprocess.CompletedProcess | None, report: Path) -> Witness
         return None
     executed = max(artifact.total - artifact.skipped, 0)
     return Witnessed(proc.returncode, executed, artifact.failed, _tail(proc), "pytest",
-                     errors=artifact.errors, first=artifact.first)
+                     errors=artifact.errors, first=artifact.first,
+                     disconnected=artifact.disconnected)
 
 
 def _together(base: Path, runs: list[tuple[Path, Witnessed]]) -> Witnessed:
@@ -905,6 +919,7 @@ def _what_broke_together(seen: list[Witnessed]) -> dict:
         "first": next((one.first for one in [*broken, *seen] if one.first), ""),
         "recovered": sum(one.recovered for one in seen),
         "reproduced": any(one.reproduced for one in seen),
+        "disconnected": sum(one.disconnected for one in seen),
     }
 
 

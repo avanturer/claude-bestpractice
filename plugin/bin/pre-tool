@@ -1759,8 +1759,10 @@ def main() -> None:
                     "more first.\n"
                     "  Otherwise show them what changed and ask. When they are happy they "
                     "say `+merge` — copy it exactly — and this allows every pull request "
-                    "you have open, and every one you showed them by number since their "
-                    "last message, each once; with none of either, the next merge.\n"
+                    "you have open, and every one you put in front of them since their last "
+                    "message, each once: named in the message they answer by its link, or "
+                    "by `#<number>` where it is on record here, looked at with `gh pr view`, "
+                    "or refused to them like this one; with none of either, the next merge.\n"
                     "  Their word is read from their own message; nothing you write "
                     "can stand in for it."
                 )
@@ -1835,6 +1837,10 @@ def main() -> None:
                                    into=pullrequest.base_of(event.tool_name, command, ti))
             if pullrequest.about_this_repository(ctx, event.tool_name, ti, command):
                 pr_vouch = vouch.PULL_REQUEST
+                # Where the chat opened one, for the Stop gate to know it as the chat's when
+                # GitHub has a pull request no hook here filed for the branch (#295).
+                if event.tool_name == "Bash":
+                    pullrequest.note_opening(ctx, event.session_id, command, str(session_cwd))
         else:
             # Closed without merging: the other way an obligation ends, and the one nothing
             # wrote down — a closed pull request stayed on every board as "ready to merge"

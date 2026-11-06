@@ -857,6 +857,14 @@ def main() -> None:
         sys.stderr.write(f"claude-bestpractice: standing down — {why}.\n")
         hookio.emit_silent()
 
+    # The pull requests the message that ended this turn names, which is what the founder's
+    # next `+merge` answers. Noted first, before anything slow: they may answer while this runs,
+    # and the moment it is noted is what places it before their word (#295).
+    if cfg.manage_pull_requests:
+        message = event.raw.get("last_assistant_message")
+        if isinstance(message, str) and message:
+            pullrequest.shown(ctx, event.session_id, pullrequest.named_in_message(ctx, message))
+
     rec = sessions.get(ctx, event.session_id)
     if rec is None:
         # Re-register rather than allow. A missing record used to mean "finish freely",
@@ -938,7 +946,7 @@ def main() -> None:
         # Asked before the record is read as well, because a pull request GitHub has for
         # this branch is recorded by the asking — and is then the one waiting below. It is
         # how an open draft opened elsewhere stopped being "no pull request" (#239).
-        lacking = pullrequest.missing(ctx)
+        lacking = pullrequest.missing(ctx, event.session_id)
         waiting = pullrequest.unhanded(ctx, ctx.branch)
         if waiting is not None or lacking is not None:
             # Whether the founder's word covers it decides what the demand says, and a word
