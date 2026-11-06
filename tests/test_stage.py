@@ -164,6 +164,50 @@ class TestRatchet(RepoCase):
         self.assertEqual(merged.returncode, 0, merged.stdout + merged.stderr)
 
 
+class TestAHeldStageIsNotProbedForWhatCannotMoveIt(RepoCase):
+    """The gates resolve the stage on every tool call (decision 0079). A users table only ever
+    makes traction, and a Django or Alembic project never spells `create table` in its
+    migrations, so every one of them was read on every call of a project already held there."""
+
+    def held_at(self, held: str) -> None:
+        from claude_bestpractice import store
+
+        store.write_json(store.tier_a(self.ctx(), stage.STAGE_DIR, f"reached-{held}.json"), {"stage": held})
+
+    def test_held_at_traction_its_migrations_are_not_read_again(self):
+        from unittest import mock
+
+        for n in range(30):
+            self.write(f"migrations/{n:04d}_initial.py", "operations = [migrations.CreateModel('User')]\n")
+        self.held_at(stage.TRACTION)
+        read = []
+        real = stage._read
+        with mock.patch.object(stage, "_read", side_effect=lambda path, limit=200_000: read.append(path) or real(path, limit)):
+            resolved, _ = stage.current(self.ctx())
+        self.assertEqual(stage.TRACTION, resolved)
+        self.assertEqual([], [path for path in read if "migrations" in str(path)])
+
+    def test_held_at_the_top_nothing_is_probed(self):
+        from unittest import mock
+
+        self.held_at(stage.REVENUE)
+        with mock.patch.object(stage, "probe", side_effect=AssertionError("probed")):
+            self.assertEqual(stage.REVENUE, stage.current(self.ctx())[0])
+
+    def test_the_gates_count_no_commits_and_status_does(self):
+        from unittest import mock
+
+        from claude_bestpractice import gitctx
+
+        asked = []
+        real = gitctx._run
+        with mock.patch.object(gitctx, "_run", side_effect=lambda args, *rest, **kw: asked.append(args) or real(args, *rest, **kw)):
+            stage.current(self.ctx())
+            self.assertFalse(any("rev-list" in args for args in asked))
+            stage.current(self.ctx(), record=False)
+            self.assertTrue(any("rev-list" in args for args in asked))
+
+
 class TestGates(unittest.TestCase):
     def test_spine_fires_at_every_stage(self):
         """The evidence gate does not scale down. A lying prototype is still lying."""

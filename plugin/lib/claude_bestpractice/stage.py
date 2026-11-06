@@ -91,8 +91,11 @@ class StageSignals:
 
 
 def _read(path: Path, limit: int = 200_000) -> str:
+    """The first `limit` characters of `path`, never more of it: a migration of megabytes was
+    read whole and cut afterwards, on every tool call."""
     try:
-        return path.read_text(encoding="utf-8", errors="replace")[:limit]
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            return handle.read(limit)
     except OSError:
         return ""
 
@@ -106,7 +109,9 @@ def _manifest_text(root: Path) -> str:
     return "\n".join(chunks)
 
 
-def probe(ctx: GitContext) -> StageSignals:
+def probe(ctx: GitContext, held: str | None = None, count_commits: bool = True) -> StageSignals:
+    """The signals the repository shows now. `held` is the stage the ratchet already holds: a
+    scan that could only find what that stage already is is not run (decision 0079)."""
     root = ctx.worktree_root
     sig = StageSignals()
 
@@ -120,12 +125,17 @@ def probe(ctx: GitContext) -> StageSignals:
             sig.reasons.append(f"deploy config {name}")
             break
 
+    # A users table makes traction and nothing more, so a stage held at traction or above is
+    # not scanned for one. On a project whose migrations never spell `create table` — Django's
+    # `CreateModel`, Alembic's `create_table(` — every migration was read on every tool call.
+    scan = ORDER.get(held or "", 0) < ORDER[TRACTION]
     migration_files: list[Path] = []
     for rel in _MIGRATION_DIRS:
         d = root / rel
         if d.is_dir():
             sig.has_migrations = True
-            migration_files.extend([p for p in d.rglob("*") if p.is_file()][:200])
+            if scan:
+                migration_files.extend([p for p in d.rglob("*") if p.is_file()][:200])
     if sig.has_migrations:
         sig.reasons.append("migrations directory present")
 
@@ -155,10 +165,12 @@ def probe(ctx: GitContext) -> StageSignals:
             sig.reasons.append(f"live-mode key shape in {name}")
             break
 
-    from .gitctx import _run
+    # Shown by `claude-bp status`, read by no gate: a process a tool call does not need.
+    if count_commits:
+        from .gitctx import _run
 
-    count = _run(["rev-list", "--count", "HEAD"], root, check=False)
-    sig.commits = int(count) if count.isdigit() else 0
+        count = _run(["rev-list", "--count", "HEAD"], root, check=False)
+        sig.commits = int(count) if count.isdigit() else 0
     return sig
 
 
@@ -202,12 +214,15 @@ def current(
     command named `status` must not mutate what it reports on. The gates still record —
     they are the ones with a mandate to change state.
     """
-    sig = probe(ctx)
+    previous = recorded_stage(ctx)
+    # Held at the top, nothing a probe finds can move it: the gates ask on every tool call.
+    if record and previous == REVENUE:
+        return REVENUE, StageSignals(reasons=[f"ratchet held at {REVENUE}"])
+    sig = probe(ctx, held=previous, count_commits=not record)
     detected = classify(sig)
     if override and override in ORDER:
         detected = override if ORDER[override] > ORDER[detected] else detected
 
-    previous = recorded_stage(ctx)
     resolved = detected
     if previous in ORDER and ORDER[previous] > ORDER[detected]:
         resolved = previous
