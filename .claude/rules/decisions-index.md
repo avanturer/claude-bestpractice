@@ -1,14 +1,14 @@
 # Decisions
 
-- [0060] A server's tool that writes files is judged as the write it is — `decisions/0060-a-servers-write-is-judged-as-a-write.md`
-- [0061] A session starting in the main checkout brings it level with the trunk — `decisions/0061-the-main-checkout-is-kept-level-with-the-trunk.md`
-- [0062] Build output and logs regrow, and the sweep says why it keeps a tree — `decisions/0062-build-output-and-logs-regrow-and-the-sweep-says-why.md`
-- [0063] A red record is cleared by a run the plugin watches, and one can be asked for — `decisions/0063-a-red-record-is-cleared-by-a-watched-run-and-one-can-be-asked-for.md`
-- [0064] A run is held to the tests its runner runs, and a red record to its own branch — `decisions/0064-a-run-is-held-to-its-runners-tests-and-a-record-to-its-branch.md`
-- [0065] The word carries to a stack's pull request opened again, and a refusal says what it was used on — `decisions/0065-a-word-carries-to-a-stack-reopened-and-says-what-it-was-used-on.md`
-- [0066] A fork runs on its session's model, so its spawn is not asked for a tier — `decisions/0066-a-fork-runs-on-its-sessions-model.md`
-- [0067] A gate that cannot run refuses the call — `decisions/0067-a-gate-that-cannot-run-refuses.md`
-- [0068] A turn that waits on its own agents is not a finish — `decisions/0068-a-turn-that-waits-on-its-agents-is-not-a-finish.md`
 - [0069] The compaction summary is told what to keep by the hook that saves the window — `decisions/0069-the-summary-is-told-what-to-keep-by-the-checkpoint.md`
 - [0070] A prompt a session schedules, or a message it sends, carries no word of the founder's — `decisions/0070-a-scheduled-prompt-carries-no-word-of-the-founders.md`
-- ... 57 older, see `decisions/`
+- [0071] The summary a compaction leaves is nobody's word — `decisions/0071-a-compaction-summary-is-nobodys-word.md`
+- [0072] The commit reviewer names the moves that make a red suite read green — `decisions/0072-the-reviewer-names-what-fakes-a-green-run.md`
+- [0073] A pause ends a turn on the founder's words, or after refusals that held — `decisions/0073-a-pause-ends-a-turn-on-the-founders-words.md`
+- [0074] The founder sees the board beside the chat, and the model is never sent it — `decisions/0074-the-founder-sees-the-board-beside-the-chat.md`
+- [0075] The tree a chat's agent ran in is put away once it is spent — `decisions/0075-an-agents-tree-is-put-away-once-spent.md`
+- [0076] An agent is told the card it works under — `decisions/0076-an-agent-is-told-the-card-it-works-under.md`
+- [0077] What the plugin puts in front of the model states facts, never orders — `decisions/0077-what-the-model-is-shown-states-facts.md`
+- [0078] How often each of this plugin's skills is read is counted, and a skill nobody reads shows it — `decisions/0078-a-skill-nobody-reads-is-counted-as-read-none.md`
+- [0079] A stage the ratchet holds is not probed on every tool call for what cannot move it — `decisions/0079-a-held-stage-is-not-probed-for-what-cannot-move-it.md`
+- ... 66 older, see `decisions/`
