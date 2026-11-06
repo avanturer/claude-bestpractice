@@ -199,6 +199,13 @@ run sessions inside a user namespace or a rootless container, where the channel 
 silently off from 2.1.232 until that release. Where messaging is unavailable the plugin is
 simply silent.
 
+**And you see the board without asking for it.** The hooks module keeps a line under the
+prompt — how many other sessions are live, which pull requests wait for your `+merge`, how
+many are blocked, whether the suite is red — and `/sessions` opens a pane with a row for each
+session, its card and branch, each pull request and the red suite. It is read again at the end
+of every turn and once a minute, in the terminal and in VS Code, and it is never part of a
+request, so it costs no tokens. A session counts as live by its process, as the reaper reads it.
+
 ### A work ledger that merges
 
 `.claude/claude-bestpractice/plan/{next,doing,done}/` — one file per task, state encoded in the
@@ -298,9 +305,11 @@ forever is a gate that gets uninstalled.
 
 **A pause is not a finish.** Tell a session to stop before the work is done and it pauses its
 card with your words as the blocker; the turn ends there, with no suite run, nothing filed as
-unverified, and no demand for a card. The paused card says what the work is and what it waits
-on. The suite is asked for again when the card is claimed and the work finished, and a merge
-still needs a green run.
+unverified, and no demand for a card. The words have to be yours: a blocker that quotes no
+message of yours is judged as a finish, and the refusal says why, unless the gate has already
+refused the session twice in a row — a session stopped by something outside the repository
+still gets out. The paused card says what the work is and what it waits on. The suite is asked
+for again when the card is claimed and the work finished, and a merge still needs a green run.
 
 **Waiting for its own agents is not a finish either.** Claude Code runs a spawned agent in the
 background by default, and a session that hands work to three of them ends its turn to wait for
@@ -412,6 +421,12 @@ then still held there by Claude Code, which refuses every git call aimed anywher
 gate names the way out — `ExitWorktree` with `keep` — and the Stop gate that removes the tree a
 shell stands in asks for it before the turn ends.
 
+Claude Code never removes the trees `worktree-create` makes for a chat's own agents. Once the
+gate lets a finish through with none of that chat's agents still at work, it removes the ones
+nobody stands in whose `git status` is empty and whose work is in the trunk — the same way,
+without `--force`, the branch only on proof — and `remove_finished_trees` switches that off
+with the rest.
+
 A tree another tool created is never removed, because that is not a plugin's call. It is
 **named** instead, with the command — as is a branch carrying commits that no pull request
 here has seen, and a pull request nothing has moved in a week. All three lines are empty in
@@ -468,10 +483,13 @@ before it is sent. Written in backticks, a word is named rather than given, and 
 
 ### Slop caught mechanically — in your repository
 
-On the lines this turn added, the commit reviewer flags seven classes: swallowed
-exceptions, bare excepts, debug leftovers, disabled verification, skipped tests, shell
-injection and SQL interpolation — plus anything shaped like a credential. Pre-existing
-matches are ignored, so it never bills you for someone else's history.
+On the lines this turn added, the commit reviewer flags thirteen classes. Seven are slop:
+swallowed exceptions, bare excepts, debug leftovers, disabled verification, skipped or focused
+tests, shell injection and SQL interpolation. Six are the moves that make a red suite read
+green: a test command that cannot fail (`|| true`, `--passWithNoTests`, `-DskipTests`), an
+`__eq__` that answers True to anything, and, in test files only, a test that exits the process,
+a hook that rewrites a result, an assertion that cannot fail and a test that returns before it
+asserts. And anything shaped like a credential. Pre-existing matches are ignored, so it never bills you for someone else's history.
 
 It **reports**, it does not block. A reviewer that refuses a commit over style is a
 reviewer you switch off in a week, and a switched-off reviewer catches nothing.
@@ -550,14 +568,18 @@ Exa refuses requests from some regions, and there search falls through to WebSea
 
 **Compaction keeps what you said.** The hook that saves the window before a compaction tells
 the summary what to keep: your requests and decisions, every `+merge` and what it covered, the
-cards in play — this session's own by id, title and condition — the failing tests and the paths
-of kept outputs, and to drop logs that can be read again.
+cards in play — this session's own by id, title and condition — the failing tests, the agents
+still running and the paths of kept outputs; to merge an earlier summary rather than copy it
+forward; and to drop logs that can be read again. The summary itself is nobody's word: a
+`+merge` it repeats grants nothing, because the entry Claude Code writes it as is never read as
+a message of yours.
 
 **Sessions find each other.** When a session lists the agents it can message, each other
 session on the repository is named with its card, branch and tree, so a message goes to the
 one whose work it is. A subagent spawned on a tier below `subagent_min_model` (`sonnet`) runs on it.
 A fork is never asked for a tier: Claude Code runs it on the session's own model whatever the
-call names.
+call names. A subagent's brief names the card the session that started it works under —
+its id, its condition and its files, beyond which a write counts as drift.
 
 Each is a switch you say: `compress_output off`, `route_search off`, `subagent_min_model off`.
 
@@ -574,7 +596,7 @@ configuration silently.
 
 | | |
 |---|---|
-| `claude-bp status` | Sessions, plan, knowledge, memory health, conflicts, next action |
+| `claude-bp status` | Sessions, plan, knowledge, memory health, how often each skill was read, conflicts, next action |
 | `claude-bp init` | Derive the knowledge layer from your code |
 | `claude-bp adopt` | Take over events another tool is contesting |
 | `claude-bp sweep` | Remove the trees nobody is in whose work is already in the trunk |
