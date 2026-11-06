@@ -80,7 +80,7 @@ def _blocks(rec: sessions.SessionRecord) -> int:
 
 def _bump_blocks(ctx, rec: sessions.SessionRecord, value: int,
                  reason: str = "", changed: list | None = None, tree: str = "",
-                 seen: str = "", said: str = "") -> None:
+                 seen: str = "", said: str = "", settled: bool = True) -> None:
     """Count the block, and remember WHAT it was about.
 
     The ceiling branch had nothing to hand forward, so it wrote the literal string
@@ -88,11 +88,14 @@ def _bump_blocks(ctx, rec: sessions.SessionRecord, value: int,
     empty list also skipped the attempts record entirely and left the open item with no
     subjects, so provenance could never retire it. The warning outlived the code it was
     about. Reported as issue #31.
+
+    `settled` is False for a turn let end while its agents still work: the streak is over,
+    and the turn is not, so a card it closed is still judged at the finish after them.
     """
     payload = dict(rec.tool_signatures)
     payload[BLOCK_COUNTER] = value
     payload[BLOCK_AT] = time.time()
-    if not value:
+    if not value and settled:
         payload[SETTLED_AT] = payload[BLOCK_AT]
     if reason:
         payload[BLOCK_REASON] = _as_remembered(reason)
@@ -244,7 +247,8 @@ def _closed_the_tree(ctx, rec: sessions.SessionRecord, cfg, shell: str) -> tuple
     return said, held
 
 
-def _allow(ctx, rec: sessions.SessionRecord, cfg, opener: str, shell: str) -> None:
+def _allow(ctx, rec: sessions.SessionRecord, cfg, opener: str, shell: str,
+           at_work: list | None = None) -> None:
     """Let the turn end: reset the escalation counter and hand back the leases. `shell` is
     where the session's shell stands, for the tree removed from under it.
 
@@ -257,9 +261,16 @@ def _allow(ctx, rec: sessions.SessionRecord, cfg, opener: str, shell: str) -> No
     remark, work not begun — and the card stayed in `next` for weeks, nobody's to close
     (#256). `opener` is the harness id the message came from. A turn that wrote something
     is refused before it gets here, with this card named as the one to plan.
+
+    None of the three while `at_work` names agents of this session still running: the card
+    is the work they were sent to do, the leases cover what they write, and the tree is where
+    they stand. Each is handed back at the finish after their reports (decision 0068).
     """
     from claude_bestpractice import plan
 
+    if at_work:
+        _bump_blocks(ctx, rec, 0, settled=False)
+        hookio.emit_silent()
     plan.withdraw_unplanned(ctx, opener)
     _bump_blocks(ctx, rec, 0)
     sessions.release_all(ctx, rec.session_id)
@@ -701,6 +712,38 @@ def _ends_on_a_pause(ctx, rec: sessions.SessionRecord, changed: list):
     return None if _written_since(ctx, changed, plan.moved_at(last)) else last
 
 
+# What Claude Code still runs for this session when its turn ends and will report back to it
+# when done: Stop's `background_tasks`, carried since 2.1.145. A background shell or a monitor
+# may never end — a dev server, `tail -f` — and one left running would spare every finish for
+# good, so only an agent's work counts.
+_REPORTS_BACK = frozenset({"subagent", "workflow", "teammate", "cloud session"})
+_OVER = frozenset({"completed", "failed", "killed", "cancelled", "canceled", "stopped", "error"})
+
+
+def _agents_at_work(event) -> list[str]:
+    """What this turn ends waiting on: each agent of this session still running, by what it was
+    sent to do. Empty where none is, and where the harness does not say.
+
+    Claude Code has run a spawned agent in the background by default since 2.1.232, and a
+    session that hands work to three of them ends its turn to wait for their reports. That turn
+    was judged as a finish: the suite run over files the agents were still writing, UNVERIFIED
+    filed for work not done, and the card, the leases and the tree handed back under them.
+    """
+    tasks = event.raw.get("background_tasks")
+    if not isinstance(tasks, list):
+        return []
+    at_work: list[str] = []
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        kind = str(task.get("type") or "").strip().lower()
+        if kind not in _REPORTS_BACK or str(task.get("status") or "").strip().lower() in _OVER:
+            continue
+        sent_to = str(task.get("description") or task.get("agent_type") or kind)
+        at_work.append(_cut(" ".join(redact.strip_control(sent_to).split()), 80))
+    return at_work
+
+
 def _written_since(ctx, changed: list, moment: float) -> bool:
     """Was a file in `changed` written in a later second than `moment`? A card keeps its time
     to the second, so a write in the second of the pause itself reads as before it."""
@@ -798,7 +841,11 @@ def main() -> None:
     # Asked before the ceiling: a turn that ends on a pause is not a finish, and the ceiling
     # would let it go UNVERIFIED, a mark its branch carries until the founder accepts it.
     paused = _ends_on_a_pause(ctx, rec, changed)
-    if event.stop_hook_active and blocked >= evidence.MAX_CONSECUTIVE_BLOCKS and paused is None:
+    # And a turn that ends to wait for its own agents is not one either: what they were sent
+    # to do is still being done (decision 0068).
+    at_work = _agents_at_work(event)
+    if event.stop_hook_active and blocked >= evidence.MAX_CONSECUTIVE_BLOCKS and paused is None \
+            and not at_work:
         # Both ceiling exits describe the same outcome, and this is the one that fires in
         # the live loop — so it carries the same detail the other one always did.
         ceiling_reason, ceiling_paths = _remembered_block(rec)
@@ -822,7 +869,9 @@ def main() -> None:
     # ceiling must not meet it again on its next Stop. One unignorable interruption is the
     # entire budget. Past that the board carries it, which is what stops it being
     # forgotten across sessions without wedging the one in front of us.
-    if cfg.manage_pull_requests:
+    # Not while its agents work: a pull request handed off then is handed off before the work
+    # it carries is done, and "finished work" with none is work they are still finishing.
+    if cfg.manage_pull_requests and not at_work:
         # Asked before the record is read, because a merge this gate did not perform is
         # never recorded: merging from the website, from another clone, or with a shell
         # line the tokeniser declined leaves the obligation OPEN forever, and the founder
@@ -880,7 +929,7 @@ def main() -> None:
         # say. Asked here as well as at the verified exit, and nowhere earlier — the
         # checks between the two are about the tree and answer first.
         _refuse_to_end_on_an_unanswered_block(ctx, rec, pending_refusal)
-        _allow(ctx, rec, cfg, opener, shell)
+        _allow(ctx, rec, cfg, opener, shell, at_work)
 
     # Which suites answer for these files. In a single-project repository this is the one
     # command the repository has always had; in a repository with two projects it is only
@@ -955,7 +1004,7 @@ def main() -> None:
         # The ledger had no closing half at all before this: `complete` had one caller, the
         # CLI, so a card left `doing` only if somebody remembered the command, and card
         # 0050 in this repository sat there for four days over merged and tagged work.
-        delivered = not _work_the_siblings_cannot_see(ctx)
+        delivered = not at_work and not _work_the_siblings_cannot_see(ctx)
         if delivered:
             # `pre-tool` closes the cards of a merge it gates itself, which is the ordinary
             # route and costs no turn. This is every other one: a merge on the website, a
@@ -1003,7 +1052,7 @@ def main() -> None:
     # the commit — is not asked of a turn that ends on a pause, which claims nothing is done.
     # Each still holds when the card is claimed again and finished.
     owed_by_a_finish = False
-    if cfg.block_unfinished_work and paused is None:
+    if cfg.block_unfinished_work and paused is None and not at_work:
         unfinished = discipline.introduced(ctx, changed, rec.baseline_commit, floor)
         if unfinished:
             problems.append(discipline.render(unfinished))
@@ -1024,7 +1073,7 @@ def main() -> None:
     deadline = time.time() + witness.timeout_for()
     # Whether the founder typed while a suite ran, which stopped it: no verdict, either way.
     cut_short = False
-    if gates["evidence_gate"] and not let_go and paused is None:
+    if gates["evidence_gate"] and not let_go and paused is None and not at_work:
         try:
             with witness.until_spoken(listening.heard):
                 verdict = evidence.verify(ctx, cfg.artifact_globs, changed, cfg.test_command,
@@ -1123,6 +1172,11 @@ def main() -> None:
             sys.stderr.write(
                 f"claude-bestpractice: paused, not finished — {paused.id} waits on: "
                 f"{paused.blocker}. Nothing was run: a pause claims nothing is done.\n")
+        elif at_work:
+            sys.stderr.write(
+                f"claude-bestpractice: waiting, not finished — {len(at_work)} agent(s) still at "
+                f"work ({'; '.join(at_work[:3])}). Nothing was run: the finish after their "
+                "reports is judged.\n")
         elif let_go:
             sys.stderr.write(
                 "claude-bestpractice: finishing UNVERIFIED — nothing in this tree has changed "
@@ -1136,13 +1190,17 @@ def main() -> None:
             # more urgent to say, and one finishing UNVERIFIED is already on the record as
             # a failure — asking either of them for notes is the gate talking over itself.
             _ask_for_the_notes_once(ctx, rec, cfg, changed)
-        _allow(ctx, rec, cfg, opener, shell)
+        _allow(ctx, rec, cfg, opener, shell, at_work)
 
     reason = "\n\n".join(problems)
     tree = evidence.tree_hash(ctx)
     repeated = bool(blocked) and _asked_and_answered(ctx, rec, reason, tree)
 
     if blocked >= evidence.MAX_CONSECUTIVE_BLOCKS or repeated:
+        if at_work:
+            # The ceiling ends a loop. It does not make a finish of a turn still waiting on its
+            # agents, and what it refused is asked again at the finish after their reports.
+            _allow(ctx, rec, cfg, opener, shell, at_work)
         _give_up(ctx, rec, reason, changed)
         _let_go(ctx, rec, seen, said)
         _bump_blocks(ctx, rec, 0)
