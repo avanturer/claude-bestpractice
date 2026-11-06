@@ -744,6 +744,49 @@ def _agents_at_work(event) -> list[str]:
     return at_work
 
 
+# How many refusals in a row a pause has to come after when its blocker is not the founder's
+# words: by then the condition it names has held across tries. DeepSeek Harness rejects a goal's
+# `blocked` until three rounds have passed and lets a person stop it at once (decision 0073).
+PAUSE_AFTER_REFUSALS = 2
+
+# How much of the transcript's end is read for the founder's words a blocker quotes.
+PAUSE_WORDS_BYTES = 8 * 1024 * 1024
+
+
+def _plain(text: str) -> str:
+    """`text` as it is compared for a quotation: lower case, one space, no outer quotes or stops."""
+    return " ".join(str(text or "").lower().split()).strip(" \"'«»“”.,!…")
+
+
+def _spares_the_finish(event, card, blocked: int) -> bool:
+    """May the turn end on this pause without what a finish owes?
+
+    At once where the blocker is the founder's own words: decision 0033 took a pause as a
+    legitimate end because it carries "словом пользователя", and nothing checked that it did. A
+    blocker of the session's own only once this gate has refused it PAUSE_AFTER_REFUSALS times in
+    a row, so it is never the first answer to a red suite.
+    """
+    if blocked >= PAUSE_AFTER_REFUSALS:
+        return True
+    from claude_bestpractice import plan
+
+    quoted = _plain(card.blocker)
+    if len(quoted) < plan.MIN_BLOCKER_CHARS:
+        return False
+    return any(quoted in _plain(said)
+               for said in founder.messages(event.transcript_path, PAUSE_WORDS_BYTES))
+
+
+def _why_the_pause_did_not_end_it(card) -> str:
+    """What a refusal says to a session whose pause did not spare its finish, and the way out."""
+    return (
+        f"The pause of {card.id} did not end this turn: its blocker is not the founder's words, and "
+        f"a blocker of the session's own is taken after {PAUSE_AFTER_REFUSALS} refusals in a row. "
+        "Where the founder asked to stop, say so in their words, as they wrote them:\n"
+        f"  claude-bp-plan pause {card.id} --blocker \"<the founder's words>\"\n\n"
+    )
+
+
 def _written_since(ctx, changed: list, moment: float) -> bool:
     """Was a file in `changed` written in a later second than `moment`? A card keeps its time
     to the second, so a write in the second of the pause itself reads as before it."""
@@ -841,6 +884,10 @@ def main() -> None:
     # Asked before the ceiling: a turn that ends on a pause is not a finish, and the ceiling
     # would let it go UNVERIFIED, a mark its branch carries until the founder accepts it.
     paused = _ends_on_a_pause(ctx, rec, changed)
+    # Unless nothing says the pause is the founder's, and it is the first answer to a refusal.
+    unspared = None
+    if paused is not None and not _spares_the_finish(event, paused, blocked):
+        paused, unspared = None, paused
     # And a turn that ends to wait for its own agents is not one either: what they were sent
     # to do is still being done (decision 0068).
     at_work = _agents_at_work(event)
@@ -1031,7 +1078,7 @@ def main() -> None:
         # And the card it ended this turn by pausing: the board says what the work is and
         # what it waits on. Asked to `claim` instead, a session was told to take back the
         # card it had just set down at the founder's word (#264).
-        if not mine and not closed and not delivered and paused is None:
+        if not mine and not closed and not delivered and paused is None and unspared is None:
             # Quoted, and the card given its `--done-when`: printed any other way the second
             # command failed on the first one's card, or the first on a path with a space in
             # it (decision 0020 — every command a refusal names runs as printed).
@@ -1219,6 +1266,7 @@ def main() -> None:
         f"claude-bestpractice [{blocked + 1}/{evidence.MAX_CONSECUTIVE_BLOCKS}] — not done yet.\n\n"
         f"{reason}\n\n"
         + (_how_to_stop_here(ctx, rec) if owed_by_a_finish else "")
+        + (_why_the_pause_did_not_end_it(unspared) if unspared is not None else "")
         + "Your description of what you did is not evidence and was not read."
     )
 
