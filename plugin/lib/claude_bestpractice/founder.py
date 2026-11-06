@@ -350,15 +350,24 @@ def messages(transcript_path: str, most_bytes: int = _MOST_BYTES) -> list[str]:
     return said
 
 
+# The flags on a `user` entry that nobody typed: another loop's turn, the harness's own
+# bookkeeping, the summary a compaction leaves, and what only the transcript view shows.
+_NOBODY_TYPED = ("isSidechain", "isMeta", "isCompactSummary", "isVisibleInTranscriptOnly")
+
+
 def _from_a_person(entry: dict[str, Any]) -> tuple[str, str, float] | None:
     """(identity, text, when) of a message a person sent, or None for anything else.
 
     A turn the founder started is a `user` entry; one they sent while the session worked is a
     `queued_command` attachment folded into the running turn. Everything else the harness
     files under those types — tool results, sidechains, meta entries, task notifications,
-    another agent's report — is not them.
+    another agent's report, the summary a compaction leaves — is not them.
+
+    The summary carries no `origin`, so it read as a turn from before the harness marked its
+    sender, and a summary told to keep the founder's words keeps them: a `+merge` it repeated
+    was a new word, given by nobody (decision 0071).
     """
-    if entry.get("isSidechain") or entry.get("isMeta"):
+    if any(entry.get(flag) for flag in _NOBODY_TYPED):
         return None
     found = _as_a_turn(entry) if entry.get("type") == "user" else _as_queued(entry)
     if found is None:

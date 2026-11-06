@@ -58,7 +58,8 @@ MAX_TURNS = 3
 # Claude Code documents, and it holds where mods are off (decision 0069).
 KEEP = (
     "Keep, word for word: the founder's requests and decisions, every `+merge`, `+release` and "
-    "`+migration` they gave and what it covered, the task card ids and titles in play, the files "
+    "`+migration` they gave, in backticks as written here, and what it covered, the task card "
+    "ids and titles in play, the files "
     "changed and why, each failing test by name with its first error line, and what was tried "
     "and failed. Keep the path a claude-bestpractice digest names for its whole output instead "
     "of the output. Drop passing test lists, install and build logs, and file contents that can "
