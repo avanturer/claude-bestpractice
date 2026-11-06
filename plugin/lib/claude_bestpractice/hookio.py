@@ -301,6 +301,24 @@ def emit_silent(note: str = "") -> NoReturn:
     raise SystemExit(OK)
 
 
+# What Claude Code keeps of one PreCompact hook's stdout; it cuts the rest (2.1.314).
+COMPACTION_CHARS = 10_000
+
+
+def instruct_the_compaction(instructions: str) -> NoReturn:
+    """PreCompact only: tell the compaction summary what to keep, and let it run.
+
+    Claude Code uses the stdout of a PreCompact hook that exits 0 as instructions for the
+    summary. As plain text: JSON there is read for its fields, and this event discards
+    `continue` and `systemMessage`, so the `emit_silent` the checkpoint printed told the summary
+    nothing, and what to keep reached it only through the hooks module, which is off wherever
+    mods are (decision 0069).
+    """
+    sys.stdout.write(instructions.strip()[:COMPACTION_CHARS] + "\n")
+    sys.stdout.flush()
+    raise SystemExit(OK)
+
+
 # Whether this process is a Stop gate Claude Code runs once the turn has ended (`asyncRewake`).
 _AFTER_THE_TURN = False
 

@@ -27,15 +27,6 @@ const SITE_QUERIES = 3
 // The tiers a subagent can name, cheapest first, as `subagents.TIERS` in the library has them.
 const TIERS = ['haiku', 'sonnet', 'opus', 'fable']
 
-const KEEP_THROUGH_COMPACTION = [
-  'Keep, word for word: the founder\'s requests and decisions, every +merge, +release and',
-  '+migration they gave and what it covered, the task card ids and titles in play, the files',
-  'changed and why, each failing test by name with its first error line, and what was tried',
-  'and failed. Keep the path a claude-bestpractice digest names for its whole output instead of',
-  'the output. Drop passing test lists, install and build logs, and file contents that can be',
-  'read again.',
-].join(' ')
-
 type BashRecord = {
   stdout?: string
   stderr?: string
@@ -205,10 +196,5 @@ export const register: Register = (on) => {
     const map = await ask($, 'map', { task: `${e.description}\n${e.prompt}` })
     const prompt = typeof map.text === 'string' && map.text !== '' ? `${e.prompt}\n\n${map.text}` : e.prompt
     return next({ ...e, model, prompt })
-  }).catch(async ($, e, next) => next(e))
-
-  on('session.compact', async ($, e, next) => {
-    const instructions = e.instructions ? `${e.instructions}\n\n${KEEP_THROUGH_COMPACTION}` : KEEP_THROUGH_COMPACTION
-    return next({ ...e, instructions })
   }).catch(async ($, e, next) => next(e))
 }

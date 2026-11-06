@@ -1750,6 +1750,32 @@ class TestCheckpoint(GateCase):
         self.assertEqual(proc.returncode, 0)
         self.assertTrue(list((self.repo / ".claude" / "claude-bestpractice" / "checkpoints").glob("*.md")))
 
+    def test_the_summary_is_told_what_to_keep(self):
+        """Claude Code hands this hook's stdout to the compaction summary as its instructions
+        (decision 0069). The JSON it printed before told the summary nothing: on PreCompact
+        `continue` and `systemMessage` are discarded."""
+        self.start()
+        card = self.claim_a_task("s1", "src/invoice.py")
+        proc = self.gate("checkpoint", {"session_id": "s1", "hook_event_name": "PreCompact",
+                                        "trigger": "auto"})
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(proc.stdout.startswith("Keep, word for word: the founder's requests"),
+                        proc.stdout)
+        self.assertIn(f'In play: card {card.id} "{card.title}"', proc.stdout)
+        with self.assertRaises(ValueError, msg="read as fields, it would instruct nothing"):
+            json.loads(proc.stdout)
+
+    def test_what_it_tells_the_summary_stays_under_the_cap(self):
+        """Claude Code cuts each PreCompact hook's stdout at 10,000 characters."""
+        self.start()
+        for n in range(5):
+            self.claim_a_task("s1", f"src/part_{n}.py")
+        proc = self.gate("checkpoint", {"session_id": "s1", "hook_event_name": "PreCompact",
+                                        "trigger": "manual"})
+        self.assertLess(len(proc.stdout), 2_000)
+        self.assertEqual(3, proc.stdout.count("In play: card"))
+
     def test_checkpoints_do_not_collide(self):
         self.start()
         for _ in range(3):
