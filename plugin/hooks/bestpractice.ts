@@ -4,7 +4,9 @@
 // successful command result becomes a digest with the whole kept on disk (decision 0048), the
 // harness's WebSearch is answered by Parallel and then Exa (decision 0049), a listing of the
 // agents a session can message says what each session on the repository is doing (decision
-// 0050), and a subagent runs no lower than the founder's floor (decision 0051). What any of
+// 0050), a subagent runs no lower than the founder's floor (decision 0051), and the founder sees
+// the board beside the chat, a status line and a pane the model is never sent (decision 0074).
+// What any of
 // that should be is asked of the plugin's Python library through
 // `bin/claude-bp-mod`; whatever goes wrong here leaves the call as Claude Code made it.
 import type { EngineInterface, Register, ToolCallResult } from 'claude-code'
@@ -26,6 +28,10 @@ const PARALLEL_FIRST_MS = 15 * 60_000
 const SITE_QUERIES = 3
 // The tiers a subagent can name, cheapest first, as `subagents.TIERS` in the library has them.
 const TIERS = ['haiku', 'sonnet', 'opus', 'fable']
+// The pane the founder opens with `/sessions`, and how often the board is read again besides the
+// end of every turn: a session that only waits still sees a sibling's pull request come in.
+const BOARD_PANE = 'sessions'
+const BOARD_EVERY_MS = 60_000
 
 type BashRecord = {
   stdout?: string
@@ -41,6 +47,8 @@ type Answer = Record<string, unknown>
 
 let python: readonly string[] | null = null
 const searchedThroughParallel = new Map<string, number>()
+// The pane's rows as the library last gave them; a reload starts them over.
+let boardRows: readonly string[] = []
 
 async function ask($: EngineInterface, what: string, request: Answer): Promise<Answer> {
   const script = `${$.plugin.root}/bin/claude-bp-mod`
@@ -101,6 +109,16 @@ function routed(query: string, text: string, tool: string, exa: string | undefin
       durationSeconds: (Date.now() - started) / 1000,
     },
   }
+}
+
+// Reads the board again and shows it: the status line under the prompt, and the pane's rows if it
+// is open. An empty answer, which is what `enabled off` and a directory outside every repository
+// give, clears the line.
+async function showTheBoard($: EngineInterface): Promise<void> {
+  const board = await ask($, 'board', {})
+  $.ui.status(typeof board.line === 'string' && board.line !== '' ? board.line : undefined)
+  boardRows = Array.isArray(board.rows) ? board.rows.filter((row): row is string => typeof row === 'string') : []
+  $.ui.invalidate('ui.render')
 }
 
 function ourRefusal(ran: ToolCallResult): string {
@@ -186,6 +204,32 @@ export const register: Register = (on) => {
     const answer = await ask($, 'roster', {})
     if (typeof answer.text !== 'string' || answer.text === '') return ran
     return { result: { ...listed, listing: `${listed.listing}\n\n${answer.text}` } }
+  }).catch(async ($, e, next) => next(e))
+
+  on('session.start', async ($, e, next) => {
+    const started = await next(e)
+    await $.command.register({ name: BOARD_PANE, description: 'What every session on this repository is doing' })
+    $.clock.every(BOARD_EVERY_MS, () => showTheBoard($))
+    void showTheBoard($)
+    return started
+  }).catch(async ($, e, next) => next(e))
+
+  on('turn.complete', async ($, e, next) => {
+    const completed = await next(e)
+    void showTheBoard($)
+    return completed
+  }).catch(async ($, e, next) => next(e))
+
+  on('command.run', { command: BOARD_PANE }, async ($) => {
+    await showTheBoard($)
+    const opened = await $.ui.open({ id: BOARD_PANE, title: 'Sessions' })
+    return { text: opened.isPlaced ? 'The sessions pane is open.' : 'The sessions pane opens where there is room.' }
+  }).catch(async ($, e, next) => (next.called ? next(e) : { text: 'The sessions pane could not be read.' }))
+
+  on('ui.render', { component: 'Pane', requestId: BOARD_PANE }, async ($, e) => {
+    const { Box, Text } = $.ui.resolve(e)
+    const rows = boardRows.length > 0 ? boardRows : ['No other session, pull request or red suite here.']
+    return h(Box, { flexDirection: 'column' }, ...rows.map((row) => h(Text, null, row)))
   }).catch(async ($, e, next) => next(e))
 
   on('agent.spawn', async ($, e, next) => {
