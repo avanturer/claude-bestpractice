@@ -5,7 +5,7 @@
 **Память, координация и принуждение для разработки продукта в нескольких параллельных сессиях Claude Code.**
 
 [![version](https://img.shields.io/badge/version-2.10.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-2541%20passing-2ea44f)](#проверено)
+[![tests](https://img.shields.io/badge/tests-2871%20passing-2ea44f)](#проверено)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#проверено)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#требования)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#требования)
@@ -543,7 +543,7 @@ WebSearch, только когда не ответил ни один; Exa — д
 ## Проверено
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2541 тест · 36 проверок доктора · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2871 тест · 36 проверок доктора · budget
 ```
 
 Доктор доказывает гейты **попыткой сделать плохое**, а не чтением конфигурации обратно —
