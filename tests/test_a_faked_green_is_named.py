@@ -12,9 +12,10 @@ Samples are assembled at run time, so this file does not itself read as the thin
 
 from __future__ import annotations
 
-from claude_bestpractice import reviewrules
-
+# First: through `helpers` it puts the plugin's library on the path the next import needs.
 from test_gates import GateCase
+
+from claude_bestpractice import reviewrules
 
 OR_TRUE = "|" + "| true"
 ALWAYS_EQUAL = "class Anything:\n    def __eq__(self, other):\n        return " + "True\n"
