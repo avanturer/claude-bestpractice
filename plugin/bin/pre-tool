@@ -1496,6 +1496,17 @@ def main() -> None:
                               "credential in it.")
         hookio.emit_silent()
 
+    # A prompt this session schedules, or a message it sends another session, comes back as a
+    # turn that the hook hearing the founder cannot tell from one they typed. So no word of
+    # theirs rides in one: a scheduled `+merge` was a grant the gated session wrote for itself,
+    # and a scheduled `enabled off` a switch it threw (decision 0070).
+    if event.tool_name in founder.TURN_TEXT:
+        carried = founder.written_for_a_turn(event.tool_name, event.tool_input)
+        if carried:
+            hookio.deny_tool(founder.written_for_a_turn_refusal(event.tool_name, carried)
+                             + REFUSAL_IS_YOURS)
+        hookio.emit_silent()
+
     rec = sessions.get(ctx, event.session_id)
     if rec is None:
         # No record means SessionStart never ran, or something deleted it. Re-register
