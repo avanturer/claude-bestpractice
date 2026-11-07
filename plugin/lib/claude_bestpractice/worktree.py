@@ -1790,7 +1790,8 @@ def release_mine(ctx: GitContext, session_id: str) -> tuple[str, str, list[str]]
     return None
 
 
-def release_agents_trees(ctx: GitContext, harness_id: str) -> list[str]:
+def release_agents_trees(ctx: GitContext, harness_id: str, session_id: str = "",
+                         shell: Path | None = None) -> list[str]:
     """Remove the trees `worktree-create` made for this chat's agents, once they are spent.
 
     Claude Code keeps the tree a WorktreeCreate hook made for a subagent with `isolation:
@@ -1801,17 +1802,30 @@ def release_agents_trees(ctx: GitContext, harness_id: str) -> list[str]:
     Only a tree nobody stands in, with `git status` empty, whose branch is in the trunk: an
     agent's committed work that never reached it stays, its branch with it. The Stop gate asks
     on a turn it lets end with none of this chat's agents still at work. The paths removed.
-    """
-    from . import gitpolicy
 
+    The record an agent's own tool calls leave in its tree is this chat's, and is nobody
+    standing in it: read as a sibling, it kept every tree an agent had worked in. The tree the
+    session's own shell (`shell`) stands in is never removed from under it.
+    """
+    here = shell.resolve() if shell is not None else None
     gone: list[str] = []
     for tree in _agents_trees(ctx, harness_id):
-        if gitpolicy.stood_in(ctx, tree.resolve()):
+        if _someone_in(ctx, tree.resolve(), session_id, here):
             continue
         found = _in_the_trunk(tree)
         if found and _nothing_left_in(ctx, tree) and _release(ctx, found, record_for(ctx, tree)[0]):
             gone.append(found[0])
     return gone
+
+
+def _someone_in(ctx: GitContext, tree: Path, session_id: str, here: Path | None) -> bool:
+    """Whether `tree` holds the shell standing at `here`, or a session other than this one."""
+    from . import gitpolicy
+
+    if here is not None and (here == tree or tree in here.parents):
+        return True
+    return gitpolicy.stood_in(ctx, tree) and not (
+        session_id and gitpolicy.nobody_else_in(ctx, tree, session_id))
 
 
 def _agents_trees(ctx: GitContext, harness_id: str) -> list[Path]:

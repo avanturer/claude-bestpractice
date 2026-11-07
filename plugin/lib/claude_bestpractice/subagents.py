@@ -146,3 +146,8 @@ def fanout_refusal(spawned: int, ceiling: int) -> str:
         "If the work genuinely needs more, the founder raises `subagent_fanout`; it is "
         "their number, not this session's."
     )
+
+
+# What Stop's `background_tasks` says of work still under way. A missing or unknown status is no
+# work at all: a record the harness never ends must not stand for work being done.
+UNDER_WAY = frozenset({"running", "pending", "in_progress", "starting", "queued"})

@@ -25,7 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import __version__, attempts, board, config, delivery, discipline, drafts, evidence, founder, hookio, inbox, options, pullrequest, redact, sessions, stage, store, suites, witness, worktree  # noqa: E402
+from claude_bestpractice import __version__, attempts, board, config, delivery, discipline, drafts, evidence, founder, hookio, inbox, options, pullrequest, redact, sessions, stage, store, subagents, suites, witness, worktree  # noqa: E402
 from claude_bestpractice.gitctx import authored_floor, changed_files, resolve  # noqa: E402
 
 BLOCK_COUNTER = "_consecutive_blocks"
@@ -55,6 +55,8 @@ LET_GO_SECONDS = 3600.0
 # after it was closed in the turn being judged, and that turn is a finish whatever else it
 # paused (#264).
 SETTLED_AT = "_settled_at"
+# The pause this gate took after refusals, as `<card>@<the second it was set down>`.
+PAUSE_TAKEN = "_pause_taken"
 
 # A gap this long between blocks is not the thing the ceiling exists to stop. The ceiling
 # catches a session looping — block, retry, block, retry, minutes apart — and lets it
@@ -279,7 +281,7 @@ def _allow(ctx, rec: sessions.SessionRecord, cfg, opener: str, shell: str,
     # them (decision 0077). Never what keeps the turn from ending well.
     if cfg.remove_finished_trees:
         with contextlib.suppress(Exception):
-            spent = worktree.release_agents_trees(ctx, opener)
+            spent = worktree.release_agents_trees(ctx, opener, rec.session_id, Path(shell))
             if spent:
                 said = f"{said} Removed {len(spent)} finished agent tree(s).".strip()
     if held:
@@ -723,8 +725,11 @@ def _ends_on_a_pause(ctx, rec: sessions.SessionRecord, changed: list):
 # when done: Stop's `background_tasks`, carried since 2.1.145. A background shell or a monitor
 # may never end — a dev server, `tail -f` — and one left running would spare every finish for
 # good, so only an agent's work counts.
-_REPORTS_BACK = frozenset({"subagent", "workflow", "teammate", "cloud session"})
-_OVER = frozenset({"completed", "failed", "killed", "cancelled", "canceled", "stopped", "error"})
+#
+# Not a teammate: Claude Code keeps an idle teammate's entry `running` for good
+# (anthropics/claude-code#85955), and one would have spared every finish of the session after it.
+# And only a status that says the work is under way: a missing or unknown one is no work at all.
+_REPORTS_BACK = frozenset({"subagent", "workflow", "cloud session"})
 
 
 def _agents_at_work(event) -> list[str]:
@@ -744,7 +749,7 @@ def _agents_at_work(event) -> list[str]:
         if not isinstance(task, dict):
             continue
         kind = str(task.get("type") or "").strip().lower()
-        if kind not in _REPORTS_BACK or str(task.get("status") or "").strip().lower() in _OVER:
+        if kind not in _REPORTS_BACK or str(task.get("status") or "").strip().lower() not in subagents.UNDER_WAY:
             continue
         sent_to = str(task.get("description") or task.get("agent_type") or kind)
         at_work.append(_cut(" ".join(redact.strip_control(sent_to).split()), 80))
@@ -765,17 +770,24 @@ def _plain(text: str) -> str:
     return " ".join(str(text or "").lower().split()).strip(" \"'«»“”.,!…")
 
 
-def _spares_the_finish(event, card, blocked: int) -> bool:
+def _spares_the_finish(ctx, event, rec, card, blocked: int) -> bool:
     """May the turn end on this pause without what a finish owes?
 
     At once where the blocker is the founder's own words: decision 0033 took a pause as a
     legitimate end because it carries "словом пользователя", and nothing checked that it did. A
     blocker of the session's own only once this gate has refused it PAUSE_AFTER_REFUSALS times in
-    a row, so it is never the first answer to a red suite.
+    a row, so it is never the first answer to a red suite; and then for good, until the card moves
+    again. The Stop that took it reset the count, and every later turn was refused twice more.
     """
-    if blocked >= PAUSE_AFTER_REFUSALS:
-        return True
     from claude_bestpractice import plan
+
+    taken = f"{card.id}@{plan.moved_at(card):.0f}"
+    if rec.tool_signatures.get(PAUSE_TAKEN) == taken:
+        return True
+    if blocked >= PAUSE_AFTER_REFUSALS:
+        rec.tool_signatures[PAUSE_TAKEN] = taken
+        sessions.touch(ctx, rec.session_id, tool_signatures=dict(rec.tool_signatures))
+        return True
 
     quoted = _plain(card.blocker)
     if len(quoted) < plan.MIN_BLOCKER_CHARS:
@@ -901,7 +913,7 @@ def main() -> None:
     paused = _ends_on_a_pause(ctx, rec, changed)
     # Unless nothing says the pause is the founder's, and it is the first answer to a refusal.
     unspared = None
-    if paused is not None and not _spares_the_finish(event, paused, blocked):
+    if paused is not None and not _spares_the_finish(ctx, event, rec, paused, blocked):
         paused, unspared = None, paused
     # And a turn that ends to wait for its own agents is not one either: what they were sent
     # to do is still being done (decision 0070).
@@ -1066,7 +1078,9 @@ def main() -> None:
         # The ledger had no closing half at all before this: `complete` had one caller, the
         # CLI, so a card left `doing` only if somebody remembered the command, and card
         # 0050 in this repository sat there for four days over merged and tagged work.
-        delivered = not at_work and not _work_the_siblings_cannot_see(ctx)
+        landed = not _work_the_siblings_cannot_see(ctx)
+        # Not while its agents work: the cards are closed once what they were sent to do is done.
+        delivered = landed and not at_work
         if delivered:
             # `pre-tool` closes the cards of a merge it gates itself, which is the ordinary
             # route and costs no turn. This is every other one: a merge on the website, a
@@ -1093,7 +1107,7 @@ def main() -> None:
         # And the card it ended this turn by pausing: the board says what the work is and
         # what it waits on. Asked to `claim` instead, a session was told to take back the
         # card it had just set down at the founder's word (#264).
-        if not mine and not closed and not delivered and paused is None and unspared is None:
+        if not mine and not closed and not landed and paused is None and unspared is None:
             # Quoted, and the card given its `--done-when`: printed any other way the second
             # command failed on the first one's card, or the first on a path with a space in
             # it (decision 0020 — every command a refusal names runs as printed).
@@ -1281,7 +1295,8 @@ def main() -> None:
         f"claude-bestpractice [{blocked + 1}/{evidence.MAX_CONSECUTIVE_BLOCKS}] — not done yet.\n\n"
         f"{reason}\n\n"
         + (_how_to_stop_here(ctx, rec) if owed_by_a_finish else "")
-        + (_why_the_pause_did_not_end_it(unspared) if unspared is not None else "")
+        + (_why_the_pause_did_not_end_it(unspared) if unspared is not None and owed_by_a_finish
+           else "")
         + "Your description of what you did is not evidence and was not read."
     )
 
