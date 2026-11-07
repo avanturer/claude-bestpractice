@@ -145,6 +145,12 @@ _NOISE = re.compile(
 # the gate's message into the inbox as a founder decision, and the loop fed itself: the
 # more the gate blocked, the more "decisions" appeared. Measured on a live repository, 96
 # drafts — 57 the gate quoting itself, 39 compaction boilerplate, 0 from a human.
+#
+# The plain-text lines the harness opens its own records with, read off one founder's 1.2 GB
+# transcript (Claude Code 2.1.314): another session's message, a skill's expanded text, a
+# compaction summary that held others' content, and a notice about another session going idle.
+# The reader leaves them out by the harness's own marks; their text keeps them out of the drafts
+# 2.11 made from them, which repair 0045 drops, and out of a record from before those marks.
 _SYNTHETIC = re.compile(
     r"(?i)^(?:"
     r"stop hook feedback\b|"
@@ -152,6 +158,10 @@ _SYNTHETIC = re.compile(
     r"this session is being continued from a previous conversation\b|"
     r"\[request interrupted\b|"
     r"caveat: the messages below\b|"
+    r"another claude session sent a message\b|"
+    r"base directory for this skill\b|"
+    r"<artifact-content-authored-by-others\b|"
+    r"\[cross-session idle notice\]|"
     r"<(?:command-name|command-message|local-command-stdout|system-reminder|"
     r"user-prompt-submit-hook|bash-input|bash-stdout|bash-stderr)\b"
     r")"

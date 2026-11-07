@@ -1330,9 +1330,9 @@ def _drop_drafts_nobody_typed(ctx: GitContext) -> str:
     `drafts.user_turns` took every user record of the transcript, so a task's notification, a
     command's expanded text and a hook's line were drafted as the founder's decisions: on one
     founder's clone `claude-bp status` said 730 drafts were waiting, and the newest of them were
-    `<task-notification>` rows and the instructions `/loop` expands to. The reader takes only the
-    founder's own messages now; this drops the drafts it left, and keeps every draft of a
-    person's words and every one already resolved.
+    `<task-notification>` rows and the instructions `/loop` expands to, and many of the rest
+    another session's message. The reader takes only the founder's own messages now; this drops
+    the drafts it left, and keeps every draft of a person's words and every one already resolved.
     """
     from . import drafts
 

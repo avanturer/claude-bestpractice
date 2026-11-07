@@ -594,16 +594,35 @@ class TestWhatNobodyTypedIsDropped(RepoCase):
     LOOP = "# /loop — schedule a recurring or self-paced prompt Parse the input below into `[interval]`"
     THEIRS = "не нужно ничего считать все уже сделано, просто закрой задачу и всё"
 
+    # The lines the harness opened its own `user` records with in that founder's transcript,
+    # Claude Code 2.1.314: most of what repair 0045 kept at first was the first of them.
+    # Each carries a marker the reader drafts from, so only the rule keeps it out of the inbox.
+    PEER = ('Another Claude session sent a message: <agent-message from="af240023bb"> '
+            "[Subagent hand-back] From now on the suite runs before every merge")
+    HARNESS_LINES = (
+        PEER,
+        "Another Claude session sent a message: [claude-bp] fix/images: never use the shared base",
+        "Base directory for this skill: /home/f/.claude/skills/synced/3f327 Always run the suite",
+        "<artifact-content-authored-by-others/> The summarized conversation: from now on, merge",
+        '[Cross-session idle notice] "fuddy-06", which you asked about, is idle. From now on it waits',
+    )
+
     def test_harness_text_is_nobodys(self):
         for quote in (self.NOTIFICATION, self.NOTIFICATION[:60], self.LOOP,
                       "Stop hook feedback: the suite is red",
-                      "[Request interrupted by user for tool use]"):
+                      "[Request interrupted by user for tool use]", *self.HARNESS_LINES):
             self.assertTrue(drafts.nobodys_words(quote), quote)
+
+    def test_the_reader_files_no_draft_from_them_either(self):
+        """A record from before the harness marked its sender is judged by its text."""
+        for line in self.HARNESS_LINES:
+            self.assertIsNone(drafts.classify(line), line)
 
     def test_a_persons_words_are_theirs_even_beside_an_envelope(self):
         for quote in (self.THEIRS, f"<ide_opened_file>src/app.ts</ide_opened_file> {self.THEIRS}",
                       "# Итог: всегда мерджи после зелёного CI",
-                      f"{self.THEIRS} <task-notification> вставил для примера"):
+                      f"{self.THEIRS} <task-notification> вставил для примера",
+                      f"{self.THEIRS}, а то Another Claude session sent a message: всегда так"):
             self.assertFalse(drafts.nobodys_words(quote), quote)
 
     def file(self, quote: str, **extra) -> None:
@@ -619,12 +638,13 @@ class TestWhatNobodyTypedIsDropped(RepoCase):
 
         self.file(self.NOTIFICATION)
         self.file(self.LOOP)
+        self.file(self.PEER)
         self.file(self.THEIRS)
         self.file("<task-notification> already handled", resolved=True)
 
         said = migrate._drop_drafts_nobody_typed(self.ctx())
 
-        self.assertEqual("2 decision draft(s) made from text nobody typed dropped", said)
+        self.assertEqual("3 decision draft(s) made from text nobody typed dropped", said)
         self.assertEqual([self.THEIRS], [row["quote"] for row in drafts.pending(self.ctx())])
         from claude_bestpractice import store
 
