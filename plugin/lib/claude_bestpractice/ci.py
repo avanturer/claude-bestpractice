@@ -201,9 +201,43 @@ fi
 # git gave us, and its refusal is still a refusal. Displacing a husky or lefthook hook
 # without running it would switch off a check you rely on. Never a hook of ours, though:
 # chained under that name it runs itself, and a push became `sh` forking until killed.
+#
+# What git hands the hook on stdin, a line per ref, is read once: that hook reads it too, and so
+# does the check after it. Only when git runs the hook, which it does with the remote's name and
+# address, and with the shell's own `read`: run by hand, a hook waited on a terminal for input.
+_cbp_refs=""
+_cbp_read=""
+if [ "$#" -ge 2 ] && [ ! -t 0 ]; then
+    _cbp_read=1
+    while IFS= read -r _cbp_line || [ -n "$_cbp_line" ]; do
+        _cbp_refs="$_cbp_refs$_cbp_line
+"
+    done
+fi
 _original="$(dirname "$0")/{DISPLACED_NAME}"
 if [ -x "$_original" ] && ! grep -q '{MARKER}' "$_original" 2>/dev/null; then
-    "$_original" "$@" || exit $?
+    if [ -z "$_cbp_read" ]; then
+        "$_original" "$@" || exit $?
+    else
+        printf '%s' "$_cbp_refs" | "$_original" "$@" || exit $?
+    fi
+fi
+
+# A push that only deletes carries no code to check: each line git hands over names a local
+# object of zeros. `git push origin --delete <branch>` waited on the whole suite, and failed
+# after it once that branch's tree was gone (reported on 1.73.0).
+_cbp_code=""
+_cbp_seen=""
+while read -r _cbp_local _cbp_sha _cbp_rest; do
+    [ -n "$_cbp_local" ] || continue
+    _cbp_seen=1
+    case "$_cbp_sha" in *[!0]*) _cbp_code=1 ;; esac
+done <<_CBP_REFS_
+$_cbp_refs
+_CBP_REFS_
+if [ -n "$_cbp_seen" ] && [ -z "$_cbp_code" ]; then
+    echo "claude-bestpractice: this push only deletes; there is no code to check." >&2
+    exit 0
 fi
 
 # Already proven on THIS EXACT TREE, so running it again cannot change the answer. The

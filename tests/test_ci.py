@@ -72,6 +72,46 @@ class TestTheHookStopsAPush(CICase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
+    def test_a_push_that_only_deletes_runs_nothing(self):
+        """Reported on 1.73.0: `git push origin --delete <branch>` waited on the whole suite,
+        and failed after it once that branch's tree was gone. A deletion carries no code."""
+        self.with_remote()
+        self.make_check(exit_code=0)
+        git(["push", "-q", "--no-verify", "origin", "main:old-feature"], self.repo)
+        self.make_check(exit_code=1)
+        self.cli("local")
+
+        deleted = subprocess.run(["git", "push", "origin", "--delete", "old-feature"],
+                                 capture_output=True, text=True, cwd=str(self.repo), timeout=180)
+        pushed = subprocess.run(["git", "push", "origin", "main"],
+                                capture_output=True, text=True, cwd=str(self.repo), timeout=180)
+
+        self.assertEqual(0, deleted.returncode, deleted.stderr)
+        self.assertNotIn("red", deleted.stdout + deleted.stderr)
+        self.assertNotEqual(0, pushed.returncode, "a push with code went out over a red check")
+
+    def test_a_hook_it_displaced_still_reads_what_git_hands_over(self):
+        """The refs are read once and handed on: a hook that refuses a push to main by them
+        must still see them."""
+        from claude_bestpractice import ci
+
+        self.with_remote()
+        self.make_check(exit_code=0)
+        hooks = ci.hooks_dir(self.ctx())
+        hooks.mkdir(parents=True, exist_ok=True)
+        (hooks / "pre-push").write_text(
+            "#!/bin/sh\nwhile read -r local sha remote rsha; do\n"
+            "  case \"$remote\" in refs/heads/main) echo NO-PUSH-TO-MAIN >&2; exit 1 ;; esac\n"
+            "done\nexit 0\n")
+        (hooks / "pre-push").chmod(0o755)
+        self.cli("local")
+
+        proc = subprocess.run(["git", "push", "origin", "main"],
+                              capture_output=True, text=True, cwd=str(self.repo), timeout=180)
+
+        self.assertNotEqual(0, proc.returncode)
+        self.assertIn("NO-PUSH-TO-MAIN", proc.stderr)
+
     def test_no_verify_is_the_deliberate_bypass(self):
         """Escapable on purpose — an inescapable gate is one that gets uninstalled."""
         self.with_remote()
@@ -433,7 +473,7 @@ class TestTheHookRunsTheProjectsOwnSuite(CICase):
             (stub / tool).symlink_to(found)
 
         proc = subprocess.run(
-            ["sh", str(ci.hook_path(self.ctx()))],
+            ["sh", str(ci.hook_path(self.ctx()))], stdin=subprocess.DEVNULL,
             cwd=str(self.repo), capture_output=True, text=True, timeout=60,
             env={**os.environ, "PATH": str(stub)},
         )
@@ -819,7 +859,7 @@ class TestALanguageIsNotADirectoryName(CICase):
 
         env = dict(os.environ, PATH=f"{BIN}{os.pathsep}{os.environ.get('PATH', '')}")
         proc = subprocess.run(
-            ["sh", str(ci.hook_path(self.ctx()))],
+            ["sh", str(ci.hook_path(self.ctx()))], stdin=subprocess.DEVNULL,
             cwd=str(self.repo), capture_output=True, text=True, timeout=120, env=env,
         )
         self.assertEqual(0, proc.returncode, f"a Ruby project could not push: {proc.stderr}")
@@ -1078,7 +1118,7 @@ class TestTheChecksDieWithTheHook(RepoCase):
         ci.ensure(self.ctx())
 
         hook = subprocess.Popen(
-            [str(ci.hook_path(self.ctx()))], cwd=str(self.repo),
+            [str(ci.hook_path(self.ctx()))], cwd=str(self.repo), stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         try:
@@ -1319,7 +1359,7 @@ class TestAHookFromBeforeTheRenameIsOurs(CICase):
         carried = ci.hooks_dir(self.ctx()) / ci.DISPLACED_NAME
         self.assertTrue(carried.exists(), "their hook was left where nothing reads it")
         proc = subprocess.run(
-            ["sh", str(ci.hook_path(self.ctx()))],
+            ["sh", str(ci.hook_path(self.ctx()))], stdin=subprocess.DEVNULL,
             cwd=str(self.repo), capture_output=True, text=True, timeout=60,
         )
         self.assertIn("THEIR-CHECK-RAN", proc.stdout)
@@ -1391,7 +1431,7 @@ class TestTheHookDoesNotAimTheChecksAtThisRepository(CICase):
         injected = self.elsewhere()
 
         subprocess.run(
-            ["sh", str(ci.hook_path(self.ctx()))],
+            ["sh", str(ci.hook_path(self.ctx()))], stdin=subprocess.DEVNULL,
             cwd=str(self.repo), capture_output=True, text=True, timeout=180,
             env={**os.environ, "GIT_DIR": str(injected)},
         )
@@ -1410,7 +1450,7 @@ class TestTheHookDoesNotAimTheChecksAtThisRepository(CICase):
         injected = self.elsewhere()
 
         proc = subprocess.run(
-            ["sh", str(ci.hook_path(self.ctx()))],
+            ["sh", str(ci.hook_path(self.ctx()))], stdin=subprocess.DEVNULL,
             cwd=str(self.repo), capture_output=True, text=True, timeout=180,
             env={**os.environ, "GIT_INDEX_FILE": str(injected / "index"),
                  "GIT_WORK_TREE": str(injected.parent)},
