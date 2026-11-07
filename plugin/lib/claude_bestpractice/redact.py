@@ -91,6 +91,8 @@ _PLACEHOLDERS = {
     # Russian and transliterations, because a comment is written in the language of
     # whoever wrote it, and this one was.
     "\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c", "\u043b\u043e\u0433\u0438\u043d", "\u043f\u0430\u0440\u043e\u043b\u044c", "polzovatel", "logini", "parol",
+    # What an `.env.example` asks the reader to replace: fuddy's says it for every key.
+    "changeme", "change_me", "change-me",
 }
 
 
@@ -130,11 +132,42 @@ def _is_indirection(value: str) -> bool:
 #
 # Safe by construction rather than by judgement: no credential worth rotating is a bare
 # number, so this cannot suppress a real one.
-_MEASUREMENT = re.compile(r"^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$")
+#
+# A range is two of them: `VISION_MAX_TOKENS=800→2000` in a comment of fuddy's config.
+_NUMBER = r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?"
+_MEASUREMENT = re.compile(rf"^{_NUMBER}(?:\s*(?:→|->|–|-|\.\.)\s*{_NUMBER})?$")
 
 
 def _is_measurement(value: str) -> bool:
     return bool(_MEASUREMENT.match(value.strip().strip("\"'")))
+
+
+# Not a credential by what it is, quoted or not, each read off fuddy's code by the scanner:
+# - an example cut short, `LLM_API_KEY=sk-or-...` in its quick start;
+# - a path to where the key is kept, `"ascApiKeyPath": "./.secrets/AuthKey_….p8"`, which base64
+#   and hex cannot start with;
+# - prose, a value opening on a letter outside ASCII: `- FatSecret: официальная информация…`.
+#   Keys and tokens are ASCII, as the headers that carry them are.
+_ELIDED = re.compile(r"(?:\.\.\.|…)[\"']?$")
+_PATH = re.compile(r"^[\"']?(?:\./|\.\./|~/)")
+
+
+def _is_elided(value: str) -> bool:
+    return bool(_ELIDED.search(value.strip()))
+
+
+def _is_path(value: str) -> bool:
+    return bool(_PATH.match(value.strip()))
+
+
+def _is_prose(value: str) -> bool:
+    first = value.strip().lstrip("\"'")[:1]
+    return first.isalpha() and not first.isascii()
+
+
+# What a credential's NAME says it is not: the identifier of a key, not the key. App Store
+# Connect's key id and issuer id sit beside the path to the key itself in fuddy's `eas.json`.
+_IDENTIFIES = re.compile(r"(?i)(?:key|issuer)[_-]?id$")
 
 
 # A dotted code reference is not a literal, and only a literal can be a credential worth
@@ -208,18 +241,43 @@ def _is_coordinate(value: str) -> bool:
 # had to be renamed to be written. Unquoted, one identifier, and code after it on its line: a
 # secret in a `.env` file or a shell's environment ends the line or the word. After a colon only
 # a type's name, which starts with a capital; `token: s3cr3tv4lue, user: bob` is still a secret.
+#
+# Two more shapes of the same, from fuddy's tests and scripts: a name after a QUOTED key, the
+# value of a mapping in code (`{"prompt_tokens": in_tokens,`), where JSON allows no bare word and
+# the name has a code name's shape, snake or camel; and a chained assignment, `a = b = 0`.
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _TYPE_NAME = re.compile(r"^[A-Z][A-Za-z0-9_]*$")
+_CODE_NAME = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+|[A-Z][a-z0-9]*)+$")
 _TYPED = re.compile(r"\s*[,)|=\]]")
-_OPERAND = re.compile(r"\s+(?:[-+*/%]|or|and|if)\s")
+_ITEM_ENDS = re.compile(r"[ \t]*(?:[,)}\]]|$)", re.M)
+_OPERAND = re.compile(r"\s+(?:[-+*/%]|==?|or|and|if)\s")
 
 
 def _is_code(match: "re.Match") -> bool:
-    value = match.group("value")
-    typed = ":" in match.string[match.end("name"):match.start("value")]
-    if not (_TYPE_NAME if typed else _IDENTIFIER).match(value):
-        return False
-    return bool((_TYPED if typed else _OPERAND).match(match.string, match.end("value")))
+    value, text = match.group("value"), match.string
+    between = text[match.end("name"):match.start("value")]
+    if ":" not in between:
+        shape, after = _IDENTIFIER, _OPERAND
+    elif between[:1] in "\"'" and text[match.start("name") - 1:match.start("name")] == between[:1]:
+        shape, after = _CODE_NAME, _ITEM_ENDS
+    else:
+        shape, after = _TYPE_NAME, _TYPED
+    return bool(shape.match(value) and after.match(text, match.end("value")))
+
+
+# A JavaScript regular expression, `definitiveTokens: /paraben/i,` in fuddy's dietary matcher.
+_REGEX_LITERAL = re.compile(r"^/(?:[^/\\\n]|\\.)+/[dgimsuyv]*$")
+
+
+def _is_regex_literal(value: str) -> bool:
+    return bool(_REGEX_LITERAL.match(value.strip()))
+
+
+def _is_required_variable(match: "re.Match") -> bool:
+    """`${MAIL_PASSWORD:?MAIL_PASSWORD required}`: a shell asking for the variable, whose text
+    after `:?` is the error it prints when the variable is missing."""
+    opened = match.string[max(0, match.start("name") - 2):match.start("name")] == "${"
+    return opened and match.group("value").startswith("?")
 
 
 def _is_development_default(name: str, value: str) -> bool:
@@ -250,13 +308,21 @@ def _is_not_a_secret(match: "re.Match") -> bool:
     protects nothing at all.
     """
     value, name = match.group("value"), match.group("name")
-    if _is_indirection(value) or _is_measurement(value) or _is_address(value):
+    if _IDENTIFIES.search(name) or _is_required_variable(match):
+        return True
+    if any(rule(value) for rule in _NEVER_A_CREDENTIAL):
         return True
     if _is_development_default(name, value) or _is_fetch_mode(name, value):
         return True
     if match.group("quote"):
         return False
-    return _is_reference(value) or _is_expression(value) or _is_code(match) or _is_coordinate(value)
+    return any(rule(value) for rule in _CODE_WHEN_BARE) or _is_code(match)
+
+
+# Quoted or bare. A bare value is also code in the shapes after these; a quoted one is a literal.
+_NEVER_A_CREDENTIAL = (_is_indirection, _is_measurement, _is_address, _is_elided, _is_path,
+                       _is_prose)
+_CODE_WHEN_BARE = (_is_reference, _is_expression, _is_coordinate, _is_regex_literal)
 
 
 def scrub(text: str) -> str:
