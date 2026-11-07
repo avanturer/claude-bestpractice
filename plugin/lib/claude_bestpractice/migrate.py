@@ -28,6 +28,7 @@ command.
 from __future__ import annotations
 
 import calendar
+import os
 import re
 import subprocess
 import time
@@ -2002,9 +2003,9 @@ def registries(ctx: GitContext) -> list[Path]:
     root = ctx.worktree_root
     skip = _ignored(ctx)
     found: list[Path] = []
-    for path in sorted(root.rglob("*.md")):
+    for path in _markdown_under(root):
         relative = path.relative_to(root).as_posix()
-        if any(part in _SKIP for part in path.relative_to(root).parts) or _key(relative) in skip:
+        if _key(relative) in skip:
             continue
         if _TEMPLATE.search(relative):
             continue
@@ -2016,6 +2017,22 @@ def registries(ctx: GitContext) -> list[Path]:
             continue
         found.append(path)
     return found
+
+
+def _markdown_under(root: Path) -> list[Path]:
+    """Every `.md` file under `root`, sorted, from a walk that never enters a directory `_SKIP`
+    names and goes on past one that is gone by the time it gets there.
+
+    `rglob` entered every `node_modules` and every tree under `.claude/worktrees` before the skip
+    list was asked, at each session start, and on Python 3.10 a directory removed while it walked,
+    a sibling's tree or a reinstall, ended the session start with FileNotFoundError: three times on
+    the founder's machine on 2.7.1, and that session's board was never built.
+    """
+    found: list[Path] = []
+    for where, dirs, files in os.walk(root):
+        dirs[:] = [name for name in dirs if name not in _SKIP]
+        found.extend(Path(where) / name for name in files if name.endswith(".md"))
+    return sorted(found)
 
 
 def _not_ours_to_judge(ctx: GitContext, relative: str) -> bool:
