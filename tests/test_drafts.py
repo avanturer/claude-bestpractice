@@ -8,9 +8,12 @@ import sys
 import time
 import unittest
 
-from helpers import BIN, RepoCase
+from helpers import BIN, RepoCase, turn as founder_turn
 
 from claude_bestpractice import drafts
+
+# When the turns in these transcripts were typed: the founder's reader takes the harness's stamp.
+AT = 1794000000.0
 
 
 class TestClassification(unittest.TestCase):
@@ -109,16 +112,16 @@ class TestTranscriptReading(RepoCase):
     def test_reads_user_turns(self):
         path = self.transcript(
             [
-                {"type": "user", "message": {"content": "first thing"}},
+                founder_turn("first thing", AT),
                 {"type": "assistant", "message": {"content": "reply"}},
-                {"type": "user", "message": {"content": [{"type": "text", "text": "second"}]}},
+                founder_turn([{"type": "text", "text": "second"}], AT + 1),
             ]
         )
         self.assertEqual(drafts.user_turns(path), ["first thing", "second"])
 
     def test_skips_sidechain_turns(self):
         path = self.transcript(
-            [{"type": "user", "isSidechain": True, "message": {"content": "subagent noise"}}]
+            [founder_turn("subagent noise", AT, isSidechain=True)]
         )
         self.assertEqual(drafts.user_turns(path), [])
 
@@ -128,8 +131,38 @@ class TestTranscriptReading(RepoCase):
 
     def test_garbage_lines_are_skipped(self):
         path = self.tmp / "t.jsonl"
-        path.write_text('{"type":"user","message":{"content":"ok"}}\nnot json at all\n')
+        path.write_text(json.dumps(founder_turn("ok", AT)) + "\nnot json at all\n")
         self.assertEqual(drafts.user_turns(str(path)), ["ok"])
+
+
+class TestOnlyTheFoundersWordsAreDrafted(RepoCase):
+    """Every `user` entry used to count: a task's notification and a skill's expanded text were
+    drafted as the founder's decisions, and the whole transcript was read at every Stop."""
+
+    def transcript(self, records: list[dict]) -> str:
+        path = self.tmp / "t.jsonl"
+        path.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+        return str(path)
+
+    def test_what_the_harness_files_as_a_user_entry_is_not_drafted(self):
+        path = self.transcript([
+            founder_turn("нет, не так — всегда через worktree", AT),
+            founder_turn("<task-notification> <task-id>w1</task-id> <status>completed</status> "
+                         "не нужно больше ждать</task-notification>", AT + 1,
+                         origin={"kind": "task-notification"}),
+            founder_turn("# /loop — schedule a recurring prompt. Never run it twice", AT + 2,
+                         isMeta=True),
+        ])
+        self.assertEqual(["нет, не так — всегда через worktree"], drafts.user_turns(path))
+
+    def test_only_the_end_of_a_long_transcript_is_read(self):
+        from unittest import mock
+
+        filler = [{"type": "assistant", "message": {"content": "x" * 500}}] * 40
+        path = self.transcript([founder_turn("нет, это старое решение из начала разговора", AT),
+                                *filler, founder_turn("нет, не так — это свежая поправка", AT + 9)])
+        with mock.patch.object(drafts, "TAIL_BYTES", 2000):
+            self.assertEqual(["нет, не так — это свежая поправка"], drafts.user_turns(path))
 
 
 class TestCli(RepoCase):
@@ -229,12 +262,7 @@ class TestGateIntegration(RepoCase):
     def test_stop_gate_harvests_drafts(self):
         transcript = self.tmp / "t.jsonl"
         transcript.write_text(
-            json.dumps(
-                {
-                    "type": "user",
-                    "message": {"content": "No, not Redis — we already tried that and it broke"},
-                }
-            )
+            json.dumps(founder_turn("No, not Redis — we already tried that and it broke", AT))
             + "\n"
         )
         for gate, event in (
@@ -309,7 +337,7 @@ class TestThePluginDoesNotQuoteItselfBackAsADecision(RepoCase):
         rows = [self.GATE_FEEDBACK] * 5 + [self.COMPACTION] * 3 + [self.HUMAN]
         transcript.write_text(
             "\n".join(
-                json.dumps({"type": "user", "message": {"content": body}}) for body in rows
+                json.dumps(founder_turn(body, AT + i)) for i, body in enumerate(rows)
             ),
             encoding="utf-8",
         )
@@ -404,7 +432,7 @@ class TestARussianTurnReachesTheInbox(RepoCase):
         transcript = self.repo / "transcript.jsonl"
         turn = "нет, не так — бери timestamp из source_products, а не из snapshot"
         transcript.write_text(
-            json.dumps({"type": "user", "message": {"content": turn}}), encoding="utf-8"
+            json.dumps(founder_turn(turn, AT)), encoding="utf-8"
         )
         turns = drafts.user_turns(str(transcript))
         made = drafts.extract(turns, "main", "s1", [])
@@ -481,7 +509,7 @@ class TestAStandingInstructionSurvivesTheTurn(RepoCase):
         transcript = self.repo / "transcript.jsonl"
         turn = "запомни навсегда: во всех трёх сторах держим один и тот же номер версии"
         transcript.write_text(
-            json.dumps({"type": "user", "message": {"content": turn}}), encoding="utf-8"
+            json.dumps(founder_turn(turn, AT)), encoding="utf-8"
         )
         made = d.extract(d.user_turns(str(transcript)), "main", "s1", [])
         self.assertEqual(1, len(made))

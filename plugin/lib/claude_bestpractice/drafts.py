@@ -18,7 +18,6 @@ paraphrase away the exact wording that makes the record worth keeping.
 
 from __future__ import annotations
 
-import json
 import re
 import time
 from dataclasses import dataclass
@@ -196,47 +195,25 @@ class Draft:
         }
 
 
+# How much of a transcript's end is read for the founder's recent words. A draft comes from the
+# turn that just ended; the whole file was read at every Stop, and a long session's runs to
+# hundreds of megabytes.
+TAIL_BYTES = 8 * 1024 * 1024
+
+
 def user_turns(transcript_path: str) -> list[str]:
-    """Recent user messages, best effort.
+    """What the founder typed into this chat lately, oldest first, best effort.
 
-    The transcript format is documented as internal and changing between releases, so
-    every failure here degrades to an empty list rather than raising. Drafting is a
-    convenience; breaking a session over it would be absurd.
+    Read through `founder.messages`, the one reader of a person's words. Every `user` entry
+    used to count, so a task's notification and a skill's expanded text were drafted as the
+    founder's decisions, beside this plugin's own refusals the textual rules below still
+    catch. Never raises: drafting is a convenience, and breaking a session over it would be
+    absurd.
     """
-    if not transcript_path:
-        return []
-    try:
-        text = Path(transcript_path).read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return []
+    from . import founder
 
-    turns: list[str] = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(record, dict) or record.get("type") != "user" or record.get("isSidechain"):
-            continue
-        message = record.get("message")
-        content = message.get("content") if isinstance(message, dict) else None
-        if isinstance(content, str):
-            body = content
-        elif isinstance(content, list):
-            body = " ".join(
-                str(part.get("text", ""))
-                for part in content
-                if isinstance(part, dict) and part.get("type") == "text"
-            )
-        else:
-            continue
-        body = body.strip()
-        if body and not is_synthetic(body):
-            turns.append(body)
-    return turns
+    turns = (turn.strip() for turn in founder.messages(transcript_path, TAIL_BYTES))
+    return [turn for turn in turns if turn and not is_synthetic(turn)]
 
 
 def classify(turn: str) -> str | None:
