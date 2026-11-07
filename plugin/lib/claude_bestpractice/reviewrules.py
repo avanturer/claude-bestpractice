@@ -44,11 +44,13 @@ CHECKS: list[tuple[str, re.Pattern[str], str]] = [
     # not a test switched off. A new test carrying `skipif(not _db_ok(), reason="требуется
     # Postgres")`, which ran in CI and skipped nothing more than before, was flagged and kept
     # its pull request from merging after the founder's `+merge` (#283). A condition that is
-    # always true switches the test off, and is still one.
+    # always true switches the test off, and is still one. A bare `fit(` or `xdescribe(` is a
+    # test only with the description every runner's test call opens with: fuddy's landing has a
+    # `function fit()` and its meal planner calls `fit(day.kcal, eaten?.kcal)`.
     ("skipped-test", re.compile(
         r"(?i)@pytest\.mark\.skip\b|@pytest\.mark\.skipif\(\s*(?:True|1)\s*[,)]"
         r"|@pytest\.mark\.xfail\b(?!\()|@unittest\.(?:skip|expectedFailure)\b(?!If|Unless)"
-        r"|\b(?:it|test|describe)\.(?:skip|only)\(|(?<![.\w])[xf](?:it|describe)\(|\bt\.Skip\("
+        r"|\b(?:it|test|describe)\.(?:skip|only)\(|(?<![.\w])[xf](?:it|describe)\(\s*['\"`]|\bt\.Skip\("
         r"|#\[ignore\]|@(?:Disabled|Ignore)\b"),
      "test skipped or narrowed — freeze the scoring rules, do not edit them"),
     ("debug-leftover", re.compile(r"(?:^|\s)(?:breakpoint\(\)|debugger;|console\.log\()"),
