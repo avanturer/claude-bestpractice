@@ -48,8 +48,21 @@ MARK = "[claude-bestpractice"
 ENVIRONMENT = "environment"
 
 
+def repository(ctx: GitContext) -> Path:
+    """The repository the facts are about: its main checkout, whichever tree asks.
+
+    A session in one of the repository's worktrees wrote a block of its own, about a tree
+    as if it were a repository, telling auto mode that sessions work in trees under
+    `<that tree>/.claude/worktrees/`. One clone had twelve such blocks, each read at every
+    classification.
+    """
+    from . import worktree
+
+    return worktree.main_checkout(ctx)
+
+
 def marker(ctx: GitContext) -> str:
-    return f"{MARK} {ctx.worktree_root.as_posix()}]"
+    return f"{MARK} {repository(ctx).as_posix()}]"
 
 
 def settings_path(home: Path | None = None) -> Path:
@@ -111,7 +124,7 @@ def facts(ctx: GitContext, test_command: list[str]) -> list[str]:
     from . import gitpolicy
 
     mark = marker(ctx)
-    root = ctx.worktree_root.as_posix()
+    root = repository(ctx).as_posix()
     trunk = gitpolicy.default_branch(ctx) or "main"
     checks = " ".join(test_command) if test_command else "not detected"
     remotes = ", ".join(_remotes(ctx)) or "none"
@@ -221,12 +234,26 @@ def _repository_of(entry: str) -> str:
     return found.group(1) if found else ""
 
 
+def _a_linked_tree(path: Path) -> bool:
+    """A worktree added to another checkout: its `.git` file names `<common dir>/worktrees/`.
+
+    A submodule's `.git` is a file too, naming `modules/`, and it is a repository of its own.
+    """
+    try:
+        with (path / ".git").open(encoding="utf-8", errors="replace") as handle:
+            head = handle.read(4096)
+    except OSError:
+        return False
+    return head.startswith("gitdir:") and "/worktrees/" in head.replace("\\", "/")
+
+
 def _gone(settings: dict) -> set[str]:
-    """Repositories our own blocks name that are no longer on disk."""
+    """What our own blocks name that is no repository on disk: a path gone, or a worktree of
+    another checkout, whose repository's block is written under its main checkout."""
     out = set()
     for entry in _entries(settings, ENVIRONMENT):
         named = _repository_of(entry)
-        if named and not Path(named).exists():
+        if named and (not Path(named).exists() or _a_linked_tree(Path(named))):
             out.add(named)
     return out
 
