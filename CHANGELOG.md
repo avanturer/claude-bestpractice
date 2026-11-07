@@ -39,7 +39,7 @@ drew the board as empty, and an agent's every turn started a Python process to r
 at every Stop, so a task's notification and the instructions `/loop` expands to were drafted as
 the founder's decisions, and a long session's transcript was read whole each turn.
 
-**A scheduled turn's text was judged raw and recorded clean.** `+​merge` passed the check
+**A scheduled turn's text was judged raw and recorded clean.** `+\u200bmerge` passed the check
 on `CronCreate`, `ScheduleWakeup` and `SendMessage`, and was recorded as `+merge` when it fired.
 
 **A function called `fit` was a focused test.** Four honest lines in fuddy were named, a merge
