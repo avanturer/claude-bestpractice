@@ -18,8 +18,11 @@ MAX_FILE_BYTES = 400_000
 # Each pattern is a class that is exact, cheap, and measured to be over-produced by
 # generated code. Anything requiring judgement is deliberately absent: a reviewer that
 # cries wolf gets ignored, and an ignored reviewer is worse than none.
-# The statement a string handed to `execute` opens with, where it is SQL at all.
-_SQL_VERB = r"\s*(?:select|insert|update|delete|with|create|alter|drop|merge|replace|truncate)\b"
+# The statement a string handed to `execute` opens with, where it is SQL at all; a bracket may
+# open it, as it opens a union.
+_SQL_VERB = (r"\s*\(?\s*(?:select|insert|update|delete|with|create|alter|drop|merge|replace|"
+             r"truncate|explain|copy|set|show|call|values|grant|revoke|vacuum|analyze|refresh|"
+             r"comment|lock|notify)\b")
 
 CHECKS: list[tuple[str, re.Pattern[str], str]] = [
     ("swallowed-exception", re.compile(r"except[^:\n]*:\s*(?:#[^\n]*)?\n\s*pass\b"),
@@ -40,10 +43,15 @@ CHECKS: list[tuple[str, re.Pattern[str], str]] = [
     # matched whatever it was handed, so fuddy's assistant splitting a product's name and
     # composition into words, `split_query(f"{name} {composition}")`, was reported as SQL (on
     # 2.7.1). A wrapper's name still counts: `db_execute(f"SELECT … {x}")` is the real thing.
+    # A string is read to the quote that opened it, on its line, so the quotes of SQL inside are
+    # its text: `"… ILIKE '%%москв%%'"` was SQL handed to `%`. A triple-quoted one is not read,
+    # its second quote opening no statement, as 2.11 read none: reading it named four trusted
+    # fragments (`{what}`, `{_visible()}`) and one plain string in fuddy's last 300 commits, and
+    # no input.
     ("sql-interpolation", re.compile(
         r"(?i)(?:execute|executemany|query)\s*\(\s*(?:"
-        r"f(?:\"\"\"|'''|[\"'])" + _SQL_VERB + r"[^\"']*\{"
-        r"|(?:\"\"\"|'''|[\"'])" + _SQL_VERB + r"[^\"']*[\"']\s*(?:%|\+)"
+        r"f(?P<f>[\"'])" + _SQL_VERB + r"(?:(?!(?P=f))[^\n])*?\{"
+        r"|(?P<q>[\"'])" + _SQL_VERB + r"(?:(?!(?P=q))[^\n])*(?P=q)\s*(?:%|\+)"
         r")"),
      "SQL built by string interpolation"),
     ("disabled-verification", re.compile(r"(?i)verify\s*=\s*False|rejectUnauthorized\s*:\s*false"),
