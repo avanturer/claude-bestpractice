@@ -58,9 +58,10 @@ async function ask($: EngineInterface, what: string, request: Answer): Promise<A
       .catch(() => null)
     if (ran === null || NOT_FOUND.has(ran.exitCode)) continue
     python = interpreter
-    return ran.exitCode === 0 ? parsed(ran.stdout) : {}
+    return ran.exitCode === 0 ? parsed(ran.stdout) : { failed: true }
   }
-  return {}
+  // Nothing answered: no Python found, or the one found was cut off at `ASK_MS`.
+  return { failed: true }
 }
 
 function parsed(text: string): Answer {
@@ -113,9 +114,16 @@ function routed(query: string, text: string, tool: string, exa: string | undefin
 
 // Reads the board again and shows it: the status line under the prompt, and the pane's rows if it
 // is open. An empty answer, which is what `enabled off` and a directory outside every repository
-// give, clears the line.
+// give, clears the line. A read that failed leaves the board as it was: drawn, it said nothing was
+// here. Each read is numbered, so an older answer that lands after a newer one is not drawn over it.
+let boardAsked = 0
+let boardDrawn = 0
+
 async function showTheBoard($: EngineInterface): Promise<void> {
+  const mine = ++boardAsked
   const board = await ask($, 'board', {})
+  if (board.failed === true || 'error' in board || mine < boardDrawn) return
+  boardDrawn = mine
   $.ui.status(typeof board.line === 'string' && board.line !== '' ? board.line : undefined)
   boardRows = Array.isArray(board.rows) ? board.rows.filter((row): row is string => typeof row === 'string') : []
   $.ui.invalidate('ui.render')
@@ -216,7 +224,9 @@ export const register: Register = (on) => {
 
   on('turn.complete', async ($, e, next) => {
     const completed = await next(e)
-    void showTheBoard($)
+    // The main loop's end only: an agent's run is a turn of its own, and reading the board at
+    // each was a process per agent, from the agent's own tree.
+    if (loopOf(e) === '') void showTheBoard($)
     return completed
   }).catch(async ($, e, next) => next(e))
 

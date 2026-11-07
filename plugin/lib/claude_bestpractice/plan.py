@@ -1355,15 +1355,18 @@ def settle_delivered(ctx: GitContext, session_id: str, delivered: list[str],
     return closed
 
 
-def held_by(ctx: GitContext, session_id: str) -> list[Task]:
+def held_by(ctx: GitContext, session_id: str, doing: list[Task] | None = None) -> list[Task]:
     """The cards this session is holding in `doing`, under any id it has had.
 
     A session that claims its card in the main checkout and then enters its own tree is a
     second identity there (`sessions.identities`), and the card is still its own. Asked by
     id alone, the gates told it nothing on the board said it was working, and the remedy
     they named — claim it — was refused as a live session's, which was itself.
+
+    `doing`, the cards in `doing` as `load_all` gives them, spares a reader that asks of every
+    session a sweep of every tree's ledger for each one.
     """
-    return _owned(ctx, session_id, DOING)
+    return _owned(ctx, session_id, DOING, doing)
 
 
 def closed_by(ctx: GitContext, session_id: str) -> list[Task]:
@@ -1381,12 +1384,14 @@ def paused_by(ctx: GitContext, session_id: str) -> list[Task]:
     return [task for task in load_all(ctx, PAUSED) if task.paused_by in pausers]
 
 
-def _owned(ctx: GitContext, session_id: str, state: str) -> list[Task]:
+def _owned(ctx: GitContext, session_id: str, state: str,
+           cards: list[Task] | None = None) -> list[Task]:
     """The cards in `state` whose owner is this session by any of its ids."""
     from . import sessions
 
     owners = sessions.identities(ctx, session_id)
-    return [task for task in load_all(ctx, state) if task.owner in owners]
+    return [task for task in (load_all(ctx, state) if cards is None else cards)
+            if task.owner in owners]
 
 
 def moved_at(task: Task) -> float:

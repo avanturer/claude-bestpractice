@@ -1,6 +1,6 @@
 // The hooks module, driven the way a session drives it, with the library and the tools stubbed:
 // `claude plugin test plugin` runs these with no process, network or file system.
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 const PARALLEL = 'mcp__plugin_bestpractice_parallel__web_search'
 const EXA = 'mcp__plugin_bestpractice_exa__web_search_exa'
@@ -218,6 +218,84 @@ test('a board the library has nothing for clears the line, as enabled off does',
   const shown = statusLines(on as On)
   await $.command.run({ command: 'sessions', args: '' })
   expect(shown).toEqual([undefined])
+})
+
+function ran(exitCode: number, stdout: string) {
+  return { value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+}
+
+function ended(agentId?: string) {
+  return { answer: 'done', durationMs: 1, isAborted: false, turnId: agentId ?? 'main', reason: 'answer' as const,
+    ...(agentId ? { agentId } : {}) }
+}
+
+test('an agent\'s turn ending reads no board, and the session\'s own turn ending does', async ($, on) => {
+  inASession(on as On)
+  const clock = mock.clock(on as never)
+  const asked: string[] = []
+  on('process.run', async ($$: unknown, e: { argv: readonly string[] }) => {
+    asked.push(e.argv[e.argv.length - 1])
+    return ran(0, JSON.stringify(BOARD))
+  })
+  on('turn.complete', async () => ({ text: 'done' }))
+  statusLines(on as On)
+  await $.turn.complete(ended('a4d2c8f1e0b3a297'))
+  await clock.advance(1)
+  expect(asked.filter((what) => what === 'board')).toHaveLength(0)
+  await $.turn.complete(ended())
+  await clock.advance(1)
+  expect(asked.filter((what) => what === 'board')).toHaveLength(1)
+})
+
+test('a board read that failed leaves the line as it was, rather than saying nothing is here', async ($, on) => {
+  inASession(on as On)
+  let exitCode = 0
+  on('process.run', async () => ran(exitCode, JSON.stringify(BOARD)))
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  const shown = statusLines(on as On)
+  await $.command.run({ command: 'sessions', args: '' })
+  exitCode = 1
+  await $.command.run({ command: 'sessions', args: '' })
+  expect(shown).toEqual([BOARD.line])
+  const ui = await $.ui.mount({ ...SESSIONS_PANE, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: /ledger-export-3c/ }))?.text).toBe(BOARD.rows[0])
+  await ui.unmount()
+})
+
+test('a board read that timed out leaves the line as it was', async ($, on) => {
+  inASession(on as On)
+  let late = false
+  on('process.run', async () => {
+    if (late) throw new Error('still running after 20000 ms')
+    return ran(0, JSON.stringify(BOARD))
+  })
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  const shown = statusLines(on as On)
+  await $.command.run({ command: 'sessions', args: '' })
+  late = true
+  await $.command.run({ command: 'sessions', args: '' })
+  expect(shown).toEqual([BOARD.line])
+})
+
+test('an older board answering after a newer one is not drawn over it', async ($, on) => {
+  inASession(on as On)
+  const clock = mock.clock(on as never)
+  const NEWER = { line: 'bestpractice · no other session', rows: [] }
+  let reads = 0
+  on('process.run', async () => {
+    reads += 1
+    if (reads === 1) {
+      await clock.sleep(5_000)
+      return ran(0, JSON.stringify(BOARD))
+    }
+    return ran(0, JSON.stringify(NEWER))
+  })
+  on('turn.complete', async () => ({ text: 'done' }))
+  const shown = statusLines(on as On)
+  await $.turn.complete(ended())
+  await $.turn.complete(ended())
+  await clock.advance(10_000)
+  expect(shown).toEqual([NEWER.line])
 })
 
 test('a read of one of this plugin\'s skills is counted, and another plugin\'s is not', async ($, on) => {

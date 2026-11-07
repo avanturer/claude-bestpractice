@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from . import __version__, hookio, provenance, redact, store, suites, testcount, witness
-from .gitctx import GitContext, changed_files
+from .gitctx import GitContext, changed_files, quiet_env
 
 # Consecutive Stop blocks before we stop blocking and leave a durable marker instead.
 # The platform overrides the hook after 8, so escalating past that just burns turns.
@@ -2103,7 +2103,7 @@ def _status_entries(ctx: GitContext) -> list[tuple[str, str]] | None:
         proc = subprocess.run(
             ["git", "-c", "core.quotePath=false", "status", "--porcelain", "-z",
              "--untracked-files=all"],
-            cwd=str(ctx.worktree_root),
+            cwd=str(ctx.worktree_root), env=quiet_env(),
             capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=30,
         )
     except (OSError, subprocess.SubprocessError):
@@ -3138,6 +3138,32 @@ def red_line(ctx: GitContext) -> str:
             f"taking it as true{_verify_here(ctx, entry, ': `claude-bp verify`')}."
         )
     return _standing_red_line(ctx, entry, lasted)
+
+
+def red_glance(ctx: GitContext) -> tuple[bool, str]:
+    """The red record as the founder's glance shows it: whether it stands, and the pane's row.
+
+    (False, "") while the suite is green. It stands where `red_line` tells every session to fix
+    it first, so neither a run beside a neighbour's database nor history about other code than
+    this tree holds reads "suite red" under the prompt. Asked every minute in every session
+    (decision 0076): it never counts the tree's tests, which only naming the run that clears the
+    record needs (`_verify_here`).
+    """
+    entry = red(ctx)
+    if not entry:
+        return False, ""
+    ran = " ".join(entry.get("command") or [])
+    scoped = f" in {entry['path']}" if entry.get("path") else ""
+    if entry.get("shared_with"):
+        tree = Path(str(entry.get("tree") or "")).name or "another tree"
+        return False, (f"`{ran}`{scoped} failed in {tree}, which shares its database with "
+                       f"{entry['shared_with']}: maybe the neighbours', not the code")
+    if _unconfirmed(ctx, entry):
+        seen = _lasted(entry.get("last_seen") or entry.get("first_seen"))
+        return False, f"`{ran}`{scoped} failed {seen} ago on other code, and has not run here since"
+    lasted = _lasted(entry.get("first_seen"))
+    since = "just now" if lasted == "just now" else f"for {lasted}"
+    return True, f"`{ran}`{scoped} fails on {entry.get('branch', '?')}, red {since}"
 
 
 def _standing_red_line(ctx: GitContext, entry: dict, lasted: str) -> str:

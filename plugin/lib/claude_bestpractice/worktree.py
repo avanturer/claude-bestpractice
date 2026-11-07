@@ -33,7 +33,7 @@ import time
 from pathlib import Path
 
 from . import store
-from .gitctx import TRUNK_REFS, GitContext
+from .gitctx import TRUNK_REFS, GitContext, quiet_env
 
 PORT_BASE = 41000
 PORT_RANGE = 900
@@ -1610,7 +1610,7 @@ def _status_of(tree: Path) -> list[tuple[str, str]] | None:
         proc = subprocess.run(
             ["git", "-c", "core.quotePath=false", "status", "--porcelain", "-z",
              "--untracked-files=all"],
-            cwd=str(tree), capture_output=True,
+            cwd=str(tree), env=quiet_env(), capture_output=True,
             encoding="utf-8", errors="surrogateescape", timeout=60,
         )
     except (OSError, subprocess.SubprocessError):
