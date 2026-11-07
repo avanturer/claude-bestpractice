@@ -72,6 +72,13 @@ class PauseCase(GateCase):
     def card_now(self) -> plan.Task:
         return plan.find(self.ctx(), self.card.id)
 
+    def settled_after_the_pause(self) -> None:
+        """The turn the card was paused in has ended, as the Stop gate stamps an allowed turn."""
+        ctx = self.ctx()
+        rec = sessions.get(ctx, sid(self.repo, "s1"))
+        sessions.touch(ctx, rec.session_id,
+                       tool_signatures={**rec.tool_signatures, "_settled_at": time.time() + 2})
+
 
 class TestAnAgentLeftRunningIsNamed(PauseCase):
     def test_a_pause_over_an_agent_at_work_is_refused_once_naming_the_stop(self):
@@ -91,6 +98,19 @@ class TestAnAgentLeftRunningIsNamed(PauseCase):
         others = [{"id": "w1", "type": "workflow", "status": "running", "description": "review"},
                   {"id": "b2p7qgt0k", "type": "shell", "status": "running", "description": "make check"}]
         self.assertEqual(0, self.stop(background_tasks=others).returncode)
+
+    def test_agents_sent_off_after_an_earlier_pause_are_not_asked_about(self):
+        """A card paused in a turn that has ended; the founder has asked for other work since, and
+        the agents are that work's."""
+        self.pause()
+        self.settled_after_the_pause()
+        self.task_stop()
+
+        proc = self.stop(background_tasks=[at_work()])
+
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertNotIn("`TaskStop`", proc.stderr)
+        self.assertNotIn(AGENT, self.card_now().body)
 
     def test_a_turn_that_is_no_pause_is_not_asked(self):
         """Agents at work spare a finish as before (decision 0070); only a pause stops them."""
@@ -155,7 +175,8 @@ class TestTheStoppedAgentsAreOnTheCard(PauseCase):
         ctx = self.ctx()
         rec = sessions.get(ctx, sid(self.repo, "s1"))
         sessions.touch(ctx, rec.session_id,
-                       tool_signatures={**rec.tool_signatures, "_settled_at": time.time() + 1})
+                       tool_signatures={**rec.tool_signatures, "_settled_at": time.time() + 0.5})
+        time.sleep(1.1)
         self.pause()
 
         self.stop()

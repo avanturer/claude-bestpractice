@@ -317,8 +317,8 @@ for again when the card is claimed and the work finished, and a merge still need
 **A pause keeps the agents it stops.** An agent left running under a pause goes on spending
 tokens, and its report wakes the session to carry on; one stopped and started afresh reads
 everything again. So a pause over an agent still at work is refused once, naming `TaskStop`, and
-each agent the session stops is written on the paused card, by its id and what it was sent to
-do. Claiming the card again lists them, and a `SendMessage` to the id resumes the agent with its
+each agent the session stops as it pauses is written on the card, by its id and what it was sent
+to do. Claiming the card again lists them, and a `SendMessage` to the id resumes the agent with its
 own context. It is asked once per pause, so where you asked for the agents to finish, the turn
 still ends.
 

@@ -5,13 +5,14 @@ date: 2026-11-07
 ---
 
 ## Decision
-**A turn that ends on a pause while an agent of the session still works is refused once for that
-pause**, naming each agent by id and `TaskStop`. **Each agent the session stops is written on the
-paused card**, by its id and what it was sent to do, read off `TaskStop`'s result, and
-`claude-bp-plan claim` says them again: a `SendMessage` to the id resumes the agent with its own
-context. A shell, a monitor, a workflow or a teammate is neither asked about nor kept. The note
-keeps the card's stamp, which the gate reads as the moment it was set down. Decisions 0070 and
-0075 hold otherwise.
+**A turn that ends on a pause set down in it, while an agent of the session still works, is
+refused once for that pause**, naming each agent by id and `TaskStop`. **Each agent the session
+stops in that turn is written on the paused card**, by its id and what it was sent to do, read off
+`TaskStop`'s result, and `claude-bp-plan claim` says them again: a `SendMessage` to the id resumes
+the agent with its own context. Agents sent off under a card paused in an earlier turn are other
+work, and neither asked about nor written. A shell, a monitor, a workflow or a teammate is neither
+asked about nor kept. The note keeps the card's stamp, which the gate reads as the moment it was set
+down. Decisions 0070 and 0075 hold otherwise.
 
 ## Why
 > мне часто надоедает что клод именно стопает агентов полностью и закрывает их когда я прошу

@@ -816,17 +816,22 @@ def _keep_the_pauses_agents(ctx, event, rec, card, chat: str) -> None:
     So the pause is refused once while an agent of the session still works, naming `TaskStop`; and
     each agent the session stopped since its last turn ended is written on the card, by id and
     what it was sent to do, for a `SendMessage` to resume it with its own context.
+
+    Only a pause set down since that turn ended: under a card paused before it, the agents are
+    work the founder asked for since, and the stops are of those.
     """
     from claude_bestpractice import plan
 
+    settled = rec.tool_signatures.get(SETTLED_AT)
+    since = settled if isinstance(settled, (int, float)) else rec.started_at
+    if plan.moved_at(card) < int(since):
+        return
     still = subagents.running(event.raw.get("background_tasks"))
     taken = f"{card.id}@{plan.moved_at(card):.0f}"
     if still and rec.tool_signatures.get(AGENTS_ASKED) != taken:
         rec.tool_signatures[AGENTS_ASKED] = taken
         sessions.touch(ctx, rec.session_id, tool_signatures=dict(rec.tool_signatures))
         hookio.block(_agents_run_on(card, still))
-    settled = rec.tool_signatures.get(SETTLED_AT)
-    since = settled if isinstance(settled, (int, float)) else rec.started_at
     # A note is the card's memory, never what keeps a turn from ending.
     with contextlib.suppress(Exception):
         plan.note_stopped_agents(ctx, card.id, subagents.stopped_since(ctx, chat, since))
