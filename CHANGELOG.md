@@ -1,5 +1,25 @@
 # Changelog
 
+## v2.11.1
+
+The commit reviewer no longer names a function called `fit` as a focused test.
+
+### What broke
+
+**A function called `fit` was a focused test to the reviewer.** v2.11.0 read Jasmine's `fit(`,
+`fdescribe(`, `xit(` and `xdescribe(` as any call by those names. Run over fuddy, it named four
+honest lines and no real one: the landing's `function fit()` and `fit();`, and the meal planner's
+`kcal: fit(day.kcal, eaten?.kcal)` and `protein: fit(…)`. A finding shown is one a merge waits on
+(decision 0052), and `def fit(self, X, y)`, the usual name in model code, would have been next.
+
+### What changed
+
+- Those four are read as a test only before the description every runner's test call opens with,
+  a string in quotes or backticks (decision 0074).
+
+No `migrate._REPAIRS` step: a finding already filed over such a line is retired when the merge is
+judged, since the rule no longer fires on the file (`pullrequest._stale`).
+
 ## v2.11.0
 
 What current Claude Code, DeepSeek Harness and this autumn's research showed this plugin
