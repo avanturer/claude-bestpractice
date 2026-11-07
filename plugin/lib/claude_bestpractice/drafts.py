@@ -18,7 +18,6 @@ paraphrase away the exact wording that makes the record worth keeping.
 
 from __future__ import annotations
 
-import json
 import re
 import time
 from dataclasses import dataclass
@@ -146,6 +145,12 @@ _NOISE = re.compile(
 # the gate's message into the inbox as a founder decision, and the loop fed itself: the
 # more the gate blocked, the more "decisions" appeared. Measured on a live repository, 96
 # drafts — 57 the gate quoting itself, 39 compaction boilerplate, 0 from a human.
+#
+# The plain-text lines the harness opens its own records with, read off one founder's 1.2 GB
+# transcript (Claude Code 2.1.314): another session's message, a skill's expanded text, a
+# compaction summary that held others' content, and a notice about another session going idle.
+# The reader leaves them out by the harness's own marks; their text keeps them out of the drafts
+# 2.11 made from them, which repair 0045 drops, and out of a record from before those marks.
 _SYNTHETIC = re.compile(
     r"(?i)^(?:"
     r"stop hook feedback\b|"
@@ -153,6 +158,10 @@ _SYNTHETIC = re.compile(
     r"this session is being continued from a previous conversation\b|"
     r"\[request interrupted\b|"
     r"caveat: the messages below\b|"
+    r"another claude session sent a message\b|"
+    r"base directory for this skill\b|"
+    r"<artifact-content-authored-by-others\b|"
+    r"\[cross-session idle notice\]|"
     r"<(?:command-name|command-message|local-command-stdout|system-reminder|"
     r"user-prompt-submit-hook|bash-input|bash-stdout|bash-stderr)\b"
     r")"
@@ -196,47 +205,25 @@ class Draft:
         }
 
 
+# How much of a transcript's end is read for the founder's recent words. A draft comes from the
+# turn that just ended; the whole file was read at every Stop, and a long session's runs to
+# hundreds of megabytes.
+TAIL_BYTES = 8 * 1024 * 1024
+
+
 def user_turns(transcript_path: str) -> list[str]:
-    """Recent user messages, best effort.
+    """What the founder typed into this chat lately, oldest first, best effort.
 
-    The transcript format is documented as internal and changing between releases, so
-    every failure here degrades to an empty list rather than raising. Drafting is a
-    convenience; breaking a session over it would be absurd.
+    Read through `founder.messages`, the one reader of a person's words. Every `user` entry
+    used to count, so a task's notification and a skill's expanded text were drafted as the
+    founder's decisions, beside this plugin's own refusals the textual rules below still
+    catch. Never raises: drafting is a convenience, and breaking a session over it would be
+    absurd.
     """
-    if not transcript_path:
-        return []
-    try:
-        text = Path(transcript_path).read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return []
+    from . import founder
 
-    turns: list[str] = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(record, dict) or record.get("type") != "user" or record.get("isSidechain"):
-            continue
-        message = record.get("message")
-        content = message.get("content") if isinstance(message, dict) else None
-        if isinstance(content, str):
-            body = content
-        elif isinstance(content, list):
-            body = " ".join(
-                str(part.get("text", ""))
-                for part in content
-                if isinstance(part, dict) and part.get("type") == "text"
-            )
-        else:
-            continue
-        body = body.strip()
-        if body and not is_synthetic(body):
-            turns.append(body)
-    return turns
+    turns = (turn.strip() for turn in founder.messages(transcript_path, TAIL_BYTES))
+    return [turn for turn in turns if turn and not is_synthetic(turn)]
 
 
 def classify(turn: str) -> str | None:
@@ -313,6 +300,36 @@ def record(ctx: GitContext, drafts: list[Draft]) -> int:
     if _size(path) > COMPACT_BYTES:
         collapse(ctx)
     return filed
+
+
+# A command's or a skill's text as the harness expands it into the turn: `# /loop — …`.
+_EXPANDED_COMMAND = re.compile(r"^#{1,2}\s*/[\w:.-]+")
+
+
+def nobodys_words(quote: str) -> bool:
+    """Whether a draft's quote is text no person typed: harness envelopes with nothing of a
+    person's beside them, a hook's or the harness's own line, or a command's expanded text.
+
+    What 2.11 drafted from, reading every user record of the transcript. The reader takes only
+    the founder's own messages since (`founder.messages`); this tells the rows it left behind.
+    """
+    from . import founder
+
+    text = " ".join(str(quote).split())
+    return (not founder.strip_envelopes(text) or is_synthetic(text)
+            or bool(_EXPANDED_COMMAND.match(text)))
+
+
+def drop_what_nobody_typed(ctx: GitContext) -> int:
+    """Rewrite the inbox without the waiting drafts made from nobody's words, under the lock its
+    rewrites take. How many drafts went; every resolved row, and every draft of a person's, stays."""
+    def keep(rows: list) -> list:
+        return [row for row in rows if not isinstance(row, dict) or row.get("resolved")
+                or not nobodys_words(str(row.get("quote", "")))]
+
+    before = len(pending(ctx))
+    store.compact_jsonl(store.tier_b(ctx, INBOX_FILE), keep)
+    return before - len(pending(ctx))
 
 
 # Past this size the inbox is rewritten as `pending` reads it. Each sighting of a waiting

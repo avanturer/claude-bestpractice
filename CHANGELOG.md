@@ -1,5 +1,135 @@
 # Changelog
 
+## v2.12.0
+
+A pause keeps the agents it stops, and its card says which to resume. What 2.11 added is fixed
+where an independent review and a run over fuddy on the founder's own machine found it wrong:
+an idle teammate no longer holds off every finish, a pause taken after refusals stays taken, the
+trees agents worked in are put away, and the founder's board shows only a red suite that stands
+and never takes the index lock. Decision drafts come only from the founder's own words, a
+scheduled turn's text is read for words the way the recorder reads it, a function called `fit`
+is not a focused test, and auto mode is told about a repository once.
+
+And the defects fuddy's sessions recorded are fixed where they still stood: a session start
+that crashed, ordinary code refused as a credential, a read-only query over ssh taken for a
+write, a removal that lost a tree's files, and the reviewer, the dependency check, the Stop
+gate's command and the pre-push hook each reading something wrong.
+
+### What broke
+
+Found by reviewers who had not written the code, each finding reproduced before it was fixed, and
+by 2.11.0 run read-only over fuddy on the founder's machine (Claude Code 2.1.314, WSL): its doctor
+passed 36 of 36, and `claude-bp status` reported 730 decision drafts waiting.
+
+**A pause stopped the agents for good.** Asked to stop, a session stopped its background agents,
+and told to go on, it started new ones that read everything again; one left running spends tokens
+and its report wakes the session to carry on.
+
+**An idle teammate held off every finish.** Claude Code keeps an idle teammate's entry `running`
+for good (anthropics/claude-code#85955), and an entry with no status, or one the gate did not
+know, counted as work under way too.
+
+**A pause taken after refusals was taken once.** The Stop that took it reset the count, so every
+later turn on the same pause was refused twice more.
+
+**A tree an agent had worked in was never put away.** The agent's own tool calls leave a record in
+its tree under the chat's id, which read as another session standing there.
+
+**The board took the index lock once a minute.** `git status` writes the index back under
+`index.lock`, and a commit made in that moment failed on it. Its status line said "suite red" over
+a run beside a neighbour's database and over a day-old failure on other code, a read that failed
+drew the board as empty, and an agent's every turn started a Python process to redraw it.
+
+**Decision drafts were made from text nobody typed.** Every user entry of the transcript was read
+at every Stop, so a task's notification and the instructions `/loop` expands to were drafted as
+the founder's decisions, and a long session's transcript was read whole each turn.
+
+**A scheduled turn's text was judged raw and recorded clean.** `+\u200bmerge` passed the check
+on `CronCreate`, `ScheduleWakeup` and `SendMessage`, and was recorded as `+merge` when it fired.
+
+**A function called `fit` was a focused test.** Four honest lines in fuddy were named, a merge
+waits on a finding shown, and `def fit(self, X, y)` is the usual name in model code.
+
+**Auto mode was told about each worktree as a repository.** The founder's settings held twelve
+blocks of facts, each read at every classification.
+
+Then fuddy's 94 captured defects were read against today's code, and every tracked text file
+and its last 300 commits put through the gates that read them.
+
+**A session start crashed.** The walk for hand-kept TODO documents entered every
+`node_modules` and sibling tree before asking the skip list, and on Python 3.10 a directory
+removed while it walked ended the start with `FileNotFoundError`: three times on 2.7.1.
+
+**Ordinary code was refused as a credential.** Sixteen reports, twelve of the lines still
+refused today: a parameter's type (`secret: Uint8Array,`), a parameter handed on, an operand,
+a coordinate. Across fuddy's tracked text, 28 lines read as credentials, none of them one.
+
+**A read-only query over ssh was a write.** `ssh host "psql -c \"… WHERE x > now() …\""`
+ended its quoted span at the escaped quote, and `now` became a file to claim.
+
+**A removal on a longer line lost the tree's files.** `cp -r <tree>/.claude /tmp/kept && git
+worktree remove <tree>`: the gate removed the tree first, and the `cp` never ran.
+
+**A note in an ignored folder waited on the database.** Research notes in an ignored
+`research_notes/` were refused over a sibling's database three times.
+
+**The reviewer and the checks read the wrong thing.** `split_query(f"{name} {composition}")`
+was SQL interpolation, while `f"… WHERE name = '{name}'"` was not; comment words in a
+manifest were packages and a Gradle coordinate was none; a jest project was told a vitest
+command; a push that only deleted a branch ran the whole suite.
+
+**Most decision drafts were another session's words.** Of the 734 waiting on fuddy's clone,
+repair 0045 as first written kept 667, almost all `Another Claude session sent a message:`.
+
+### What changed
+
+- A pause set down while a subagent of the session still works is refused once, naming
+  `TaskStop`; each agent the session stops in that turn is written on the paused card by id and
+  what it was sent to do, read off `TaskStop`'s result, and `claude-bp-plan claim` lists them for
+  a `SendMessage` to resume each with its own context (decision 0082).
+- Only a subagent, a workflow or a cloud session whose status says the work goes on spares a
+  finish; a teammate, a shell and a monitor spare none (decision 0070).
+- A pause taken after two refusals stays taken until the card moves again (decision 0075).
+- A chat's agent trees are removed at its finish over the records its own agents left in them,
+  and never the tree its shell stands in (decision 0077).
+- Every `git status` the plugin runs sets `GIT_OPTIONAL_LOCKS=0`. The status line says "suite red"
+  only where `red_line` tells every session to fix it first; the pane names the other records for
+  what they are. A failed or timed-out read leaves the last board, an older answer is not drawn
+  over a newer one, and an agent's turn ending no longer redraws it (decision 0076).
+- The ledger's cards in progress are read once per glance and per listing of agents.
+- `claude-bp reindex` keeps the skill count (decision 0080).
+- Drafts are made from `founder.messages`, the founder's own messages in the last 8 MB of the
+  transcript.
+- The check on a scheduled or sent turn reads its text through the same readers as
+  `prompt-capture` (decision 0072).
+- `fit(`, `fdescribe(`, `xit(` and `xdescribe(` are a test only before the description a runner's
+  test call opens with (decision 0074).
+- Auto mode's facts are written once per repository, under its main checkout; a block an older
+  version wrote under a linked worktree is pruned at the next session start.
+- The TODO-document walk prunes skipped directories and goes on past one that is gone.
+- The credential scan lets through what cannot be one: a type, a name handed on, an operand or
+  a chained assignment, a code name after a quoted key, `$(…)`, a `<placeholder>`, a fetch
+  mode, a coordinate, `CHANGE_ME`, an example cut short, a range of numbers, `${VAR:?…}`, a
+  key's id, a path, a regular expression, prose. A literal in the same places is still one.
+- Shell words are quoted as bash quotes them, a backslash escaping outside quotes and inside
+  double ones.
+- A removal of a session's own tree on a line that does more is refused, nothing removed, the
+  removal named to run alone (decision 0042).
+- A write of files git ignores passes while a sibling holds the database.
+- `sql-interpolation` reads a string to the quote that opened it, starting with a statement;
+  triple-quoted strings are not read, as before. Comments in a manifest are skipped and
+  `"group:artifact:version"` is a package. A package.json that uses jest is told jest with
+  `jest-junit`. The pre-push hook passes a push whose every ref is a deletion.
+
+`migrate._REPAIRS` gains 0045: the decision drafts made from text nobody typed go, read off their
+quotes: harness envelopes with nothing of a person's beside them, a hook's or the harness's own
+line (another session's message, a skill's expanded text, a compaction summary, an idle notice),
+a command's expanded text. A person's words and every resolved draft stay. Run by the branch over
+a copy of fuddy's clone and state, it dropped 464 of 734; of the 270 kept, five are skills' text,
+which no rule over the text alone tells from a founder's heading. The agent trees 2.11 kept are
+named on the board as any finished tree is, for `claude-bp sweep`. An installed pre-push hook is
+refreshed at the next session start, as every version's is.
+
 ## v2.11.0
 
 What current Claude Code, DeepSeek Harness and this autumn's research showed this plugin

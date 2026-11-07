@@ -4,8 +4,8 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-2.11.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-2945%20passing-2ea44f)](#已验证)
+[![version](https://img.shields.io/badge/version-2.12.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-3017%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#运行要求)
@@ -257,11 +257,16 @@ UNVERIFIED，由你的 `+merge` 决定。红色的运行会点名第一个出错
 这个会话：被仓库之外的事情卡住的会话仍然可以结束。暂停的卡片写明
 这是什么工作、在等什么。卡片被重新领取、工作完成时，才会再次要求测试套件；合并仍然需要一次绿色的运行。
 
+**暂停会保留它停下的代理。** 在暂停期间继续运行的代理会继续消耗 token，它的报告还会唤醒会话接着干；
+停掉后重新启动的代理则要从头再读一遍。所以，若暂停时仍有代理在工作，这次暂停会被拒绝一次，并指明
+`TaskStop`；会话在暂停时停下的每个代理都会写在这张卡片上：它的 id 和它被派去做的事。重新领取卡片时会列出它们，
+向该 id 发送 `SendMessage` 即可让代理带着自己的上下文继续。每次暂停只问一次，所以若你要求让代理做完，这一轮仍会结束。
+
 **等待自己的代理也不是完成。** Claude Code 默认在后台运行派出的代理，把工作交给三个代理的会话会结束
-这一轮来等它们的报告。只要其中还有一个在工作——子代理、workflow、teammate——闸门就不会在它们正在写的
+这一轮来等它们的报告。只要其中还有一个在工作——子代理、workflow、云端会话——闸门就不会在它们正在写的
 文件上运行测试套件，不记录未经验证的完成，不要求 PR，并保留卡片、租约和它们所在的工作树。其他会话应得
-的检查照常进行，报告回来之后的那次完成会被完整评判。后台 shell 或 monitor 不算：一直开着的 dev 服务器
-永远不会回报。
+的检查照常进行，报告回来之后的那次完成会被完整评判。后台 shell、monitor 或 teammate 不算：一直开着的
+dev 服务器永远不会回报，而 Claude Code 会把空闲 teammate 的条目一直标为 running。
 
 ### 三件需要你亲口许可的事
 
@@ -430,7 +435,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 ## 已验证
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2945 个测试 · 36 项 doctor 检查 · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 3017 个测试 · 36 项 doctor 检查 · budget
 ```
 
 doctor 通过**真的去做那件坏事**来证明 gate 有效，而不是把配置读回来对一遍——

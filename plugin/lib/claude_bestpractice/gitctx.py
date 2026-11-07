@@ -21,10 +21,22 @@ class GitError(RuntimeError):
     """Raised when a git invocation fails or the cwd is not a repository."""
 
 
+def quiet_env() -> dict[str, str]:
+    """The environment of a git process this plugin starts to read a tree.
+
+    `git status` refreshes the index as it reads and writes it back under `index.lock`: measured
+    on git 2.43, a plain status over touched files rewrote `.git/index`, and one with
+    `GIT_OPTIONAL_LOCKS=0` left it as it was. A gate, or the founder's board once a minute, read
+    the tree while a session committed in it, and the commit failed on the lock it held.
+    """
+    return {**os.environ, "GIT_OPTIONAL_LOCKS": "0"}
+
+
 def _run(args: list[str], cwd: Path | str, check: bool = True) -> str:
     proc = subprocess.run(
         ["git", *args],
         cwd=str(cwd),
+        env=quiet_env(),
         capture_output=True,
         # NOT text=True. That decodes as strict UTF-8, and a filename is a byte string
         # on POSIX, not text — one file named in latin-1 anywhere in the repository made

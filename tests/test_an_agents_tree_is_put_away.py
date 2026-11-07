@@ -76,3 +76,30 @@ class TestWhatKeepsAnAgentsTree(AgentTreeCase):
         tree = self.an_agents_tree()
         self.stop()
         self.assertTrue(tree.is_dir())
+
+
+class TestAnAgentsOwnCallsDoNotKeepItsTree(AgentTreeCase):
+    """The agent's first call in its tree left a record of this chat there, read as somebody
+    standing in it: only a tree no agent had touched was ever put away."""
+
+    def agent_call_in(self, tree: Path) -> None:
+        self.gate("pre-tool", {"cwd": str(tree), "session_id": "s1", "hook_event_name": "PreToolUse",
+                               "tool_name": "Bash", "tool_input": {"command": "ls"},
+                               "agent_id": "a1", "agent_type": "general-purpose"})
+
+    def test_a_tree_the_agent_worked_in_is_put_away(self):
+        tree = self.an_agents_tree()
+        self.agent_call_in(tree)
+
+        proc = self.stop()
+
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertFalse(tree.exists(), "the agent's own record kept its tree")
+
+    def test_not_the_tree_the_sessions_shell_stands_in(self):
+        tree = self.an_agents_tree()
+        self.agent_call_in(tree)
+
+        self.stop(cwd=str(tree))
+
+        self.assertTrue(tree.exists(), "the tree was removed from under the session's shell")

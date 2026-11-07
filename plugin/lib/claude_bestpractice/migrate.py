@@ -28,6 +28,7 @@ command.
 from __future__ import annotations
 
 import calendar
+import os
 import re
 import subprocess
 import time
@@ -1323,6 +1324,22 @@ def _forget_a_red_suite_of_lost_connections(ctx: GitContext) -> str:
             "had lost its connection to a server, so the run never reached the code")
 
 
+def _drop_drafts_nobody_typed(ctx: GitContext) -> str:
+    """Decision drafts 2.11 made from text no person typed.
+
+    `drafts.user_turns` took every user record of the transcript, so a task's notification, a
+    command's expanded text and a hook's line were drafted as the founder's decisions: on one
+    founder's clone `claude-bp status` said 730 drafts were waiting, and the newest of them were
+    `<task-notification>` rows and the instructions `/loop` expands to, and many of the rest
+    another session's message. The reader takes only the founder's own messages now; this drops
+    the drafts it left, and keeps every draft of a person's words and every one already resolved.
+    """
+    from . import drafts
+
+    dropped = drafts.drop_what_nobody_typed(ctx)
+    return f"{dropped} decision draft(s) made from text nobody typed dropped" if dropped else ""
+
+
 def _kept_reports(ctx: GitContext, suite: str) -> list:
     """The reports the gate kept of its last run of the suite at `suite` that broke, each as
     `evidence.parse_artifact` reads it: None for one it cannot."""
@@ -1860,6 +1877,7 @@ _REPAIRS = {
     "0042-let-go-of-what-dead-runs-and-sessions-left": (1, _let_go_of_what_dead_runs_left),
     "0043-cut-the-logs-down-to-what-is-live": (1, _cut_the_logs_down_to_what_is_live),
     "0044-forget-a-red-suite-of-lost-connections": (1, _forget_a_red_suite_of_lost_connections),
+    "0045-drop-drafts-nobody-typed": (1, _drop_drafts_nobody_typed),
 }
 
 
@@ -1985,9 +2003,9 @@ def registries(ctx: GitContext) -> list[Path]:
     root = ctx.worktree_root
     skip = _ignored(ctx)
     found: list[Path] = []
-    for path in sorted(root.rglob("*.md")):
+    for path in _markdown_under(root):
         relative = path.relative_to(root).as_posix()
-        if any(part in _SKIP for part in path.relative_to(root).parts) or _key(relative) in skip:
+        if _key(relative) in skip:
             continue
         if _TEMPLATE.search(relative):
             continue
@@ -1999,6 +2017,22 @@ def registries(ctx: GitContext) -> list[Path]:
             continue
         found.append(path)
     return found
+
+
+def _markdown_under(root: Path) -> list[Path]:
+    """Every `.md` file under `root`, sorted, from a walk that never enters a directory `_SKIP`
+    names and goes on past one that is gone by the time it gets there.
+
+    `rglob` entered every `node_modules` and every tree under `.claude/worktrees` before the skip
+    list was asked, at each session start, and on Python 3.10 a directory removed while it walked,
+    a sibling's tree or a reinstall, ended the session start with FileNotFoundError: three times on
+    the founder's machine on 2.7.1, and that session's board was never built.
+    """
+    found: list[Path] = []
+    for where, dirs, files in os.walk(root):
+        dirs[:] = [name for name in dirs if name not in _SKIP]
+        found.extend(Path(where) / name for name in files if name.endswith(".md"))
+    return sorted(found)
 
 
 def _not_ours_to_judge(ctx: GitContext, relative: str) -> bool:

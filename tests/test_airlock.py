@@ -405,6 +405,49 @@ class TestReviewCommit(GateCase):
         )
         self.assertNotIn("swallowed-exception", self.context(self.review()))
 
+    def test_a_call_named_like_a_query_over_no_sql_is_not_sql(self):
+        """Reported on 2.7.1: fuddy's assistant splitting a product's name and composition into
+        words was named `sql-interpolation`. Any call whose name ended in `query` matched, with
+        no SQL in the string."""
+        self.start()
+        self.write("tools.py", 'def words(name, composition):\n'
+                               '    return split_query(f"{name} {composition}")\n')
+        self.assertNotIn("sql-interpolation", self.context(self.review()))
+
+    def test_a_triple_quoted_string_is_not_read(self):
+        """As 2.11 read none. Read for a day, in fuddy's last 300 commits it named four trusted
+        fragments interpolated into SQL and one plain string whose SQL quote, `'%%москв%%'`,
+        read as the string's end before a `%`: no input anywhere."""
+        self.start()
+        self.write("repo.py", 'def find(cur, what):\n    cur.execute(f"""\n'
+                              '        INSERT INTO daily (code_id, {what}) VALUES (%s, 1)\n'
+                              '    """, (1,))\n')
+        self.write("matrix.py", 'def chains(cur):\n    cur.execute(\n'
+                                '        """SELECT slug FROM stores WHERE city ILIKE \'%%москв%%\'\n'
+                                '           GROUP BY 1""")\n')
+        self.assertNotIn("sql-interpolation", self.context(self.review()))
+
+    def test_the_quotes_of_sql_inside_a_string_are_its_text(self):
+        self.start()
+        self.write("plain.py", "def towns(con):\n"
+                               "    return con.execute(\"SELECT * FROM t WHERE city ILIKE '%%москв%%'\")\n")
+        self.assertNotIn("sql-interpolation", self.context(self.review()))
+        self.write("formatted.py", "def find(con, v):\n"
+                                   "    return con.execute(\"SELECT * FROM t WHERE a = '%s'\" % v)\n")
+        self.assertIn("formatted.py", self.context(self.review()))
+        # The classic shape, which 2.11 stopped reading at the quote before the placeholder.
+        self.write("classic.py", "def find(con, name):\n"
+                                 "    return con.execute(f\"SELECT * FROM t WHERE name = '{name}'\")\n")
+        self.assertIn("classic.py", self.context(self.review()))
+
+    def test_any_statement_is_sql(self):
+        self.start()
+        for name, statement in (("explain.py", "EXPLAIN ANALYZE SELECT * FROM {name}"),
+                                ("union.py", "(SELECT a FROM {name}) UNION (SELECT b FROM u)"),
+                                ("search.py", "SET search_path TO {name}")):
+            self.write(name, f'def run(con, name):\n    return con.execute(f"{statement}")\n')
+            self.assertIn(name, self.context(self.review()), statement)
+
     def test_flags_a_skipped_test(self):
         self.start()
         self.write("test_x.py", "import pytest\n\n\n@pytest.mark.skip\ndef test_a():\n    assert False\n")

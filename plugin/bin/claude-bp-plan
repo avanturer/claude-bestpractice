@@ -97,6 +97,11 @@ def cmd_claim(ctx, task_id: str, session_id: str) -> int:
         print(error, file=sys.stderr)
         return 1
     print(f"claimed {task.id}  {task.title}")
+    # The agents its pause stopped, which a message resumes with their own context (decision 0082).
+    stopped = plan.stopped_agents(task)
+    if stopped:
+        print(plan.STOPPED_AGENTS)
+        print("\n".join(stopped))
     if waiting:
         # Said, not refused. Starting ahead of the order is sometimes right and the
         # session knows things this does not; starting ahead of it WITHOUT KNOWING is

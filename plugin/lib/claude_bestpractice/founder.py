@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import config, inbox, store
+from . import config, inbox, redact, store
 from .gitctx import GitContext
 
 # Every word heard, from either door: its identity, when it was said, whose chat, what it
@@ -195,6 +195,53 @@ def founders_word(prompt: str) -> str:
     return typed
 
 
+# The harness wraps things into the prompt that the founder did not type. `ide_opened_file`
+# says so itself — "This may or may not be related to the current task" — and it carries a
+# path, which is the one thing this file mines a prompt for.
+#
+# Reported from a real session: the block named `/tmp/readonly/Bash tool output (aeqikl)`,
+# that became the entire task scope, and every genuine project file was therefore drift.
+# Eight consecutive blocks on correct work. Two separate leaks were reproduced here: the
+# absolute path when its parent happened to exist, and — with no help from the filesystem
+# at all — the closing tag itself, `/ide_opened_file`, whose parent is `/`.
+#
+# Named rather than pattern-matched on angle brackets: a founder pasting XML is asking for
+# it to be read, not stripped. `<task-notification>` was added after it was taken as the
+# task and quoted back at a session whose 136 changed files were then all drift (#118): the
+# list is the cheap half of that fix, and `is_harness_block` is the half that does not
+# depend on having guessed every name the harness will ever use. The list lives with the
+# reader of the founder's word, which needs it too.
+_ENVELOPE_BLOCK = re.compile(
+    r"<(" + "|".join(ENVELOPES) + r")\b[^>]*>.*?</\1\s*>", re.S | re.I
+)
+_ENVELOPE_OPEN = re.compile(
+    r"<(?:" + "|".join(ENVELOPES) + r")\b[^>]*>.*?(?:\n|$)", re.S | re.I
+)
+
+
+def strip_envelopes(text: str) -> str:
+    """Remove what the harness injected, leaving what the founder actually typed.
+
+    An unclosed opener takes the rest of its block with it rather than being left behind
+    as a bare tag — the tag alone is enough, because `</ide_opened_file>` is path-shaped.
+    """
+    text = _ENVELOPE_BLOCK.sub(" ", text)
+    return _ENVELOPE_OPEN.sub(" ", text).strip()
+
+
+def approvals_said(prompt: str) -> dict[str, str]:
+    """The grants a message gives, read as `prompt-capture` reads the message it is handed."""
+    return config.approvals_in(redact.strip_control(founders_word(prompt)))
+
+
+def switches_said(prompt: str) -> dict[str, str]:
+    """The gate switches a message throws, read as `prompt-capture` reads them."""
+    from . import sessions
+
+    typed = sessions.without_the_goal_command(strip_envelopes(prompt))
+    return config.switches_in(redact.scrub(redact.strip_control(typed)))
+
+
 # ---------------------------------------------------------------------------------------------
 # Text a session writes that comes back as a turn.
 
@@ -220,8 +267,11 @@ def written_for_a_turn(tool_name: str, tool_input: Any) -> list[str]:
     if field is None or not isinstance(tool_input, dict):
         return []
     text = str(tool_input.get(field) or "")
-    granted = [_NAMED[key] for key in config.approvals_in(founders_word(text)) if key in _NAMED]
-    return granted + [f"`{key} {value}`" for key, value in config.switches_in(text).items()]
+    # Read by the same functions `prompt-capture` records with. The raw text was judged here
+    # and the cleaned text there, so a zero-width space inside `+merge` passed this check and
+    # was gone by the time the turn's word was recorded.
+    granted = [_NAMED[key] for key in approvals_said(text) if key in _NAMED]
+    return granted + [f"`{key} {value}`" for key, value in switches_said(text).items()]
 
 
 def written_for_a_turn_refusal(tool_name: str, words: list[str]) -> str:

@@ -308,3 +308,96 @@ class TestTheWholeCredentialIsTakenOut(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWhatFuddysSessionsWereRefusedFor(unittest.TestCase):
+    """Lines fuddy's sessions were refused for, each reported with `claude-bp-report`: ordinary
+    code a session had to rename to get written, and the reviewer then named on the merge."""
+
+    REFUSED = (
+        "def basic_ok(credentials: HTTPBasicCredentials | None) -> bool:",
+        "    credentials: HTTPBasicCredentials | None = Depends(_basic),",
+        "function keystream(prim: Primitives, secret: Uint8Array, length: number): Uint8Array {",
+        "export async function argon2id(password: Uint8Array, salt: Uint8Array) {",
+        "        self.out_of_tokens = out_of_tokens",
+        "max_tokens=max_tokens or config.VISION_MAX_TOKENS",
+        "tokens_per_second = total_docs * avg_len / total_s",
+        'NAME_PASSWORD="$(obscure "$ENV_VAR")"',
+        'fetch(url, { credentials: "same-origin" })',
+        'implementation "androidx.credentials:credentials:1.3.0"',
+        'implementation("androidx.credentials:credentials-play-services-auth:1.3.0")',
+        'Refresh token: "<rotating phrase>" (README url)',
+    )
+
+    STILL_SECRETS = (
+        "API_TOKEN=abcdef123456ghijkl",
+        "SECRET_KEY=django_insecure_k3y_v4lue",
+        "  password: Hunter2SuperSecret",
+        "  api_key: Abcdef123456",
+        "password = admin123456",
+        'self.password = "hunter2hunter2"',
+        "GITHUB_TOKEN=abcdef123456ghijkl gh api user",
+        "export DEPLOY_TOKEN=abcdef123456ghijkl",
+        "auth token=9f8e7d6c5b4a3210, user=bob",
+        'credentials: "hunter2hunter2"',
+        "token: s3cr3tv4lue, user: bob",
+    )
+
+    def test_none_of_them_reads_as_a_credential(self):
+        for line in self.REFUSED:
+            self.assertEqual([], redact.find(line), line)
+
+    def test_scrubbing_leaves_them_whole(self):
+        for line in self.REFUSED:
+            self.assertEqual(line, redact.scrub(line), line)
+
+    def test_a_literal_in_the_same_places_is_still_one(self):
+        for line in self.STILL_SECRETS:
+            self.assertIn("assigned-secret", redact.find(line), line)
+
+
+class TestWhatTheWholeOfFuddyReadAsCredentials(unittest.TestCase):
+    """Every tracked text file of fuddy put through the scan a Write of it gets: 28 lines read as
+    credentials on 2.11.0. These are their shapes, the values made up; a test's two literals
+    stay, as test-flavoured literals do."""
+
+    NOT_CREDENTIALS = (
+        ': "${MAIL_PASSWORD:?MAIL_PASSWORD required}"',
+        "# VISION_MAX_TOKENS=800→2000 for the second pass",
+        '        "usage": {"prompt_tokens": in_tokens, "completion_tokens": out_tokens},',
+        '        "max_tokens": max_new_tokens,',
+        "    tokens_in = tokens_out = 0",
+        "LLM_API_KEY=sk-or-...                  # https://openrouter.ai/keys",
+        'yellow "  LLM_API_KEY=sk-or-...   # https://openrouter.ai/keys"',
+        "ADMIN_PASSWORD=CHANGE_ME",
+        "# AWS_SECRET_ACCESS_KEY=CHANGE_ME",
+        "DATABASE_URL=postgresql://gen_user:CHANGE_ME@HOST:5432/app?sslmode=require",
+        '        "ascApiKeyPath": "./.secrets/AuthKey_ABCD123456.p8",',
+        '        "ascApiKeyId": "ABCD123456",',
+        '        "ascApiKeyIssuerId": "00000000-1111-2222-3333-444444444444"',
+        "    definitiveTokens: /paraben/i,",
+        "- FatSecret: официальная информация о пробном периоде не найдена.",
+    )
+
+    # A test-flavoured literal stays one, as `TestTheAssignmentFormOfADevelopmentDefault` holds:
+    # read without its file, it is also the key a settings file would ship.
+    STILL_SECRETS = (
+        '        mock_cfg.VISION_API_KEY = "test-key"',
+        '"token": s3cr3tv4lue',
+        "PASSWORD=/9j4AAQSkZJRgABAQ",
+        "VAULT_SECRET_ID=3f9c8a7e1b2d4c6f",
+        "API_KEY='test-k3y-9f8a7b6c'",
+        'STRIPE_KEY = "sk_test_51HabcdefghijklmnopQRst"',
+        "PASSWORD=1234-abcd-5678",
+        "TOKEN=abc...defghijk",
+        'pw="${DB_PASSWORD:-hunter2hunter2 }"',
+    )
+
+    def test_none_of_them_reads_as_a_credential(self):
+        for line in self.NOT_CREDENTIALS:
+            self.assertEqual([], redact.find(line), line)
+            self.assertEqual(line, redact.scrub(line), line)
+
+    def test_a_literal_in_the_same_places_is_still_one(self):
+        for line in self.STILL_SECRETS:
+            self.assertTrue(redact.find(line), line)

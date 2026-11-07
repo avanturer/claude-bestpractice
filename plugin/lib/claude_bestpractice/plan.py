@@ -370,7 +370,8 @@ def _render(task_id: str, title: str, state: str, owner: str, branch: str, body:
             paths: list[str] | None = None, source: str = "",
             done_when: str = "", blocker: str = "", created_at: str = "",
             after: list[str] | None = None, together: list[str] | None = None,
-            opened_by: str = "", paused_by: str = "") -> str:
+            opened_by: str = "", paused_by: str = "", stamped: str = "") -> str:
+    """One card file. `stamped` keeps an `updated_at` a rewrite is no move of the card's."""
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     lines = [
         "---",
@@ -392,7 +393,7 @@ def _render(task_id: str, title: str, state: str, owner: str, branch: str, body:
         # created at the moment it was last touched, which is the one thing `created_at`
         # is for.
         f"created_at: {created_at or now}",
-        f"updated_at: {now}",
+        f"updated_at: {stamped or now}",
         "---",
         "",
         body[:MAX_BODY_CHARS].strip() or NO_DETAIL,
@@ -1124,7 +1125,8 @@ def amend(ctx: GitContext, task_id: str, note: str = "", paths: list[str] | None
     return amended, ""
 
 
-def _amended(task: Task, note: str, paths: list[str] | None, done_when: str, title: str) -> str:
+def _amended(task: Task, note: str, paths: list[str] | None, done_when: str, title: str,
+             stamped: str = "") -> str:
     """One task file rewritten with what it has just learned, and nothing else changed.
 
     Everything absent from the amendment is carried, `after` and `with` included — they
@@ -1145,7 +1147,62 @@ def _amended(task: Task, note: str, paths: list[str] | None, done_when: str, tit
         task.together,
         opened_by=meta.get(OPENED_BY, ""),
         paused_by=task.paused_by,
+        stamped=stamped,
     )
+
+
+# The block the Stop gate writes on a card a session paused, a line per agent the session stopped
+# (decision 0082); `claude-bp-plan claim` says it again when the card is taken up.
+STOPPED_AGENTS = ("Agents this session stopped at the pause; a SendMessage to the id resumes "
+                  "each with its own context:")
+
+
+def note_stopped_agents(ctx: GitContext, task_id: str, agents: list[tuple[str, str]]) -> list[str]:
+    """Write on a paused card the agents its session stopped: (id, what it was sent to do).
+
+    Added to the handoff of every copy, for the agents the card does not name yet, and only while
+    the card is paused. Its stamp is kept: the Stop gate reads `updated_at` as when the card was
+    set down, and a note this plugin writes is no move of the session's. The ids written.
+    """
+    with store.file_lock(store.tier_b(ctx, CLAIM_LOCK)):
+        task = find(ctx, task_id)
+        if task is None or task.state != PAUSED:
+            return []
+        block, fresh = _agents_block(task, agents)
+        if not fresh:
+            return []
+        for copy in copies(ctx, task_id) or [task]:
+            store.atomic_write(copy.path, _amended(copy, _with(copy, block), None, "", "",
+                                                   stamped=copy.updated_at), mode=0o644)
+        return fresh
+
+
+def _agents_block(task: Task, agents: list[tuple[str, str]]) -> tuple[str, list[str]]:
+    """The block naming each of `agents` the card does not name yet, and their ids."""
+    fresh = [(ident, said) for ident, said in agents if ident and f"`{ident}`" not in task.body]
+    lines = [f"- `{ident}`: {said or 'what it was sent to do went unrecorded'}" for ident, said in fresh]
+    return ("\n".join([STOPPED_AGENTS, *lines]) if lines else ""), [ident for ident, _ in fresh]
+
+
+def _with(copy: Task, block: str) -> str:
+    """The handoff of this copy of a card with `block` after it."""
+    _, body = _frontmatter(copy.path.read_text(encoding="utf-8", errors="replace"))
+    kept = "" if body.strip() == NO_DETAIL else body.strip()
+    return f"{kept}\n\n{block}"
+
+
+def stopped_agents(task: Task) -> list[str]:
+    """The lines of the agents a pause stopped, as the card names them; none where it names none."""
+    out: list[str] = []
+    inside = False
+    for line in task.body.splitlines():
+        if line.strip() == STOPPED_AGENTS:
+            inside = True
+        elif inside and line.startswith("- `"):
+            out.append(line)
+        else:
+            inside = False
+    return out
 
 
 def _unplanned(task: Task) -> str:
@@ -1355,15 +1412,18 @@ def settle_delivered(ctx: GitContext, session_id: str, delivered: list[str],
     return closed
 
 
-def held_by(ctx: GitContext, session_id: str) -> list[Task]:
+def held_by(ctx: GitContext, session_id: str, doing: list[Task] | None = None) -> list[Task]:
     """The cards this session is holding in `doing`, under any id it has had.
 
     A session that claims its card in the main checkout and then enters its own tree is a
     second identity there (`sessions.identities`), and the card is still its own. Asked by
     id alone, the gates told it nothing on the board said it was working, and the remedy
     they named — claim it — was refused as a live session's, which was itself.
+
+    `doing`, the cards in `doing` as `load_all` gives them, spares a reader that asks of every
+    session a sweep of every tree's ledger for each one.
     """
-    return _owned(ctx, session_id, DOING)
+    return _owned(ctx, session_id, DOING, doing)
 
 
 def closed_by(ctx: GitContext, session_id: str) -> list[Task]:
@@ -1381,12 +1441,14 @@ def paused_by(ctx: GitContext, session_id: str) -> list[Task]:
     return [task for task in load_all(ctx, PAUSED) if task.paused_by in pausers]
 
 
-def _owned(ctx: GitContext, session_id: str, state: str) -> list[Task]:
+def _owned(ctx: GitContext, session_id: str, state: str,
+           cards: list[Task] | None = None) -> list[Task]:
     """The cards in `state` whose owner is this session by any of its ids."""
     from . import sessions
 
     owners = sessions.identities(ctx, session_id)
-    return [task for task in load_all(ctx, state) if task.owner in owners]
+    return [task for task in (load_all(ctx, state) if cards is None else cards)
+            if task.owner in owners]
 
 
 def moved_at(task: Task) -> float:

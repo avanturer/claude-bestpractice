@@ -118,9 +118,12 @@
           "it and holds it; spent and settled there, a merge that then failed had taken the",
           "founder's word and closed its cards (#232, #243, #268).",
           "",
-          "`enable_pr_auto_merge` for the same reason: it is `gh pr merge --auto` as a tool."
+          "`enable_pr_auto_merge` for the same reason: it is `gh pr merge --auto` as a tool.",
+          "",
+          "`TaskStop` because only its result says which agent it stopped and what the",
+          "agent was sent to do, which the card a session pauses keeps (decision 0082)."
         ],
-        "matcher": ".*((create|update|merge)_pull_request|enable_pr_auto_merge)",
+        "matcher": "^TaskStop$|.*((create|update|merge)_pull_request|enable_pr_auto_merge)",
         "hooks": [
           {
             "type": "command",

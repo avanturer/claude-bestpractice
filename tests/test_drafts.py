@@ -8,9 +8,12 @@ import sys
 import time
 import unittest
 
-from helpers import BIN, RepoCase
+from helpers import BIN, RepoCase, turn as founder_turn
 
 from claude_bestpractice import drafts
+
+# When the turns in these transcripts were typed: the founder's reader takes the harness's stamp.
+AT = 1794000000.0
 
 
 class TestClassification(unittest.TestCase):
@@ -109,16 +112,16 @@ class TestTranscriptReading(RepoCase):
     def test_reads_user_turns(self):
         path = self.transcript(
             [
-                {"type": "user", "message": {"content": "first thing"}},
+                founder_turn("first thing", AT),
                 {"type": "assistant", "message": {"content": "reply"}},
-                {"type": "user", "message": {"content": [{"type": "text", "text": "second"}]}},
+                founder_turn([{"type": "text", "text": "second"}], AT + 1),
             ]
         )
         self.assertEqual(drafts.user_turns(path), ["first thing", "second"])
 
     def test_skips_sidechain_turns(self):
         path = self.transcript(
-            [{"type": "user", "isSidechain": True, "message": {"content": "subagent noise"}}]
+            [founder_turn("subagent noise", AT, isSidechain=True)]
         )
         self.assertEqual(drafts.user_turns(path), [])
 
@@ -128,8 +131,38 @@ class TestTranscriptReading(RepoCase):
 
     def test_garbage_lines_are_skipped(self):
         path = self.tmp / "t.jsonl"
-        path.write_text('{"type":"user","message":{"content":"ok"}}\nnot json at all\n')
+        path.write_text(json.dumps(founder_turn("ok", AT)) + "\nnot json at all\n")
         self.assertEqual(drafts.user_turns(str(path)), ["ok"])
+
+
+class TestOnlyTheFoundersWordsAreDrafted(RepoCase):
+    """Every `user` entry used to count: a task's notification and a skill's expanded text were
+    drafted as the founder's decisions, and the whole transcript was read at every Stop."""
+
+    def transcript(self, records: list[dict]) -> str:
+        path = self.tmp / "t.jsonl"
+        path.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+        return str(path)
+
+    def test_what_the_harness_files_as_a_user_entry_is_not_drafted(self):
+        path = self.transcript([
+            founder_turn("нет, не так — всегда через worktree", AT),
+            founder_turn("<task-notification> <task-id>w1</task-id> <status>completed</status> "
+                         "не нужно больше ждать</task-notification>", AT + 1,
+                         origin={"kind": "task-notification"}),
+            founder_turn("# /loop — schedule a recurring prompt. Never run it twice", AT + 2,
+                         isMeta=True),
+        ])
+        self.assertEqual(["нет, не так — всегда через worktree"], drafts.user_turns(path))
+
+    def test_only_the_end_of_a_long_transcript_is_read(self):
+        from unittest import mock
+
+        filler = [{"type": "assistant", "message": {"content": "x" * 500}}] * 40
+        path = self.transcript([founder_turn("нет, это старое решение из начала разговора", AT),
+                                *filler, founder_turn("нет, не так — это свежая поправка", AT + 9)])
+        with mock.patch.object(drafts, "TAIL_BYTES", 2000):
+            self.assertEqual(["нет, не так — это свежая поправка"], drafts.user_turns(path))
 
 
 class TestCli(RepoCase):
@@ -229,12 +262,7 @@ class TestGateIntegration(RepoCase):
     def test_stop_gate_harvests_drafts(self):
         transcript = self.tmp / "t.jsonl"
         transcript.write_text(
-            json.dumps(
-                {
-                    "type": "user",
-                    "message": {"content": "No, not Redis — we already tried that and it broke"},
-                }
-            )
+            json.dumps(founder_turn("No, not Redis — we already tried that and it broke", AT))
             + "\n"
         )
         for gate, event in (
@@ -309,7 +337,7 @@ class TestThePluginDoesNotQuoteItselfBackAsADecision(RepoCase):
         rows = [self.GATE_FEEDBACK] * 5 + [self.COMPACTION] * 3 + [self.HUMAN]
         transcript.write_text(
             "\n".join(
-                json.dumps({"type": "user", "message": {"content": body}}) for body in rows
+                json.dumps(founder_turn(body, AT + i)) for i, body in enumerate(rows)
             ),
             encoding="utf-8",
         )
@@ -404,7 +432,7 @@ class TestARussianTurnReachesTheInbox(RepoCase):
         transcript = self.repo / "transcript.jsonl"
         turn = "нет, не так — бери timestamp из source_products, а не из snapshot"
         transcript.write_text(
-            json.dumps({"type": "user", "message": {"content": turn}}), encoding="utf-8"
+            json.dumps(founder_turn(turn, AT)), encoding="utf-8"
         )
         turns = drafts.user_turns(str(transcript))
         made = drafts.extract(turns, "main", "s1", [])
@@ -481,7 +509,7 @@ class TestAStandingInstructionSurvivesTheTurn(RepoCase):
         transcript = self.repo / "transcript.jsonl"
         turn = "запомни навсегда: во всех трёх сторах держим один и тот же номер версии"
         transcript.write_text(
-            json.dumps({"type": "user", "message": {"content": turn}}), encoding="utf-8"
+            json.dumps(founder_turn(turn, AT)), encoding="utf-8"
         )
         made = d.extract(d.user_turns(str(transcript)), "main", "s1", [])
         self.assertEqual(1, len(made))
@@ -554,3 +582,77 @@ class TestTheSameCorrectionIsCountedNotRefiled(RepoCase):
         drafts.record(ctx, [self.draft()])
         self.assertEqual(1, drafts.record(ctx, [self.draft("никогда не трогай прод")]))
         self.assertEqual(2, len(drafts.pending(ctx)))
+
+
+class TestWhatNobodyTypedIsDropped(RepoCase):
+    """Repair 0045. 2.11 drafted from every user record of the transcript: on one founder's
+    clone 730 drafts were waiting, the newest of them a task's notification and the text `/loop`
+    expands to."""
+
+    NOTIFICATION = ("<task-notification> <task-id>wqie21tps</task-id> <tool-use-id>toolu_01Uk92"
+                    "</tool-use-id> <status>completed</status> </task-notification>")
+    LOOP = "# /loop — schedule a recurring or self-paced prompt Parse the input below into `[interval]`"
+    THEIRS = "не нужно ничего считать все уже сделано, просто закрой задачу и всё"
+
+    # The lines the harness opened its own `user` records with in that founder's transcript,
+    # Claude Code 2.1.314: most of what repair 0045 kept at first was the first of them.
+    # Each carries a marker the reader drafts from, so only the rule keeps it out of the inbox.
+    PEER = ('Another Claude session sent a message: <agent-message from="af240023bb"> '
+            "[Subagent hand-back] From now on the suite runs before every merge")
+    HARNESS_LINES = (
+        PEER,
+        "Another Claude session sent a message: [claude-bp] fix/images: never use the shared base",
+        "Base directory for this skill: /home/f/.claude/skills/synced/3f327 Always run the suite",
+        "<artifact-content-authored-by-others/> The summarized conversation: from now on, merge",
+        '[Cross-session idle notice] "fuddy-06", which you asked about, is idle. From now on it waits',
+    )
+
+    def test_harness_text_is_nobodys(self):
+        for quote in (self.NOTIFICATION, self.NOTIFICATION[:60], self.LOOP,
+                      "Stop hook feedback: the suite is red",
+                      "[Request interrupted by user for tool use]", *self.HARNESS_LINES):
+            self.assertTrue(drafts.nobodys_words(quote), quote)
+
+    def test_the_reader_files_no_draft_from_them_either(self):
+        """A record from before the harness marked its sender is judged by its text."""
+        for line in self.HARNESS_LINES:
+            self.assertIsNone(drafts.classify(line), line)
+
+    def test_a_persons_words_are_theirs_even_beside_an_envelope(self):
+        for quote in (self.THEIRS, f"<ide_opened_file>src/app.ts</ide_opened_file> {self.THEIRS}",
+                      "# Итог: всегда мерджи после зелёного CI",
+                      f"{self.THEIRS} <task-notification> вставил для примера",
+                      f"{self.THEIRS}, а то Another Claude session sent a message: всегда так"):
+            self.assertFalse(drafts.nobodys_words(quote), quote)
+
+    def file(self, quote: str, **extra) -> None:
+        ctx = self.ctx()
+        store_row = {"marker": "always", "quote": quote, "branch": "main", "session_id": "s1",
+                     "created_at": time.time(), "subject_paths": [], "seen": 1, **extra}
+        from claude_bestpractice import store
+
+        store.append_jsonl(store.tier_b(ctx, drafts.INBOX_FILE), store_row)
+
+    def test_the_repair_drops_them_and_keeps_the_rest(self):
+        from claude_bestpractice import migrate
+
+        self.file(self.NOTIFICATION)
+        self.file(self.LOOP)
+        self.file(self.PEER)
+        self.file(self.THEIRS)
+        self.file("<task-notification> already handled", resolved=True)
+
+        said = migrate._drop_drafts_nobody_typed(self.ctx())
+
+        self.assertEqual("3 decision draft(s) made from text nobody typed dropped", said)
+        self.assertEqual([self.THEIRS], [row["quote"] for row in drafts.pending(self.ctx())])
+        from claude_bestpractice import store
+
+        rows = store.read_jsonl(store.tier_b(self.ctx(), drafts.INBOX_FILE))
+        self.assertTrue(any(row.get("resolved") for row in rows), "a resolved row stays resolved")
+        self.assertEqual("", migrate._drop_drafts_nobody_typed(self.ctx()))
+
+    def test_it_is_a_registered_repair(self):
+        from claude_bestpractice import migrate
+
+        self.assertIn("0045-drop-drafts-nobody-typed", migrate._REPAIRS)

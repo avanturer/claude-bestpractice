@@ -69,7 +69,10 @@ class TestTheMovesAreNamed(ReviewCase):
     def test_a_focused_test_narrows_the_run(self):
         self.start()
         self.write("web/cart.test.js", "f" + "it('adds', () => { expect(add(1, 2)).toBe(3) })\n")
-        self.assertIn("skipped-test at web/cart.test.js:", self.said())
+        self.write("web/total.test.ts", "xdes" + "cribe(`totals`, () => { it('sums', () => {}) })\n")
+        said = self.said()
+        self.assertIn("skipped-test at web/cart.test.js:", said)
+        self.assertIn("skipped-test at web/total.test.ts:", said)
 
 
 class TestHonestCodeIsLeftAlone(ReviewCase):
@@ -82,6 +85,15 @@ class TestHonestCodeIsLeftAlone(ReviewCase):
         self.write("app/queries.py", "def ids():\n    return User.objects.only('id')\n")
         self.write("ml/train.py", "def train(model, x, y):\n    return model.fit(x, y)\n")
         self.write("package.json", '{"scripts": {"test": "echo \\"Error: no test specified\\" && exit 1"}}\n')
+        self.assertEqual("", self.said())
+
+    def test_a_function_called_fit_is_not_a_focused_test(self):
+        """Found on fuddy: its landing's `function fit()` and the meal planner's `fit(day.kcal,
+        …)` were named as focused tests, and a finding shown is one a merge waits on."""
+        self.start()
+        self.write("landing/index.html", "<script>\nfunction f" + "it() {\n  f" + "it();\n}\n</script>\n")
+        self.write("mobile/planner.ts", "export const day = {\n  kcal: f" + "it(day.kcal, eaten?.kcal),\n};\n")
+        self.write("ml/model.py", "class Model:\n    def f" + "it(self, x, y):\n        return self\n")
         self.assertEqual("", self.said())
 
     def test_a_condition_on_the_environment_is_not_a_skip(self):

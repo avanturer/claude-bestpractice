@@ -672,7 +672,12 @@ def proposed_content(event: hookio.HookEvent) -> str:
 # `> f`, `>> f`, `tee f`, `sed -i … f`, `cat … > f`. Deliberately generous: a path this
 # misses costs a missed lease, and a path it invents costs one spurious claim on a file
 # nobody else wanted.
-_QUOTED = re.compile(r"""'[^']*'|"[^"]*\"""", re.S)
+#
+# Quoted the way bash quotes: a backslash escapes the next character outside quotes and inside
+# double quotes, and nothing inside single ones. A double-quoted span ended at its first `"`,
+# escaped or not, so `ssh host "psql -c \"SELECT 1 WHERE x > now() - interval '40 minutes'\""`
+# read as a write to `now`, and a session querying production was asked for a card for it.
+_QUOTED = re.compile(r"""\\.|'[^']*'|"(?:[^"\\]|\\.)*\"""", re.S)
 
 # A `>` that is half of an OPERATOR is not a redirect, and reading it as one invented a
 # write target out of a query. `select … where data @> '{"k":1}'` sent to psql was read as
@@ -1067,6 +1072,19 @@ def unforced_removals(command: str, cwd: Path) -> set[Path]:
             if not _forces(_removal(argv)[0]):
                 out.update(path for path in _removed_from(argv, here) if path is not None)
     return out
+
+
+def _ignored_only(ctx, paths: list) -> bool:
+    """Whether this call writes something, and only files git ignores in this tree."""
+    return bool(paths) and all(gitpolicy.git_ignores(ctx.worktree_root, str(rel)) for rel in paths)
+
+
+def _removal_alone(command: str) -> bool:
+    """Whether a line that removes a tree does nothing else: only moves into a directory first."""
+    scannable = _blanked(command)
+    parts = [part.strip() for part in _SEGMENTS.split(scannable) if part.strip()]
+    removals = [part for part in parts if not _CD.match(part)]
+    return len(removals) == 1 and not re.search(r"\||&(?!&)", scannable.replace("&&", "  "))
 
 
 def worktree_removals(command: str, cwd: Path) -> list[Path]:
@@ -2039,6 +2057,19 @@ def main() -> None:
         removals = worktree_removals(str(ti.get("command", "")), session_cwd)
         own = next((path.resolve() for path in removals
                     if worktree.removable_by(ctx, rec.session_id, path)), None)
+        if own is not None and not _removal_alone(str(ti.get("command", ""))):
+            # Done here, the removal goes before anything else on the line runs, and the rest
+            # never runs at all: `cp` of the tree's ignored records, then the removal, lost
+            # the records (reported on 2.7.1). One act at a time, as a merge is (decision 0040).
+            deny(
+                ctx, rec,
+                f"claude-bestpractice: this line removes {own} and does more besides. Removing "
+                "a session's own tree is done by this gate, before anything else on the line "
+                "would run, so the rest would never run. Run the rest first, then the removal "
+                "as a command of its own:\n"
+                f"  git -C {shlex.quote(str(worktree.main_checkout(ctx)))} worktree remove "
+                f"{shlex.quote(str(own))}"
+            )
         if own is not None:
             released = None
             # Before the removal, never after: when the session stands in the tree it is
@@ -2406,7 +2437,9 @@ def main() -> None:
         remedy = writing_now and all(_is_env_file(Path(rel).name) for rel in writing_now)
         if cfg.isolate_databases and touched and ctx.is_worktree and not remedy:
             clash = worktree.session_on_this_database(ctx, event.session_id)
-            if clash:
+            # A file git ignores is no test's and no code's: research notes in an ignored folder
+            # were refused over the database three times on 2.2.0, reaching neither.
+            if clash and not _ignored_only(ctx, writing_now):
                 deny(
                     ctx, rec,
                     f"claude-bestpractice: session {sessions.called(ctx, clash[0])} is already "

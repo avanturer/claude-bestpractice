@@ -690,6 +690,48 @@ class TestARegistryIsFoundByWhatIsInIt(RepoCase):
         self.write(".claude/commands/todo.md", self.REGISTRY)
         self.assertEqual([], migrate.registries(self.ctx()))
 
+    def test_a_directory_gone_mid_walk_ends_nothing(self):
+        """Three session starts on the founder's machine on 2.7.1 ended in FileNotFoundError
+        here: a sibling removed a tree, or a reinstall a directory, while the walk was in it."""
+        import os
+        import shutil
+        from unittest import mock
+
+        self.write("docs/TODO.md", self.REGISTRY)
+        self.write("scratch/gone/notes.md", self.REGISTRY)
+        real = os.scandir
+
+        def scandir(path="."):
+            if str(path).endswith("gone"):
+                shutil.rmtree(path, ignore_errors=True)
+            return real(path)
+
+        with mock.patch("os.scandir", scandir):
+            found = [p.name for p in migrate.registries(self.ctx())]
+        self.assertEqual(["TODO.md"], found)
+
+    def test_the_walk_never_enters_what_it_skips(self):
+        """Every `node_modules` and every tree under `.claude/worktrees` was walked through at
+        each session start before the skip list was asked."""
+        import os
+        from unittest import mock
+
+        self.write("docs/TODO.md", self.REGISTRY)
+        self.write("mobile/node_modules/pkg/README.md", self.REGISTRY)
+        self.write(".claude/worktrees/feat/docs/TODO.md", self.REGISTRY)
+        entered: list[str] = []
+        real = os.scandir
+
+        def scandir(path="."):
+            entered.append(str(path))
+            return real(path)
+
+        with mock.patch("os.scandir", scandir):
+            found = [p.relative_to(self.repo).as_posix() for p in migrate.registries(self.ctx())]
+        self.assertEqual(["docs/TODO.md"], found)
+        self.assertFalse([path for path in entered if "node_modules" in path or ".claude" in path],
+                         entered)
+
 
 class TestMigrationIsDelegatedAndThenCounted(RepoCase):
     """The plugin cannot read prose, and a model can. So it hands the job over — and

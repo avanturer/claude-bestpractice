@@ -23,8 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
 from claude_bestpractice import config, founder, hookio, pullrequest, redact, sessions  # noqa: E402
-from claude_bestpractice.founder import ENVELOPES as _ENVELOPES  # noqa: E402
-from claude_bestpractice.founder import founders_word  # noqa: E402
+from claude_bestpractice.founder import strip_envelopes  # noqa: E402
 from claude_bestpractice.gitctx import resolve  # noqa: E402
 from claude_bestpractice.statements import (  # noqa: E402
     is_harness_block,
@@ -39,41 +38,6 @@ MAX_TASK_PATHS = 64
 # Path-shaped tokens: an explicit separator, or a bare filename with an extension.
 _PATH = re.compile(r"[A-Za-z0-9_./\-]*[/][A-Za-z0-9_./\-]+|\b[A-Za-z0-9_\-]+\.[A-Za-z0-9]{1,6}\b")
 _NOISE = {"e.g.", "i.e.", "etc.", "vs."}
-
-# The harness wraps things into the prompt that the founder did not type. `ide_opened_file`
-# says so itself — "This may or may not be related to the current task" — and it carries a
-# path, which is the one thing this file mines a prompt for.
-#
-# Reported from a real session: the block named `/tmp/readonly/Bash tool output (aeqikl)`,
-# that became the entire task scope, and every genuine project file was therefore drift.
-# Eight consecutive blocks on correct work. Two separate leaks were reproduced here: the
-# absolute path when its parent happened to exist, and — with no help from the filesystem
-# at all — the closing tag itself, `/ide_opened_file`, whose parent is `/`.
-#
-# Named rather than pattern-matched on angle brackets: a founder pasting XML is asking for
-# it to be read, not stripped. `<task-notification>` was added after it was taken as the
-# task and quoted back at a session whose 136 changed files were then all drift (#118): the
-# list is the cheap half of that fix, and `is_harness_block` is the half that does not
-# depend on having guessed every name the harness will ever use. The list lives with the
-# reader of the founder's word, which needs it too.
-_ENVELOPE_BLOCK = re.compile(
-    r"<(" + "|".join(_ENVELOPES) + r")\b[^>]*>.*?</\1\s*>", re.S | re.I
-)
-_ENVELOPE_OPEN = re.compile(
-    r"<(?:" + "|".join(_ENVELOPES) + r")\b[^>]*>.*?(?:\n|$)", re.S | re.I
-)
-
-
-def strip_envelopes(text: str) -> str:
-    """Remove what the harness injected, leaving what the founder actually typed.
-
-    An unclosed opener takes the rest of its block with it rather than being left behind
-    as a bare tag — the tag alone is enough, because `</ide_opened_file>` is path-shaped.
-    """
-    text = _ENVELOPE_BLOCK.sub(" ", text)
-    return _ENVELOPE_OPEN.sub(" ", text).strip()
-
-
 
 def extract_paths(text: str, root: Path) -> list[str]:
     """Paths the task actually refers to, and only ones inside this worktree.
@@ -138,7 +102,7 @@ def main() -> None:
         # session can reach it. This is the whole authorisation for `claude-bp set`: the
         # remedy every gate names has to be one the session can perform and cannot perform
         # alone, and the founder saying it is the only thing that satisfies both (#108).
-        config.record_switches(ctx, config.switches_in(safe))
+        config.record_switches(ctx, founder.switches_said(event.prompt or ""))
         # Acceptance travels the same road as a switch, and for the same reason: it is
         # the founder's own word, recorded where the session being gated cannot write it.
         #
@@ -152,12 +116,11 @@ def main() -> None:
         #
         # From the message as it ARRIVED, and only the part of it the founder typed:
         # `founders_word` says what is left out and why.
-        typed = redact.strip_control(founders_word(event.prompt or ""))
         # Recorded the way a word read back from the transcript is, under the id the harness
         # gives this prompt, so that a gate reading the transcript later knows this one was
         # heard already (`founder.catch_up`).
         said = time.time()
-        approvals = config.approvals_in(typed)
+        approvals = founder.approvals_said(event.prompt or "")
         if config.APPROVE_MERGE in approvals:
             # The founder's previous message may be one they sent while the session worked,
             # which no hook heard: what the chat showed before it is not this word's (#276).

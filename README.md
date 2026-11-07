@@ -4,8 +4,8 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-2.11.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-2945%20passing-2ea44f)](#verified)
+[![version](https://img.shields.io/badge/version-2.12.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-3017%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
@@ -314,13 +314,22 @@ refused the session twice in a row — a session stopped by something outside th
 still gets out. The paused card says what the work is and what it waits on. The suite is asked
 for again when the card is claimed and the work finished, and a merge still needs a green run.
 
+**A pause keeps the agents it stops.** An agent left running under a pause goes on spending
+tokens, and its report wakes the session to carry on; one stopped and started afresh reads
+everything again. So a pause over an agent still at work is refused once, naming `TaskStop`, and
+each agent the session stops as it pauses is written on the card, by its id and what it was sent
+to do. Claiming the card again lists them, and a `SendMessage` to the id resumes the agent with its
+own context. It is asked once per pause, so where you asked for the agents to finish, the turn
+still ends.
+
 **Waiting for its own agents is not a finish either.** Claude Code runs a spawned agent in the
 background by default, and a session that hands work to three of them ends its turn to wait for
-their reports. While one of them is still at work — a subagent, a workflow, a teammate — the gate
-runs no suite over the files they are writing, files nothing as unverified, demands no pull
-request, and keeps the card, the leases and the tree they work in. What the other sessions are
-owed is still asked, and the finish after the reports is judged in full. A background shell or
-a monitor spares nothing: a dev server left running never reports back.
+their reports. While one of them is still at work — a subagent, a workflow, a cloud session —
+the gate runs no suite over the files they are writing, files nothing as unverified, demands no
+pull request, and keeps the card, the leases and the tree they work in. What the other sessions
+are owed is still asked, and the finish after the reports is judged in full. A background shell,
+a monitor or a teammate spares nothing: a dev server left running never reports back, and Claude
+Code keeps an idle teammate's entry running for good.
 
 ### A pull request is an obligation, not a notification
 
@@ -650,7 +659,7 @@ roughly 0.1 % of a 200k window.
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2945 tests · 36 doctor checks · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 3017 tests · 36 doctor checks · budget
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration

@@ -2920,6 +2920,20 @@ class TestAPauseIsNotAFinish(GateCase):
         self.pause(command=f"claude-bp-plan pause {self.card.id} --blocker '{self.OWN_BLOCKER}'")
         self.assertEqual(0, self.stop(stop_hook_active=True).returncode)
 
+    def test_a_pause_taken_after_refusals_stays_taken_on_the_next_turn(self):
+        """The Stop that took it reset the count, and every later turn was refused twice more."""
+        for attempt in range(2):
+            self.assertEqual(2, self.stop(stop_hook_active=attempt > 0).returncode)
+        self.pause(command=f"claude-bp-plan pause {self.card.id} --blocker '{self.OWN_BLOCKER}'")
+        self.assertEqual(0, self.stop(stop_hook_active=True).returncode)
+        ran = self.ran()
+
+        # The founder's next message; the session answers and writes nothing.
+        proc = self.stop()
+
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual(ran, self.ran(), "the suite ran again over a pause already taken")
+
     def test_the_founders_words_are_found_however_they_are_spaced_or_quoted(self):
         self.assertEqual(2, self.stop().returncode)
         self.pause(command=f"claude-bp-plan pause {self.card.id} --blocker '«Ставь  всё на паузу, завтра продолжим»'")

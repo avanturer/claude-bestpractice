@@ -264,7 +264,7 @@ def roster(ctx: GitContext, harness_id: str) -> str:
     Asked fresh here, names included, and only then: `claude agents --json` takes a third of a
     second, which a listing can afford and a tool call cannot (decision 0028).
     """
-    from . import hookio
+    from . import hookio, plan
 
     running = sessions.running()
     sessions.learn_names(ctx, running)
@@ -272,7 +272,8 @@ def roster(ctx: GitContext, harness_id: str) -> str:
               if not harness_id or hookio.harness_of(rec.session_id, rec.worktree) != harness_id]
     if not others:
         return ""
-    rows = [f"  - {rec.name or rec.session_id[:8]}: {doing(ctx, rec)[:100] or 'no card yet'} "
+    cards = plan.load_all(ctx, plan.DOING)
+    rows = [f"  - {rec.name or rec.session_id[:8]}: {doing(ctx, rec, cards)[:100] or 'no card yet'} "
             f"(branch {rec.branch}, tree {Path(rec.worktree).name})"
             for rec in sorted(others, key=lambda r: r.heartbeat_at, reverse=True)]
     return (f"What each session on {ctx.worktree_root.name} is doing, from claude-bestpractice's "
@@ -296,15 +297,16 @@ def glance(ctx: GitContext, harness_id: str) -> dict[str, Any]:
     Live by pid, as the reaper reads them, never by `claude agents --json`, which this would ask
     every minute of every session.
     """
-    from . import evidence, hookio, pullrequest
+    from . import evidence, hookio, plan, pullrequest
 
     others = [rec for rec in sessions.one_per_session(sessions.live_sessions(ctx))
               if not harness_id or hookio.harness_of(rec.session_id, rec.worktree) != harness_id]
     others.sort(key=lambda rec: rec.heartbeat_at, reverse=True)
     waiting = [row for row in pullrequest.outstanding(ctx) if not row.get("draft")]
-    red = evidence.red_line(ctx)
-    return {"line": _glance_line(len(others), waiting, bool(red)),
-            "rows": _glance_rows(ctx, others, waiting, red)}
+    stands, red = evidence.red_glance(ctx)
+    cards = plan.load_all(ctx, plan.DOING) if others else []
+    return {"line": _glance_line(len(others), waiting, stands),
+            "rows": _glance_rows(ctx, others, waiting, red, cards)}
 
 
 def _glance_line(others: int, waiting: list[dict[str, Any]], red: bool) -> str:
@@ -323,15 +325,15 @@ def _glance_line(others: int, waiting: list[dict[str, Any]], red: bool) -> str:
 
 
 def _glance_rows(ctx: GitContext, others: list[SessionRecord], waiting: list[dict[str, Any]],
-                 red: str) -> list[str]:
+                 red: str, cards: list[Any]) -> list[str]:
     """The pane: a row per session with its card and branch, per pull request, and the red suite."""
-    rows = [f"{rec.name or rec.session_id[:8]}: {doing(ctx, rec)[:80] or 'no card yet'} · {rec.branch}"
+    rows = [f"{rec.name or rec.session_id[:8]}: {doing(ctx, rec, cards)[:80] or 'no card yet'} · {rec.branch}"
             for rec in others[:GLANCE_SESSIONS]]
     rows += [f"{_numbered(row)} on {row.get('branch', '')}: "
              + (f"blocked by {str(row['blockers'][0])[:80]}" if row.get("blockers") else "ready to merge")
              for row in waiting[:GLANCE_PULL_REQUESTS]]
     if red:
-        rows.append(red[:200])
+        rows.append(f"suite: {red[:200]}")
     return rows
 
 
@@ -340,13 +342,14 @@ def _numbered(row: dict[str, Any]) -> str:
     return f"#{row['number']}" if row.get("number") else str(row.get("branch") or "?")
 
 
-def doing(ctx: GitContext, rec: SessionRecord) -> str:
+def doing(ctx: GitContext, rec: SessionRecord, cards: list[Any] | None = None) -> str:
     """What a session is doing: the card it holds, or what it was last told when it holds
     none. The last message alone was the answer, typos and all, while the session's own card
-    said what it had actually taken on (#253)."""
+    said what it had actually taken on (#253). `cards`, the ledger's `doing` loaded once by a
+    reader that asks of every session."""
     from . import plan
 
-    held = plan.held_by(ctx, rec.session_id)
+    held = plan.held_by(ctx, rec.session_id, cards)
     return f"{held[0].id} {held[0].title}" if held else rec.task_statement
 
 

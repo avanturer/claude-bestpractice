@@ -30,8 +30,10 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from pathlib import Path
 
+from . import store
 from .gitctx import GitContext
 
 # Both spellings the harness has used for the spawn. The tool is `Agent` in current
@@ -146,3 +148,78 @@ def fanout_refusal(spawned: int, ceiling: int) -> str:
         "If the work genuinely needs more, the founder raises `subagent_fanout`; it is "
         "their number, not this session's."
     )
+
+
+# What Stop's `background_tasks` says of work still under way. A missing or unknown status is no
+# work at all: a record the harness never ends must not stand for work being done.
+UNDER_WAY = frozenset({"running", "pending", "in_progress", "starting", "queued"})
+
+
+# ---------------------------------------------------------------------------------------------
+# The agents a chat stopped, kept for the card it pauses (decision 0082).
+
+# The kinds a SendMessage to the id resumes with its own context: a subagent, as Stop's
+# `background_tasks` labels one and as TaskStop's result names it (`local_agent`, measured on
+# Claude Code 2.1.319). A workflow has a pause of its own, in `/workflows`, and a teammate is a
+# session of its own, whose idle entry the harness keeps `running` (anthropics/claude-code#85955).
+RESUMABLE = frozenset({"subagent", "local_agent"})
+STOP_TOOL = "TaskStop"
+ROSTER_DIR = "stopped-agents"
+ROSTER_LIMIT = 40
+DESCRIPTION_CHARS = 120
+
+
+def running(tasks: object) -> list[dict]:
+    """The agents a Stop's `background_tasks` lists as still at work, of a kind that resumes."""
+    out: list[dict] = []
+    for task in tasks if isinstance(tasks, list) else []:
+        if not isinstance(task, dict) or not str(task.get("id") or "").strip():
+            continue
+        kind = str(task.get("type") or "").strip().lower()
+        if kind in RESUMABLE and str(task.get("status") or "").strip().lower() in UNDER_WAY:
+            out.append(task)
+    return out
+
+
+def _roster(ctx: GitContext, chat: str) -> Path:
+    return store.tier_b(ctx, ROSTER_DIR, re.sub(r"[^A-Za-z0-9_.-]", "_", chat)[:120] + ".json")
+
+
+def _when(row: object) -> float:
+    """When a kept agent was stopped, 0.0 where the row cannot say."""
+    try:
+        return float(row.get("stopped") or 0) if isinstance(row, dict) else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def stopped(ctx: GitContext, chat: str, response: object) -> str:
+    """Keep the agent one of the chat's `TaskStop` calls stopped, by what it was sent to do. The
+    id kept, or "" for a stop of anything a message does not resume, a shell or a monitor.
+
+    Read off the call's result, which names the task and its kind, `{"task_id": …, "task_type":
+    "local_agent", "command": <its description>}` on Claude Code 2.1.319: the input names an id
+    alone, and a shell's id looks like an agent's.
+    """
+    from . import redact
+
+    found = response if isinstance(response, dict) else {}
+    ident = str(found.get("task_id") or "").strip()
+    if not chat or not ident or str(found.get("task_type") or "").strip().lower() not in RESUMABLE:
+        return ""
+    said = redact.scrub(" ".join(redact.strip_control(str(found.get("command") or "")).split()))
+    with store.guarded_json(_roster(ctx, chat), default={}) as box:
+        roster = box[0] if isinstance(box[0], dict) else {}
+        roster[ident] = {"description": said[:DESCRIPTION_CHARS], "stopped": time.time()}
+        box[0] = dict(sorted(roster.items(), key=lambda item: -_when(item[1]))[:ROSTER_LIMIT])
+    return ident
+
+
+def stopped_since(ctx: GitContext, chat: str, since: float) -> list[tuple[str, str]]:
+    """(id, what it was sent to do) of each agent the chat stopped after `since`, in order."""
+    roster = store.read_json(_roster(ctx, chat), default={}) if chat else {}
+    if not isinstance(roster, dict):
+        return []
+    rows = sorted(((ident, row) for ident, row in roster.items() if _when(row) > since),
+                  key=lambda item: _when(item[1]))
+    return [(ident, str(row.get("description") or "")) for ident, row in rows]

@@ -84,6 +84,35 @@ class TestOnlyFactsAreGenerated(PolicyCase):
         self.assertEqual(HAND_WRITTEN["permissions"]["allow"], after["permissions"]["allow"])
 
 
+class TestOneBlockPerRepository(PolicyCase):
+    """A session in a worktree wrote a block about its tree as if it were a repository, telling
+    auto mode that sessions work under `<that tree>/.claude/worktrees/`; one clone had twelve."""
+
+    def test_a_session_in_a_worktree_writes_the_repositorys_block(self):
+        from claude_bestpractice.gitctx import resolve
+
+        tree = self.add_worktree("feature-tree")
+        policy.apply(resolve(tree), self.checks(), self.home)
+        written = self.read()["autoMode"]["environment"]
+        main = self.repo.resolve().as_posix()
+        self.assertTrue(written and all(e.startswith(f"[claude-bestpractice {main}]") for e in written))
+        self.assertTrue(any(f"{main}/.claude/worktrees/" in e for e in written))
+        self.assertFalse(any(tree.resolve().as_posix() in e for e in written))
+
+    def test_a_block_written_under_a_worktree_is_dropped_and_a_submodules_kept(self):
+        tree = self.add_worktree("old-tree")
+        module = self.tmp / "vendor-lib"
+        module.mkdir()
+        (module / ".git").write_text("gitdir: ../.git/modules/vendor-lib\n", encoding="utf-8")
+        self.settings.write_text(json.dumps({"autoMode": {"environment": [
+            f"[claude-bestpractice {tree.as_posix()}] a fact about a tree",
+            f"[claude-bestpractice {module.as_posix()}] a fact about a submodule",
+        ]}}), encoding="utf-8")
+        self.assertEqual([tree.as_posix()], policy.prune(self.home))
+        kept = self.read()["autoMode"]["environment"]
+        self.assertEqual([f"[claude-bestpractice {module.as_posix()}] a fact about a submodule"], kept)
+
+
 class TestNothingHandWrittenIsTouched(PolicyCase):
     def test_the_founders_own_environment_prose_survives_verbatim(self):
         self.hand_written()

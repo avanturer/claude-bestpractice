@@ -82,6 +82,35 @@ class TestTheTurnWaitsForItsAgents(GateCase):
         self.assertEqual(1, self.ran())
 
 
+class TestOnlyWorkUnderWaySparesAFinish(TestTheTurnWaitsForItsAgents):
+    """An idle teammate stays `running` in the list for good (anthropics/claude-code#85955), and an
+    entry with no status said nothing: either spared every finish of the session after it."""
+
+    def test_an_idle_teammate_spares_nothing(self):
+        mate = {"id": "t6edmim5e", "type": "teammate", "status": "running", "name": "researcher",
+                "description": "Reply with exactly the word: done."}
+        proc = self.stop(background_tasks=[mate])
+        self.assertEqual(2, proc.returncode, proc.stderr)
+        self.assertEqual(1, self.ran())
+
+    def test_an_agent_whose_status_says_nothing_spares_nothing(self):
+        silent = {"id": "a4d2c8f1e0b3a297", "type": "subagent", "description": "write the tests"}
+        proc = self.stop(background_tasks=[silent])
+        self.assertEqual(2, proc.returncode, proc.stderr)
+        self.assertEqual(1, self.ran())
+
+
+class TestLandedWorkIsNotAskedForACard(GateCase):
+    def test_while_an_agent_researches(self):
+        """The demand fixed in #149 came back for any turn waiting on an agent."""
+        self.start()
+        self.write("feature.py", "x = 1\n")
+        self.commit("the work, finished and on the trunk")
+        proc = self.stop(background_tasks=[an_agent("research the newest agent harnesses")])
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertNotIn("Nothing on the board", proc.stderr)
+
+
 class TestWhatTheOthersAreOwedStillHolds(GateCase):
     """The siblings read the board to decide what is safe to touch, and work under no card is
     work none of them can see, the agents' included."""

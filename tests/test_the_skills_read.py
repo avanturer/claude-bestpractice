@@ -13,7 +13,7 @@ import sys
 
 from helpers import BIN
 
-from claude_bestpractice import skilluse
+from claude_bestpractice import skilluse, store
 
 from test_gates import GateCase
 
@@ -44,6 +44,13 @@ class TestTheCount(GateCase):
                               capture_output=True, text=True, timeout=60)
         self.assertEqual(0, proc.returncode, proc.stderr)
         self.assertIn("founder-defaults 1", skilluse.line(self.ctx()))
+
+    def test_a_reindex_keeps_the_count(self):
+        """A count is a record of events, which no rescan brings back (`store.CARRIED`)."""
+        self.start()
+        skilluse.used(self.ctx(), "llm-first-code")
+        store.purge_tier_b(self.ctx())
+        self.assertIn("llm-first-code 1", skilluse.line(self.ctx()))
 
     def test_before_any_session_started_status_says_nothing(self):
         self.assertEqual("", skilluse.line(self.ctx()))

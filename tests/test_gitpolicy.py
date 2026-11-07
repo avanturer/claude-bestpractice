@@ -459,6 +459,20 @@ class TestAPackageNameIsNotAPath(PolicyCase):
         ):
             self.assertEqual([], write_targets(command, self.repo), command)
 
+    def test_a_quote_escaped_inside_a_quoted_command_keeps_it_quoted(self):
+        """A query sent to production through `ssh` quotes it twice, the inner quotes escaped:
+        the span ended at the first `\"`, and `x > now()` was read as a write to `now`, so a
+        session reading fuddy's database was asked for a card (reported on 1.73.0, live in
+        2.11). A backslash outside quotes escapes too, as bash reads it."""
+        for command in (
+            "ssh host \"docker exec db psql -c \\\"SELECT 1 WHERE x > now() - interval '40 minutes'\\\"\"",
+            'echo "a \\" > b"',
+            "echo a \\> b",
+        ):
+            self.assertEqual([], write_targets(command, self.repo), command)
+        for command, expected in (('echo \\"a > b', "b"), ("echo 'it'\\''s' > out.txt", "out.txt")):
+            self.assertIn(str(self.repo / expected), write_targets(command, self.repo), command)
+
     def test_a_real_redirect_beside_an_operator_still_counts(self):
         """The fix must not cost the write. A query CAN be redirected into a file, and
         that file is exactly what the leases and the credential scan are about."""

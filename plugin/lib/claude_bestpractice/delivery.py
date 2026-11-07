@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Iterator
 
 from . import store
-from .gitctx import GitContext
+from .gitctx import GitContext, quiet_env
 
 
 @dataclass
@@ -471,7 +471,8 @@ def _uncommitted(ctx: GitContext) -> Iterator[str]:
     listed = subprocess.run(
         # Forced: see evidence.py — a repository can otherwise declare itself clean.
         ["git", "status", "--porcelain", "--untracked-files=normal"],
-        cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=30,
+        cwd=str(ctx.worktree_root), env=quiet_env(), capture_output=True, encoding="utf-8",
+        errors="surrogateescape", timeout=30,
     ).stdout
     for line in listed.splitlines():
         # `XY <path>`, and for a rename `XY <old> -> <new>`. The destination is what a
