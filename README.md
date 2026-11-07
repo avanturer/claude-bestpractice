@@ -324,11 +324,12 @@ still ends.
 
 **Waiting for its own agents is not a finish either.** Claude Code runs a spawned agent in the
 background by default, and a session that hands work to three of them ends its turn to wait for
-their reports. While one of them is still at work — a subagent, a workflow, a teammate — the gate
-runs no suite over the files they are writing, files nothing as unverified, demands no pull
-request, and keeps the card, the leases and the tree they work in. What the other sessions are
-owed is still asked, and the finish after the reports is judged in full. A background shell or
-a monitor spares nothing: a dev server left running never reports back.
+their reports. While one of them is still at work — a subagent, a workflow, a cloud session —
+the gate runs no suite over the files they are writing, files nothing as unverified, demands no
+pull request, and keeps the card, the leases and the tree they work in. What the other sessions
+are owed is still asked, and the finish after the reports is judged in full. A background shell,
+a monitor or a teammate spares nothing: a dev server left running never reports back, and Claude
+Code keeps an idle teammate's entry running for good.
 
 ### A pull request is an obligation, not a notification
 
