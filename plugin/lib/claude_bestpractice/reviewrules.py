@@ -18,6 +18,9 @@ MAX_FILE_BYTES = 400_000
 # Each pattern is a class that is exact, cheap, and measured to be over-produced by
 # generated code. Anything requiring judgement is deliberately absent: a reviewer that
 # cries wolf gets ignored, and an ignored reviewer is worse than none.
+# The statement a string handed to `execute` opens with, where it is SQL at all.
+_SQL_VERB = r"\s*(?:select|insert|update|delete|with|create|alter|drop|merge|replace|truncate)\b"
+
 CHECKS: list[tuple[str, re.Pattern[str], str]] = [
     ("swallowed-exception", re.compile(r"except[^:\n]*:\s*(?:#[^\n]*)?\n\s*pass\b"),
      "exception swallowed silently — the highest-prevalence measured regression in generated code"),
@@ -32,10 +35,15 @@ CHECKS: list[tuple[str, re.Pattern[str], str]] = [
     #
     # So interpolation is what it says: an f-string with a placeholder, or a literal handed
     # to `%` or `+`. A literal followed by a comma is a parameter binding and is left alone.
+    #
+    # And it is SQL: the string starts with a statement. Any call whose name ended in `query`
+    # matched whatever it was handed, so fuddy's assistant splitting a product's name and
+    # composition into words, `split_query(f"{name} {composition}")`, was reported as SQL (on
+    # 2.7.1). A wrapper's name still counts: `db_execute(f"SELECT … {x}")` is the real thing.
     ("sql-interpolation", re.compile(
-        r"(?i)(?:execute|query)\s*\(\s*(?:"
-        r"f[\"'][^\"']*\{"
-        r"|[\"'][^\"']*[\"']\s*(?:%|\+)"
+        r"(?i)(?:execute|executemany|query)\s*\(\s*(?:"
+        r"f(?:\"\"\"|'''|[\"'])" + _SQL_VERB + r"[^\"']*\{"
+        r"|(?:\"\"\"|'''|[\"'])" + _SQL_VERB + r"[^\"']*[\"']\s*(?:%|\+)"
         r")"),
      "SQL built by string interpolation"),
     ("disabled-verification", re.compile(r"(?i)verify\s*=\s*False|rejectUnauthorized\s*:\s*false"),

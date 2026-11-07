@@ -405,6 +405,21 @@ class TestReviewCommit(GateCase):
         )
         self.assertNotIn("swallowed-exception", self.context(self.review()))
 
+    def test_a_call_named_like_a_query_over_no_sql_is_not_sql(self):
+        """Reported on 2.7.1: fuddy's assistant splitting a product's name and composition into
+        words was named `sql-interpolation`. Any call whose name ended in `query` matched, with
+        no SQL in the string."""
+        self.start()
+        self.write("tools.py", 'def words(name, composition):\n'
+                               '    return split_query(f"{name} {composition}")\n')
+        self.assertNotIn("sql-interpolation", self.context(self.review()))
+
+    def test_sql_in_a_triple_quoted_string_is_caught_too(self):
+        self.start()
+        self.write("repo.py", 'def find(cur, x):\n    cur.execute(f"""\n'
+                              '        SELECT a FROM t WHERE id = {x}\n    """)\n')
+        self.assertIn("sql-interpolation", self.context(self.review()))
+
     def test_flags_a_skipped_test(self):
         self.start()
         self.write("test_x.py", "import pytest\n\n\n@pytest.mark.skip\ndef test_a():\n    assert False\n")
