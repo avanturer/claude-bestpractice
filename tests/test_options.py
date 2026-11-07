@@ -132,6 +132,26 @@ class TestDependencyDetection(unittest.TestCase):
     def test_container_keys_are_not_packages(self):
         self.assertNotIn("dependencies", self.names('dependencies = ["redis==5.0"]'))
 
+    def test_a_word_in_a_comment_is_no_package(self):
+        """Reported on fuddy, 1.70.1 and 2.2.0: `# versionadded 44.0.0` beside a pin, and
+        `Kotlin`, `RN`, `versionCode` in a Gradle comment, were each asked to be compared."""
+        cases = [
+            ('dependencies = [\n  "cryptography>=44.0.0",  # versionadded 44.0.0\n]\n', {"cryptography"}),
+            ("requests>=2.31  # http\n# flask>=3.0\nhttpx>=0.27\n", {"requests", "httpx"}),
+            ('"react-native": "0.76.5", // pinned for Expo 52\n', {"react-native"}),
+            ("pkg @ git+https://github.com/o/r.git#egg=pkg\nrich>=13\n", {"rich"}),
+        ]
+        for text, want in cases:
+            with self.subTest(text=text[:30]):
+                self.assertEqual(self.names(text), want)
+
+    def test_a_gradle_coordinate_is_a_package(self):
+        """The Android libraries a fuddy session added were the ones nothing asked about."""
+        self.assertEqual(
+            self.names('implementation("androidx.credentials:credentials:1.3.0") '
+                       "// Kotlin 2.0, RN 0.76, versionCode 12\n"),
+            {"androidx.credentials:credentials"})
+
 
 class TestTheGateDemandsIt(RepoCase):
     def stop(self):

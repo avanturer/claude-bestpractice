@@ -263,6 +263,9 @@ def _branch_point(ctx: GitContext) -> str:
 # The name is optionally quoted: JSON quotes it, TOML (`serde = "1.0"`) does not.
 _DEP_MAPPING = re.compile(r"""["']?([A-Za-z][\w.@/-]{1,60})["']?\s*[:=]\s*["'][\^~>=<\d*]""")
 _DEP_REQUIREMENT = re.compile(r"""["']?([A-Za-z][\w.@/-]{1,60})\s*(?:[><=~!]=|[><]|\s+v?\d)""")
+# And a Maven or Gradle coordinate, `"group:artifact:version"`, named by its group and artifact:
+# the Android libraries a fuddy session added were the ones nothing asked to be compared.
+_DEP_COORDINATE = re.compile(r"""["']([A-Za-z][\w.-]*:[A-Za-z][\w.-]*):[\w.+-]+["']""")
 
 # Container keys and section headers, which look exactly like package names.
 _NOT_PACKAGES = {
@@ -273,16 +276,25 @@ _NOT_PACKAGES = {
 }
 
 
+# A comment, `#` or `//`, outside a quoted string and not the `//` of a URL: words in one are
+# not packages. `# versionadded 44.0.0` beside a pin in fuddy's pyproject.toml was asked to be
+# compared as a new dependency, and so were `Kotlin`, `RN` and `versionCode` from a comment in
+# its build.gradle (reported on 1.70.1 and 2.2.0).
+_COMMENT_OR_QUOTED = re.compile(r"""("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')|(?<![:\w])(?:#|//)[^\n]*""")
+
+
 def _dependency_names(text: str) -> set[str]:
     """Package names from any manifest format, without parsing five of them properly.
 
     Over-inclusive on purpose: a spurious name costs one comparison request, while a
     missed one is a dependency nobody ever compared — which is the whole failure.
     """
+    text = _COMMENT_OR_QUOTED.sub(lambda m: m.group(1) or "", text or "")
     if not text.strip():
         return set()
     names = {m.group(1) for m in _DEP_MAPPING.finditer(text)}
     names |= {m.group(1) for m in _DEP_REQUIREMENT.finditer(text)}
+    names |= {m.group(1) for m in _DEP_COORDINATE.finditer(text)}
     return {
         n for n in names
         # `http`, not `http://`, ate the package `httpx` — a URL prefix has to include
