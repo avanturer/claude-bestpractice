@@ -113,8 +113,8 @@ def _is_local_default(user: str, secret: str, host: str) -> bool:
 # and an agent that gets denied for doing the right thing learns to route around us.
 _INDIRECTION = re.compile(
     r"(?i)^(?:os\.environ|os\.getenv|process\.env|import\.meta\.env|env\[|ENV\[|getenv|"
-    r"System\.getenv|std::env|Deno\.env|config\.|settings\.|secrets\.|\$\{?[A-Z_]|"
-    r"<[A-Z_ ]+>|\.\.\.|xxx|placeholder|changeme|your[-_])"
+    r"System\.getenv|std::env|Deno\.env|config\.|settings\.|secrets\.|\$\{?[A-Z_]|\$\(|"
+    r"<[A-Za-z]|\.\.\.|xxx|placeholder|changeme|your[-_])"
 )
 
 
@@ -184,6 +184,44 @@ def _is_address(value: str) -> bool:
     return bool(_ADDRESS.match(value.strip()))
 
 
+# What the Fetch standard allows `credentials` to say: a mode, never a credential.
+# `fetch(url, { credentials: "same-origin" })` was refused as an assigned secret.
+_FETCH_MODES = frozenset({"include", "omit", "same-origin"})
+
+
+def _is_fetch_mode(name: str, value: str) -> bool:
+    return name.lower() == "credentials" and value.strip("\"'") in _FETCH_MODES
+
+
+# A dependency's coordinate, `androidx.credentials:credentials:1.3.0`, names a package and its
+# version. A Gradle file adding Android's credentials library was refused for it.
+_COORDINATE = re.compile(r"^[A-Za-z][\w.-]*:\d+(?:\.\d+)+(?:[-+][\w.]+)?$")
+
+
+def _is_coordinate(value: str) -> bool:
+    return bool(_COORDINATE.match(value.strip()))
+
+
+# A name in code, not a literal: a parameter's type before the next parameter, a default or a
+# union (`secret: Uint8Array,`, `credentials: HTTPBasicCredentials | None`), and an operand
+# (`tokens_per_second = total_docs * avg_len`). Each was refused as a credential in fuddy, and
+# had to be renamed to be written. Unquoted, one identifier, and code after it on its line: a
+# secret in a `.env` file or a shell's environment ends the line or the word. After a colon only
+# a type's name, which starts with a capital; `token: s3cr3tv4lue, user: bob` is still a secret.
+_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_TYPE_NAME = re.compile(r"^[A-Z][A-Za-z0-9_]*$")
+_TYPED = re.compile(r"\s*[,)|=\]]")
+_OPERAND = re.compile(r"\s+(?:[-+*/%]|or|and|if)\s")
+
+
+def _is_code(match: "re.Match") -> bool:
+    value = match.group("value")
+    typed = ":" in match.string[match.end("name"):match.start("value")]
+    if not (_TYPE_NAME if typed else _IDENTIFIER).match(value):
+        return False
+    return bool((_TYPED if typed else _OPERAND).match(match.string, match.end("value")))
+
+
 def _is_development_default(name: str, value: str) -> bool:
     """The assignment form of the default `_is_local_default` already lets through.
 
@@ -194,7 +232,9 @@ def _is_development_default(name: str, value: str) -> bool:
     of this form.
     """
     word = value.strip().lower()
-    return _is_placeholder(word) or word in name.lower().replace("-", "_").split("_")
+    named = name.lower().replace("-", "_")
+    # Or the name itself: `self.out_of_tokens = out_of_tokens` hands a parameter on.
+    return _is_placeholder(word) or word == named or word in named.split("_")
 
 
 def _is_not_a_secret(match: "re.Match") -> bool:
@@ -209,14 +249,14 @@ def _is_not_a_secret(match: "re.Match") -> bool:
     that makes ordinary code un-editable gets worked around, and a worked-around scanner
     protects nothing at all.
     """
-    value = match.group("value")
+    value, name = match.group("value"), match.group("name")
     if _is_indirection(value) or _is_measurement(value) or _is_address(value):
         return True
-    if _is_development_default(match.group("name"), value):
+    if _is_development_default(name, value) or _is_fetch_mode(name, value):
         return True
     if match.group("quote"):
         return False
-    return _is_reference(value) or _is_expression(value)
+    return _is_reference(value) or _is_expression(value) or _is_code(match) or _is_coordinate(value)
 
 
 def scrub(text: str) -> str:

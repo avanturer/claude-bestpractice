@@ -308,3 +308,49 @@ class TestTheWholeCredentialIsTakenOut(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWhatFuddysSessionsWereRefusedFor(unittest.TestCase):
+    """Lines fuddy's sessions were refused for, each reported with `claude-bp-report`: ordinary
+    code a session had to rename to get written, and the reviewer then named on the merge."""
+
+    REFUSED = (
+        "def basic_ok(credentials: HTTPBasicCredentials | None) -> bool:",
+        "    credentials: HTTPBasicCredentials | None = Depends(_basic),",
+        "function keystream(prim: Primitives, secret: Uint8Array, length: number): Uint8Array {",
+        "export async function argon2id(password: Uint8Array, salt: Uint8Array) {",
+        "        self.out_of_tokens = out_of_tokens",
+        "max_tokens=max_tokens or config.VISION_MAX_TOKENS",
+        "tokens_per_second = total_docs * avg_len / total_s",
+        'NAME_PASSWORD="$(obscure "$ENV_VAR")"',
+        'fetch(url, { credentials: "same-origin" })',
+        'implementation "androidx.credentials:credentials:1.3.0"',
+        'implementation("androidx.credentials:credentials-play-services-auth:1.3.0")',
+        'Refresh token: "<rotating phrase>" (README url)',
+    )
+
+    STILL_SECRETS = (
+        "API_TOKEN=abcdef123456ghijkl",
+        "SECRET_KEY=django_insecure_k3y_v4lue",
+        "  password: Hunter2SuperSecret",
+        "  api_key: Abcdef123456",
+        "password = admin123456",
+        'self.password = "hunter2hunter2"',
+        "GITHUB_TOKEN=abcdef123456ghijkl gh api user",
+        "export DEPLOY_TOKEN=abcdef123456ghijkl",
+        "auth token=9f8e7d6c5b4a3210, user=bob",
+        'credentials: "hunter2hunter2"',
+        "token: s3cr3tv4lue, user: bob",
+    )
+
+    def test_none_of_them_reads_as_a_credential(self):
+        for line in self.REFUSED:
+            self.assertEqual([], redact.find(line), line)
+
+    def test_scrubbing_leaves_them_whole(self):
+        for line in self.REFUSED:
+            self.assertEqual(line, redact.scrub(line), line)
+
+    def test_a_literal_in_the_same_places_is_still_one(self):
+        for line in self.STILL_SECRETS:
+            self.assertIn("assigned-secret", redact.find(line), line)
