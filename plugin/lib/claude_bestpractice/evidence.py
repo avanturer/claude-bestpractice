@@ -312,6 +312,10 @@ _ARTIFACT_HINTS: list[tuple[str, str]] = [
     ("package.json", "npx vitest run --reporter=junit --outputFile={report}"),
     ("pyproject.toml", _PYTEST),
 ]
+# Jest writes JUnit through the `jest-junit` reporter. Named for a project that runs jest: fuddy's
+# mobile app was told to run vitest, which it does not have, over its jest suite (on 2.2.0).
+_JEST = ("JEST_JUNIT_OUTPUT_FILE={report} npx jest --ci --reporters=default --reporters=jest-junit"
+         "   # needs jest-junit in devDependencies")
 
 # The runners this gate drives itself (`witness.detect`), by the name a run it stopped carries.
 _DRIVEN = {"pytest": _PYTEST, "go": _GO}
@@ -332,10 +336,25 @@ def artifact_hint(ctx: GitContext, suite=None, runner: str = "") -> str:
     report = shlex.quote(str(_ready(ctx, report_path(ctx, suite))))
     command = _DRIVEN.get(runner) or next(
         (line for marker, line in _ARTIFACT_HINTS if (root / marker).exists()), "")
+    if command == dict(_ARTIFACT_HINTS)["package.json"] and _runs_jest(root):
+        command = _JEST
     if not command:
         return f"run your test suite with a JUnit XML reporter writing {report}, then finish"
     python = shlex.join(witness.python_for(root, ctx.worktree_root))
     return f"cd {shlex.quote(str(root))} && {command.format(report=report, python=python)}"
+
+
+def _runs_jest(root: Path) -> bool:
+    """Whether the Node project at `root` tests with jest and not vitest, by its package.json."""
+    try:
+        manifest = json.loads((root / "package.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    sections = ([manifest.get(key) for key in ("dependencies", "devDependencies", "scripts")]
+                if isinstance(manifest, dict) else [])
+    named = " ".join(f"{name} {value}" for section in sections if isinstance(section, dict)
+                     for name, value in section.items())
+    return "jest" in named and "vitest" not in named
 
 
 def newest_source_mtime(root: Path, relpaths: list[str]) -> float:

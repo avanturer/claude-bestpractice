@@ -1186,6 +1186,20 @@ class TestTheReportTheGateAsksForIsTheOneItReads(RepoCase):
         report.write_text(PASSING_REPORT, encoding="utf-8")
         self.assertEqual("", git(["status", "--porcelain"], tree))
 
+    def test_a_jest_project_is_told_a_jest_command(self):
+        """Reported on 2.2.0: fuddy's mobile app, which runs jest, was told to run vitest."""
+        import json
+
+        from claude_bestpractice import evidence, suites
+
+        self.write("mobile/package.json", json.dumps(
+            {"scripts": {"test": "jest"}, "devDependencies": {"jest-expo": "~52.0.0"}}))
+        said = evidence.artifact_hint(self.ctx(), suites.Suite("mobile", (), False))
+        self.assertIn("npx jest", said)
+        self.assertNotIn("vitest", said)
+        self.write("web/package.json", json.dumps({"scripts": {"test": "vitest run"}}))
+        self.assertIn("npx vitest", evidence.artifact_hint(self.ctx(), suites.Suite("web", (), False)))
+
     def test_the_suites_own_directory_is_searched(self):
         """The artifact search follows the suite (decision 0012); it read the top of the tree,
         so `cd backend && pytest --junitxml=junit.xml` wrote a report it never found."""
