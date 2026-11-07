@@ -1074,6 +1074,14 @@ def unforced_removals(command: str, cwd: Path) -> set[Path]:
     return out
 
 
+def _removal_alone(command: str) -> bool:
+    """Whether a line that removes a tree does nothing else: only moves into a directory first."""
+    scannable = _blanked(command)
+    parts = [part.strip() for part in _SEGMENTS.split(scannable) if part.strip()]
+    removals = [part for part in parts if not _CD.match(part)]
+    return len(removals) == 1 and not re.search(r"\||&(?!&)", scannable.replace("&&", "  "))
+
+
 def worktree_removals(command: str, cwd: Path) -> list[Path]:
     """Every working tree this command would remove, resolved as the shell would resolve it.
 
@@ -2044,6 +2052,19 @@ def main() -> None:
         removals = worktree_removals(str(ti.get("command", "")), session_cwd)
         own = next((path.resolve() for path in removals
                     if worktree.removable_by(ctx, rec.session_id, path)), None)
+        if own is not None and not _removal_alone(str(ti.get("command", ""))):
+            # Done here, the removal goes before anything else on the line runs, and the rest
+            # never runs at all: `cp` of the tree's ignored records, then the removal, lost
+            # the records (reported on 2.7.1). One act at a time, as a merge is (decision 0040).
+            deny(
+                ctx, rec,
+                f"claude-bestpractice: this line removes {own} and does more besides. Removing "
+                "a session's own tree is done by this gate, before anything else on the line "
+                "would run, so the rest would never run. Run the rest first, then the removal "
+                "as a command of its own:\n"
+                f"  git -C {shlex.quote(str(worktree.main_checkout(ctx)))} worktree remove "
+                f"{shlex.quote(str(own))}"
+            )
         if own is not None:
             released = None
             # Before the removal, never after: when the session stands in the tree it is

@@ -7,7 +7,10 @@ date: 2026-10-16
 ## Decision
 **`git worktree remove` of the tree a session stands in is performed from the main checkout,
 whoever made the tree.** Decision 0022 did it for the trees this plugin makes; a tree made by
-hand is taken over the same way where no other chat works in it.
+hand is taken over the same way where no other chat works in it. **Only on a line that does
+nothing else**, a `cd` before it aside: done for a longer line, the removal ran before the rest
+and the rest never ran, so a `cp` of the tree's ignored records went with the tree (reported on
+2.7.1). Such a line is refused, naming the removal to run alone after the rest.
 
 **The way out of a removed tree is `ExitWorktree` with action `keep`.** The refusal that did the
 removal names it, and so does the Stop gate when the tree it removes is the one the shell stands

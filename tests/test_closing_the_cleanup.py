@@ -185,6 +185,34 @@ class TestARemovalAskedForByHand(CleanupCase):
 
         self.assertNotIn(branch, self.branches())
 
+    def test_a_line_that_does_more_than_remove_it_is_refused_and_nothing_goes(self):
+        """Reported on 2.7.1: `cp` of the tree's ignored records, then the removal, on one line.
+        The gate removed the tree before the line ran and refused the line, so `cp` never ran
+        and the records went with the tree. Refused now, the removal named to run alone."""
+        tree, _branch = self.a_tree()
+        self.a_live_session(tree)
+
+        proc = self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+            "tool_input": {"command": f"cp -r {tree}/.claude /tmp/kept && git worktree remove {tree}"},
+        }, cwd=self.repo)
+
+        self.assertEqual("deny", self.hook_decision(proc), proc.stdout)
+        self.assertTrue(tree.is_dir(), "the tree went before the rest of the line could run")
+        self.assertIn("as a command of its own", self.hook_reason(proc))
+        self.assertIn(f"worktree remove {tree}", self.hook_reason(proc))
+
+    def test_a_move_into_the_main_checkout_first_is_still_the_removal_alone(self):
+        tree, _branch = self.a_tree()
+        self.a_live_session(tree)
+
+        proc = self.run_hook("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+            "tool_input": {"command": f"cd {self.repo} && git worktree remove {tree}"},
+        }, cwd=self.repo)
+
+        self.assertFalse(tree.is_dir(), proc.stdout)
+
     def test_it_says_that_nothing_is_left(self):
         """Asked from the main checkout the shell stands where it was, so it is sent nowhere;
         `test_one_session_two_trees` drives the removal from inside, which is told the way out."""
