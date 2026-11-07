@@ -10,6 +10,11 @@ and never takes the index lock. Decision drafts come only from the founder's own
 scheduled turn's text is read for words the way the recorder reads it, a function called `fit`
 is not a focused test, and auto mode is told about a repository once.
 
+And the defects fuddy's sessions recorded are fixed where they still stood: a session start
+that crashed, ordinary code refused as a credential, a read-only query over ssh taken for a
+write, a removal that lost a tree's files, and the reviewer, the dependency check, the Stop
+gate's command and the pre-push hook each reading something wrong.
+
 ### What broke
 
 Found by reviewers who had not written the code, each finding reproduced before it was fixed, and
@@ -48,6 +53,34 @@ waits on a finding shown, and `def fit(self, X, y)` is the usual name in model c
 **Auto mode was told about each worktree as a repository.** The founder's settings held twelve
 blocks of facts, each read at every classification.
 
+Then fuddy's 94 captured defects were read against today's code, and every tracked text file
+and its last 300 commits put through the gates that read them.
+
+**A session start crashed.** The walk for hand-kept TODO documents entered every
+`node_modules` and sibling tree before asking the skip list, and on Python 3.10 a directory
+removed while it walked ended the start with `FileNotFoundError`: three times on 2.7.1.
+
+**Ordinary code was refused as a credential.** Sixteen reports, twelve of the lines still
+refused today: a parameter's type (`secret: Uint8Array,`), a parameter handed on, an operand,
+a coordinate. Across fuddy's tracked text, 28 lines read as credentials, none of them one.
+
+**A read-only query over ssh was a write.** `ssh host "psql -c \"… WHERE x > now() …\""`
+ended its quoted span at the escaped quote, and `now` became a file to claim.
+
+**A removal on a longer line lost the tree's files.** `cp -r <tree>/.claude /tmp/kept && git
+worktree remove <tree>`: the gate removed the tree first, and the `cp` never ran.
+
+**A note in an ignored folder waited on the database.** Research notes in an ignored
+`research_notes/` were refused over a sibling's database three times.
+
+**The reviewer and the checks read the wrong thing.** `split_query(f"{name} {composition}")`
+was SQL interpolation, while `f"… WHERE name = '{name}'"` was not; comment words in a
+manifest were packages and a Gradle coordinate was none; a jest project was told a vitest
+command; a push that only deleted a branch ran the whole suite.
+
+**Most decision drafts were another session's words.** Of the 734 waiting on fuddy's clone,
+repair 0045 as first written kept 667, almost all `Another Claude session sent a message:`.
+
 ### What changed
 
 - A pause set down while a subagent of the session still works is refused once, naming
@@ -73,11 +106,29 @@ blocks of facts, each read at every classification.
   test call opens with (decision 0074).
 - Auto mode's facts are written once per repository, under its main checkout; a block an older
   version wrote under a linked worktree is pruned at the next session start.
+- The TODO-document walk prunes skipped directories and goes on past one that is gone.
+- The credential scan lets through what cannot be one: a type, a name handed on, an operand or
+  a chained assignment, a code name after a quoted key, `$(…)`, a `<placeholder>`, a fetch
+  mode, a coordinate, `CHANGE_ME`, an example cut short, a range of numbers, `${VAR:?…}`, a
+  key's id, a path, a regular expression, prose. A literal in the same places is still one.
+- Shell words are quoted as bash quotes them, a backslash escaping outside quotes and inside
+  double ones.
+- A removal of a session's own tree on a line that does more is refused, nothing removed, the
+  removal named to run alone (decision 0042).
+- A write of files git ignores passes while a sibling holds the database.
+- `sql-interpolation` reads a string to the quote that opened it, starting with a statement;
+  triple-quoted strings are not read, as before. Comments in a manifest are skipped and
+  `"group:artifact:version"` is a package. A package.json that uses jest is told jest with
+  `jest-junit`. The pre-push hook passes a push whose every ref is a deletion.
 
 `migrate._REPAIRS` gains 0045: the decision drafts made from text nobody typed go, read off their
 quotes: harness envelopes with nothing of a person's beside them, a hook's or the harness's own
-line, a command's expanded text. A person's words and every resolved draft stay. The agent trees
-2.11 kept are named on the board as any finished tree is, for `claude-bp sweep`.
+line (another session's message, a skill's expanded text, a compaction summary, an idle notice),
+a command's expanded text. A person's words and every resolved draft stay. Run by the branch over
+a copy of fuddy's clone and state, it dropped 464 of 734; of the 270 kept, five are skills' text,
+which no rule over the text alone tells from a founder's heading. The agent trees 2.11 kept are
+named on the board as any finished tree is, for `claude-bp sweep`. An installed pre-push hook is
+refreshed at the next session start, as every version's is.
 
 ## v2.11.0
 
