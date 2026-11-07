@@ -582,3 +582,57 @@ class TestTheSameCorrectionIsCountedNotRefiled(RepoCase):
         drafts.record(ctx, [self.draft()])
         self.assertEqual(1, drafts.record(ctx, [self.draft("никогда не трогай прод")]))
         self.assertEqual(2, len(drafts.pending(ctx)))
+
+
+class TestWhatNobodyTypedIsDropped(RepoCase):
+    """Repair 0045. 2.11 drafted from every user record of the transcript: on one founder's
+    clone 730 drafts were waiting, the newest of them a task's notification and the text `/loop`
+    expands to."""
+
+    NOTIFICATION = ("<task-notification> <task-id>wqie21tps</task-id> <tool-use-id>toolu_01Uk92"
+                    "</tool-use-id> <status>completed</status> </task-notification>")
+    LOOP = "# /loop — schedule a recurring or self-paced prompt Parse the input below into `[interval]`"
+    THEIRS = "не нужно ничего считать все уже сделано, просто закрой задачу и всё"
+
+    def test_harness_text_is_nobodys(self):
+        for quote in (self.NOTIFICATION, self.NOTIFICATION[:60], self.LOOP,
+                      "Stop hook feedback: the suite is red",
+                      "[Request interrupted by user for tool use]"):
+            self.assertTrue(drafts.nobodys_words(quote), quote)
+
+    def test_a_persons_words_are_theirs_even_beside_an_envelope(self):
+        for quote in (self.THEIRS, f"<ide_opened_file>src/app.ts</ide_opened_file> {self.THEIRS}",
+                      "# Итог: всегда мерджи после зелёного CI",
+                      f"{self.THEIRS} <task-notification> вставил для примера"):
+            self.assertFalse(drafts.nobodys_words(quote), quote)
+
+    def file(self, quote: str, **extra) -> None:
+        ctx = self.ctx()
+        store_row = {"marker": "always", "quote": quote, "branch": "main", "session_id": "s1",
+                     "created_at": time.time(), "subject_paths": [], "seen": 1, **extra}
+        from claude_bestpractice import store
+
+        store.append_jsonl(store.tier_b(ctx, drafts.INBOX_FILE), store_row)
+
+    def test_the_repair_drops_them_and_keeps_the_rest(self):
+        from claude_bestpractice import migrate
+
+        self.file(self.NOTIFICATION)
+        self.file(self.LOOP)
+        self.file(self.THEIRS)
+        self.file("<task-notification> already handled", resolved=True)
+
+        said = migrate._drop_drafts_nobody_typed(self.ctx())
+
+        self.assertEqual("2 decision draft(s) made from text nobody typed dropped", said)
+        self.assertEqual([self.THEIRS], [row["quote"] for row in drafts.pending(self.ctx())])
+        from claude_bestpractice import store
+
+        rows = store.read_jsonl(store.tier_b(self.ctx(), drafts.INBOX_FILE))
+        self.assertTrue(any(row.get("resolved") for row in rows), "a resolved row stays resolved")
+        self.assertEqual("", migrate._drop_drafts_nobody_typed(self.ctx()))
+
+    def test_it_is_a_registered_repair(self):
+        from claude_bestpractice import migrate
+
+        self.assertIn("0045-drop-drafts-nobody-typed", migrate._REPAIRS)

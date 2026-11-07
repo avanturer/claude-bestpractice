@@ -1323,6 +1323,22 @@ def _forget_a_red_suite_of_lost_connections(ctx: GitContext) -> str:
             "had lost its connection to a server, so the run never reached the code")
 
 
+def _drop_drafts_nobody_typed(ctx: GitContext) -> str:
+    """Decision drafts 2.11 made from text no person typed.
+
+    `drafts.user_turns` took every user record of the transcript, so a task's notification, a
+    command's expanded text and a hook's line were drafted as the founder's decisions: on one
+    founder's clone `claude-bp status` said 730 drafts were waiting, and the newest of them were
+    `<task-notification>` rows and the instructions `/loop` expands to. The reader takes only the
+    founder's own messages now; this drops the drafts it left, and keeps every draft of a
+    person's words and every one already resolved.
+    """
+    from . import drafts
+
+    dropped = drafts.drop_what_nobody_typed(ctx)
+    return f"{dropped} decision draft(s) made from text nobody typed dropped" if dropped else ""
+
+
 def _kept_reports(ctx: GitContext, suite: str) -> list:
     """The reports the gate kept of its last run of the suite at `suite` that broke, each as
     `evidence.parse_artifact` reads it: None for one it cannot."""
@@ -1860,6 +1876,7 @@ _REPAIRS = {
     "0042-let-go-of-what-dead-runs-and-sessions-left": (1, _let_go_of_what_dead_runs_left),
     "0043-cut-the-logs-down-to-what-is-live": (1, _cut_the_logs_down_to_what_is_live),
     "0044-forget-a-red-suite-of-lost-connections": (1, _forget_a_red_suite_of_lost_connections),
+    "0045-drop-drafts-nobody-typed": (1, _drop_drafts_nobody_typed),
 }
 
 

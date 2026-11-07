@@ -292,6 +292,36 @@ def record(ctx: GitContext, drafts: list[Draft]) -> int:
     return filed
 
 
+# A command's or a skill's text as the harness expands it into the turn: `# /loop — …`.
+_EXPANDED_COMMAND = re.compile(r"^#{1,2}\s*/[\w:.-]+")
+
+
+def nobodys_words(quote: str) -> bool:
+    """Whether a draft's quote is text no person typed: harness envelopes with nothing of a
+    person's beside them, a hook's or the harness's own line, or a command's expanded text.
+
+    What 2.11 drafted from, reading every user record of the transcript. The reader takes only
+    the founder's own messages since (`founder.messages`); this tells the rows it left behind.
+    """
+    from . import founder
+
+    text = " ".join(str(quote).split())
+    return (not founder.strip_envelopes(text) or is_synthetic(text)
+            or bool(_EXPANDED_COMMAND.match(text)))
+
+
+def drop_what_nobody_typed(ctx: GitContext) -> int:
+    """Rewrite the inbox without the waiting drafts made from nobody's words, under the lock its
+    rewrites take. How many drafts went; every resolved row, and every draft of a person's, stays."""
+    def keep(rows: list) -> list:
+        return [row for row in rows if not isinstance(row, dict) or row.get("resolved")
+                or not nobodys_words(str(row.get("quote", "")))]
+
+    before = len(pending(ctx))
+    store.compact_jsonl(store.tier_b(ctx, INBOX_FILE), keep)
+    return before - len(pending(ctx))
+
+
 # Past this size the inbox is rewritten as `pending` reads it. Each sighting of a waiting
 # draft appends a superseding row, so one founder's inbox reached 10.9 MB, sixty per cent of
 # everything this plugin kept for the clone: 7,361 rows holding 591 distinct drafts, one of
