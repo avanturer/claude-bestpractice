@@ -1074,6 +1074,11 @@ def unforced_removals(command: str, cwd: Path) -> set[Path]:
     return out
 
 
+def _ignored_only(ctx, paths: list) -> bool:
+    """Whether this call writes something, and only files git ignores in this tree."""
+    return bool(paths) and all(gitpolicy.git_ignores(ctx.worktree_root, str(rel)) for rel in paths)
+
+
 def _removal_alone(command: str) -> bool:
     """Whether a line that removes a tree does nothing else: only moves into a directory first."""
     scannable = _blanked(command)
@@ -2432,7 +2437,9 @@ def main() -> None:
         remedy = writing_now and all(_is_env_file(Path(rel).name) for rel in writing_now)
         if cfg.isolate_databases and touched and ctx.is_worktree and not remedy:
             clash = worktree.session_on_this_database(ctx, event.session_id)
-            if clash:
+            # A file git ignores is no test's and no code's: research notes in an ignored folder
+            # were refused over the database three times on 2.2.0, reaching neither.
+            if clash and not _ignored_only(ctx, writing_now):
                 deny(
                     ctx, rec,
                     f"claude-bestpractice: session {sessions.called(ctx, clash[0])} is already "

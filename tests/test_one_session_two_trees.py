@@ -262,6 +262,21 @@ class TestASiblingIsStillASibling(MovedSession):
         self.assertEqual("deny", self.hook_decision(proc))
         self.assertIn("already using the database", self.hook_reason(proc))
 
+    def test_a_note_in_a_folder_git_ignores_is_not_held_up_by_the_database(self):
+        """Reported three times on 2.2.0: a research note in an ignored `research_notes/` was
+        refused over the shared database, though the write reached no database and no code.
+        The same tree's code is refused as before."""
+        self.a_sibling(self.repo, "B")
+        (self.repo / ".env").write_text(f"DATABASE_URL={DSN}\n", encoding="utf-8")
+        (self.tree / ".env").write_text(f"DATABASE_URL={DSN}\n", encoding="utf-8")
+        (self.tree / ".gitignore").write_text("research_notes/\n", encoding="utf-8")
+
+        note = self.write_in(self.tree, "research_notes/alternatives.md")
+        code = self.write_in(self.tree)
+
+        self.assertNotIn("already using the database", self.hook_reason(note))
+        self.assertIn("already using the database", self.hook_reason(code))
+
     def test_a_tree_made_for_another_process_is_not_this_ones_to_remove(self):
         """The interception acts for the session standing in its own tree only; a tree the
         same harness id holds in another process goes to the cross-tree rule as before."""
