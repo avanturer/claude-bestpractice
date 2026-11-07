@@ -1,6 +1,5 @@
 # Decisions
 
-- [0071] The compaction summary is told what to keep by the hook that saves the window — `decisions/0071-the-summary-is-told-what-to-keep-by-the-checkpoint.md`
 - [0072] A prompt a session schedules, or a message it sends, carries no word of the founder's — `decisions/0072-a-scheduled-prompt-carries-no-word-of-the-founders.md`
 - [0073] The summary a compaction leaves is nobody's word — `decisions/0073-a-compaction-summary-is-nobodys-word.md`
 - [0074] The commit reviewer names the moves that make a red suite read green — `decisions/0074-the-reviewer-names-what-fakes-a-green-run.md`
@@ -11,4 +10,5 @@
 - [0079] What the plugin puts in front of the model states facts, never orders — `decisions/0079-what-the-model-is-shown-states-facts.md`
 - [0080] How often each of this plugin's skills is read is counted, and a skill nobody reads shows it — `decisions/0080-a-skill-nobody-reads-is-counted-as-read-none.md`
 - [0081] A stage the ratchet holds is not probed on every tool call for what cannot move it — `decisions/0081-a-held-stage-is-not-probed-for-what-cannot-move-it.md`
-- ... 68 older, see `decisions/`
+- [0082] A pause keeps the agents it stops, and its card says which to resume — `decisions/0082-a-pause-keeps-the-agents-it-stops.md`
+- ... 69 older, see `decisions/`

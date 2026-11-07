@@ -18,6 +18,9 @@ other — and a pull request closed without merging used to stay OPEN on every b
 thirty days. Here the close has already succeeded, so it is settled rather than guessed.
 The same call with `draft` marks one ready or pauses it again, and that is recorded here too.
 
+And it is the only event that says which agent a `TaskStop` stopped and what the agent was sent
+to do: kept for the card the session pauses, which the Stop gate writes them on (decision 0082).
+
 Fails open. A number that did not get learned costs a numbered merge its judgement and, once
 a `+merge` names the chat's pull requests, the word as well: the merge gate then says which
 pull request it could not place and names the merge that works. A hook that raised would
@@ -32,11 +35,23 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import config, gitpolicy, hookio, pullrequest  # noqa: E402
+from claude_bestpractice import config, gitpolicy, hookio, pullrequest, subagents  # noqa: E402
+
+
+def _an_agent_stopped(event: hookio.HookEvent) -> None:
+    """Keep the agent a `TaskStop` of this chat stopped, where the Stop gate reads it. Stands
+    down with the plugin, and only with it: this is about a pause, not the pull-request flow."""
+    event = hookio.placed(event)
+    ctx = hookio.repo(event.place)
+    if config.enforcing(ctx)[0]:
+        subagents.stopped(ctx, str(event.raw.get("session_id") or ""), event.raw.get("tool_response"))
+    hookio.emit_silent()
 
 
 def main() -> None:
     event = hookio.read_event()
+    if event.tool_name == subagents.STOP_TOOL:
+        _an_agent_stopped(event)
     command = str(event.tool_input.get("command", "")) if event.tool_name == "Bash" else ""
     merges = pullrequest.merge_target(event.tool_name, command, event.tool_input) is not None
     # A shell line is here for the number `gh pr create` printed and for the merge that ran,

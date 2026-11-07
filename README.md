@@ -314,6 +314,14 @@ refused the session twice in a row — a session stopped by something outside th
 still gets out. The paused card says what the work is and what it waits on. The suite is asked
 for again when the card is claimed and the work finished, and a merge still needs a green run.
 
+**A pause keeps the agents it stops.** An agent left running under a pause goes on spending
+tokens, and its report wakes the session to carry on; one stopped and started afresh reads
+everything again. So a pause over an agent still at work is refused once, naming `TaskStop`, and
+each agent the session stops is written on the paused card, by its id and what it was sent to
+do. Claiming the card again lists them, and a `SendMessage` to the id resumes the agent with its
+own context. It is asked once per pause, so where you asked for the agents to finish, the turn
+still ends.
+
 **Waiting for its own agents is not a finish either.** Claude Code runs a spawned agent in the
 background by default, and a session that hands work to three of them ends its turn to wait for
 their reports. While one of them is still at work — a subagent, a workflow, a teammate — the gate

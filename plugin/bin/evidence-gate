@@ -57,6 +57,8 @@ LET_GO_SECONDS = 3600.0
 SETTLED_AT = "_settled_at"
 # The pause this gate took after refusals, as `<card>@<the second it was set down>`.
 PAUSE_TAKEN = "_pause_taken"
+# The pause this gate refused once over agents of the session still at work, kept the same way.
+AGENTS_ASKED = "_agents_asked"
 
 # A gap this long between blocks is not the thing the ceiling exists to stop. The ceiling
 # catches a session looping — block, retry, block, retry, minutes apart — and lets it
@@ -806,6 +808,46 @@ def _why_the_pause_did_not_end_it(card) -> str:
     )
 
 
+def _keep_the_pauses_agents(ctx, event, rec, card, chat: str) -> None:
+    """At a pause this gate takes, keep the agents the pause would otherwise cost (decision 0082).
+
+    The founder asked for the work to stop, and an agent left running goes on spending tokens and
+    wakes the session with its report, while one stopped and started afresh loses what it had read.
+    So the pause is refused once while an agent of the session still works, naming `TaskStop`; and
+    each agent the session stopped since its last turn ended is written on the card, by id and
+    what it was sent to do, for a `SendMessage` to resume it with its own context.
+    """
+    from claude_bestpractice import plan
+
+    still = subagents.running(event.raw.get("background_tasks"))
+    taken = f"{card.id}@{plan.moved_at(card):.0f}"
+    if still and rec.tool_signatures.get(AGENTS_ASKED) != taken:
+        rec.tool_signatures[AGENTS_ASKED] = taken
+        sessions.touch(ctx, rec.session_id, tool_signatures=dict(rec.tool_signatures))
+        hookio.block(_agents_run_on(card, still))
+    settled = rec.tool_signatures.get(SETTLED_AT)
+    since = settled if isinstance(settled, (int, float)) else rec.started_at
+    # A note is the card's memory, never what keeps a turn from ending.
+    with contextlib.suppress(Exception):
+        plan.note_stopped_agents(ctx, card.id, subagents.stopped_since(ctx, chat, since))
+
+
+def _agents_run_on(card, still: list) -> str:
+    """The refusal of a pause while agents of the session still work under it."""
+    named = "; ".join(
+        f"`{task['id']}` ({_cut(' '.join(redact.strip_control(str(task.get('description') or task.get('agent_type') or '')).split()), 60)})"
+        for task in still[:5])
+    more = f" and {len(still) - 5} more" if len(still) > 5 else ""
+    return (
+        f"claude-bestpractice: {card.id} is paused, and {len(still)} agent(s) of this session still "
+        f"work: {named}{more}. Each goes on spending tokens while the work waits, and its report "
+        "wakes this session to carry on. `TaskStop` with an agent's id stops it, and this gate then "
+        "writes it on the card; `SendMessage` to that id, once the card is claimed again, resumes the "
+        "agent with its own context. This is said once for this pause: where the founder asked for "
+        "the agents to finish, the turn ends as it is.\n"
+    )
+
+
 def _written_since(ctx, changed: list, moment: float) -> bool:
     """Was a file in `changed` written in a later second than `moment`? A card keeps its time
     to the second, so a write in the second of the pause itself reads as before it."""
@@ -918,6 +960,9 @@ def main() -> None:
     # And a turn that ends to wait for its own agents is not one either: what they were sent
     # to do is still being done (decision 0070).
     at_work = _agents_at_work(event)
+    # And a pause keeps the agents it stops, for the card to say which to resume (decision 0082).
+    if paused is not None:
+        _keep_the_pauses_agents(ctx, event, rec, paused, opener)
     if event.stop_hook_active and blocked >= evidence.MAX_CONSECUTIVE_BLOCKS and paused is None \
             and not at_work:
         # Both ceiling exits describe the same outcome, and this is the one that fires in
