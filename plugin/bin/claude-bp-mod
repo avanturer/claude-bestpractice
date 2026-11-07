@@ -8,6 +8,8 @@ included, leaves the call as it was, so a fault here costs a digest and never a 
 
   digest    a successful Bash result -> {"stdout": what the model reads instead} or {}
   roster    -> {"text": what each other session on the repository is doing} or {}
+  board     -> {"line": the founder's status line, "rows": the pane's lines} or {}
+  skill     -> {} once one of this plugin's skills, `request["skill"]`, is counted as read
   map       -> {"text": the files a subagent's task is about, ranked} or {}
   settings  -> {"enabled", "compress_output", "route_search": true or false,
                 "subagent_min_model": the least tier a subagent runs on, "" for none}
@@ -25,7 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import board, config, hookio, outputs, repomap  # noqa: E402
+from claude_bestpractice import board, config, hookio, outputs, repomap, skilluse  # noqa: E402
 from claude_bestpractice.gitctx import GitError, resolve  # noqa: E402
 
 
@@ -62,6 +64,11 @@ def _answer(asked: str, request: dict) -> dict:
     if asked == "roster" and ctx is not None:
         text = board.roster(ctx, harness)
         return {"text": text} if text else {}
+    if asked == "board" and ctx is not None:
+        return board.glance(ctx, harness)
+    if asked == "skill" and ctx is not None:
+        skilluse.used(ctx, str(request.get("skill") or ""))
+        return {}
     if asked == "map" and ctx is not None:
         text = repomap.for_a_task(ctx, str(request.get("task") or ""))
         return {"text": text} if text else {}

@@ -1750,6 +1750,32 @@ class TestCheckpoint(GateCase):
         self.assertEqual(proc.returncode, 0)
         self.assertTrue(list((self.repo / ".claude" / "claude-bestpractice" / "checkpoints").glob("*.md")))
 
+    def test_the_summary_is_told_what_to_keep(self):
+        """Claude Code hands this hook's stdout to the compaction summary as its instructions
+        (decision 0071). The JSON it printed before told the summary nothing: on PreCompact
+        `continue` and `systemMessage` are discarded."""
+        self.start()
+        card = self.claim_a_task("s1", "src/invoice.py")
+        proc = self.gate("checkpoint", {"session_id": "s1", "hook_event_name": "PreCompact",
+                                        "trigger": "auto"})
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(proc.stdout.startswith("Keep, word for word: the founder's requests"),
+                        proc.stdout)
+        self.assertIn(f'In play: card {card.id} "{card.title}"', proc.stdout)
+        with self.assertRaises(ValueError, msg="read as fields, it would instruct nothing"):
+            json.loads(proc.stdout)
+
+    def test_what_it_tells_the_summary_stays_under_the_cap(self):
+        """Claude Code cuts each PreCompact hook's stdout at 10,000 characters."""
+        self.start()
+        for n in range(5):
+            self.claim_a_task("s1", f"src/part_{n}.py")
+        proc = self.gate("checkpoint", {"session_id": "s1", "hook_event_name": "PreCompact",
+                                        "trigger": "manual"})
+        self.assertLess(len(proc.stdout), 2_000)
+        self.assertEqual(3, proc.stdout.count("In play: card"))
+
     def test_checkpoints_do_not_collide(self):
         self.start()
         for _ in range(3):
@@ -2811,6 +2837,14 @@ class TestAPauseIsNotAFinish(GateCase):
         self.card = self.claim_a_task("s1", "feature.py")
         self.write("feature.py", "def total(prices, tax):\n    return sum(prices) * tax\n")
         self.commit("total takes the tax rate; its tests are next")
+        # Where the founder said it: a pause ends a turn on their words (decision 0075).
+        from helpers import turn
+
+        self.transcript = self.tmp / "transcript.jsonl"
+        self.transcript.write_text(json.dumps(turn(self.WORDS, time.time())) + "\n", encoding="utf-8")
+
+    def stop(self, session_id: str = "s1", **extra) -> subprocess.CompletedProcess:
+        return super().stop(session_id, **{"transcript_path": str(self.transcript), **extra})
 
     def pause(self, card: str = "", command: str = "") -> None:
         """`claude-bp-plan pause`, run by this session the way its shell runs it."""
@@ -2857,7 +2891,38 @@ class TestAPauseIsNotAFinish(GateCase):
             [f"claude-bp-plan pause {self.card.id} --blocker \"<the founder's words>\""], named)
 
         self.pause(command=named[0])
+        # Run as printed, the placeholder is no words of the founder's, and a pause that is the
+        # first answer to a red suite has to carry theirs (decision 0075); the refusal says so.
+        again = self.stop(stop_hook_active=True)
+        self.assertEqual(2, again.returncode)
+        self.assertIn(f"The pause of {self.card.id} did not end this turn", again.stderr)
 
+    OWN_BLOCKER = "ждём ключ от API стороннего сервиса"
+
+    def test_a_blocker_of_its_own_is_not_the_first_answer_to_a_red_suite(self):
+        """DeepSeek Harness rejects a goal's `blocked` until three rounds have passed. Here a pause
+        had only to say twelve characters, and the red suite was not asked again (decision 0075)."""
+        self.assertEqual(2, self.stop().returncode)
+        self.pause(command=f"claude-bp-plan pause {self.card.id} --blocker '{self.OWN_BLOCKER}'")
+
+        proc = self.stop(stop_hook_active=True)
+
+        # Judged as a finish: the red suite refuses it again, re-asserted on the unchanged tree
+        # (decision 0013), and the card on the board is named rather than asked for.
+        self.assertEqual(2, proc.returncode, proc.stderr)
+        self.assertIn(f"The pause of {self.card.id} did not end this turn", proc.stderr)
+        self.assertNotIn("Nothing on the board says this session is working", proc.stderr)
+        self.assertNotIn("paused, not finished", proc.stderr)
+
+    def test_after_two_refusals_in_a_row_a_blocker_of_its_own_ends_the_turn(self):
+        for attempt in range(2):
+            self.assertEqual(2, self.stop(stop_hook_active=attempt > 0).returncode)
+        self.pause(command=f"claude-bp-plan pause {self.card.id} --blocker '{self.OWN_BLOCKER}'")
+        self.assertEqual(0, self.stop(stop_hook_active=True).returncode)
+
+    def test_the_founders_words_are_found_however_they_are_spaced_or_quoted(self):
+        self.assertEqual(2, self.stop().returncode)
+        self.pause(command=f"claude-bp-plan pause {self.card.id} --blocker '«Ставь  всё на паузу, завтра продолжим»'")
         self.assertEqual(0, self.stop(stop_hook_active=True).returncode)
 
     def test_unfinished_work_is_not_asked_of_a_pause(self):

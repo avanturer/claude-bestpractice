@@ -164,6 +164,65 @@ class TestRatchet(RepoCase):
         self.assertEqual(merged.returncode, 0, merged.stdout + merged.stderr)
 
 
+class TestAHeldStageIsNotProbedForWhatCannotMoveIt(RepoCase):
+    """The gates resolve the stage on every tool call (decision 0081). A users table only ever
+    makes traction, and a Django or Alembic project never spells `create table` in its
+    migrations, so every one of them was read on every call of a project already held there."""
+
+    def held_at(self, held: str) -> None:
+        from claude_bestpractice import store
+
+        store.write_json(store.tier_a(self.ctx(), stage.STAGE_DIR, f"reached-{held}.json"), {"stage": held})
+
+    def test_held_at_traction_its_migrations_are_not_read_again(self):
+        from unittest import mock
+
+        for n in range(30):
+            self.write(f"migrations/{n:04d}_initial.py", "operations = [migrations.CreateModel('User')]\n")
+        self.held_at(stage.TRACTION)
+        read = []
+        real = stage._read
+        with mock.patch.object(stage, "_read", side_effect=lambda path, limit=200_000: read.append(path) or real(path, limit)):
+            resolved, _ = stage.current(self.ctx())
+        self.assertEqual(stage.TRACTION, resolved)
+        self.assertEqual([], [path for path in read if "migrations" in str(path)])
+
+    def test_held_at_the_top_nothing_is_probed(self):
+        from unittest import mock
+
+        from claude_bestpractice import store
+
+        self.held_at(stage.REVENUE)
+        with mock.patch.object(stage, "probe", side_effect=AssertionError("probed")):
+            resolved, sig = stage.current(self.ctx())
+        self.assertEqual(stage.REVENUE, resolved)
+        self.assertIn("not probed", " ".join(sig.reasons))
+        # Still written: `reindex` rebuilds the signals file through this call.
+        recorded = store.read_json(store.tier_b(self.ctx(), stage.SIGNALS_FILE), default={})
+        self.assertEqual(stage.REVENUE, recorded.get("stage"))
+
+    def test_status_still_reads_what_a_gate_skips(self):
+        """`claude-bp status` shows the reasons: a gate's "probe said prototype" over migrations
+        it never read would be a claim nobody checked."""
+        self.write("migrations/0001_initial.sql", "CREATE TABLE users (id serial);\n")
+        self.held_at(stage.TRACTION)
+        _, shown = stage.current(self.ctx(), record=False)
+        self.assertIn("user-shaped table in 0001_initial.sql", shown.reasons)
+        _, gated = stage.current(self.ctx())
+        self.assertIn("not read", " ".join(gated.reasons))
+        self.assertNotIn("user-shaped table in 0001_initial.sql", gated.reasons)
+
+    def test_resolving_the_stage_starts_no_process(self):
+        """It ran `git rev-list --count` on every tool call, for a number nothing read."""
+        import subprocess
+        from unittest import mock
+
+        ctx = self.ctx()
+        with mock.patch.object(subprocess, "Popen", side_effect=AssertionError("a process ran")):
+            stage.current(ctx)
+            stage.current(ctx, record=False)
+
+
 class TestGates(unittest.TestCase):
     def test_spine_fires_at_every_stage(self):
         """The evidence gate does not scale down. A lying prototype is still lying."""

@@ -111,6 +111,23 @@ class TierIsNamed(SpawnCase):
         self.assertEqual(subagents.pinned_tier(self.ctx(), "../../etc/passwd"), "")
         self.assertEqual(subagents.pinned_tier(self.ctx(), ""), "")
 
+    def test_a_fork_is_not_asked_for_a_tier(self):
+        """Claude Code runs a fork on the parent's model and ignores `model` on the call.
+
+        Refused, the session added a field the harness throws away and spawned again: a round
+        trip on every fork, which is on by default in VS Code since 2.1.302.
+        """
+        self.start()
+        decision, why = self.decision(self.gate({"subagent_type": "fork", "prompt": "try the other half"}))
+        self.assertNotEqual(decision, "deny", why)
+        self.assertEqual(self.record().spawns_this_turn, 1)
+
+    def test_only_the_fork_is_spared(self):
+        """An agent of the founder's named `forked-review` is an agent like any other."""
+        self.start()
+        decision, _ = self.decision(self.gate({"subagent_type": "forked-review", "prompt": "review"}))
+        self.assertEqual(decision, "deny")
+
 
 class CountIsBounded(SpawnCase):
     def spawn(self, n: int, first: int = 0) -> list[tuple[str, str]]:
@@ -155,6 +172,14 @@ class CountIsBounded(SpawnCase):
         self.assertEqual(decision, "deny")
         self.assertIn("ceiling is 1", why)
 
+    def test_a_fork_counts_toward_the_ceiling(self):
+        """Spared the tier, not the count: a fork is still one more agent working at once."""
+        self.start()
+        self.spawn(3)
+        decision, why = self.decision(self.gate({"subagent_type": "fork", "prompt": "a fourth way"}))
+        self.assertEqual(decision, "deny")
+        self.assertIn("ceiling is 3", why)
+
     def test_zero_switches_the_ceiling_off(self):
         self.configure(subagent_fanout=0)
         self.start()
@@ -190,3 +215,30 @@ class TheMatcherCarriesTheTool(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheAgentIsToldItsCard(SpawnCase):
+    """An agent was handed a task and nothing of the work it is part of: the files the session's
+    finish measures drift against were invisible to it (decision 0078)."""
+
+    def brief(self) -> str:
+        proc = subprocess.run(
+            [sys.executable, str(BIN / "subagent-brief")],
+            input=json.dumps({"cwd": str(self.repo), "session_id": "s1", "agent_id": "a1",
+                              "hook_event_name": "SubagentStart", "agent_type": "general-purpose"}),
+            capture_output=True, text=True, cwd=str(self.repo), timeout=60,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        return json.loads(proc.stdout).get("hookSpecificOutput", {}).get("additionalContext", "") \
+            if proc.stdout.strip() else ""
+
+    def test_the_card_of_the_session_that_started_it_is_in_its_brief(self):
+        self.start()
+        card = self.claim_a_task("s1", "src/invoice.py")
+        body = self.brief()
+        self.assertIn(f"works under card {card.id}", body)
+        self.assertIn("src/invoice.py", body)
+
+    def test_a_session_that_holds_no_card_hands_none(self):
+        self.start()
+        self.assertNotIn("works under card", self.brief())

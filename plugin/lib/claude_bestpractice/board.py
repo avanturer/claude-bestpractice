@@ -235,8 +235,10 @@ def _sessions_block(ctx: GitContext, others: list[SessionRecord], leases: dict,
     if not others:
         return ["OTHER LIVE SESSIONS: none. This session is alone on the repository."]
 
-    out = [f"OTHER LIVE SESSIONS ({len(others)}) — do not edit files they hold; SendMessage "
-           "reaches each by the name its row starts with:"]
+    # Facts, never an order: the block is fenced as data, and Claude Code's hooks reference warns
+    # that injected text framed as a command trips the model's prompt-injection defences.
+    out = [f"OTHER LIVE SESSIONS ({len(others)}) — files they hold are refused to every other "
+           "session; SendMessage reaches each by the name its row starts with:"]
     for rec in sorted(others, key=lambda r: r.heartbeat_at, reverse=True):
         out.append(
             f"  - {sessions.label(rec)} on {rec.branch} "
@@ -276,6 +278,66 @@ def roster(ctx: GitContext, harness_id: str) -> str:
     return (f"What each session on {ctx.worktree_root.name} is doing, from claude-bestpractice's "
             "board. Send to the one whose work it is, by the name its row starts with:\n"
             + "\n".join(rows))
+
+
+# How much of the board the founder's glance holds: the rows a pane shows, and the numbers a
+# status line names before it says how many more there are.
+GLANCE_SESSIONS = 12
+GLANCE_PULL_REQUESTS = 6
+GLANCE_NUMBERS = 3
+
+
+def glance(ctx: GitContext, harness_id: str) -> dict[str, Any]:
+    """What the founder sees beside the chat: `line`, one status line, and `rows`, a pane's.
+
+    Drawn by the hooks module and never put in front of the model, so it costs no tokens, and it
+    is read by the one person who decides what every session does next: who else is working on
+    what, which pull requests wait for their word, whether the suite is red (decision 0076).
+    Live by pid, as the reaper reads them, never by `claude agents --json`, which this would ask
+    every minute of every session.
+    """
+    from . import evidence, hookio, pullrequest
+
+    others = [rec for rec in sessions.one_per_session(sessions.live_sessions(ctx))
+              if not harness_id or hookio.harness_of(rec.session_id, rec.worktree) != harness_id]
+    others.sort(key=lambda rec: rec.heartbeat_at, reverse=True)
+    waiting = [row for row in pullrequest.outstanding(ctx) if not row.get("draft")]
+    red = evidence.red_line(ctx)
+    return {"line": _glance_line(len(others), waiting, bool(red)),
+            "rows": _glance_rows(ctx, others, waiting, red)}
+
+
+def _glance_line(others: int, waiting: list[dict[str, Any]], red: bool) -> str:
+    """The status line: the other sessions, the pull requests waiting on the founder, a red suite."""
+    ready = [row for row in waiting if not row.get("blockers")]
+    said = [f"{others} other session(s)" if others else "no other session"]
+    if ready:
+        named = ", ".join(_numbered(row) for row in ready[:GLANCE_NUMBERS])
+        more = f" +{len(ready) - GLANCE_NUMBERS}" if len(ready) > GLANCE_NUMBERS else ""
+        said.append(f"{named}{more} wait for your `+merge`")
+    if len(waiting) > len(ready):
+        said.append(f"{len(waiting) - len(ready)} pull request(s) blocked")
+    if red:
+        said.append("suite red")
+    return f"bestpractice · {' · '.join(said)}"
+
+
+def _glance_rows(ctx: GitContext, others: list[SessionRecord], waiting: list[dict[str, Any]],
+                 red: str) -> list[str]:
+    """The pane: a row per session with its card and branch, per pull request, and the red suite."""
+    rows = [f"{rec.name or rec.session_id[:8]}: {doing(ctx, rec)[:80] or 'no card yet'} · {rec.branch}"
+            for rec in others[:GLANCE_SESSIONS]]
+    rows += [f"{_numbered(row)} on {row.get('branch', '')}: "
+             + (f"blocked by {str(row['blockers'][0])[:80]}" if row.get("blockers") else "ready to merge")
+             for row in waiting[:GLANCE_PULL_REQUESTS]]
+    if red:
+        rows.append(red[:200])
+    return rows
+
+
+def _numbered(row: dict[str, Any]) -> str:
+    """A pull request as the founder names it: `#<number>`, or its branch before it has one."""
+    return f"#{row['number']}" if row.get("number") else str(row.get("branch") or "?")
 
 
 def doing(ctx: GitContext, rec: SessionRecord) -> str:

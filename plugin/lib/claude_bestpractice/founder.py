@@ -196,6 +196,48 @@ def founders_word(prompt: str) -> str:
 
 
 # ---------------------------------------------------------------------------------------------
+# Text a session writes that comes back as a turn.
+
+# The tools whose text Claude Code later hands a session as a turn of its own, by the field the
+# text is in: a scheduled prompt fires into this session, a message starts a turn in another.
+# UserPromptSubmit fires for each and carries nothing that tells it from a message the founder
+# typed, so a `+merge` in one was a grant the gated session wrote for itself (decision 0072).
+TURN_TEXT = {"CronCreate": "prompt", "ScheduleWakeup": "prompt", "SendMessage": "message"}
+
+# Each grant as a refusal names it: in backticks, as every message of this plugin's names the
+# founder's word, so that no line it prints is one that grants.
+_NAMED = {config.APPROVE_MERGE: "`+merge`", config.APPROVE_RELEASE: "`+release`",
+          config.APPROVE_MIGRATION: "`+migration`"}
+
+
+def written_for_a_turn(tool_name: str, tool_input: Any) -> list[str]:
+    """What the turn this call's text starts would take as the founder's, as a refusal names it:
+    each word that would grant and each switch it would throw. Empty for any other tool, and for
+    text that does neither: a word quoted, asked about or withheld is read here as
+    `prompt-capture` reads it.
+    """
+    field = TURN_TEXT.get(tool_name)
+    if field is None or not isinstance(tool_input, dict):
+        return []
+    text = str(tool_input.get(field) or "")
+    granted = [_NAMED[key] for key in config.approvals_in(founders_word(text)) if key in _NAMED]
+    return granted + [f"`{key} {value}`" for key, value in config.switches_in(text).items()]
+
+
+def written_for_a_turn_refusal(tool_name: str, words: list[str]) -> str:
+    """Why such a call is refused, and how to send what it meant without granting anything."""
+    named = ", ".join(words)
+    return (
+        f"claude-bestpractice: this {tool_name} text carries {named}, which the turn it starts "
+        "would read as the founder's own word: Claude Code hands a scheduled prompt or a "
+        "message to the same hook as a message the founder typed, with nothing to tell them "
+        "apart.\n"
+        "  Those words are theirs to type, in the chat they are for. Put each in backticks, or "
+        "say it in other words (\"once the founder accepts the merge\"), and send it again."
+    )
+
+
+# ---------------------------------------------------------------------------------------------
 # The words a transcript holds.
 
 
@@ -308,15 +350,24 @@ def messages(transcript_path: str, most_bytes: int = _MOST_BYTES) -> list[str]:
     return said
 
 
+# The flags on a `user` entry that nobody typed: another loop's turn, the harness's own
+# bookkeeping, the summary a compaction leaves, and what only the transcript view shows.
+_NOBODY_TYPED = ("isSidechain", "isMeta", "isCompactSummary", "isVisibleInTranscriptOnly")
+
+
 def _from_a_person(entry: dict[str, Any]) -> tuple[str, str, float] | None:
     """(identity, text, when) of a message a person sent, or None for anything else.
 
     A turn the founder started is a `user` entry; one they sent while the session worked is a
     `queued_command` attachment folded into the running turn. Everything else the harness
     files under those types — tool results, sidechains, meta entries, task notifications,
-    another agent's report — is not them.
+    another agent's report, the summary a compaction leaves — is not them.
+
+    The summary carries no `origin`, so it read as a turn from before the harness marked its
+    sender, and a summary told to keep the founder's words keeps them: a `+merge` it repeated
+    was a new word, given by nobody (decision 0073).
     """
-    if entry.get("isSidechain") or entry.get("isMeta"):
+    if any(entry.get(flag) for flag in _NOBODY_TYPED):
         return None
     found = _as_a_turn(entry) if entry.get("type") == "user" else _as_queued(entry)
     if found is None:

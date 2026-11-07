@@ -1,5 +1,129 @@
 # Changelog
 
+## v2.11.0
+
+What current Claude Code, DeepSeek Harness and this autumn's research showed this plugin
+missing. A fork is no longer asked for a tier, a gate that cannot run refuses, a turn that
+waits on its own agents is not judged as a finish, and the compaction summary is told what to
+keep and is never read as the founder's word, nor is a prompt a session schedules. The commit
+reviewer names what fakes a green run, a pause ends a turn only on the founder's words, the
+founder sees the board beside the chat, an agent is told its card and its tree is put away
+once spent, and the stage is no longer probed on every tool call for what cannot move it.
+
+### What broke
+
+Found by reading Claude Code's hook reference and changelog through 2.1.319 against what this
+plugin does, beside DeepSeek Harness (`dsh`, August 2026), whose compaction and goal loop take
+the same questions on.
+
+**Every fork was refused once.** Claude Code runs forks by default, in VS Code and the desktop
+app since 2.1.302, on the session's own model whatever the call names. The tier rule looked a
+fork up as an agent called `fork`, found nothing pinning a model, and refused it, so the session
+added a `model` the harness discards and spawned again.
+
+**A gate that could not run let every call through.** Claude Code runs a tool on any exit but 2.
+`hookio.guard` turns a failure inside `pre-tool` into a refusal, and nothing turned one before
+it: a library that does not import, a missing `python3`, the fifteen-second timeout.
+
+**A turn waiting for its agents was judged as finished.** Agents run in the background by
+default since 2.1.232, and a session that hands work to three of them ends its turn to wait.
+The Stop gate ran the suite over files they were still writing, filed UNVERIFIED for work not
+done, withdrew the card a message had opened as unplanned, and handed back the leases and the
+tree under them. Stop carries `background_tasks` for exactly this; nothing read it.
+
+**The checkpoint told the compaction summary nothing.** Claude Code uses a PreCompact hook's
+stdout as the summary's instructions. This one printed `{"continue": true, "suppressOutput":
+true}`, fields the event discards; the keep-list reached the summary only through the hooks
+module, which is off wherever mods are.
+
+**A scheduled prompt could carry the founder's word.** Claude Code fires UserPromptSubmit for a
+scheduled task, a `/loop` iteration and a message from another session, with nothing telling
+such a turn from one the founder typed, and `prompt-capture` records `+merge` and gate switches
+from that event. A session could schedule `+merge` a minute out.
+
+A second pass, against the papers and plugins of October and November 2026, found the rest.
+
+**The compaction summary could grant `+merge`.** Claude Code writes it as a `user` entry with
+no `origin`, the shape this plugin reads by its text, and the summary is told to keep the
+founder's words: a `+merge` it repeated was a new word under a new id, given by nobody. arXiv
+2610.29869 measured 87–100% of forged approvals surviving compaction where roles are flattened.
+
+**The reviewer caught one way to fake a green run, a skip.** A test command that cannot fail, an
+`__eq__` equal to anything, a test that exits the process, a conftest hook that rewrites the
+outcome, `assert True` and a return before the assertion all went by; arXiv 2610.12822 found
+exactly these passed between agents through code and memory.
+
+**Any pause ended a turn.** A pause skips the suite because it carries the founder's word, and
+nothing checked that it did: a blocker of twelve characters, any twelve, ended a turn over a
+red suite with no run and nothing on record.
+
+**The founder saw the board only through a session,** once per session start, and asked each
+of three to eight what it was doing, a turn each. The VS Code extension runs no custom
+`statusLine` command.
+
+**Trees made for agents piled up.** Claude Code keeps the worktree a WorktreeCreate hook made
+for a subagent or a workflow agent and leaves its removal to the hook's author; only
+`claude-bp sweep`, asked for, took them.
+
+**An agent did not know the card it worked under,** so the files the finish measures drift
+against were invisible to the one writing them.
+
+**The board spoke to the model in orders.** Claude Code asks for injected context written as
+facts, since text framed as instructions can trip its prompt-injection defences.
+
+**Nothing counted whether a skill was read.** Its description rides in every request and its
+body loads only when the model picks it; JetBrains found one plugin's skill self-activated
+zero times in ten sessions.
+
+**The stage was probed in full on every tool call.** Django and Alembic migrations never spell
+`create table`, so up to two hundred were read, each whole, on every Bash, Edit and Write,
+beside a `git rev-list --count` for a number nothing read.
+
+### What changed
+
+- `subagent_type: "fork"` names no tier and is not refused for it; it still counts toward
+  `subagent_fanout` (decision 0068).
+- The `pre-tool` entry says `"onFailure": "block"`: Claude Code 2.1.295 and later refuse the
+  call when the gate cannot start, crashes before its guard or times out (decision 0069).
+- A Stop whose `background_tasks` names a running subagent, workflow, teammate or cloud session
+  runs no suite, files nothing, demands no pull request, and keeps the card, the leases and the
+  tree; what the other sessions are owed is still asked. A background shell or monitor spares
+  nothing (decision 0070).
+- The checkpoint prints the keep-list as plain text, with this session's claimed cards by id,
+  title and condition; the hooks module's `session.compact` is gone (decision 0071).
+- `CronCreate`, `ScheduleWakeup` and `SendMessage` are refused when their text would grant
+  `+merge`, `+release` or `+migration` or throw a gate switch. A word in backticks is named, not
+  given, and goes through (decision 0072).
+- A transcript entry marked `isCompactSummary` or `isVisibleInTranscriptOnly` is never read as
+  the founder's message. The summary is told to keep their words in backticks, the agents still
+  running, and to merge an earlier summary rather than copy it forward (decisions 0073, 0071).
+- The commit reviewer reports six more classes: a test command that cannot fail, an `__eq__`
+  answering True, and, in test files, a test that exits, a hook that rewrites a result, an
+  assertion that cannot fail and a return before the assertion. Focused and skipped tests are
+  read in more runners' spellings. Reported, never blocked (decision 0074).
+- A pause ends a turn without what a finish owes when its blocker quotes a message of the
+  founder's, or after the Stop gate has refused the session twice in a row; any other pause is
+  judged as a finish, and the refusal says why (decision 0075).
+- The hooks module keeps a status line of the other live sessions, the pull requests waiting
+  for `+merge`, the blocked ones and a red suite, and `/sessions` opens a pane with a row each.
+  Read at every turn's end and once a minute, at no token cost (decision 0076).
+- A Stop the gate lets end, with none of the chat's agents at work, removes the trees made for
+  them that nobody stands in, with an empty `git status` and their work in the trunk;
+  `remove_finished_trees` switches it off with the rest (decision 0077).
+- A subagent's brief names the cards its session holds: id, title, condition and files
+  (decision 0078).
+- The board's header states that held files are refused to every other session, where it said
+  not to edit them (decision 0079).
+- `claude-bp status` says how often each of this plugin's skills was read since the count began
+  (decision 0080).
+- A gate resolving the stage skips what cannot move the stage the ratchet holds: nothing is
+  probed at revenue, migrations are not read at traction, and commits are not counted at all.
+  `claude-bp status` still probes everything (decision 0081).
+
+No `migrate._REPAIRS` step. None of the fourteen leaves state behind: a card an older gate
+withdrew under running agents cannot be told from one no work followed, and stays withdrawn;
+the agent trees an older version left are `claude-bp sweep`'s to remove, as they were.
+
 ## v2.10.0
 
 The founder's `+merge` covers the pull requests the message it answers names, a pull request a

@@ -1790,6 +1790,43 @@ def release_mine(ctx: GitContext, session_id: str) -> tuple[str, str, list[str]]
     return None
 
 
+def release_agents_trees(ctx: GitContext, harness_id: str) -> list[str]:
+    """Remove the trees `worktree-create` made for this chat's agents, once they are spent.
+
+    Claude Code keeps the tree a WorktreeCreate hook made for a subagent with `isolation:
+    worktree` or for a workflow agent, and never runs a removal for it: "Remove those worktrees
+    yourself when the work is done." This plugin's hook makes every such tree, and recorded it
+    for no session the reaper reads, so each one an agent ran in stayed (decision 0077).
+
+    Only a tree nobody stands in, with `git status` empty, whose branch is in the trunk: an
+    agent's committed work that never reached it stays, its branch with it. The Stop gate asks
+    on a turn it lets end with none of this chat's agents still at work. The paths removed.
+    """
+    from . import gitpolicy
+
+    gone: list[str] = []
+    for tree in _agents_trees(ctx, harness_id):
+        if gitpolicy.stood_in(ctx, tree.resolve()):
+            continue
+        found = _in_the_trunk(tree)
+        if found and _nothing_left_in(ctx, tree) and _release(ctx, found, record_for(ctx, tree)[0]):
+            gone.append(found[0])
+    return gone
+
+
+def _agents_trees(ctx: GitContext, harness_id: str) -> list[Path]:
+    """The trees `worktree-create` made for this chat, still on disk, the main checkout never.
+
+    A record that names no path names no tree: `Path("")` is the directory this process stands in.
+    """
+    if not harness_id:
+        return []
+    main = main_checkout(ctx).resolve()
+    trees = [Path(str(body["path"])) for body in _provisioned(ctx)
+             if body.get("path") and not body.get("session_id") and body.get("harness_id") == harness_id]
+    return [tree for tree in trees if tree.is_dir() and tree.resolve() != main]
+
+
 def release_now(ctx: GitContext, tree: Path, force: bool = False,
                 kept: list[str] | None = None) -> tuple[str, str, list[str]] | None:
     """Remove the session's own `tree` because the session asked to, not because it is finished.

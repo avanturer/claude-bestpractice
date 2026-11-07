@@ -159,3 +159,79 @@ test('a subagent is handed the map of its own task', async ($, on) => {
   expect(prompt).toContain('fix the OTA check')
   expect(prompt).toContain('mobile/src/ota/check.ts')
 })
+
+const SESSIONS_PANE = {
+  plugin: 'bestpractice',
+  component: 'Pane',
+  requestId: 'sessions',
+  props: {
+    title: 'Sessions',
+    isFocused: false,
+    bodyColumns: 80,
+    placement: 'dock',
+    scroll: { offset: 0, bodyRows: 20 },
+    view: {},
+  },
+} as const
+
+const BOARD = {
+  line: 'bestpractice · 2 other session(s) · #297 wait for your `+merge`',
+  rows: ['ledger-export-3c: 0006 Add CSV export · feat/export', '#297 on feat/x: ready to merge'],
+}
+
+function statusLines(on: On): (string | undefined)[] {
+  const shown: (string | undefined)[] = []
+  on('ui.status', async ($: unknown, e: { text: string | undefined }) => {
+    shown.push(e.text)
+    return { value: undefined }
+  })
+  return shown
+}
+
+test('the founder sees the board as a status line, which the model is never sent', async ($, on) => {
+  inASession(on as On)
+  on('process.run', library({ board: BOARD }))
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  const shown = statusLines(on as On)
+  await $.command.run({ command: 'sessions', args: '' })
+  expect(shown).toContain(BOARD.line)
+})
+
+test('the sessions pane draws a row for each session and pull request, in the terminal and VS Code', async ($, on) => {
+  inASession(on as On)
+  on('process.run', library({ board: BOARD }))
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  statusLines(on as On)
+  await $.command.run({ command: 'sessions', args: '' })
+  for (const surface of ['terminal', 'vscode'] as const) {
+    const ui = await $.ui.mount({ ...SESSIONS_PANE, surface })
+    expect((await ui.find({ type: 'Text', text: /ledger-export-3c/ }))?.text).toBe(BOARD.rows[0])
+    expect((await ui.find({ type: 'Text', text: /#297/ }))?.text).toBe(BOARD.rows[1])
+    await ui.unmount()
+  }
+})
+
+test('a board the library has nothing for clears the line, as enabled off does', async ($, on) => {
+  inASession(on as On)
+  on('process.run', library({ board: {} }))
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  const shown = statusLines(on as On)
+  await $.command.run({ command: 'sessions', args: '' })
+  expect(shown).toEqual([undefined])
+})
+
+test('a read of one of this plugin\'s skills is counted, and another plugin\'s is not', async ($, on) => {
+  inASession(on as On)
+  const asked: string[] = []
+  on('process.run', async ($$: unknown, e: { argv: readonly string[] }) => {
+    asked.push(e.argv[e.argv.length - 1])
+    return { value: { exitCode: 0, stdout: '{}', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('skill.prompt', async (_: unknown, e: { text: string }) => ({ text: e.text }))
+  const skill = (pluginName: string, name: string) => $.skill.prompt({
+    skill: name, text: 'the skill', frontmatter: {}, source: 'plugin', pluginName,
+  } as never)
+  await skill('bestpractice', 'llm-first-code')
+  await skill('superpowers', 'brainstorming')
+  expect(asked.filter((what) => what === 'skill').length).toBe(1)
+})

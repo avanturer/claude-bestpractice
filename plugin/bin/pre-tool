@@ -1496,6 +1496,17 @@ def main() -> None:
                               "credential in it.")
         hookio.emit_silent()
 
+    # A prompt this session schedules, or a message it sends another session, comes back as a
+    # turn that the hook hearing the founder cannot tell from one they typed. So no word of
+    # theirs rides in one: a scheduled `+merge` was a grant the gated session wrote for itself,
+    # and a scheduled `enabled off` a switch it threw (decision 0072).
+    if event.tool_name in founder.TURN_TEXT:
+        carried = founder.written_for_a_turn(event.tool_name, event.tool_input)
+        if carried:
+            hookio.deny_tool(founder.written_for_a_turn_refusal(event.tool_name, carried)
+                             + REFUSAL_IS_YOURS)
+        hookio.emit_silent()
+
     rec = sessions.get(ctx, event.session_id)
     if rec is None:
         # No record means SessionStart never ran, or something deleted it. Re-register
@@ -1608,10 +1619,11 @@ def main() -> None:
     # the model nor the prompt — by then the choice has been made and paid for.
     if event.tool_name in subagents.SPAWN_TOOLS:
         named = str(ti.get("model") or "")
-        if not subagents.names_a_tier(named):
-            pinned = subagents.pinned_tier(ctx, str(ti.get("subagent_type") or ""))
+        kind = str(ti.get("subagent_type") or "")
+        if not subagents.names_a_tier(named) and not subagents.is_a_fork(kind):
+            pinned = subagents.pinned_tier(ctx, kind)
             if not subagents.names_a_tier(pinned):
-                deny(ctx, rec, subagents.tier_refusal(str(ti.get("subagent_type") or ""), pinned))
+                deny(ctx, rec, subagents.tier_refusal(kind, pinned))
         # Counted on the way through, because a PreToolUse hook never sees the result and
         # a spawn that is allowed is a spawn that is running. Refused ones are not
         # counted, for the same reason refused tool calls are not: a call this gate

@@ -8,6 +8,10 @@ never at compact time, and treat this hook as a flush rather than a save point.
 Exactly one surveyed tool registers PreCompact. The rest re-inject after the window
 has already collapsed, which recovers nothing.
 
+What it prints is the other half: Claude Code hands the stdout of this hook to the summary
+as its instructions, so the summary is told what to keep, this session's card among it,
+before anything is lost (decision 0071).
+
 Extraction is deliberately cheap — no summarisation, no model. A stateful model
 reducer in front of a durable queue is a trap: you persist the fragments and lose the
 reducer state, and the leading memory plugin bills up to ~8k input tokens per tool
@@ -48,6 +52,26 @@ from claude_bestpractice.gitctx import changed_files, resolve  # noqa: E402
 
 MAX_TURN_CHARS = 300
 MAX_TURNS = 3
+
+# What the compaction summary is told to keep, by the hook that saves the window first. The
+# hooks module used to say it, through `session.compact`; the hook's own stdout is the way
+# Claude Code documents, and it holds where mods are off (decision 0071).
+KEEP = (
+    "Keep, word for word: the founder's requests and decisions, every `+merge`, `+release` and "
+    "`+migration` they gave, in backticks as written here, and what it covered, the task card "
+    "ids and titles in play, the files "
+    "changed and why, each failing test by name with its first error line, and what was tried "
+    "and failed, and the agents and background commands still running, by what they were sent "
+    "to do. Keep the path a claude-bestpractice digest names for its whole output instead of the "
+    "output. Where an earlier summary is in the conversation, do not copy it forward: keep what "
+    "is still true, drop what is stale, and merge it into this one. Drop passing test lists, "
+    "install and build logs, and file contents that can be read again."
+)
+
+# Cards named to the summary, and how much of each. The ledger holds the rest, and the restore
+# at the next session start hands it back.
+MAX_CARDS_TOLD = 3
+MAX_CARD_CHARS = 240
 
 
 def read_user_turns(transcript_path: str) -> list[str]:
@@ -145,6 +169,28 @@ def _carried(ctx, rec) -> list:
     return kept
 
 
+def _what_the_summary_keeps(ctx, rec) -> str:
+    """The instructions for this compaction: what any window keeps, and this one's cards.
+
+    The summary is the stronger carrier. Context put back at the next session start is read
+    beside a summary that has already decided what the work was, and a card the summary never
+    named is the one a session goes on to file a second time.
+    """
+    from claude_bestpractice import plan
+
+    told = [KEEP]
+    try:
+        held = plan.held_by(ctx, rec.session_id) if rec else []
+    except Exception:  # noqa: BLE001 - the instructions are a hint; the compaction runs anyway
+        held = []
+    for card in held[:MAX_CARDS_TOLD]:
+        line = f"In play: card {card.id} \"{card.title}\""
+        if card.done_when:
+            line += f", done when {card.done_when}"
+        told.append(redact.scrub(redact.strip_control(line))[:MAX_CARD_CHARS])
+    return "\n".join(told)
+
+
 def main() -> None:
     event = hookio.read_event()
     ctx = hookio.repo(event.cwd or os.getcwd())
@@ -205,7 +251,7 @@ def main() -> None:
     path = store.checkpoint_dir(ctx) / name
     store.atomic_write(path, "\n".join(lines) + "\n", mode=0o644)
 
-    hookio.emit_silent()
+    hookio.instruct_the_compaction(_what_the_summary_keeps(ctx, rec))
 
 
 if __name__ == "__main__":

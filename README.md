@@ -4,8 +4,8 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-2.10.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
-[![tests](https://img.shields.io/badge/tests-2541%20passing-2ea44f)](#verified)
+[![version](https://img.shields.io/badge/version-2.11.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![tests](https://img.shields.io/badge/tests-2945%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
@@ -139,7 +139,7 @@ the clone no longer has is not shown, and a branch's green and run records go wi
 ### Sessions that see each other
 
 ```
-OTHER LIVE SESSIONS (2) — do not edit files they hold; SendMessage reaches each by the name its row starts with:
+OTHER LIVE SESSIONS (2) — files they hold are refused to every other session; SendMessage reaches each by the name its row starts with:
   - ledger-export-3c (a3f81c22) on feat/export [ledger-export] active 40s ago
       touched: src/billing.js, src/csv.js
       holds: src/billing.js
@@ -198,6 +198,13 @@ worse than silence. Requires Claude Code 2.1.224+ on macOS or Linux — and 2.1.
 run sessions inside a user namespace or a rootless container, where the channel was
 silently off from 2.1.232 until that release. Where messaging is unavailable the plugin is
 simply silent.
+
+**And you see the board without asking for it.** The hooks module keeps a line under the
+prompt — how many other sessions are live, which pull requests wait for your `+merge`, how
+many are blocked, whether the suite is red — and `/sessions` opens a pane with a row for each
+session, its card and branch, each pull request and the red suite. It is read again at the end
+of every turn and once a minute, in the terminal and in VS Code, and it is never part of a
+request, so it costs no tokens. A session counts as live by its process, as the reaper reads it.
 
 ### A work ledger that merges
 
@@ -301,9 +308,19 @@ forever is a gate that gets uninstalled.
 
 **A pause is not a finish.** Tell a session to stop before the work is done and it pauses its
 card with your words as the blocker; the turn ends there, with no suite run, nothing filed as
-unverified, and no demand for a card. The paused card says what the work is and what it waits
-on. The suite is asked for again when the card is claimed and the work finished, and a merge
-still needs a green run.
+unverified, and no demand for a card. The words have to be yours: a blocker that quotes no
+message of yours is judged as a finish, and the refusal says why, unless the gate has already
+refused the session twice in a row — a session stopped by something outside the repository
+still gets out. The paused card says what the work is and what it waits on. The suite is asked
+for again when the card is claimed and the work finished, and a merge still needs a green run.
+
+**Waiting for its own agents is not a finish either.** Claude Code runs a spawned agent in the
+background by default, and a session that hands work to three of them ends its turn to wait for
+their reports. While one of them is still at work — a subagent, a workflow, a teammate — the gate
+runs no suite over the files they are writing, files nothing as unverified, demands no pull
+request, and keeps the card, the leases and the tree they work in. What the other sessions are
+owed is still asked, and the finish after the reports is judged in full. A background shell or
+a monitor spares nothing: a dev server left running never reports back.
 
 ### A pull request is an obligation, not a notification
 
@@ -410,6 +427,12 @@ then still held there by Claude Code, which refuses every git call aimed anywher
 gate names the way out — `ExitWorktree` with `keep` — and the Stop gate that removes the tree a
 shell stands in asks for it before the turn ends.
 
+Claude Code never removes the trees `worktree-create` makes for a chat's own agents. Once the
+gate lets a finish through with none of that chat's agents still at work, it removes the ones
+nobody stands in whose `git status` is empty and whose work is in the trunk — the same way,
+without `--force`, the branch only on proof — and `remove_finished_trees` switches that off
+with the rest.
+
 A tree another tool created is never removed, because that is not a plugin's call. It is
 **named** instead, with the command — as is a branch carrying commits that no pull request
 here has seen, and a pull request nothing has moved in a week. All three lines are empty in
@@ -459,14 +482,20 @@ is why the clause around a word decides whether it counts. The prefix is a
 symbol rather than the word "ok" because "ok" is English and the gate should not depend on
 which language you happen to be writing in. Nothing the session writes can stand in for these — only your own turns reach the
 hook that records them, which is the whole point: the gate on an irreversible action must
-not be openable by the party it gates.
+not be openable by the party it gates. That includes the turns a session can start for
+itself: a prompt it schedules (`CronCreate`, `/loop`) or a message it sends another session
+reaches that hook as a turn, so one carrying a word of yours, or a gate switch, is refused
+before it is sent. Written in backticks, a word is named rather than given, and goes through.
 
 ### Slop caught mechanically — in your repository
 
-On the lines this turn added, the commit reviewer flags seven classes: swallowed
-exceptions, bare excepts, debug leftovers, disabled verification, skipped tests, shell
-injection and SQL interpolation — plus anything shaped like a credential. Pre-existing
-matches are ignored, so it never bills you for someone else's history.
+On the lines this turn added, the commit reviewer flags thirteen classes. Seven are slop:
+swallowed exceptions, bare excepts, debug leftovers, disabled verification, skipped or focused
+tests, shell injection and SQL interpolation. Six are the moves that make a red suite read
+green: a test command that cannot fail (`|| true`, `--passWithNoTests`, `-DskipTests`), an
+`__eq__` that answers True to anything, and, in test files only, a test that exits the process,
+a hook that rewrites a result, an assertion that cannot fail and a test that returns before it
+asserts. And anything shaped like a credential. Pre-existing matches are ignored, so it never bills you for someone else's history.
 
 It **reports**, it does not block. A reviewer that refuses a commit over style is a
 reviewer you switch off in a week, and a switched-off reviewer catches nothing.
@@ -543,13 +572,20 @@ carrying anything that reads as a credential is refused before it leaves. Querie
 policy](https://parallel.ai/privacy-policy)) and Exa ([privacy policy](https://exa.ai/privacy-policy));
 Exa refuses requests from some regions, and there search falls through to WebSearch.
 
-**Compaction keeps what you said.** It is told to keep your requests and decisions, every
-`+merge` and what it covered, the cards in play, the failing tests and the paths of kept
-outputs, and to drop logs that can be read again.
+**Compaction keeps what you said.** The hook that saves the window before a compaction tells
+the summary what to keep: your requests and decisions, every `+merge` and what it covered, the
+cards in play — this session's own by id, title and condition — the failing tests, the agents
+still running and the paths of kept outputs; to merge an earlier summary rather than copy it
+forward; and to drop logs that can be read again. The summary itself is nobody's word: a
+`+merge` it repeats grants nothing, because the entry Claude Code writes it as is never read as
+a message of yours.
 
 **Sessions find each other.** When a session lists the agents it can message, each other
 session on the repository is named with its card, branch and tree, so a message goes to the
 one whose work it is. A subagent spawned on a tier below `subagent_min_model` (`sonnet`) runs on it.
+A fork is never asked for a tier: Claude Code runs it on the session's own model whatever the
+call names. A subagent's brief names the card the session that started it works under —
+its id, its condition and its files, beyond which a write counts as drift.
 
 Each is a switch you say: `compress_output off`, `route_search off`, `subagent_min_model off`.
 
@@ -566,7 +602,7 @@ configuration silently.
 
 | | |
 |---|---|
-| `claude-bp status` | Sessions, plan, knowledge, memory health, conflicts, next action |
+| `claude-bp status` | Sessions, plan, knowledge, memory health, how often each skill was read, conflicts, next action |
 | `claude-bp init` | Derive the knowledge layer from your code |
 | `claude-bp adopt` | Take over events another tool is contesting |
 | `claude-bp sweep` | Remove the trees nobody is in whose work is already in the trunk |
@@ -596,12 +632,12 @@ In a session: `/bestpractice:status` · `/bestpractice:plan` · `/bestpractice:r
 | `setup` | Setup | fails open | Derives the knowledge layer, creates the plan, seeds the stage |
 | `session-start` | SessionStart | fails open | Reaps the dead, registers, injects board + plan + stage |
 | `prompt-capture` | UserPromptSubmit | fails open | Records the verbatim task. **Injects nothing** |
-| `pre-tool` | PreToolUse | **fails closed** | Call ceiling, loop break, secret pre-write scan, leases, migration and deploy gating, subagent tier and fan-out |
+| `pre-tool` | PreToolUse | **fails closed**, even when it cannot start (`onFailure`) | Call ceiling, loop break, secret pre-write scan, leases, migration and deploy gating, subagent tier and fan-out, no founder's word in a scheduled prompt or message |
 | `review-commit` | `if: Bash(git commit:*)` | async rewake | Reviews this turn's diff; wakes you only when there is something to say |
 | `worktree-create` | WorktreeCreate | fails open | Names it, seeds trust, derives a private port and database |
 | `subagent-brief` | SubagentStart | fails open | Non-goals, entities and a query-biased map to agents that inherit no rules |
-| `checkpoint` | PreCompact | fails open | Extractive checkpoint, zero model calls, secrets scrubbed. **Never refuses a compaction** — a refusal there reaches the founder, never the model (decision 0021) |
-| `evidence-gate` | Stop | **fails closed** | Scope drift, test evidence, clean re-run, a turn ending on an unanswered block; harvests decision drafts; asks once for what only this window knows; puts a finished worktree away |
+| `checkpoint` | PreCompact | fails open | Extractive checkpoint, zero model calls, secrets scrubbed; tells the summary what to keep. **Never refuses a compaction** — a refusal there reaches the founder, never the model (decision 0021) |
+| `evidence-gate` | Stop | **fails closed** | Scope drift, test evidence, clean re-run, a turn ending on an unanswered block; harvests decision drafts; asks once for what only this window knows; puts a finished worktree away; waits while the session's own agents work |
 | `pr-opened` | PostToolUse `.*(create\|update\|merge)_pull_request`, and `Bash` if it runs `gh pr` | fails open | Files the pull request just opened and learns its number, so the merge gate can tell its own from somebody else's; settles one closed through the tool; finishes a merge once it has run |
 | `permission-denied` | PermissionDenied | fails open | Records what auto mode refused, so a repeated prompt can be traced to its rule; never overturns one |
 
@@ -614,7 +650,7 @@ roughly 0.1 % of a 200k window.
 ## Verified
 
 ```
-make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2541 tests · 36 doctor checks · budget
+make check    # lint · docs gate · slop gate · polyglot gate · knowledge · 2945 tests · 36 doctor checks · budget
 ```
 
 The doctor proves gates by **attempting the bad thing**, not by reading configuration
