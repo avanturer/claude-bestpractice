@@ -4,7 +4,7 @@
 
 **Память, координация и принуждение для разработки продукта в нескольких параллельных сессиях Claude Code.**
 
-[![version](https://img.shields.io/badge/version-2.13.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.14.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-3017%20passing-2ea44f)](#проверено)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#проверено)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#требования)
@@ -536,6 +536,7 @@ WebSearch, только когда не ответил ни один; Exa — д
 | `claude-bp init` | Вывести слой знания из вашего кода |
 | `claude-bp adopt` | Забрать события, которые оспаривает другой инструмент |
 | `claude-bp sweep` | Удалить деревья, в которых никого нет и чья работа уже в транке |
+| `claude-bp spend` | На что сессии этого репозитория потратили токены, по их транскриптам, и сколько от этого оставил бы потолок контекста |
 | `claude-bp verify` | Сделать там, где это видит плагин, прогон, который снимает запись о красном сьюте: вашей командой, если вы её объявили |
 | `claude-bp database` | Создать собственную базу этого worktree, если её нет на сервере (нужен `psql`; иначе `worktree_setup`) |
 | `claude-bp set` | Изменить переключатель гейта, о котором вы попросили своими словами |

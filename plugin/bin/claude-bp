@@ -20,7 +20,7 @@ BIN = Path(__file__).resolve().parent
 sys.path.insert(0, str(BIN.parent / "lib"))
 
 from claude_bestpractice import __version__, board, ci, conflicts, defects, delivery, drafts, hookio, knowledge, onboard, pullrequest  # noqa: E402
-from claude_bestpractice import config, inbox, plan, policy, provenance, sessions, skilluse, stage, upgrade, vouch  # noqa: E402
+from claude_bestpractice import config, inbox, plan, policy, provenance, sessions, skilluse, spend, stage, upgrade, vouch  # noqa: E402
 from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
 
 BOLD = "\033[1m" if sys.stdout.isatty() else ""
@@ -338,6 +338,13 @@ def cmd_sweep(ctx) -> int:
         print(f"kept {path}: {why}")
     if not removed and not left:
         print("nothing to remove: every tree is in use, holds work, or was touched lately")
+    return 0
+
+
+def cmd_spend(ctx, days: float) -> int:
+    """What this repository's sessions spent, and what a ceiling on the context would have
+    left of it. Read off the transcripts on this machine; nothing is changed."""
+    print(spend.render(spend.measure(spend.transcripts(ctx, days)), spend.ceiling_in_effect(ctx)))
     return 0
 
 
@@ -671,6 +678,10 @@ def main() -> int:
     reply.add_argument("text", help="the answer, in your own words")
     sub.add_parser(
         "database", help="create this worktree's own database if the server has not got it")
+    spent = sub.add_parser(
+        "spend", help="where this repository's sessions spent their tokens, from their transcripts")
+    spent.add_argument("--days", type=float, default=14,
+                       help="transcripts written to in the last N days (default 14; 0 for all)")
     switch = sub.add_parser(
         "set", help="change a gate switch the founder has asked for in their own words")
     switch.add_argument("key", help="a config key, e.g. scope_drift_block")
@@ -695,6 +706,8 @@ def main() -> int:
         return cmd_dismiss(ctx, args.detector, args.path)
     if args.command == "sweep":
         return cmd_sweep(ctx)
+    if args.command == "spend":
+        return cmd_spend(ctx, args.days)
     if args.command == "verify":
         return cmd_verify(ctx)
     if args.command == "adopt":

@@ -1777,13 +1777,14 @@ class TestCheckpoint(GateCase):
         self.assertEqual(3, proc.stdout.count("In play: card"))
 
     def test_checkpoints_do_not_collide(self):
+        """One per session: three sessions compacting in the same second keep three, and a
+        session compacting again keeps its newest alone."""
         self.start()
-        for _ in range(3):
+        for session in ("s1", "s2", "s3", "s1"):
             self.gate(
                 "checkpoint",
-                {"session_id": "s1", "hook_event_name": "PreCompact", "trigger": "auto"},
+                {"session_id": session, "hook_event_name": "PreCompact", "trigger": "auto"},
             )
-            time.sleep(1.01)  # filenames are second-resolution by design
         files = list((self.repo / ".claude" / "claude-bestpractice" / "checkpoints").glob("*.md"))
         self.assertEqual(len(files), 3)
 

@@ -120,6 +120,46 @@ def checkpoint_dir(ctx: GitContext) -> Path:
     return root.joinpath(TIER_A_DIRNAME, "checkpoints")
 
 
+# How long a checkpoint of a session that never compacted again is kept. A session resumed
+# after longer starts from its card and its record, as one that never compacted does.
+CHECKPOINT_DAYS = 30
+
+
+def prune_checkpoints(ctx: GitContext, session_id: str) -> int:
+    """Remove the checkpoints nothing will read again, and say how many went.
+
+    Only a session's newest is ever restored (`newest_checkpoint`), and every compaction
+    wrote another: a founder's clone held 169, none ever removed. This session's older ones
+    go, and any session's older than `CHECKPOINT_DAYS`. A session under a context ceiling
+    compacts several times as often, so they would pile up that much faster.
+    """
+    directory = checkpoint_dir(ctx)
+    try:
+        found = sorted(directory.glob("*.md"))
+    except OSError:
+        return 0
+    mine = [path for path in found if session_id and session_id[:8] in path.name]
+    old = time.time() - CHECKPOINT_DAYS * 86400
+    spent = set(mine[:-1]) | {path for path in found if _older_than_stamp(path, old)}
+    spent.discard(mine[-1] if mine else None)
+    removed = 0
+    for path in spent:
+        try:
+            path.unlink()
+            removed += 1
+        except OSError:
+            continue
+    return removed
+
+
+def _older_than_stamp(path: Path, moment: float) -> bool:
+    """Was this file last written before `moment`? False for one that cannot be read."""
+    try:
+        return path.stat().st_mtime < moment
+    except OSError:
+        return False
+
+
 def newest_checkpoint(ctx: GitContext, session_id: str) -> str:
     """The last thing written before this session's context was compacted, or "".
 

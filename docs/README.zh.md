@@ -4,7 +4,7 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-2.13.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.14.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-3017%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
@@ -392,6 +392,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 | `claude-bp init` | 从你的代码推导出知识层 |
 | `claude-bp adopt` | 接管被其他工具争抢的事件 |
 | `claude-bp sweep` | 删除无人使用、工作已进入主干的 worktree |
+| `claude-bp spend` | 根据会话记录统计本仓库各会话的 token 花在了哪里，以及给上下文设上限后还会剩下多少 |
 | `claude-bp verify` | 在插件看得到的地方执行能清除红色套件记录的那次运行：如果你声明了测试命令，就用你自己的 |
 | `claude-bp database` | 为这个 worktree 创建它自己的数据库（如果服务器上还没有；需要 `psql`，否则用 `worktree_setup`） |
 | `claude-bp set` | 修改你用自己的话要求过的 gate 开关 |

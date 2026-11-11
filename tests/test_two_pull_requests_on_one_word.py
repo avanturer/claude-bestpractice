@@ -171,6 +171,32 @@ class TestThePullRequestTheMessageNamedIsNamedByTheWord(TwoPullRequestsCase):
         self.accept()
         self.merged(1140)
 
+    def anothers_draft(self, number: int = 1138, branch: str = "release/1.3.0") -> None:
+        git(["branch", branch], self.repo)
+        pullrequest.opened(self.ctx(), branch, "main", "c44fb007-another-chat", number=number,
+                           url=LINK.format(number), draft=True)
+
+    def test_a_draft_another_chat_opened_is_named_by_the_word_that_answers_its_number(self):
+        """#300: a release draft another chat left, named as waiting for the founder, `+merge`."""
+        self.anothers_draft()
+        self.stop(f"Opened #{self.PR_NUMBER}. #1138 is not merged: it waits for your word.")
+        self.accept()
+        self.merged(self.PR_NUMBER)
+        self.merged(1138)
+
+    def test_and_once_it_is_marked_ready_it_still_is(self):
+        self.anothers_draft()
+        self.stop("#1138 is not merged: it waits for your word.")
+        self.accept()
+        pullrequest.redraft(self.ctx(), "release/1.3.0", False)
+        self.merged(1138)
+
+    def test_a_draft_only_looked_at_is_still_paused_work(self):
+        self.anothers_draft()
+        pullrequest.shown(self.ctx(), "s1", [1138])
+        self.accept()
+        self.assertEqual("deny", self.decision(self.merge(1138)))
+
     def test_a_number_nothing_here_records_is_no_pull_request_of_theirs(self):
         """`#295` is as often the issue: a word naming only that would lose the one merge."""
         self.assertEqual([], pullrequest.named_in_message(self.ctx(), "Fixes #295."))
