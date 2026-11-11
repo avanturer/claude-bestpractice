@@ -59,6 +59,38 @@ class TestTheDigest(RepoCase):
         self.assertIsNone(digest.condense(lines, digest.BUILD))
 
 
+class TestACompilersOwnSpellingIsRead(RepoCase):
+    """What three compilers print, each read as an ordinary line before."""
+
+    def test_an_error_is_an_error_however_the_compiler_spells_it(self):
+        for line in ("src/app.ts(3,5): error TS2322: Type 'string' is not assignable.",
+                     "src/app.ts:3:5 - error TS2322: Type 'string' is not assignable.",
+                     "panic: assignment to entry in nil map",
+                     "error[E0308]: mismatched types"):
+            with self.subTest(line=line):
+                self.assertTrue(digest._flag(line) & digest._ERR)
+
+    def test_a_failed_typescript_build_keeps_its_errors(self):
+        """Three errors in the middle of four hundred progress lines: the digest had none."""
+        noise = [f"[{n:03d}/400] transforming src/module{n}.ts\n" for n in range(400)]
+        errors = [f"src/screens/Screen{n}.tsx({n},5): error TS2322: Type 'string' is not "
+                  "assignable to type 'number'.\n" for n in range(3)]
+        body = digest.condense("".join(noise[:200] + errors + noise[200:])
+                               + "Found 3 errors in 3 files.\n", digest.BUILD)
+        self.assertEqual(3, body.count("error TS2322"))
+
+    def test_a_lowercase_warning_is_a_warning(self):
+        for line in ("warning: unused variable: `x`", "main.c:4:9: warning: unused variable 'x'",
+                     "warning[E0170]: pattern binding is named the same"):
+            with self.subTest(line=line):
+                self.assertEqual(digest._WARN, digest._flag(line))
+
+    def test_the_words_alone_are_still_ordinary(self):
+        for line in ("no panic here", "the warning sign", "an error TS file", "errors: none"):
+            with self.subTest(line=line):
+                self.assertEqual(0, digest._flag(line))
+
+
 class TestTheAnswerTheModuleGets(RepoCase):
     def ask(self, command: str, text: str, **extra) -> dict:
         return outputs.answer(self.ctx(), {"command": command, "stdout": text, "stderr": "", **extra})
