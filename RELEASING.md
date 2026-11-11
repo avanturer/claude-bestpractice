@@ -71,7 +71,7 @@ never reached, the other asserted tolerance that a lower layer was already provi
 2. Write the CHANGELOG entry: what broke, how it was found, what changed. Not a list of
    commits — the reader is someone deciding whether this affects them.
 3. `make check-fast` green.
-4. **If the branch had to merge the trunk, run it again.** A green check before
+4. **If the branch had to merge the trunk, run `make check-fast` again.** A green check before
    a conflict resolution says nothing about the tree after it. Resolving to "our" side is
    right only when our side is a superset — and it is not, whenever this branch *replaced*
    something the trunk also changed, because the merge then keeps both copies.
