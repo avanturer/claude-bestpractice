@@ -88,8 +88,8 @@ class TestARequestIsCountedOnce(TranscriptCase):
         agent = self.transcript([json.dumps({**json.loads(text), "isSidechain": True})
                                  for text in growing(60)], "subagents/agent-1.jsonl")
         report = spend.measure([agent])
-        self.assertGreater(report.compactions[200_000], 0)
-        self.assertLess(report.replayed[200_000], report.replayed[0])
+        self.assertGreater(report.compactions[300_000], 0)
+        self.assertLess(report.replayed[300_000], report.replayed[0])
 
 
 class TestTheReplayIsCheckedAgainstWhatWasSpent(TranscriptCase):
@@ -104,15 +104,15 @@ class TestTheReplayIsCheckedAgainstWhatWasSpent(TranscriptCase):
         self.assertEqual(spend.replay(history, 0), spend.replay(history, 400_000))
 
     def test_a_ceiling_compacts_and_what_is_read_after_it_is_less(self):
-        """50k growing by 10k a request: past 200k on the seventeenth, where the context
+        """50k growing by 10k a request: past 300k on the twenty-seventh, where the context
         falls back to the floor and what a compaction leaves."""
         history = spend.turns(self.transcript(growing(60)))
         whole, _ = spend.replay(history, 0)
-        capped, compactions = spend.replay(history, 200_000)
+        capped, compactions = spend.replay(history, 300_000)
         self.assertGreater(compactions, 0)
         self.assertLess(capped, whole)
-        every = (200_000 - 50_000 - spend.KEPT) // 10_000
-        self.assertAlmostEqual(compactions, (60 - 16) // every + 1, delta=1)
+        every = (300_000 - 50_000 - spend.KEPT) // 10_000
+        self.assertAlmostEqual(compactions, (60 - 26) // every + 1, delta=1)
 
     def test_a_conversation_compacted_in_fact_is_followed_down(self):
         lines = growing(30) + [line("after", read=50_000, written=20_000, out=100)]
@@ -138,7 +138,8 @@ class TestWhatTheReportSays(TranscriptCase):
     def test_it_reads_as_a_page(self):
         said = spend.render(spend.measure([self.transcript(growing(60))]), (0, ""))
         self.assertIn("1 conversation(s), a subagent's among them, 60 requests", said)
-        self.assertIn("at 200k:", said)
+        self.assertIn("at 300k:", said)
+        self.assertIn("is not counted", said)
         self.assertIn("Ceiling in effect here: none", said)
         self.assertIn("autoCompactWindow", said)
 

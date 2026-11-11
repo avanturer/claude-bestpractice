@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.14.1
+
+- This repository's context ceiling is 850,000, not 300,000: the large context is used on
+  purpose (decision 0085, the founder's word).
+- `claude-bp spend` replays under 300k, 500k and 800k, says that what a session reads again
+  after a compaction is not counted, and no longer recommends a ceiling.
+
 ## v2.14.0
 
 `claude-bp spend` says where a repository's sessions spent their tokens and what a ceiling on
