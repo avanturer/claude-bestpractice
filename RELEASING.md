@@ -71,6 +71,10 @@ never reached, the other asserted tolerance that a lower layer was already provi
 2. Write the CHANGELOG entry: what broke, how it was found, what changed. Not a list of
    commits — the reader is someone deciding whether this affects them.
 3. `make check-fast` green.
+   Where the release repairs state or adds a refusal, drill it over the founder's clone first,
+   on their machine: `python3 tools/drill.py <clone>` starts a session twice in a copy of the
+   clone and its state, and asks the new refusals of every shell line its sessions ran. The
+   clone is read and never written.
 4. **If the branch had to merge the trunk, run `make check-fast` again.** A green check before
    a conflict resolution says nothing about the tree after it. Resolving to "our" side is
    right only when our side is a superset — and it is not, whenever this branch *replaced*
