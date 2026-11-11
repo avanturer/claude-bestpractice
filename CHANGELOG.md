@@ -1,5 +1,87 @@
 # Changelog
 
+## v2.13.0
+
+The gate reads what a shell line does to its own state and to the trunk however the line is
+spelled, a session start takes nothing that exists nowhere else, a verdict about a suite stands
+only for the tree that ran it, and state several chats write at once is written under one lock.
+A failed TypeScript build keeps its errors in the digest.
+
+### What broke
+
+Found by reading the plugin end to end beside a read-only snapshot of fuddy on the founder's own
+machine (Claude Code 2.1.314, WSL, no managed settings and no sandbox, 50 defects of the plugin on
+record, 46 of them a gate that refused wrongly). Each was reproduced by a test that failed before
+it was fixed.
+
+**Installing the plugin rewrote a document the founder kept.** The first session start adopted
+`TODO-*.md` notes whatever their case, so `docs/todo-app-architecture.md` became a parked task.
+An adopted note kept two thousand characters in its card and said the rest was "in git history":
+an untracked 24 KB note came out as a 180-byte pointer, the rest nowhere.
+
+**Levelling the main checkout wrote over an ignored file.** `git merge --ff-only` replaces an
+ignored file the trunk has since begun to track, without a word.
+
+**The sweep took commits no branch held, and edits git was told not to show.** A clean tree on a
+detached HEAD went with the commits made there. A tracked file changed under `--skip-worktree` or
+`--assume-unchanged` reads as clean to `git status`, and `git worktree remove` takes the edit.
+
+**A merge spelled another way was nobody's to judge.** `gh -R owner/repo pr merge 5`,
+`echo 'gh pr merge 5' | bash`, `gh api -X PUT "repos/o/r/pulls/$PR/merge"`, a `POST` to
+`repos/<owner>/<repo>/merges` and `claude -p '+merge'` each merged on nobody's word, and
+`git push origin HEAD:main` wrote the trunk from any branch.
+
+**The founder's word was read out of a name.** «удали ветку feat/+merge» and `PATH=+merge`
+granted a merge.
+
+**The plugin's own state could be written by any spelling the gate had no list for.** Sixteen
+went through, a glob, a variable, `perl -pi`, `dd of=`, `find -delete`, `xargs rm`,
+`git checkout <commit> --` and a heredoc among them; one writes the file the founder's `+merge`
+is kept in. On a filesystem that folds case, `Config.json` was not `config.json`.
+
+**A verdict stood for a tree the suite had not run.** A branch that had just failed merged from
+the main checkout, where no red record was and an older green was. A green was stamped with the
+tree read once the run was over, so a commit landed during the run was green, and the pre-push
+hook skipped it. Whether a package imports from outside the tree was asked of the gate's own
+interpreter and not the suite's, so a `.venv` installed from another tree passed a regression.
+
+**Chats writing at once lost each other's writes.** A lock judged stale was removed by every
+waiter that judged it: of 960 updates behind a dead holder's lock one was lost in two runs of
+three. Six chats recording 240 switches at once kept between 41 and 48. A session start after a
+compaction wrote back the record it had read before its git calls, over what the session's agents
+had counted. A card listed as untouched and claimed before the Stop gate moved it was withdrawn
+with its owner on it. A hand-off wrote a pull request's record over what was written since.
+
+**A failed TypeScript build came back with none of its errors.** `error TS2322:`, Go's `panic:`
+and the lowercase `warning:` of rustc, gcc and clang were ordinary lines to the digest.
+
+### What changed
+
+- A `TODO-*.md` is adopted only under that name in capitals. A note HEAD does not hold as it
+  stands is kept whole under `.claude/claude-bestpractice/adopted/`, and its pointer names it.
+- The main checkout is levelled with `--no-overwrite-ignore`; git's refusal is on the board.
+- A tree on a detached HEAD whose commits no branch holds is not swept. A tracked file changed
+  under `--skip-worktree` or `--assume-unchanged` keeps its tree, named with the file.
+- `shellcmd.runs` reads past gh's repository option, what `echo` and `printf` print into a shell
+  is a script, and both merge endpoints of `gh api` are a merge. A shell line's `claude` whose
+  words read as the founder's is refused, as a scheduled prompt is (decision 0072).
+- A push that would write the default branch is refused under `protect_trunk`, naming
+  `claude-bp-ship --pr`; a tag, a deletion of another branch and the session's own branch go
+  through (decision 0083).
+- `+merge`, `+release` and `+migration` are words of their own, never the end of a name.
+- A shell line that names the plugin's enforcement state is refused unless every command naming
+  it is a plain read: by path, directory, pattern, variable, redirection, a `cd` before it or a
+  document an interpreter reads. Compared without case (decision 0084).
+- A failure the gate watched is recorded as a run of the branch, read from every tree, and a
+  green stands until a run after it fails. A green is stamped with the tree its run began on,
+  and with none where the tree moved meanwhile. The shadowed-package check asks the suite's
+  interpreter.
+- A stale lock is reclaimed under a guard and judged again inside it, and a holder releases only
+  the lock it wrote. The founder's switch file is read and written under one lock. A restarted
+  session's record is changed under its lock and read again inside it. `withdraw_unplanned`,
+  `amend` and `resume` take the lock a claim takes. A hand-off writes over the latest record.
+- The digest reads `error TS<n>:`, `panic:` and a lowercase `warning:` as what they are.
+
 ## v2.12.0
 
 A pause keeps the agents it stops, and its card says which to resume. What 2.11 added is fixed
