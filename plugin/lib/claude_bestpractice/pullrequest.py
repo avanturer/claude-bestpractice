@@ -751,8 +751,15 @@ def hand_off(ctx: GitContext, record: dict[str, Any], blockers: list[str],
 
     `ctx` is the branch's own tree, where the Stop gate read `blockers`, and `session_id` the
     session they were shown to; see `_shown`.
+
+    Written over the record as it stands now, never over the one the caller read. The Stop
+    gate reads the record, then reads the founder's word back from the transcript, which
+    writes what that word accepted onto the record, and then hands off: with the first copy
+    written back, the acceptance was gone, and the merge the hand-off asked for was refused
+    over the finish the founder had just accepted.
     """
-    _write(ctx, {**record, "handed_off_at": time.time(), "blockers": blockers[:8],
+    latest = _records(ctx).get(str(record.get("branch") or "")) or record
+    _write(ctx, {**latest, "handed_off_at": time.time(), "blockers": blockers[:8],
                  **_shown(ctx.head, blockers, session_id)})
 
 

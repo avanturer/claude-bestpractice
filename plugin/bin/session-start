@@ -47,21 +47,17 @@ def send_captured_defects(ctx, cfg) -> None:
 
 
 def build_record(ctx: GitContext, event: hookio.HookEvent) -> sessions.SessionRecord:
-    existing = sessions.get(ctx, event.session_id)
     now = time.time()
     baseline = stash_baseline(ctx)
     pid, pid_trust = sessions.resolve_owner()
 
+    # A resume or post-compaction restart keeps its identity, its task statement and its
+    # baseline. Re-deriving the baseline here would silently move the review anchor and
+    # make the diff since "start of work" wrong. The process is re-stamped, never merged:
+    # this is what upgrades a record written by a version that recorded the hook's shell
+    # wrapper and called it the session's owner.
+    existing = sessions.restarted(ctx, event.session_id, pid, pid_trust, ctx.branch)
     if existing:
-        # A resume or post-compaction restart keeps its identity, its task statement
-        # and its baseline. Re-deriving the baseline here would silently move the
-        # review anchor and make the diff since "start of work" wrong.
-        existing.heartbeat_at = now
-        existing.pid = pid
-        # Re-stamped, never merged: this is what upgrades a record written by a version
-        # that recorded the hook's shell wrapper and called it the session's owner.
-        existing.pid_trust = pid_trust
-        existing.branch = ctx.branch
         return existing
 
     # A session resumed after a crash was already reaped by a sibling, so `existing` is
@@ -69,7 +65,7 @@ def build_record(ctx: GitContext, event: hookio.HookEvent) -> sessions.SessionRe
     # place every commit it had already made outside the gate's reach.
     remembered = sessions.reaped_memory(ctx, event.session_id)
 
-    return sessions.SessionRecord(
+    fresh = sessions.SessionRecord(
         session_id=event.session_id or f"anon-{os.getpid()}",
         pid=pid,
         pid_trust=pid_trust,
@@ -83,6 +79,8 @@ def build_record(ctx: GitContext, event: hookio.HookEvent) -> sessions.SessionRe
         model=str(event.raw.get("model") or ""),
         effort=str((event.raw.get("effort") or {}).get("level", "") if isinstance(event.raw.get("effort"), dict) else ""),
     )
+    sessions.register(ctx, fresh)
+    return fresh
 
 
 _AUTONOMY_LINES = {
@@ -530,7 +528,6 @@ def main() -> None:
         ctx = hookio.repo(event.cwd or os.getcwd())
 
     me = build_record(ctx, event)
-    sessions.register(ctx, me)
     sessions.learn_names(ctx, running)
     # From here a skill of this plugin's that nobody reads shows as read none (decision 0080).
     with contextlib.suppress(Exception):

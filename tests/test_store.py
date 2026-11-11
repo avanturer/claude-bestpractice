@@ -375,6 +375,13 @@ class TestAReindexKeepsWhatItSaysItKeeps(RepoCase):
         self.assertFalse(stranded.parent.exists())
 
 
+def _count_up(path: str, times: int) -> None:
+    """One writer of `test_writers_behind_a_dead_holders_lock_lose_nothing`."""
+    for _ in range(times):
+        with store.guarded_json(Path(path), default={"n": 0}) as box:
+            box[0] = {"n": int(box[0].get("n", 0)) + 1}
+
+
 class TestLocks(RepoCase):
     def test_lock_is_exclusive(self):
         ctx = self.ctx()
@@ -405,6 +412,42 @@ class TestLocks(RepoCase):
         with store.file_lock(lock, timeout=2, stale_after=60):
             pass  # acquired by reclaiming
         self.assertFalse(lock.exists())
+
+    def test_a_reclaim_leaves_a_lock_taken_since_it_was_judged(self):
+        """Judged stale and then renamed away, the lock renamed was not always the one judged:
+        the first process to reclaim had taken a fresh lock, and the second removed that."""
+        ctx = self.ctx()
+        lock = store.tier_b(ctx, "taken-since.lock")
+        with store.file_lock(lock):
+            store._reclaim(lock, stale_after=60)
+            self.assertTrue(lock.exists(), "a live holder's lock was reclaimed")
+        self.assertFalse(lock.with_name(lock.name + ".reclaim").exists())
+
+    def test_a_holder_that_was_reclaimed_does_not_remove_its_successors_lock(self):
+        ctx = self.ctx()
+        lock = store.tier_b(ctx, "successor.lock")
+        with store.file_lock(lock):
+            lock.write_text(json.dumps({"pid": os.getpid() + 1, "acquired_at": time.time()}))
+        self.assertTrue(lock.exists(), "leaving removed a lock this process did not hold")
+
+    def test_writers_behind_a_dead_holders_lock_lose_nothing(self):
+        """A lock left by a killed hook in the way, and several writers arriving at once:
+        two of them held it together, and their updates went missing."""
+        ctx = self.ctx()
+        counter = store.tier_b(ctx, "counter.json")
+        lock = counter.with_name(counter.name + ".lock")
+        workers, rounds, each = 8, 6, 20
+        for _ in range(rounds):
+            store.ensure_dir(lock.parent)
+            lock.write_text(json.dumps({"pid": self.dead_pid(), "acquired_at": 0,
+                                        "identity": store.lock_identity()}))
+            procs = [multiprocessing.Process(target=_count_up, args=(str(counter), each))
+                     for _ in range(workers)]
+            for proc in procs:
+                proc.start()
+            for proc in procs:
+                proc.join(60)
+        self.assertEqual(workers * rounds * each, store.read_json(counter, default={})["n"])
 
     def test_fresh_lock_is_not_stolen(self):
         ctx = self.ctx()

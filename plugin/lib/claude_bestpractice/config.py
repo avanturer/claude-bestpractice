@@ -665,14 +665,18 @@ def within_grace(check: Callable[[], Any]) -> Any:
 
 
 def record_switches(ctx: GitContext, asked: dict[str, str]) -> None:
+    """Add what the founder asked for to the record every gate reads their word from.
+
+    Read and written under one lock. The file holds every chat's words, and each chat's
+    `prompt-capture` wrote back the copy it had read: of 240 switches asked for by six chats
+    at once, between 41 and 48 were kept, and the founder is asked again for one that is not.
+    """
     if not asked:
         return
-    path = store.tier_b(ctx, SWITCH_REQUESTS)
-    record = store.read_json(path, default={})
-    if not isinstance(record, dict):
-        record = {}
-    record.update(asked)
-    store.write_json(path, record)
+    with store.guarded_json(store.tier_b(ctx, SWITCH_REQUESTS), default={}) as box:
+        record = box[0] if isinstance(box[0], dict) else {}
+        record.update(asked)
+        box[0] = record
 
 
 def asked_for(ctx: GitContext, key: str) -> str | None:
@@ -686,10 +690,11 @@ def asked_for(ctx: GitContext, key: str) -> str | None:
 
 def clear_switch(ctx: GitContext, key: str) -> None:
     """One word authorises one change. Consumed, so it cannot be spent twice."""
-    path = store.tier_b(ctx, SWITCH_REQUESTS)
-    record = store.read_json(path, default={})
-    if isinstance(record, dict) and record.pop(key, None) is not None:
-        store.write_json(path, record)
+    if asked_for(ctx, key) is None:
+        return
+    with store.guarded_json(store.tier_b(ctx, SWITCH_REQUESTS), default={}) as box:
+        if isinstance(box[0], dict):
+            box[0].pop(key, None)
 
 
 def spell(value: Any) -> str:

@@ -15,12 +15,14 @@ rather than in what it computed.
 from __future__ import annotations
 
 import json
+import multiprocessing
 import unittest
 from pathlib import Path
 
 from helpers import BIN, RepoCase, git
 
 from claude_bestpractice import config, worktree
+from claude_bestpractice.gitctx import resolve
 
 PLUGIN = config.PLUGIN_KEY
 
@@ -661,6 +663,37 @@ class TestTheTrunksOwnContentIsNotDrift(RepoCase):
         (self.repo / "shared.py").write_text("x = 99  # this session's own\n", encoding="utf-8")
 
         self.assertEqual([], evidence.landed(self.ctx(), ["shared.py"]))
+
+
+def _ask(repo: str, chat: int, times: int) -> None:
+    """One chat of `test_switches_asked_for_at_once_are_all_kept`, asking for its own keys."""
+    ctx = resolve(Path(repo))
+    for n in range(times):
+        config.record_switches(ctx, {f"chat{chat}_key{n}": "off"})
+
+
+class TestEveryChatsWordIsKept(RepoCase):
+    def test_switches_asked_for_at_once_are_all_kept(self):
+        chats, each = 6, 40
+        asking = [multiprocessing.Process(target=_ask, args=(str(self.repo), chat, each))
+                  for chat in range(chats)]
+        for chat in asking:
+            chat.start()
+        for chat in asking:
+            chat.join(120)
+
+        kept = [key for key in (f"chat{c}_key{n}" for c in range(chats) for n in range(each))
+                if config.asked_for(self.ctx(), key) == "off"]
+        self.assertEqual(chats * each, len(kept))
+
+    def test_a_switch_used_leaves_the_others_asked_for(self):
+        ctx = self.ctx()
+        config.record_switches(ctx, {"scope_drift_block": "off", "require_task": "off"})
+
+        config.clear_switch(ctx, "scope_drift_block")
+
+        self.assertIsNone(config.asked_for(ctx, "scope_drift_block"))
+        self.assertEqual("off", config.asked_for(ctx, "require_task"))
 
 
 if __name__ == "__main__":

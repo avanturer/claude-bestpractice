@@ -1144,6 +1144,23 @@ class TestItCanBeTurnedOff(PRCase):
         self.assertEqual(0, proc.returncode)
 
 
+class TestAHandOffKeepsWhatWasWrittenSinceItWasRead(PRCase):
+    def test_an_acceptance_recorded_between_the_read_and_the_hand_off_survives(self):
+        """The Stop gate reads the record, reads the founder's word back from the transcript,
+        and hands off. Written back from the first read, the hand-off erased what the word
+        had just accepted, and the merge it asked for was refused again."""
+        self.start()
+        self.open_a_pr()
+        read_first = pullrequest.unhanded(self.ctx(), "feat/x")
+        pullrequest._write(self.ctx(), {**read_first, "unverified_accepted_head": "abc123"})
+
+        pullrequest.hand_off(self.ctx(), read_first, [], "s1")
+
+        record = pullrequest._records(self.ctx())["feat/x"]
+        self.assertEqual("abc123", record.get("unverified_accepted_head"))
+        self.assertTrue(record.get("handed_off_at"))
+
+
 class TestTheLedger(RepoCase):
     def test_an_ancient_obligation_stops_being_asserted(self):
         """A warning nothing can clear is one the founder learns to scroll past."""

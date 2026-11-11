@@ -463,14 +463,24 @@ def withdraw_unplanned(ctx: GitContext, opener: str) -> list[Task]:
 
     `opener` is the harness id the message came from, as `open_for` files it. Moved to
     `withdrawn/` in every tree that holds a copy, off the board and still on disk.
+
+    Read and moved under the lock a claim takes. The Stop gate runs once the turn is over
+    (decision 0046), beside the session's next step: a card listed here as untouched and
+    claimed before it was moved went to `withdrawn/` with its owner on it, since the move
+    finds the card by its number wherever it stands. Where the lock is not to be had, the
+    cards wait for the next finish.
     """
     if not opener:
         return []
     taken: list[Task] = []
-    for task in load_all(ctx, NEXT):
-        if task.source == FROM_THE_FOUNDER and task.opened_by == opener and _untouched(task):
-            if _move_every(ctx, task.id, WITHDRAWN) is not None:
-                taken.append(task)
+    try:
+        with store.file_lock(store.tier_b(ctx, CLAIM_LOCK)):
+            for task in load_all(ctx, NEXT):
+                if (task.source == FROM_THE_FOUNDER and task.opened_by == opener
+                        and _untouched(task) and _move_every(ctx, task.id, WITHDRAWN) is not None):
+                    taken.append(task)
+    except store.LockTimeout:
+        pass
     return taken
 
 
@@ -1089,13 +1099,18 @@ def _not_theirs(ctx: GitContext, task: Task, session_id: str) -> str:
 
 
 def resume(ctx: GitContext, task_id: str) -> tuple[Task | None, str]:
-    """Return a paused task to the queue, clearing the blocker that held it."""
-    task = find(ctx, task_id)
-    if task is None:
-        return None, f"no task {task_id}"
-    if task.state != PAUSED:
-        return None, f"task {task.id} is not paused"
-    return _move_every(ctx, task_id, NEXT, blocker="") or task, ""
+    """Return a paused task to the queue, clearing the blocker that held it.
+
+    Judged and moved under the lock a claim takes, as `pause` is: a card somebody claimed
+    since it was read here would go back to the queue from under them.
+    """
+    with store.file_lock(store.tier_b(ctx, CLAIM_LOCK)):
+        task = find(ctx, task_id)
+        if task is None:
+            return None, f"no task {task_id}"
+        if task.state != PAUSED:
+            return None, f"task {task.id} is not paused"
+        return _move_every(ctx, task_id, NEXT, blocker="") or task, ""
 
 
 def amend(ctx: GitContext, task_id: str, note: str = "", paths: list[str] | None = None,
@@ -1107,22 +1122,27 @@ def amend(ctx: GitContext, task_id: str, note: str = "", paths: list[str] | None
     second task, which splits the identity, or to rewrite the file by hand, which the
     worktree gate refuses from the main checkout.
     """
-    task = find(ctx, task_id)
-    if task is None:
-        return None, f"no task {task_id}"
-    # Written into every copy for the same reason a transition moves every copy: a note
-    # that reaches one worktree is a note the next reader does not get, and the copy it
-    # did not reach is the one that survives `git worktree remove` (#210).
-    amended: Task | None = None
-    for copy in copies(ctx, task_id) or [task]:
-        store.atomic_write(copy.path, _amended(copy, note, paths, done_when, title), mode=0o644)
-        reloaded = _load(copy.path, copy.state)
-        if reloaded is None:
-            continue
-        reloaded.worktree = copy.worktree
-        if amended is None or (amended.worktree and not copy.worktree):
-            amended = reloaded
-    return amended, ""
+    # Under the lock every transition takes. Each copy is written back where it was read,
+    # so a card moved in between came back in the state it had left: a second copy of it,
+    # which the board then ranks against the one that moved.
+    with store.file_lock(store.tier_b(ctx, CLAIM_LOCK)):
+        task = find(ctx, task_id)
+        if task is None:
+            return None, f"no task {task_id}"
+        # Written into every copy for the same reason a transition moves every copy: a note
+        # that reaches one worktree is a note the next reader does not get, and the copy it
+        # did not reach is the one that survives `git worktree remove` (#210).
+        amended: Task | None = None
+        for copy in copies(ctx, task_id) or [task]:
+            store.atomic_write(copy.path, _amended(copy, note, paths, done_when, title),
+                               mode=0o644)
+            reloaded = _load(copy.path, copy.state)
+            if reloaded is None:
+                continue
+            reloaded.worktree = copy.worktree
+            if amended is None or (amended.worktree and not copy.worktree):
+                amended = reloaded
+        return amended, ""
 
 
 def _amended(task: Task, note: str, paths: list[str] | None, done_when: str, title: str,

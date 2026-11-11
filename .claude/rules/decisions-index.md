@@ -1,7 +1,5 @@
 # Decisions
 
-- [0072] A prompt a session schedules, or a message it sends, carries no word of the founder's — `decisions/0072-a-scheduled-prompt-carries-no-word-of-the-founders.md`
-- [0073] The summary a compaction leaves is nobody's word — `decisions/0073-a-compaction-summary-is-nobodys-word.md`
 - [0074] The commit reviewer names the moves that make a red suite read green — `decisions/0074-the-reviewer-names-what-fakes-a-green-run.md`
 - [0075] A pause ends a turn on the founder's words, or after refusals that held — `decisions/0075-a-pause-ends-a-turn-on-the-founders-words.md`
 - [0076] The founder sees the board beside the chat, and the model is never sent it — `decisions/0076-the-founder-sees-the-board-beside-the-chat.md`
@@ -11,4 +9,6 @@
 - [0080] How often each of this plugin's skills is read is counted, and a skill nobody reads shows it — `decisions/0080-a-skill-nobody-reads-is-counted-as-read-none.md`
 - [0081] A stage the ratchet holds is not probed on every tool call for what cannot move it — `decisions/0081-a-held-stage-is-not-probed-for-what-cannot-move-it.md`
 - [0082] A pause keeps the agents it stops, and its card says which to resume — `decisions/0082-a-pause-keeps-the-agents-it-stops.md`
-- ... 69 older, see `decisions/`
+- [0083] A push that writes the trunk is refused, however the line names it — `decisions/0083-a-push-that-writes-the-trunk-is-refused.md`
+- [0084] Enforcement state named on a shell line is refused unless the line only reads it — `decisions/0084-state-named-on-a-shell-line-is-refused-unless-the-line-only-reads.md`
+- ... 71 older, see `decisions/`

@@ -1567,15 +1567,67 @@ def lost_with(ctx: GitContext, tree: Path) -> list[str] | None:
     else. What may go is what comes back by itself — the caches in `_REGROWS`, this plugin's
     own reports, a file the main checkout holds byte for byte (what `.worktreeinclude`
     copied in), and the `.env` this plugin seeded. Anything else is somebody's data.
+
+    So is a tracked file changed under `--skip-worktree` or `--assume-unchanged`
+    (`_changed_unseen`): git was told not to look at it, and the removal takes it the same way.
     """
     listed = _ignored_listing(tree)
-    if listed is None:
+    unseen = _changed_unseen(tree)
+    if listed is None or unseen is None:
         return None
     main = main_checkout(ctx)
     seeded = _seeded_envs(ctx, main, tree)
     return [rel for rel in listed
             if not _regrows_in(tree, rel) and not rel.startswith(f"{store.TIER_A_DIRNAME}/")
-            and not _held_in(main, tree, rel) and not _seeded_here(tree, rel, seeded)]
+            and not _held_in(main, tree, rel) and not _seeded_here(tree, rel, seeded)
+            ] + [f"{rel} (changed, and marked for git not to show)" for rel in unseen]
+
+
+def _changed_unseen(tree: Path) -> list[str] | None:
+    """The tracked files of `tree` that git was told not to look at and that differ from what
+    its index holds, or None when git will not say.
+
+    `git update-index --skip-worktree` (or `--assume-unchanged`) is how a local edit to a
+    tracked settings file is kept out of every commit. `git status` then reads the tree as
+    clean, and `git worktree remove` without `--force` takes the edit with it. The ledger's
+    copies are left out: this plugin marks them that way itself before a removal
+    (`_set_the_ledger_copies_aside`), and a removal git then refused leaves them marked.
+    """
+    from . import plan
+
+    ledger = f"{store.TIER_A_DIRNAME}/{plan.PLAN_DIR}/"
+    try:
+        listing = subprocess.run(
+            ["git", "-c", "core.quotePath=false", "ls-files", "-v", "-z"], cwd=str(tree),
+            env=quiet_env(), capture_output=True, encoding="utf-8", errors="surrogateescape",
+            timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if listing.returncode != 0:
+        return None
+    # `ls-files -v`: `S` is skip-worktree, a lowercase tag is assume-unchanged.
+    marked = [entry[2:] for entry in listing.stdout.split("\0")
+              if len(entry) > 2 and (entry[0] == "S" or entry[0].islower())
+              and not entry[2:].startswith(ledger) and (tree / entry[2:]).is_file()]
+    if not marked:
+        return []
+    try:
+        held = subprocess.run(
+            ["git", "-c", "core.quotePath=false", "ls-files", "-s", "-z", "--", *marked],
+            cwd=str(tree), env=quiet_env(), capture_output=True, encoding="utf-8",
+            errors="surrogateescape", timeout=60)
+        now = subprocess.run(
+            ["git", "hash-object", "--stdin-paths"], cwd=str(tree), env=quiet_env(),
+            input="\n".join(marked) + "\n", capture_output=True, encoding="utf-8",
+            errors="surrogateescape", timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    hashes = now.stdout.split()
+    if held.returncode != 0 or now.returncode != 0 or len(hashes) != len(marked):
+        return None
+    in_index = {entry.split("\t", 1)[1]: entry.split()[1]
+                for entry in held.stdout.split("\0") if "\t" in entry}
+    return [rel for rel, digest in zip(marked, hashes) if in_index.get(rel) != digest]
 
 
 def _regrows(rel: str) -> bool:
