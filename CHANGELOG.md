@@ -19,6 +19,9 @@ the defect records on the founder's machine.
   folder, it went with the tree and the main checkout's list never showed it (recorded twice).
   Such a tree's attempts are written to the main checkout, and repair 0046 carries there the
   ones already in the trees.
+- **The board lists the four paused cards set down last, and how many there are.** Fuddy's
+  132, the oldest first, took the board's budget at every session start, and NEXT was cut off
+  behind them.
 
 ## v2.14.2
 

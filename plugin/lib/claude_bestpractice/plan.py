@@ -1662,8 +1662,14 @@ def render_for_board(ctx: GitContext, limit: int = 4) -> str:
         "IN FLIGHT:", doing, lambda task: f" [{activity(ctx, task) or 'unclaimed'}]")
     # Separated from NEXT deliberately: these are not work to pick up, they are work
     # waiting on something, and mixing them sends sessions at tasks that cannot move.
-    lines += _section(
-        "PAUSED:", paused, lambda task: f" [waiting: {task.blocker[:60]}]")
+    #
+    # The few set down last, and how many there are. Listed whole, a founder's 132 paused
+    # cards, the oldest first, took the board's budget at every session start and after every
+    # compaction, and NEXT, which is what a session can begin, was cut off behind them.
+    heading = "PAUSED:" if len(paused) <= limit else (
+        f"PAUSED ({len(paused)}; the {limit} set down last, `claude-bp-plan list` for all):")
+    lines += _section(heading, sorted(paused, key=moved_at, reverse=True)[:limit],
+                      lambda task: f" [waiting: {task.blocker[:60]}]")
     lines += _section("NEXT:", upcoming, lambda task: "")
     if done:
         # Shown even when nothing is in flight. A board that goes blank the moment work

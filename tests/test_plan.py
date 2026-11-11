@@ -310,6 +310,33 @@ class TestBoardRendering(PlanCase):
         self.assertIn("visible on the board", body)
 
 
+class TestTheBoardIsNotSpentOnWhatWaits(PlanCase):
+    """A founder's board listed 132 paused cards, the oldest first, at every session start,
+    and what could be started was cut off behind them."""
+
+    def test_the_few_set_down_last_and_how_many_there_are(self):
+        ctx = self.ctx()
+        for n in range(9):
+            card = plan.add(ctx, f"waits on answer {n}")
+            plan.pause(ctx, card.id, f"the founder's answer about item {n}")
+            self.aged(card, hours=9 - n, state=plan.PAUSED)
+        plan.add(ctx, "something that can be started")
+
+        board = plan.render_for_board(ctx)
+
+        self.assertIn("PAUSED (9; the 4 set down last", board)
+        self.assertEqual(4, board.count("[waiting:"))
+        self.assertIn("waits on answer 8", board)
+        self.assertNotIn("waits on answer 0", board)
+        self.assertIn("something that can be started", board)
+
+    def test_a_few_are_listed_as_they_were(self):
+        ctx = self.ctx()
+        card = plan.add(ctx, "waits on a key")
+        plan.pause(ctx, card.id, "the key the founder has to issue")
+        self.assertIn("PAUSED:\n", plan.render_for_board(ctx) + "\n")
+
+
 class TestCli(PlanCase):
     def run_cli(self, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
