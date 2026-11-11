@@ -2,6 +2,13 @@
 
 Written down because the alternative is a ritual that lives in whoever cut the last one.
 
+## Who reads what is written here
+
+The founder and the sessions that come after, nobody else. A commit message, a pull request
+body and a CHANGELOG entry say what a later session needs to act on (what changed, what it
+now must not undo, what was measured) in as few lines as that takes. No summary for a
+reviewer, no test plan, no translation kept in step for its own sake.
+
 ## Versioning
 
 Semver, and the distinction that was being ignored: **a new capability is a minor bump.**

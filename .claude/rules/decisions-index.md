@@ -1,6 +1,5 @@
 # Decisions
 
-- [0074] The commit reviewer names the moves that make a red suite read green — `decisions/0074-the-reviewer-names-what-fakes-a-green-run.md`
 - [0075] A pause ends a turn on the founder's words, or after refusals that held — `decisions/0075-a-pause-ends-a-turn-on-the-founders-words.md`
 - [0076] The founder sees the board beside the chat, and the model is never sent it — `decisions/0076-the-founder-sees-the-board-beside-the-chat.md`
 - [0077] The tree a chat's agent ran in is put away once it is spent — `decisions/0077-an-agents-tree-is-put-away-once-spent.md`
@@ -11,4 +10,5 @@
 - [0082] A pause keeps the agents it stops, and its card says which to resume — `decisions/0082-a-pause-keeps-the-agents-it-stops.md`
 - [0083] A push that writes the trunk is refused, however the line names it — `decisions/0083-a-push-that-writes-the-trunk-is-refused.md`
 - [0084] Enforcement state named on a shell line is refused unless the line only reads it — `decisions/0084-state-named-on-a-shell-line-is-refused-unless-the-line-only-reads.md`
-- ... 71 older, see `decisions/`
+- [0085] What sessions spend is measured from their transcripts, and this repository's context has a ceiling — `decisions/0085-what-a-session-spends-is-measured-and-the-context-has-a-ceiling-here.md`
+- ... 72 older, see `decisions/`

@@ -250,6 +250,7 @@ def main() -> None:
     # remove` refuses the tree over, for good.
     path = store.checkpoint_dir(ctx) / name
     store.atomic_write(path, "\n".join(lines) + "\n", mode=0o644)
+    store.prune_checkpoints(ctx, event.session_id)
 
     hookio.instruct_the_compaction(_what_the_summary_keeps(ctx, rec))
 

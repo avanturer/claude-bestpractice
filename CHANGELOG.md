@@ -1,5 +1,39 @@
 # Changelog
 
+## v2.14.0
+
+`claude-bp spend` says where a repository's sessions spent their tokens and what a ceiling on
+the context would have left of it, this repository's sessions compact at 300,000 tokens, and
+a session's older checkpoints go when it writes a new one.
+
+### What broke
+
+Asked how to spend several times fewer tokens with no loss of quality, and measured before it
+was answered: the transcript of the session that wrote 2.13.0, read request by request.
+
+**Most of a long session's spend was reading its own conversation again.** Claude Code compacts
+a model with a million-token window near 967,000, and every request reads the whole context.
+Over 271 requests with a mean context of 478,000, 73% of the spend was cache reads, 64% of
+the spend fell on requests past 400,000, and output was 11%. Nothing showed it, and no ceiling was set.
+
+**Checkpoints were written and never removed.** One per compaction, of which only a session's
+newest is ever read back: a founder's clone held 169.
+
+### What changed
+
+- `claude-bp spend [--days N]` reads the transcripts of the repository's sessions, its trees'
+  and its subagents' among them, each request once. It prints the spend by kind and by how
+  full the context was, a session's first and largest context, the prefixes written again
+  mid-session, and the same conversations replayed turn by turn under a ceiling of 200k, 300k
+  and 400k, with the replay's own check beside it. On the session above a ceiling of 300k
+  leaves 58% of the spend over six compactions and 200k leaves 55% over fourteen; nine audit
+  agents' 437 requests keep 82%. It names the ceiling in effect and where it is set
+  (decision 0085).
+- This repository's `.claude/settings.json` sets `autoCompactWindow` to 300000. The plugin
+  writes that setting nowhere else: it is the founder's (decision 0008).
+- The checkpoint hook removes the session's older checkpoints as it writes a new one, and any
+  session's left for thirty days.
+
 ## v2.13.0
 
 The gate reads what a shell line does to its own state and to the trunk however the line is
