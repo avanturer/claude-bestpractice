@@ -232,6 +232,72 @@ class TestItsCardComesWithIt(MovedSession):
         self.assertFalse(self.tree.is_dir(), "the gate did not remove the tree")
 
 
+class TestTheChatComesBackInANewProcess(MovedSession):
+    """A machine restarted, or a chat resumed: the same harness id, in a process that did not
+    exist when the card was claimed, standing in a tree made by hand, which no registry of
+    this plugin's ties to the chat. Its card stays its own, whether its first hook back is a
+    session start or a tool call. Written while chasing three refusals a founder's clone
+    recorded under 2.12.0 over paths the session's own card named: these hold, so the cause
+    of those is elsewhere."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.hand = self.tmp / "proj-topic"
+        git(["worktree", "add", "-q", "-b", "feat/proj-topic", str(self.hand)], self.repo)
+        self.pin(self.hand, "S", THIS_PROCESS)
+        allowed = self.write_in(self.hand)
+        self.assertNotEqual("deny", self.hook_decision(allowed),
+                            f"precondition: its card covers its tree: {allowed.stdout}")
+
+    def gone(self) -> int:
+        import sys
+
+        ended = subprocess.Popen([sys.executable, "-c", ""])
+        ended.wait()
+        return ended.pid
+
+    def comes_back(self, source: str = "resume"):
+        """Every record the chat left names a process that is gone, and it starts in its tree."""
+        gone = self.gone()
+        for tree in (self.repo, self.tree, self.hand):
+            self.pin(tree, "S", gone)
+        return self.hook("session-start", self.hand, hook_event_name="SessionStart",
+                         source=source)
+
+    def test_its_card_is_its_own_at_the_first_call_with_no_session_start_before_it(self):
+        """A chat restored with its tab runs no SessionStart: its first hook is a tool call."""
+        gone = self.gone()
+        for tree in (self.repo, self.tree, self.hand):
+            self.pin(tree, "S", gone)
+        again = self.write_in(self.hand)
+        self.assertNotEqual("deny", self.hook_decision(again), self.hook_reason(again))
+
+    def test_its_card_is_still_its_own(self):
+        self.comes_back()
+        again = self.write_in(self.hand)
+        self.assertNotEqual("deny", self.hook_decision(again), self.hook_reason(again))
+        held = plan.held_by(resolve(self.hand), sid(self.hand, "S"))
+        self.assertEqual(["0001"], [card.id for card in held])
+
+    def test_the_card_was_not_handed_back_to_the_queue(self):
+        self.comes_back()
+        self.assertEqual(plan.DOING, plan.find(resolve(self.repo), "0001").state)
+
+    def test_another_chats_dead_session_is_still_reaped(self):
+        self.pin(self.repo, "another-chat", self.gone())
+        self.comes_back()
+        left = {record.session_id for record in sessions.load_all(resolve(self.repo))}
+        self.assertNotIn(sid(self.repo, "another-chat"), left)
+
+    def test_a_process_of_the_chat_still_alive_is_not_taken_over(self):
+        """A `claude -p` the chat started carries its harness id and is a process of its own."""
+        self.pin(self.repo, "S", ANOTHER_PROCESS)
+        self.pin(self.hand, "S", self.gone())
+        self.hook("session-start", self.hand, hook_event_name="SessionStart", source="resume")
+        self.assertEqual(ANOTHER_PROCESS,
+                         sessions.get(resolve(self.repo), sid(self.repo, "S")).pid)
+
+
 class TestASiblingIsStillASibling(MovedSession):
     """Every rule above relaxed for the same PROCESS under the same harness id, and for
     nothing looser: another process is refused exactly as before."""
