@@ -1,5 +1,21 @@
 # Changelog
 
+## v2.14.3
+
+The cause of three refusals fuddy recorded under 2.12.0, each over a path the session's own
+card named ("nothing on the board says this session is working on"), read off the cards and
+the defect records on the founder's machine.
+
+- **A record from an earlier boot of this machine is dead.** WSL gives each start of its
+  machine a new pid namespace, so every record from before a restart read as "another
+  namespace, cannot tell" and stood live for the 36 hours of the ceiling: a resumed chat found
+  its card held by its own record of before, and its own trees another session's.
+- **A delivery closes a card only when the chat carries nothing else under it.** A card of
+  170 files closed on a merge that carried six; every write under it after that was refused,
+  a subagent's in its own tree among them. The chat's other open pull requests and its other
+  trees with work the trunk lacks, where they touch the card's files, keep it in `doing`, and
+  the card says what was delivered and what it waits on (decision 0087).
+
 ## v2.14.2
 
 Found by `tools/drill.py` over a copy of fuddy and its state on the founder's machine: 2.14.1

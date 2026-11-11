@@ -1131,6 +1131,66 @@ def delivered_paths(ctx: GitContext, base: str, head: str = "") -> list[str]:
     return sorted(found) if found else []
 
 
+def still_carrying(ctx: GitContext, session_id: str, base: str,
+                   delivered: str = "") -> Callable[[Any], list[str]]:
+    """For a card: what else of this chat's touches a file it names and is not in the trunk.
+
+    Its other open pull requests, by number, and its other trees holding work of their own,
+    by name: uncommitted, or committed and neither merged nor squashed into the trunk. Not
+    `delivered`, the branch whose merge is asking, and not a draft, which is paused work
+    (decision 0024). What git cannot answer for names nothing: a card is then closed as it
+    was before this was asked.
+    """
+    from . import plan
+
+    at_work = _open_beside(ctx, session_id, delivered) + _trees_at_work(ctx, session_id, base,
+                                                                        delivered)
+
+    def of(card: Any) -> list[str]:
+        named = [label for label, files in at_work if plan.carried_by(card, files)]
+        return list(dict.fromkeys(named))
+
+    return of
+
+
+def _open_beside(ctx: GitContext, session_id: str, delivered: str) -> list[tuple[str, list[str]]]:
+    """This chat's other open pull requests that are not drafts: (its number, its files)."""
+    ours = _the_chats(ctx, session_id)
+    found = []
+    for record in outstanding(ctx):
+        branch = str(record.get("branch") or "")
+        if branch == delivered or record.get("draft") or not ours(record.get("session_id")):
+            continue
+        files = _files_against(ctx, str(record.get("base") or ""), branch)
+        if files:
+            found.append((_called(record, branch), sorted(files)))
+    return found
+
+
+def _trees_at_work(ctx: GitContext, session_id: str, base: str,
+                   delivered: str) -> list[tuple[str, list[str]]]:
+    """This chat's other trees with work the trunk lacks: (the tree's name, its files).
+    A subagent's tree is one: its hooks run under the session's id, in the tree it works in."""
+    from . import delivery, sessions
+    from .gitctx import GitError, resolve
+
+    found = []
+    for identity in sorted(sessions.identities(ctx, session_id)):
+        record = sessions.get(ctx, identity)
+        try:
+            here = resolve(record.worktree) if record else None
+        except (GitError, OSError):
+            here = None
+        if here is None or here.branch == delivered:
+            continue
+        files = set(delivery.uncommitted(here))
+        if base and delivery.carries_its_own(here, base):
+            files |= _files_against(here, base) or set()
+        if files:
+            found.append((os.path.basename(record.worktree.rstrip('/')), sorted(files)))
+    return found
+
+
 def merge_refusal(record: dict[str, Any], problems: list[str]) -> str:
     """Why this merge is refused, and what the model is to do instead of fixing it."""
     named = record.get("number") and f"#{record['number']}" or record.get("branch", "this branch")
@@ -2727,8 +2787,10 @@ def complete(ctx: GitContext, session_id: str, merge: dict[str, Any]) -> None:
     settle(ctx, branch, MERGED)
     sender = str(merge.get("session", session_id))
     if config.load(ctx).require_task:
+        head = str(merge.get("head", branch))
         plan.settle_delivered(ctx, sender, list(merge.get("delivered", [])),
-                              f"the merge of {merge.get('head', branch)}")
+                              f"the merge of {head}",
+                              still_carrying(ctx, sender, str(merge.get("base") or ""), head))
     inbox.broadcast(
         ctx, sender,
         f"{branch} was merged. Your baseline is behind — take the base branch in before you "

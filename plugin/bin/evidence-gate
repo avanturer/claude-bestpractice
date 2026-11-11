@@ -1138,7 +1138,13 @@ def main() -> None:
             # branch fast-forwarded by hand, a push straight to a trunk. Nothing is
             # inferred here — the condition above IS the delivery, so the files the session
             # changed are the files the base branch now carries.
-            plan.settle_delivered(ctx, rec.session_id, everything, "the base branch")
+            # Not a card the chat still works under in another tree or pull request.
+            from claude_bestpractice import gitpolicy
+
+            plan.settle_delivered(
+                ctx, rec.session_id, everything, "the base branch",
+                pullrequest.still_carrying(ctx, rec.session_id,
+                                           gitpolicy.default_branch(ctx), ctx.branch))
 
         # Under any id this session has had: it claims in the main checkout and works in
         # its own tree, where the card it holds was otherwise nobody's it knew, and this

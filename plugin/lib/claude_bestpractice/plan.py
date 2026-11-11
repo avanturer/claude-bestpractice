@@ -1400,8 +1400,16 @@ def carried_by(task: Task, delivered: list[str]) -> list[str]:
 
 
 def settle_delivered(ctx: GitContext, session_id: str, delivered: list[str],
-                     what: str) -> list[Task]:
+                     what: str, still_carrying=None) -> list[Task]:
     """Close this session's cards whose files the delivery carried. Returns what closed.
+
+    Not a card the chat is still working under. `still_carrying(card)` names what else of
+    the chat's touches the card's files and is not in the trunk: another open pull request,
+    another tree with work in it. A card over a piece of work that ships as several pull
+    requests was closed by the first of them: a founder's card of 170 files closed on a
+    merge that carried six, and every write under it after that was refused as work no card
+    claimed, a subagent's in its own tree among them (recorded under 2.12.0). Such a card
+    stays in `doing`, with what was delivered and what it waits on written into it.
 
     Owned by THIS session only, under any id it has had (`held_by`). A sibling's card over
     the same files is its own to close: it may be mid-change on top of what just landed,
@@ -1419,9 +1427,14 @@ def settle_delivered(ctx: GitContext, session_id: str, delivered: list[str],
         carried = carried_by(task, delivered)
         if not carried:
             continue
-        note = f"[{stamp}] closed on delivery — {what} carried {', '.join(carried[:6])}."
+        waits_on = still_carrying(task) if still_carrying else []
+        note = (f"[{stamp}] delivered in part — {what} carried {', '.join(carried[:6])}; "
+                f"still under this card: {', '.join(waits_on[:6])}." if waits_on else
+                f"[{stamp}] closed on delivery — {what} carried {', '.join(carried[:6])}.")
         task.body = f"{task.body}\n\n{note}".strip() if task.body else note
         _rewrite_body(task)
+        if waits_on:
+            continue
         landed, _ = complete(ctx, task.id)
         if landed:
             closed.append(landed)

@@ -1254,6 +1254,26 @@ class TestDeliveryClosesTheCard(PlanCase):
             self.ctx(), "s1", ["plugin/lib/claude_bestpractice/plan.py"], "the merge")
         self.assertEqual([task.id], [t.id for t in closed])
 
+    def test_a_card_the_chat_still_works_under_stays_open_and_says_what_it_waits_on(self):
+        """A card of 170 files closed on a merge that carried six, and every write under it
+        after that was refused as work no card claimed (a founder's clone, 2.12.0)."""
+        task = self.in_flight("s1", "src/app.py", "src/billing.py")
+        closed = plan.settle_delivered(self.ctx(), "s1", ["src/app.py"], "the merge of feat/a",
+                                       lambda card: ["#12", "proj-billing"])
+        self.assertEqual([], closed)
+        left = plan.find(self.ctx(), task.id)
+        self.assertEqual(plan.DOING, left.state)
+        self.assertIn("delivered in part — the merge of feat/a carried src/app.py; "
+                      "still under this card: #12, proj-billing.", left.body)
+
+    def test_and_closes_on_the_delivery_after_which_nothing_is_left(self):
+        task = self.in_flight("s1", "src/app.py", "src/billing.py")
+        plan.settle_delivered(self.ctx(), "s1", ["src/app.py"], "the merge of feat/a",
+                              lambda card: ["#12"])
+        closed = plan.settle_delivered(self.ctx(), "s1", ["src/billing.py"],
+                                       "the merge of feat/b", lambda card: [])
+        self.assertEqual([task.id], [t.id for t in closed])
+
     def test_a_card_is_closed_on_any_of_its_files_not_all_of_them(self):
         """A card names the code and the test that proves it; a delivery that carried the
         change and not the fixture is still the delivery of that work. Demanding the whole
