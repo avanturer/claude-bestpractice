@@ -1075,6 +1075,45 @@ def _carry_checkpoints_of(tree: Path, home: Path) -> int:
     return moved
 
 
+def _carry_attempts_out_of_trees(ctx: GitContext) -> str:
+    """Attempts filed in worktrees where git ignores them, moved to the main checkout.
+
+    Each was a file its tree's removal deletes without a word, and one the main checkout's
+    list never showed. New ones are written to the main checkout (`attempts.attempts_dir`);
+    these are the ones already there, in every tree of the clone. One git tracks is
+    somebody's commit and stays, and so does one in a tree where the folder is not ignored:
+    git refuses to remove that tree over it.
+    """
+    from . import attempts, gitpolicy, worktree
+
+    main = worktree.main_checkout(ctx).resolve()
+    home = main / store.TIER_A_DIRNAME / attempts.ATTEMPTS_DIR
+    moved = 0
+    for tree in gitpolicy.working_trees(ctx):
+        if tree != main and attempts.ignored_in(tree):
+            moved += _carry_attempts_of(tree, home)
+    return f"{moved} attempt(s) moved out of worktrees that ignore them" if moved else ""
+
+
+def _carry_attempts_of(tree: Path, home: Path) -> int:
+    """Move one tree's ignored attempts to `home`, under the tree's name where `home` has
+    another file of that name. How many moved."""
+    from . import attempts
+
+    moved = 0
+    for path in sorted((tree / store.TIER_A_DIRNAME / attempts.ATTEMPTS_DIR).glob("*.md")):
+        target = home / path.name
+        if target.exists():
+            target = home / f"{path.stem}-{tree.name}.md"
+        try:
+            store.ensure_dir(home)
+            path.replace(target)
+        except OSError:
+            continue
+        moved += 1
+    return moved
+
+
 _LEDGER_PATH = ".claude/claude-bestpractice/plan"
 
 
@@ -1886,6 +1925,7 @@ _REPAIRS = {
     "0043-cut-the-logs-down-to-what-is-live": (1, _cut_the_logs_down_to_what_is_live),
     "0044-forget-a-red-suite-of-lost-connections": (1, _forget_a_red_suite_of_lost_connections),
     "0045-drop-drafts-nobody-typed": (1, _drop_drafts_nobody_typed),
+    "0046-carry-attempts-out-of-trees": (1, _carry_attempts_out_of_trees),
 }
 
 

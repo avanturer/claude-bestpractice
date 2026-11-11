@@ -454,3 +454,46 @@ class TestTheLedgerIsCleanableWhereItLives(RepoCase):
             capture_output=True, text=True, cwd=str(self.repo), timeout=120,
         )
         self.assertEqual("deny", _decision(proc))
+
+
+class TestAnAttemptOutlivesTheTreeThatFoundIt(RepoCase):
+    """Filed in a worktree where git ignores the folder, an attempt went with the tree: the
+    removal deletes ignored files without a word, and the main checkout's list never showed
+    it (recorded on a founder's clone, twice)."""
+
+    def a_tree(self, ignoring: bool):
+        from claude_bestpractice.gitctx import resolve
+
+        if ignoring:
+            exclude = self.repo / ".git" / "info" / "exclude"
+            exclude.write_text(exclude.read_text() + "\n.claude/claude-bestpractice/attempts/\n")
+        tree = self.add_worktree("topic")
+        return tree, resolve(tree)
+
+    def kept_in(self, root) -> list:
+        return sorted((root / ".claude" / "claude-bestpractice" / "attempts").glob("*.md"))
+
+    def test_where_the_tree_ignores_them_it_is_kept_in_the_main_checkout(self):
+        tree, there = self.a_tree(ignoring=True)
+        attempts.record(there, "websockets for live updates", "reconnect storms", ["src/ws.ts"])
+        self.assertEqual(1, len(self.kept_in(self.repo)))
+        self.assertEqual([], self.kept_in(tree))
+        self.assertEqual(["websockets for live updates"],
+                         [found.title for found in attempts.load_all(self.ctx())])
+
+    def test_where_git_would_carry_it_with_the_branch_it_stays_in_the_tree(self):
+        tree, there = self.a_tree(ignoring=False)
+        attempts.record(there, "websockets for live updates", "reconnect storms", ["src/ws.ts"])
+        self.assertEqual(1, len(self.kept_in(tree)))
+
+    def test_the_ones_already_in_such_trees_are_carried_out(self):
+        from claude_bestpractice import migrate
+
+        tree, _there = self.a_tree(ignoring=True)
+        left = tree / ".claude" / "claude-bestpractice" / "attempts"
+        left.mkdir(parents=True, exist_ok=True)
+        (left / "0007-an-older-dead-end.md").write_text("---\ntitle: an older dead end\n---\n")
+        self.assertIn("1 attempt(s) moved", migrate._carry_attempts_out_of_trees(self.ctx()))
+        self.assertEqual(["0007-an-older-dead-end.md"],
+                         [path.name for path in self.kept_in(self.repo)])
+        self.assertEqual("", migrate._carry_attempts_out_of_trees(self.ctx()))

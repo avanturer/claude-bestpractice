@@ -15,6 +15,10 @@ the defect records on the founder's machine.
   a subagent's in its own tree among them. The chat's other open pull requests and its other
   trees with work the trunk lacks, where they touch the card's files, keep it in `doing`, and
   the card says what was delivered and what it waits on (decision 0087).
+- **An attempt outlives the tree that found it.** Filed in a worktree where git ignores the
+  folder, it went with the tree and the main checkout's list never showed it (recorded twice).
+  Such a tree's attempts are written to the main checkout, and repair 0046 carries there the
+  ones already in the trees.
 
 ## v2.14.2
 
