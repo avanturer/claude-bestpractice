@@ -545,6 +545,32 @@ class TestTheBoardNamesWhatNobodyWillComeBackTo(TreeCase):
         self.assertIn(f"kept {tree}: holds ignored files", out)
         self.assertNotIn("nothing to remove", out)
 
+    def test_an_edit_git_was_told_not_to_show_keeps_the_tree(self):
+        """A local edit kept out of every commit with `--skip-worktree`: `git status` reads
+        the tree as clean and `git worktree remove` takes the edit with it."""
+        tree = self.a_squashed_tree_nobody_made_for_us("agent-local-settings")
+        tracked = "src/agent-local-settings.py"
+        git(["update-index", "--skip-worktree", "--", tracked], tree)
+        (tree / tracked).write_text("a local setting nothing else has\n", encoding="utf-8")
+        self.left_alone(tree)
+        self.assertEqual("", git(["status", "--porcelain"], tree))
+
+        removed, _kept, left = worktree.sweep_named(self.ctx())
+
+        self.assertEqual([], removed)
+        self.assertTrue((tree / tracked).is_file())
+        self.assertIn(f"{tracked} (changed, and marked for git not to show)", dict(left)[str(tree)])
+
+    def test_a_file_marked_and_left_as_it_was_keeps_nothing(self):
+        tree = self.a_squashed_tree_nobody_made_for_us("agent-marked-only")
+        tracked = "src/agent-marked-only.py"
+        git(["update-index", "--assume-unchanged", "--", tracked], tree)
+        self.left_alone(tree)
+
+        removed, _kept, _left = worktree.sweep_named(self.ctx())
+
+        self.assertEqual([str(tree)], removed)
+
     def test_build_output_and_logs_do_not_keep_a_finished_tree(self):
         """Five of six finished trees of a founder's clone stayed over `backend/logs/`,
         `logs/` and Android `build/` alone (#285): built again, or printed by a run."""

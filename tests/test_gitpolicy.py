@@ -1158,6 +1158,33 @@ class TestWorktreeNamesAndCleanup(PolicyCase):
         self.assertEqual(worktree.reap_unused(ctx, live=set()), [])
         self.assertTrue(made.is_dir())
 
+    def test_a_tree_over_commits_on_no_branch_is_never_reaped(self):
+        """`git worktree remove` refuses a modified or untracked file and says nothing about a
+        detached HEAD: its commits are on no branch, so the clean tree over them went, and
+        they with it, under a line saying nothing committed was gone."""
+        from claude_bestpractice import worktree
+
+        ctx = self.ctx()
+        made = worktree.provision(ctx, "detached work", "dead-session")
+        git(["checkout", "-q", "--detach"], made)
+        (made / "kept.py").write_text("y = 2\n", encoding="utf-8")
+        git(["add", "-A"], made)
+        git(["commit", "-qm", "work on no branch"], made)
+        commit = git(["rev-parse", "HEAD"], made).strip()
+
+        self.assertEqual(worktree.reap_unused(ctx, live=set()), [])
+        self.assertTrue(made.is_dir())
+        self.assertEqual(commit, git(["rev-parse", "HEAD"], made).strip())
+
+    def test_a_detached_tree_standing_on_the_trunk_is_reaped_as_before(self):
+        from claude_bestpractice import worktree
+
+        ctx = self.ctx()
+        made = worktree.provision(ctx, "detached nothing", "dead-session")
+        git(["checkout", "-q", "--detach"], made)
+
+        self.assertEqual(worktree.reap_unused(ctx, live=set()), [str(made)])
+
     def test_a_live_session_keeps_its_tree(self):
         from claude_bestpractice import worktree
 

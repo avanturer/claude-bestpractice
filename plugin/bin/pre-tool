@@ -76,7 +76,9 @@ def _protected_state(relpath: str) -> bool:
     # NOT lstrip("./") — that strips CHARACTERS, so it eats the leading dot of `.claude`
     # and nothing ever matches. The check silently passed everything and the test that
     # caught it was an end-to-end run, not the unit test, which is the whole lesson here.
-    rel = relpath.replace("\\", "/")
+    # Compared without case: on a filesystem that keeps none, macOS's and Windows's default,
+    # `Config.json` is `config.json`, and written under that name it was nobody's to refuse.
+    rel = relpath.replace("\\", "/").casefold()
     while rel.startswith("./"):
         rel = rel[2:]
     # `rm -rf .claude/claude-bestpractice/stage` names the DIRECTORY, with no trailing slash, so a
@@ -91,6 +93,165 @@ def _protected_state(relpath: str) -> bool:
     # protected file nor a protected directory, and takes every one of them with it —
     # a rule that guards the leaves and not the branch guards nothing.
     return any(p.startswith(rel.rstrip("/") + "/") for p in PROTECTED_STATE)
+
+
+# ---------------------------------------------------------------------------------------------
+# Enforcement state named on a shell line, however the line spells it.
+#
+# The rules above read the paths a command writes, and a path is only read where it is written
+# out: `rm .claude/claude-bestpractice/failing-*.json`, `f=…/config.json; echo > "$f"`,
+# `perl -pi`, `dd of=`, `find -delete`, `git checkout HEAD~1 -- …/config.json` and a redirect
+# into `"$(git rev-parse --git-common-dir)/claude-bestpractice/switch-requests.json"`, where
+# the founder's `+merge` and `enabled off` are kept, each went through with no decision. So
+# the question is asked the other way round: a command that is not a plain read and names
+# this state is refused, whatever it would have done there.
+
+# Programs that only read what they are handed, whatever they are handed.
+_PLAIN_READERS = frozenset({
+    "cat", "head", "tail", "wc", "grep", "rg", "egrep", "fgrep", "nl", "cut", "column", "jq",
+    "diff", "cmp", "file", "stat", "basename", "dirname", "realpath", "readlink", "ls", "tree",
+    "du", "less", "more", "echo", "printf", "cd", "pwd", "pushd", "popd", "true", ":", "test",
+    "[", "sha256sum", "md5sum",
+})
+# git's subcommands that leave every file in the working tree as it is.
+_GIT_LEAVES_FILES = frozenset({
+    "log", "diff", "status", "show", "rev-parse", "ls-files", "blame", "describe", "shortlog",
+    "cat-file", "diff-tree", "rev-list", "whatchanged", "grep", "ls-tree", "add", "commit",
+    "push", "fetch", "check-ignore", "check-attr",
+})
+_FIND_ACTS = frozenset({"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf",
+                        "-fls"})
+# What stands in front of a program on a line, with the options and numbers it takes.
+_IN_FRONT = frozenset({"sudo", "doas", "env", "command", "builtin", "nohup", "time", "timeout",
+                       "nice", "ionice", "setsid", "stdbuf", "xargs", "exec"})
+_SETS_A_NAME = re.compile(r"^[A-Za-z_]\w*=")
+# The Tier B directory as a line names it without knowing where it is: under the git
+# directory git is asked for, or by a file kept nowhere else.
+_STATE_BY_NAME = re.compile(
+    r"\.git/claude-bestpractice|(?:git-common-dir|--git-dir|git-path)\S*claude-bestpractice"
+    r"|claude-bestpractice/(?:switch-requests|founder-words|merges-pending|pull-requests"
+    r"|sessions|leases|unverified|settled-drift|released-claims|migrations|green|runs)\b")
+
+
+def _names_guarded_state(word: str, tier_b: str) -> bool:
+    """Does this word of a shell line point at enforcement state: a protected file, a directory
+    holding one, a pattern that matches either, or Tier B by its path or by name?"""
+    import fnmatch
+
+    name = word.replace("\\", "/").casefold()
+    if tier_b.casefold() in name or _STATE_BY_NAME.search(name):
+        return True
+    at = name.find(".claude/")
+    if at < 0:
+        return False
+    tail = name[at:].rstrip("/")
+    for path in PROTECTED_STATE:
+        guarded = path.rstrip("/")
+        if guarded in name or guarded.startswith(tail + "/"):
+            return True
+        if any(mark in tail for mark in "*?[{"):
+            parts = guarded.split("/")
+            holders = ["/".join(parts[:count]) for count in range(2, len(parts) + 1)]
+            if "{" in tail or any(fnmatch.fnmatchcase(holder, tail) for holder in holders):
+                return True
+    return False
+
+
+def _reads_what_it_names(argv: list[str]) -> bool:
+    """Is this command, from its program on, one that reads what it names and writes nothing
+    to it? Its redirections are asked about apart."""
+    program = argv[0].rsplit("/", 1)[-1]
+    words = shellcmd.without_redirections(argv[1:])
+    if program in _PLAIN_READERS:
+        return True
+    if program == "git":
+        return gitpolicy.split_git(argv)[1] in _GIT_LEAVES_FILES
+    if program in ("sed", "gsed"):
+        return not _sed_in_place(argv)
+    if program == "find":
+        return not _FIND_ACTS.intersection(words)
+    if program in ("sort", "uniq"):
+        return not any(word == "-o" or word.startswith("--output") for word in words) and \
+            (program == "sort" or len([word for word in words if not word.startswith("-")]) < 2)
+    return vouch.own_command(shlex.join(argv))
+
+
+def _may_be_written(run: list[str]) -> list[str]:
+    """The words of a command that can name what it writes: every one, save for `cp`, which
+    writes its destination and only reads the rest. A session copies a record out to look at
+    it, and that copy is a read of the record."""
+    words = [str(word) for word in shellcmd.without_redirections(run[1:])]
+    if run[0].rsplit("/", 1)[-1] != "cp":
+        return words
+    for at, word in enumerate(words):
+        if word in ("-t", "--target-directory"):
+            return words[at + 1:at + 2]
+        if word.startswith("--target-directory="):
+            return [word.split("=", 1)[1]]
+    return [word for word in words if not word.startswith("-")][-1:]
+
+
+def guarded_state_named(command: str, cwd: Path, tier_b: Path) -> str:
+    """The word of this shell line that names enforcement state where something on the line
+    is not a plain read, or "" when nothing does.
+
+    Asked of each pipeline, because a read of the state piped into a command that acts is how
+    `ls …/failing-*.json | xargs rm` took it. A name the line gives a variable, a
+    redirection's target, a word that only names the state from the directory a `cd` left the
+    line in, and a document an interpreter reads as its code are each asked as well: every
+    one is a way the state was written with its path never standing where a path is looked
+    for. A pipeline that cannot be read as words is asked as text.
+    """
+    if "claude-bestpractice" not in command.casefold():
+        return ""
+    where = str(tier_b)
+    for _segment, literal, here, _start in _segments_with_cwd(_blanked(command), cwd, command):
+        inside = here.as_posix() if {".claude", ".git"} & set(here.parts) else ""
+
+        def names(word: str) -> bool:
+            return _names_guarded_state(word, where) or bool(
+                inside and word[:1] not in ("-", "/", "~", "$")
+                and _names_guarded_state(f"{inside}/{word}", where))
+
+        body = _EDGE_BRACKETS.sub("", _HEREDOC.sub(lambda m: " " * len(m.group(0)), literal))
+        parsed = shellcmd.segments(body)
+        if not parsed:
+            if _names_guarded_state(literal, where):
+                return " ".join(literal.split())[:120]
+            continue
+        named, acts = "", False
+        for argv in parsed:
+            at = 0
+            while at < len(argv) and _SETS_A_NAME.match(argv[at]):
+                if names(argv[at].split("=", 1)[1]):
+                    return str(argv[at])
+                at += 1
+            run = argv[_past_what_stands_in_front(argv, at):]
+            for target in shellcmd.written_by_redirection(run):
+                if names(target):
+                    return target
+            if not run:
+                continue
+            reads = _reads_what_it_names(run)
+            acts = acts or not reads
+            named = named or next((word for word in _may_be_written(run) if names(word)), "")
+            if not named and not reads and _inline(run):
+                named = next((" ".join(found.group(0).split())[:120]
+                              for found in _HEREDOC.finditer(literal)
+                              if _names_guarded_state(found.group(0), where)), "")
+        if named and acts:
+            return named
+    return ""
+
+
+def _past_what_stands_in_front(argv: list[str], at: int) -> int:
+    """Where the program really run begins, past `sudo`, `env X=1`, `timeout 30` and their like."""
+    while at < len(argv) and argv[at].rsplit("/", 1)[-1] in _IN_FRONT:
+        at += 1
+        while at < len(argv) and (argv[at].startswith("-") or _SETS_A_NAME.match(argv[at])
+                                  or argv[at][:1].isdigit()):
+            at += 1
+    return at
 
 
 # `"bestpractice@claude-bestpractice": false`, or the key it had before 2.0.0, as it reads
@@ -1450,6 +1611,21 @@ def _without_environment(literal: str, segment: str) -> str:
     return "".join(out)
 
 
+def trunk_push(command: str, cwd: Path, ctx) -> str:
+    """The trunk a `git push` on this line writes, or "" when none does: asked of each push
+    in the tree it runs in, as its `cd`s and `-C`s place it."""
+    for _segment, literal, here, _start in _segments_with_cwd(_blanked(command), cwd, command):
+        for argv in _commands_in(literal):
+            pointed, verb, args = gitpolicy.split_git(_launched(argv, "git"))
+            if verb != "push":
+                continue
+            tree = _resolve(here, pointed[-1]) if pointed else here
+            written = gitpolicy.pushes_the_trunk(ctx, tree or here, args)
+            if written:
+                return written
+    return ""
+
+
 def _written(event: hookio.HookEvent, cwd: str) -> list[Path]:
     """The absolute paths this call writes or deletes, as the rules below read them: from
     outside every repository, the first of them in one places the call there.
@@ -1524,6 +1700,14 @@ def main() -> None:
             hookio.deny_tool(founder.written_for_a_turn_refusal(event.tool_name, carried)
                              + REFUSAL_IS_YOURS)
         hookio.emit_silent()
+
+    # And a prompt handed to another `claude` on a shell line is such a turn too: the child's
+    # hook records it under this session's id, and `claude -p '+merge'` was a grant.
+    if event.tool_name == "Bash" and "claude" in str(event.tool_input.get("command", "")):
+        carried = founder.spoken_to_a_session(str(event.tool_input.get("command", "")))
+        if carried:
+            hookio.deny_tool(founder.written_for_a_turn_refusal("shell line's `claude`", carried)
+                             + REFUSAL_IS_YOURS)
 
     rec = sessions.get(ctx, event.session_id)
     if rec is None:
@@ -2236,6 +2420,22 @@ def main() -> None:
                     "restart. Do not work around this by editing the file another way."
                 )
 
+    # A push that writes the trunk delivers work no pull request carried, so no word of the
+    # founder's was asked for it and no merge was judged: `git push origin HEAD:main` went
+    # through beside a gate that refuses `gh pr merge` without `+merge` (decision 0083).
+    if cfg.protect_trunk and event.tool_name == "Bash" and "push" in str(ti.get("command", "")):
+        written = trunk_push(str(ti.get("command", "")), session_cwd, ctx)
+        if written:
+            deny(
+                ctx, rec,
+                f"claude-bestpractice: this pushes straight to `{written}`, the trunk. Work "
+                "reaches the trunk through a pull request the founder has accepted: a push "
+                "there is a merge nobody was asked about and no check was run for.\n"
+                "  Push your own branch and open a pull request for it:\n"
+                "  claude-bp-ship --pr\n"
+                + config.switch_advice("protect_trunk", False)
+            )
+
     # The push gate's own verbs, and whose they are. The hook's bookkeeping records runs the
     # hook watched, and `git push` is what starts it — never a tool call — so a session
     # calling it is writing down an observation nobody made (decision 0013). `off` is the
@@ -2285,6 +2485,24 @@ def main() -> None:
                     "conversation. The founder's own words are read back from it, so no "
                     "session writes it.\n"
                     "  If a gate is wrong, say so to the founder — do not rewrite what it reads."
+                )
+
+        # And the same state named where no path is written out for the rules above to read.
+        if event.tool_name == "Bash":
+            named = guarded_state_named(str(ti.get("command", "")), session_cwd,
+                                        store.tier_b(ctx))
+            if named:
+                deny(
+                    ctx, rec,
+                    f"claude-bestpractice: this line names `{named}`, which is this plugin's "
+                    "own enforcement state, in a command that is not a plain read. The session "
+                    "a gate judges does not write what the gate reads, and a path spelled "
+                    "through a variable, a pattern, `$(…)`, git or an interpreter is that path "
+                    "still.\n"
+                    "  To look at it: `cat`, `ls`, or `claude-bp status`. To change a switch: "
+                    "`claude-bp set <key> <value>`, which needs the founder to have asked.\n"
+                    "  If the line changes nothing there, read the state in a command of its "
+                    "own and run the rest without naming it."
                 )
 
         protected = [rel for rel in writing_now if _protected_state(rel)]

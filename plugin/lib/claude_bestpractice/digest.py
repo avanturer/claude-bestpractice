@@ -260,12 +260,20 @@ def _folded(lines: list[str]) -> list[str]:
 # "Entry" crowded the real errors out of one tool's twenty-line cap. Russian forms because
 # a WSL machine with a ru_RU locale prints Postgres and git errors in Russian, where
 # Postgres says ERROR as `ОШИБКА:`, FATAL as `ВАЖНО:` and PANIC as `ПАНИКА:`.
+#
+# And the three compilers' own spellings, each read as an ordinary line before: tsc's
+# `error TS2322:`, which puts its code between the word and the colon, Go's `panic:` and the
+# lowercase `warning:` of rustc, gcc and clang. A failed `tsc` came back as a digest with
+# none of its errors in it.
 _ERRORISH = re.compile(
-    r"\b(?:ERROR|ERR!|FAIL(?:ED|URE|S)?|FATAL|PANIC|Traceback|panicked|fatal:|error(?:\[\w+\])?:"
-    r"|Error:|npm error)|(?:ОШИБКА|ВАЖНО|ПАНИКА|ошибка):"
+    r"\b(?:ERROR|ERR!|FAIL(?:ED|URE|S)?|FATAL|PANIC|Traceback|panicked|fatal:|panic:"
+    r"|error(?:\[\w+\]| TS\d+)?:|Error:|npm error)|(?:ОШИБКА|ВАЖНО|ПАНИКА|ошибка):"
     r"|\b[A-Z]\w*(?:Error|Exception)\b|[✗✕✘]|^\s*●\s"
 )
-_WARNISH = re.compile(r"\b(?:WARN(?:ING)?|Warning|DeprecationWarning|deprecated|ПРЕДУПРЕЖДЕНИЕ)\b")
+_WARNISH = re.compile(
+    r"\b(?:WARN(?:ING)?|Warning|DeprecationWarning|deprecated|ПРЕДУПРЕЖДЕНИЕ)\b"
+    r"|\bwarning(?:\[\w+\])?:"
+)
 # The runner's verdict, however it phrases it.
 _SUMMARY = re.compile(
     r"(?<![\w.])\d+\s+(?:passed|failed|errors?|xpassed|xfailed|skipped|deselected|warnings?"

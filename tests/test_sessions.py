@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib.machinery
+import importlib.util
 import json
 import os
 import signal
@@ -1108,3 +1110,22 @@ class TestParallelHooksOfOneSessionAllCount(RepoCase):
         self.at_once([("Bash", {"command": f"ls part{i}"}) for i in range(8)])
 
         self.assertEqual(before + 8, sessions.get(self.ctx(), self.me).tool_calls)
+
+    def test_a_restart_keeps_what_a_call_counted_while_it_started(self):
+        # A session start after a compaction, beside a tool call of one of the session's
+        # agents: the call lands after the start has read the record and before it writes.
+        loader = importlib.machinery.SourceFileLoader("session_start", str(BIN / "session-start"))
+        gate = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+        loader.exec_module(gate)
+        ctx = self.ctx()
+        before = sessions.get(ctx, self.me).tool_calls
+
+        def a_call_lands(*_):
+            sessions.count(ctx, self.me, "tool_calls")
+            return ctx.head
+
+        with mock.patch.object(gate, "stash_baseline", side_effect=a_call_lands):
+            kept = gate.build_record(ctx, mock.Mock(session_id=self.me, raw={}))
+
+        self.assertEqual(before + 1, sessions.get(ctx, self.me).tool_calls)
+        self.assertEqual(before + 1, kept.tool_calls)

@@ -115,8 +115,16 @@ _MERGE_VALUE_FLAGS = frozenset({"-A", "--author-email", "-b", "--body", "-F", "-
 _MERGE_VALUE_LETTERS = "AbFtR"
 
 # `gh api` merging: the REST endpoint written to with PUT, or the GraphQL mutations.
-_API_MERGE_PATH = re.compile(r"(?:^|/)pulls/\d+/merge/?$")
-_API_MERGE_ENDPOINT = re.compile(r"\bpulls/\d+/merge\b")
+#
+# The number is whatever stands between the slashes: `pulls/$PR/merge` merged, and read for
+# digits it was no merge. `repos/<owner>/<repo>/merges` is the other endpoint that merges, one
+# branch into another with no pull request at all, and `gh api` posts as soon as it is given a
+# field.
+_API_MERGE_PATH = re.compile(r"(?:^|/)pulls/[^/\s]+/merge/?$")
+_API_MERGE_ENDPOINT = re.compile(r"\bpulls/[^/\s\"']+/merge\b")
+_API_BRANCH_MERGE = re.compile(r"(?:^|/)repos/[^/\s]+/[^/\s]+/merges/?$")
+_API_BRANCH_MERGE_ENDPOINT = re.compile(r"\brepos/[^/\s\"']+/[^/\s\"']+/merges\b")
+_API_FIELDS = frozenset({"-f", "-F", "--field", "--raw-field", "--input"})
 _API_MERGE_MUTATION = re.compile(r"\b(?:mergePullRequest|enablePullRequestAutoMerge)\b")
 
 
@@ -743,8 +751,15 @@ def hand_off(ctx: GitContext, record: dict[str, Any], blockers: list[str],
 
     `ctx` is the branch's own tree, where the Stop gate read `blockers`, and `session_id` the
     session they were shown to; see `_shown`.
+
+    Written over the record as it stands now, never over the one the caller read. The Stop
+    gate reads the record, then reads the founder's word back from the transcript, which
+    writes what that word accepted onto the record, and then hands off: with the first copy
+    written back, the acceptance was gone, and the merge the hand-off asked for was refused
+    over the finish the founder had just accepted.
     """
-    _write(ctx, {**record, "handed_off_at": time.time(), "blockers": blockers[:8],
+    latest = _records(ctx).get(str(record.get("branch") or "")) or record
+    _write(ctx, {**latest, "handed_off_at": time.time(), "blockers": blockers[:8],
                  **_shown(ctx.head, blockers, session_id)})
 
 
@@ -1607,7 +1622,8 @@ def _api_merge_written(command: str) -> bool:
     """Does this line call `gh api` and write a merge for it anywhere: a mutation that merges, or
     a pull request's merge endpoint? Asked where the call itself cannot be read."""
     return bool(re.search(r"\bgh\s+api\b", command)) and bool(
-        _API_MERGE_MUTATION.search(command) or _API_MERGE_ENDPOINT.search(command))
+        _API_MERGE_MUTATION.search(command) or _API_MERGE_ENDPOINT.search(command)
+        or _API_BRANCH_MERGE_ENDPOINT.search(command))
 
 
 def _api_merges(argv: list[str]) -> bool:
@@ -1615,10 +1631,23 @@ def _api_merges(argv: list[str]) -> bool:
     whether one was merged, and a mutation is looked for in the whole line, where a document
     or a substitution holds it as often as a word does."""
     words = argv[2:]
-    put = any(word.upper() in ("-XPUT", "-X=PUT", "--METHOD=PUT") or
-              (word in ("-X", "--method") and nxt.upper() == "PUT")
-              for word, nxt in zip(words, [*words[1:], ""]))
-    return put and any(_API_MERGE_PATH.search(word) for word in words)
+    if _api_sent_as(words, "PUT") and any(_API_MERGE_PATH.search(word) for word in words):
+        return True
+    posts = _api_sent_as(words, "POST") or any(_api_field(word) for word in words)
+    return posts and any(_API_BRANCH_MERGE.search(word) for word in words)
+
+
+def _api_sent_as(words: list[str], method: str) -> bool:
+    """Does a `gh api` call with these words name this HTTP method, however it is written?"""
+    return any(word.upper() in (f"-X{method}", f"-X={method}", f"--METHOD={method}") or
+               (word in ("-X", "--method") and nxt.upper() == method)
+               for word, nxt in zip(words, [*words[1:], ""]))
+
+
+def _api_field(word: str) -> bool:
+    """Is this word a field or a body handed to `gh api`, which makes the call a POST?"""
+    return (word in _API_FIELDS or word.startswith(("--field=", "--raw-field=", "--input="))
+            or (len(word) > 2 and word[:2] in ("-f", "-F")))
 
 
 _UNREADABLE_MERGE = (

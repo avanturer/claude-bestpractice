@@ -393,6 +393,81 @@ class TestALineMergesOnePullRequest(PRCase):
                 self.assertEqual("deny", self.decision(proc))
                 self.assertIn("cannot read which pull request it merges", self.reason(proc))
 
+    def test_a_merge_written_another_way_is_still_one(self):
+        """Each of these merged, and was no merge to the gate: gh's repository option in front
+        of its subcommand, a script printed into a shell, the number in a variable, and the
+        endpoint that merges one branch into another with no pull request at all."""
+        self.armed()
+        n = self.PR_NUMBER
+        for command in (f"echo 'gh pr merge {n} --squash' | bash",
+                        f"printf 'gh pr merge {n}\\n' | sh",
+                        f'PR={n}; gh api -X PUT "repos/o/r/pulls/$PR/merge"',
+                        "gh api repos/o/r/merges -f base=main -f head=feat/x",
+                        "gh api -X POST repos/o/r/merges --input body.json",
+                        f"sudo gh -R o/r pr merge {n}"):
+            with self.subTest(command=command):
+                proc = self.bash(command)
+                self.assertEqual("deny", self.decision(proc), proc.stdout)
+                self.assertIn("cannot read which pull request it merges", self.reason(proc))
+
+    def test_the_repository_option_in_front_does_not_hide_a_merge(self):
+        """`gh -R owner/repo pr merge 5` is `gh pr merge 5 -R owner/repo`, and read for its
+        second and third words it was nothing: it merged on nobody's word."""
+        self.armed(accepted=False)
+        for command in (f"gh -R acme/shop pr merge {self.PR_NUMBER} --squash",
+                        f"gh --repo acme/shop pr merge {self.PR_NUMBER}",
+                        f"gh --repo=acme/shop pr merge {self.PR_NUMBER}",
+                        f"gh pr -R acme/shop merge {self.PR_NUMBER}"):
+            with self.subTest(command=command):
+                proc = self.bash(command)
+                self.assertEqual("deny", self.decision(proc), proc.stdout)
+                self.assertIn("+merge", self.reason(proc))
+
+    def test_reading_about_a_merge_is_still_no_merge(self):
+        self.armed(accepted=False)
+        for command in ("echo 'gh pr merge 5 --squash' | tee notes.txt",
+                        "gh api repos/o/r/pulls/5/merge",
+                        "gh api repos/o/r/merges",
+                        "gh -R acme/shop pr view 5"):
+            with self.subTest(command=command):
+                self.assertNotIn("merge", self.reason(self.bash(command)))
+
+    def test_a_push_that_writes_the_trunk_is_refused_whatever_the_word(self):
+        """A push to the trunk delivers work no pull request carried: nobody was asked, and
+        nothing was checked. `git push origin HEAD:main` went through beside a gate that
+        refuses `gh pr merge` without the founder's word (decision 0083)."""
+        self.configure(protect_trunk=True)
+        self.armed()
+        on_main = self.tmp / "on-main"
+        git(["worktree", "add", "-q", str(on_main), "main"], self.repo)
+        for command in ("git push origin HEAD:main", "git push origin feat/x:main",
+                        "git push --force origin +feat/x:refs/heads/main",
+                        "git push origin main", "git push origin :main",
+                        "git push -o ci.skip origin feat/x:main",
+                        f"git -C {on_main} push", f"cd {on_main} && git push origin HEAD",
+                        "git push --all origin"):
+            with self.subTest(command=command):
+                proc = self.bash(command)
+                self.assertEqual("deny", self.decision(proc), proc.stdout)
+                self.assertIn("straight to `main`", self.reason(proc))
+                self.assertIn("claude-bp-ship --pr", self.reason(proc))
+
+    def test_a_push_of_the_sessions_own_branch_is_not(self):
+        self.configure(protect_trunk=True)
+        self.armed()
+        for command in ("git push -u origin feat/x", "git push", "git push origin HEAD",
+                        "git push origin v1.2.3", "git push --tags",
+                        "git push origin --delete feat/old", "git push origin :feat/old",
+                        "git push origin feat/x:feat/mainline",
+                        "echo 'git push origin main'"):
+            with self.subTest(command=command):
+                self.assertNotIn("the trunk", self.reason(self.bash(command)))
+
+    def test_the_founder_can_stand_the_rule_down(self):
+        self.configure(protect_trunk=False)
+        self.armed()
+        self.assertNotIn("the trunk", self.reason(self.bash("git push origin HEAD:main")))
+
     def test_a_line_that_hides_whether_it_merged_is_refused(self):
         """The merge is finished on the call's result, and these report another command's."""
         self.armed()
@@ -1067,6 +1142,23 @@ class TestItCanBeTurnedOff(PRCase):
         self.assertEqual([], pullrequest.outstanding(self.ctx()))
         proc = self.gate("evidence-gate", {"session_id": "s1", "hook_event_name": "Stop"})
         self.assertEqual(0, proc.returncode)
+
+
+class TestAHandOffKeepsWhatWasWrittenSinceItWasRead(PRCase):
+    def test_an_acceptance_recorded_between_the_read_and_the_hand_off_survives(self):
+        """The Stop gate reads the record, reads the founder's word back from the transcript,
+        and hands off. Written back from the first read, the hand-off erased what the word
+        had just accepted, and the merge it asked for was refused again."""
+        self.start()
+        self.open_a_pr()
+        read_first = pullrequest.unhanded(self.ctx(), "feat/x")
+        pullrequest._write(self.ctx(), {**read_first, "unverified_accepted_head": "abc123"})
+
+        pullrequest.hand_off(self.ctx(), read_first, [], "s1")
+
+        record = pullrequest._records(self.ctx())["feat/x"]
+        self.assertEqual("abc123", record.get("unverified_accepted_head"))
+        self.assertTrue(record.get("handed_off_at"))
 
 
 class TestTheLedger(RepoCase):

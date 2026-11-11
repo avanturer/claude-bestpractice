@@ -477,9 +477,18 @@ def load_all(ctx: GitContext) -> list[SessionRecord]:
 
 
 def register(ctx: GitContext, rec: SessionRecord) -> None:
+    """Write a session's record whole: the record of a session that has none.
+
+    Under the lock every other writer of the file takes, so it never lands between another
+    hook's read and its write. A session that has a record is restarted (`restarted`), never
+    registered over: this writes what the caller holds, and what a hook counted since the
+    caller read it would go.
+    """
     rec.heartbeat_at = time.time()
     _stamp(rec)
-    store.write_json(_record_path(ctx, rec.session_id), rec.to_dict())
+    path = _record_path(ctx, rec.session_id)
+    with store.file_lock(path.with_name(path.name + ".lock")):
+        store.write_json(path, rec.to_dict())
 
 
 def _stamp(rec: SessionRecord) -> None:
@@ -665,6 +674,22 @@ def _rewrite(ctx: GitContext, session_id: str, change) -> SessionRecord | None:
         rec.heartbeat_at = time.time()
         store.write_json(path, rec.to_dict())
     return rec
+
+
+def restarted(ctx: GitContext, session_id: str, pid: int, pid_trust: str,
+              branch: str) -> SessionRecord | None:
+    """This session's record as a resume or a compaction leaves it, or None where it has none.
+
+    The same record, naming the process it runs under now and the branch it stands on. Changed
+    under the record's lock and read again inside it: a session start after a compaction runs
+    beside the tool calls of the session's agents, which count in this file, and the start
+    wrote back the record it had read before its git calls, taking their counts with it.
+    """
+    def change(rec: SessionRecord) -> None:
+        rec.pid, rec.pid_trust, rec.branch = pid, pid_trust, branch
+        _stamp(rec)
+
+    return _rewrite(ctx, session_id, change)
 
 
 def _assign(rec: SessionRecord, updates: dict[str, Any]) -> None:

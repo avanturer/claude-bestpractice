@@ -35,7 +35,7 @@ import time
 from pathlib import Path, PurePosixPath
 
 from . import store
-from .gitctx import GitContext
+from .gitctx import GitContext, quiet_env
 
 # Tier B, not Tier A, and decision 0001 is why: this is bookkeeping about what has been
 # done to THIS clone, not a fact about the repository worth committing. Written to the
@@ -54,7 +54,15 @@ LEDGER = "migrations.json"
 #
 # The pattern used to accept an underscore as well, against the sentence above, and
 # `third_party/libfoo/TODO_LIST.md` — somebody else's list — was rewritten to a pointer.
-_PARKED_BY_HAND = re.compile(r"(?:^|/)TODO-[\w.-]+\.md$", re.I)
+#
+# In capitals, as a session writes it. Read in any case, `docs/todo-app-architecture.md` and
+# `examples/todo-list.md` were parked tasks: the first session start in a repository that had
+# never run this plugin rewrote both to pointers.
+_PARKED_BY_HAND = re.compile(r"(?:^|/)TODO-[\w.-]+\.md$")
+
+# Where the whole of an adopted note is kept when git never held it, under Tier A in the tree
+# the note stood in.
+ADOPTED = "adopted"
 
 # The sentence left where an adopted file stood. Adoption has to recognise its own work:
 # without this, a second run adopts the pointer, files a task whose body is the pointer
@@ -260,7 +268,7 @@ def _absorb_scratch_todos(ctx: GitContext) -> str:
 
     Only the mechanical half. `parked_by_hand` finds files a SESSION wrote as a stand-in,
     and importing one needs no judgement: the original is rewritten to a pointer, so
-    nothing that linked to it breaks and git keeps the whole text. Prose registries the
+    nothing that linked to it breaks, and `adopt` keeps the whole text where git does not. Prose registries the
     founder curates are still only reported, because deciding what in them is a task is
     the agent's job and not a regex's.
     """
@@ -2207,7 +2215,7 @@ def parked_by_hand(ctx: GitContext) -> list[Path]:
     """
     root = ctx.worktree_root
     listed = _git_out(root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard",
-                             "--", ":(glob,icase)**/TODO-*.md"])
+                             "--", ":(glob)**/TODO-*.md"])
     found: list[Path] = []
     for relative in sorted(set(listed.split("\0"))):
         if not _PARKED_BY_HAND.search(relative) or any(
@@ -2227,13 +2235,20 @@ def adopt(ctx: GitContext, path: Path) -> str:
     """Move one hand-written TODO into the ledger, leaving a pointer where it stood.
 
     The original is rewritten rather than deleted. Anything that linked to it still
-    resolves, git keeps the whole text, and there is exactly one place the task now lives
-    — which is the entire point of adopting it at all.
+    resolves, and there is exactly one place the task now lives — which is the entire point
+    of adopting it at all.
+
+    The whole text outlives the rewrite, wherever it was. A card's body is cut at
+    `plan.MAX_BODY_CHARS`, and the pointer used to say the rest was "in git history" for a
+    note git had never seen: an untracked 24 KB `notes/TODO-ideas.md` came out of a first
+    session start as 180 bytes, its end nowhere on disk. A note HEAD holds as it stands is
+    left to git; any other is kept whole under `ADOPTED`, and the pointer says where.
     """
     from . import plan
 
     text = path.read_text(encoding="utf-8")
     relative = path.relative_to(ctx.worktree_root).as_posix()
+    held = _held_by_git(ctx.worktree_root, relative)
     title = _title_of(text) or path.stem.replace("-", " ").replace("_", " ")
     task = plan.park(
         ctx,
@@ -2242,15 +2257,37 @@ def adopt(ctx: GitContext, path: Path) -> str:
         branch=ctx.branch,
         paths=_paths_in(text, ctx.worktree_root) or [relative],
     )
+    where = "the text is in the task and in git history"
+    if not held:
+        kept = store.tier_a(ctx, ADOPTED, f"{task.id}-{path.name}")
+        store.ensure_dir(kept.parent)
+        store.atomic_write(kept, text, mode=0o644)
+        where = ("git never held this text, so the whole of it is kept in "
+                 f"`{kept.relative_to(ctx.worktree_root).as_posix()}`")
     store.atomic_write(
         path,
         f"# {title}\n\n{POINTER} {task.id}.\n\n"
         f"    claude-bp-plan show {task.id}\n\n"
-        "Kept as a pointer so links to this path still resolve; the text is in the task "
-        "and in git history.\n",
+        f"Kept as a pointer so links to this path still resolve; {where}.\n",
         mode=0o644,
     )
     return task.id
+
+
+def _held_by_git(tree: Path, relative: str) -> bool:
+    """Whether HEAD holds this file with exactly the text on disk: tracked, and nothing about
+    it staged, modified or untracked."""
+    if not _git_out(tree, ["ls-files", "--cached", "--", relative]).strip():
+        return False
+    try:
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--", relative], cwd=str(tree),
+            capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=60,
+            env=quiet_env(),
+        )
+    except OSError:
+        return False
+    return status.returncode == 0 and not status.stdout.strip()
 
 
 def _title_of(text: str) -> str:

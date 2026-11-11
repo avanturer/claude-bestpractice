@@ -543,8 +543,12 @@ MERGE_POOL = "approve:merge:pool"
 # it (#147). `+` carries no language. The nouns stay because they are already the words
 # spoken in both — «мерж», «релиз», «миграция» are these words.
 #
-# A token of its own: `+merge` and not `+merged`, `a+merge` or `C++merge`.
-_TOKEN = re.compile(r"(?<![\w+])\+(?P<subject>merge|release|deploy|migration)(?![\w-])", re.I)
+# A token of its own: `+merge` and not `+merged`, `a+merge` or `C++merge`. And not the end of
+# a name the session chose: «удали ветку feat/+merge» granted a merge, and so did `PATH=+merge`
+# and a file called `docs/+merge` in a line of this plugin's the founder pasted back. A colon
+# or a full stop in front ends a clause before this is asked, and «итог: +merge» is the word.
+_TOKEN = re.compile(
+    r"(?<![\w+/\\=@#~-])\+(?P<subject>merge|release|deploy|migration)(?![\w-])", re.I)
 
 # What the founder quotes rather than says: code, a quotation, a quoted line, something pasted.
 # This plugin's own messages put every literal in backticks, so one pasted back is code here.
@@ -661,14 +665,18 @@ def within_grace(check: Callable[[], Any]) -> Any:
 
 
 def record_switches(ctx: GitContext, asked: dict[str, str]) -> None:
+    """Add what the founder asked for to the record every gate reads their word from.
+
+    Read and written under one lock. The file holds every chat's words, and each chat's
+    `prompt-capture` wrote back the copy it had read: of 240 switches asked for by six chats
+    at once, between 41 and 48 were kept, and the founder is asked again for one that is not.
+    """
     if not asked:
         return
-    path = store.tier_b(ctx, SWITCH_REQUESTS)
-    record = store.read_json(path, default={})
-    if not isinstance(record, dict):
-        record = {}
-    record.update(asked)
-    store.write_json(path, record)
+    with store.guarded_json(store.tier_b(ctx, SWITCH_REQUESTS), default={}) as box:
+        record = box[0] if isinstance(box[0], dict) else {}
+        record.update(asked)
+        box[0] = record
 
 
 def asked_for(ctx: GitContext, key: str) -> str | None:
@@ -682,10 +690,11 @@ def asked_for(ctx: GitContext, key: str) -> str | None:
 
 def clear_switch(ctx: GitContext, key: str) -> None:
     """One word authorises one change. Consumed, so it cannot be spent twice."""
-    path = store.tier_b(ctx, SWITCH_REQUESTS)
-    record = store.read_json(path, default={})
-    if isinstance(record, dict) and record.pop(key, None) is not None:
-        store.write_json(path, record)
+    if asked_for(ctx, key) is None:
+        return
+    with store.guarded_json(store.tier_b(ctx, SWITCH_REQUESTS), default={}) as box:
+        if isinstance(box[0], dict):
+            box[0].pop(key, None)
 
 
 def spell(value: Any) -> str:

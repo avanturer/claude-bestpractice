@@ -413,6 +413,75 @@ class TestAGreenRunIsStampedWithItsTree(RepoCase):
         self.assertEqual("", evidence.tree_hash(self.ctx()))
         self.assertFalse(evidence.green_covers_tree(self.ctx()))
 
+class TestAGreenIsOfTheTreeThatRan(RepoCase):
+    """The stamp was the tree's hash read once the run was over. A commit that landed while
+    the suite ran was stamped green, and the pre-push hook skipped its run over code nobody
+    had run."""
+
+    def test_a_tree_that_moved_during_the_run_is_stamped_as_none(self):
+        self.write("src/app.py", "x = 1\n")
+        self.commit("what the suite ran on")
+        ran_on = evidence.tree_hash(self.ctx())
+        self.write("src/app.py", "x = 'landed while it ran'\n")
+        self.commit("lands during the run")
+
+        evidence.record_green(self.ctx(), ["pytest"], ran_on=ran_on)
+
+        self.assertEqual("", evidence.last_green(self.ctx())["tree"])
+        self.assertFalse(evidence.green_covers_tree(self.ctx()))
+
+    def test_a_tree_that_stood_still_is_stamped_as_itself(self):
+        self.write("src/app.py", "x = 1\n")
+        self.commit("what the suite ran on")
+        ran_on = evidence.tree_hash(self.ctx())
+
+        evidence.record_green(self.ctx(), ["pytest"], ran_on=ran_on)
+
+        self.assertEqual(ran_on, evidence.last_green(self.ctx())["tree"])
+        self.assertTrue(evidence.green_covers_tree(self.ctx()))
+
+
+class TestAFailureAfterAGreenIsTheBranchs(RepoCase):
+    """The red record is the failing tree's own file. Judged from the main checkout, a merge
+    of the branch that had just failed found no red record, an older green, and nothing in
+    its way."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.write("src/app.py", "x = 1\n")
+        self.commit("first")
+        self.tree = self.add_worktree("feat-x")
+
+    def there(self):
+        from claude_bestpractice.gitctx import resolve
+
+        return resolve(self.tree)
+
+    def test_it_is_read_from_every_tree(self):
+        evidence.record_green(self.there(), ["pytest"])
+        self.assertEqual("", evidence.unproven(self.ctx(), "feat-x"))
+
+        evidence.record_red(self.there(), ["pytest"], "1 failed")
+
+        self.assertIsNone(evidence.red(self.ctx()), "the red record is the other tree's file")
+        self.assertIn("FAILED", evidence.unproven(self.ctx(), "feat-x"))
+        self.assertIn("FAILED", evidence.unproven(self.there()))
+
+    def test_a_pass_after_it_stands_again(self):
+        evidence.record_green(self.there(), ["pytest"])
+        evidence.record_red(self.there(), ["pytest"], "1 failed")
+
+        evidence.record_green(self.there(), ["pytest"])
+
+        self.assertEqual("", evidence.unproven(self.ctx(), "feat-x"))
+
+    def test_another_branchs_failure_is_not_this_ones(self):
+        evidence.record_green(self.ctx(), ["pytest"])
+        evidence.record_red(self.there(), ["pytest"], "1 failed")
+
+        self.assertEqual("", evidence.unproven(self.ctx()))
+
+
 if __name__ == "__main__":
     unittest.main()
 

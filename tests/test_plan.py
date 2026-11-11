@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import threading
 import time
 import unittest
 
@@ -1509,6 +1510,54 @@ class TestATransitionReachesEveryCopy(RepoCase):
         plan.claim(self.ctx(), task.id, "s1", "main")
         self.assertEqual(1, plan.reconcile_copies(self.ctx()))
         self.assertEqual([plan.DOING], sorted({c.state for c in plan.copies(self.ctx(), task.id)}))
+
+
+class TestACardIsJudgedAndWrittenUnderOneLock(PlanCase):
+    """A card read, then claimed by its session, then moved or written as it was read."""
+
+    def behind_the_claim_lock(self, act):
+        """`act` started while a claim holds the ledger's lock: (still waiting?, its answer)."""
+        ctx = self.ctx()
+        answer = []
+        waiting = threading.Thread(target=lambda: answer.append(act(ctx)))
+        with store.file_lock(store.tier_b(ctx, plan.CLAIM_LOCK)):
+            waiting.start()
+            waiting.join(0.4)
+            held = waiting.is_alive()
+            plan._move_every(ctx, self.card.id, plan.DOING, owner="s1")
+        waiting.join(30)
+        return held, answer[0]
+
+    def setUp(self):
+        super().setUp()
+        self.card = plan.add(self.ctx(), "look at the login", source=plan.FROM_THE_FOUNDER,
+                             opened_by="s1")
+
+    def test_a_card_claimed_before_the_finish_reads_it_is_not_withdrawn(self):
+        held, taken = self.behind_the_claim_lock(lambda ctx: plan.withdraw_unplanned(ctx, "s1"))
+
+        self.assertTrue(held)
+        self.assertEqual([], taken)
+        self.assertEqual(plan.DOING, plan.find(self.ctx(), self.card.id).state)
+
+    def test_a_note_lands_on_the_card_where_it_stands_now(self):
+        held, (noted, _) = self.behind_the_claim_lock(
+            lambda ctx: plan.amend(ctx, self.card.id, note="the form posts twice"))
+
+        self.assertTrue(held)
+        self.assertEqual(plan.DOING, noted.state)
+        self.assertEqual([plan.DOING], [c.state for c in plan.copies(self.ctx(), self.card.id)])
+        self.assertIn("the form posts twice", plan.find(self.ctx(), self.card.id).body)
+
+    def test_a_resume_waits_for_the_claim_and_leaves_its_card(self):
+        plan.pause(self.ctx(), self.card.id, "waiting on the founder's answer about scope")
+
+        held, (_, problem) = self.behind_the_claim_lock(
+            lambda ctx: plan.resume(ctx, self.card.id))
+
+        self.assertTrue(held)
+        self.assertIn("not paused", problem)
+        self.assertEqual(plan.DOING, plan.find(self.ctx(), self.card.id).state)
 
 
 class TestOneCardInAnotherEncodingStopsNothing(PlanCase):

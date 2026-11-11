@@ -442,10 +442,42 @@ def runs(line: str, program: str, *subcommand: str) -> list[list[str]]:
         name = argv[0].rsplit("/", 1)[-1]
         if name != program:
             continue
+        argv = _subcommand_first(argv) if name == "gh" else argv
         if list(argv[1:1 + len(subcommand)]) != list(subcommand):
             continue
         found.append(argv)
     return found
+
+
+# The options `gh` takes in front of its subcommand, and between its two words, with a value.
+_GH_VALUE_FLAGS = {"-R", "--repo", "--hostname"}
+
+
+def _subcommand_first(argv: list[str]) -> list[str]:
+    """A `gh` call with the options written before its subcommand moved behind it.
+
+    `gh -R owner/repo pr merge 5` and `gh pr --repo owner/repo merge 5` merge, as gh 2.89 reads
+    them, and with the option where the subcommand was looked for they were no `gh pr merge`
+    to any reader here: a merge went through on nobody's word, and a pull request opened that
+    way was never recorded. Between the two words only the repository option moves: after
+    `gh api`, `-X PUT` is the call's own, and its order is what `PUT` is read by.
+    """
+    moved: list[str] = []
+    words: list[str] = []
+    rest = list(argv[1:])
+    while rest and len(words) < 2:
+        word = rest[0]
+        repository = word in _GH_VALUE_FLAGS or word.startswith(("--repo=", "--hostname=")) \
+            or (word.startswith("-R") and len(word) > 2)
+        if not word.startswith("-"):
+            words.append(rest.pop(0))
+        elif repository or not words:
+            taken = 2 if word in _GH_VALUE_FLAGS else 1
+            moved += rest[:taken]
+            rest = rest[taken:]
+        else:
+            break
+    return [argv[0], *words, *moved, *rest]
 
 
 # Programs whose arguments are data by construction. `echo` writes nothing, and the rest
@@ -486,6 +518,21 @@ def without_redirections(words: list[str]) -> list[str]:
         else:
             kept.append(word)
     return kept
+
+
+def written_by_redirection(words: list[str]) -> list[str]:
+    """The files `words` redirect output into, as written: the word after each operator that
+    writes. `2>&1` and `>&-` name a descriptor, `<` reads, and a quoted `>` is text."""
+    targets: list[str] = []
+    operator = ""
+    for word in words:
+        if operator:
+            if ">" in operator and not word.isdigit() and word != "-":
+                targets.append(str(word))
+            operator = ""
+        elif not isinstance(word, (_Quoted, _Descriptor)) and _REDIRECTION.fullmatch(word):
+            operator = word
+    return targets
 
 
 def masked_by(line: str, argv: list[str]) -> str | None:
@@ -530,11 +577,19 @@ def hidden(line: str, program: str, *subcommand: str) -> bool:
         names = [word.rsplit("/", 1)[-1] for word in argv]
         if names[0] in READERS:
             continue
-        if any(names[at:at + len(wanted)] == wanted for at in range(1, len(names))):
+        if any(_begins(names[at:], wanted) for at in range(1, len(names))):
             return True
         if names[0] in _SCRIPT_RUNNERS and any(_runs_text(word, wanted) for word in argv[1:]):
             return True
     return _scripted(line, wanted) or _substituted(line, wanted)
+
+
+def _begins(names: list[str], wanted: list[str]) -> bool:
+    """Do these words open with `wanted`, read past the options `gh` takes in front?"""
+    if not names or names[0] != wanted[0]:
+        return False
+    names = _subcommand_first(names) if names[0] == "gh" else names
+    return names[:len(wanted)] == wanted
 
 
 def _runs_text(text: str, wanted: list[str]) -> bool:
@@ -554,11 +609,20 @@ def _scripted(line: str, wanted: list[str]) -> bool:
     links = _linked(line)
     documents = iter(_read(_without_substituted_documents(line))[1])
     for at, (words, _) in enumerate(links):
-        written = _written_for(words, documents, line)
+        written = _written_for(words, documents, line) + _printed(words)
         if written and _a_shell_reads(links, at) and \
                 any(_runs_text(text, wanted) for text in written):
             return True
     return False
+
+
+def _printed(words: tuple[str, ...]) -> list[str]:
+    """What an `echo` or a `printf` prints, which is a script once a shell reads the pipe:
+    `echo 'gh pr merge 5' | bash` merged, and to every reader here it was text about a merge."""
+    argv = _unwrap([str(word) for word in words])
+    if not argv or argv[0].rsplit("/", 1)[-1] not in ("echo", "printf"):
+        return []
+    return [" ".join(without_redirections(argv[1:]))]
 
 
 def _written_for(words: tuple[str, ...], documents: Iterator[tuple[str, str]],
