@@ -566,6 +566,29 @@ class TestTheSuiteMustHaveRunThisTree(RepoCase):
         # And with nothing shadowing it, the same tree is clean.
         self.assertIsNone(_shadowed_package(self.repo))
 
+    def test_it_is_asked_of_the_interpreter_the_suite_runs_with(self):
+        """A `.venv` whose editable install points at another tree: the gate's own interpreter
+        imported this tree's copy and found nothing wrong, the suite imported the other's,
+        and a regression here passed green."""
+        import os
+        import sys
+
+        from claude_bestpractice.evidence import _shadowed_package
+
+        self.write("mypkg/__init__.py", "VALUE = 'from the worktree'\n")
+        elsewhere = self.tmp / "another-tree"
+        (elsewhere / "mypkg").mkdir(parents=True)
+        (elsewhere / "mypkg" / "__init__.py").write_text("VALUE = 'from another tree'\n")
+        venv_python = self.tmp / "venv-python"
+        venv_python.write_text(
+            f"#!/bin/sh\nPYTHONPATH={elsewhere} exec {sys.executable} \"$@\"\n")
+        os.chmod(venv_python, 0o755)
+
+        self.assertIsNone(_shadowed_package(self.repo), "precondition: the gate's own is clean")
+        found = _shadowed_package(self.repo, python=[str(venv_python)])
+        self.assertIsNotNone(found, "the suite's interpreter was not the one asked")
+        self.assertIn("another-tree", found[1])
+
     def test_a_repository_with_no_packages_at_all_is_not_flagged(self):
         """A Node or Go project must not trip a Python-shaped check."""
         from claude_bestpractice.evidence import _shadowed_package

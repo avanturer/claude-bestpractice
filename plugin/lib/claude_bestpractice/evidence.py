@@ -697,7 +697,7 @@ def _run_one(ctx: GitContext, globs: list[str], changed: list[str], suite, tree:
     the failure remembered for `tree` (decision 0013): asking for one is the point, as a report
     of the suite passing already buys one (decision 0034).
     """
-    own = _own_code_first(suite.root(ctx))
+    own = _own_code_first(suite.root(ctx), witness.python_for(suite.root(ctx), ctx.worktree_root))
     seconds = None if deadline is None else deadline - time.time()
     # THE RUNNER ITSELF, when one is drivable — not the command the project declares.
     # `make test` and `npm run test` are recipes the agent writes, and every round of
@@ -1215,7 +1215,7 @@ def _verify_by_declared_command(
     # A green record now means exactly what the red record's absence means, or it is not
     # written at all.
     if clear_red(ctx, command, _executed_from_output(tail), suite) or red(ctx) is None:
-        record_green(ctx, command, suite)
+        record_green(ctx, command, suite, tree)
     return verdict
 
 
@@ -1246,7 +1246,7 @@ def _judge_witnessed(ctx: GitContext, seen: witness.Witnessed, suite=None, tree:
         )
     # Before the count: a run of code that is not this tree's clears no record, and the
     # count may clear one (`_short_of_the_tree`).
-    shadow = _shadowed_package(root, env)
+    shadow = _shadowed_package(root, env, witness.python_for(root, ctx.worktree_root))
     if shadow:
         name, elsewhere = shadow
         return Verdict(
@@ -1262,7 +1262,7 @@ def _judge_witnessed(ctx: GitContext, seen: witness.Witnessed, suite=None, tree:
         return short
 
     if clear_red(ctx, command, seen.executed, suite) or red(ctx) is None:
-        record_green(ctx, command, suite)
+        record_green(ctx, command, suite, tree)
     return Verdict(True, f"{seen.executed} test(s) run by the gate itself via {seen.runner}"
                          + _recovered(seen))
 
@@ -1381,7 +1381,7 @@ def _root_of(ctx: GitContext, suite=None) -> Path:
     return ctx.worktree_root if suite is None else suite.root(ctx)
 
 
-def _own_code_first(root: Path) -> dict[str, str]:
+def _own_code_first(root: Path, python: list[str] | None = None) -> dict[str, str]:
     """The environment that makes a run import this tree's packages. {} when it already does.
 
     A virtualenv shared by several worktrees carries one editable install, and it points at
@@ -1391,7 +1391,7 @@ def _own_code_first(root: Path) -> dict[str, str]:
     Only where a package here does import from elsewhere: a tree that already imports itself
     is run exactly as before, installed package data and built extensions included.
     """
-    if _shadowed_package(root) is None:
+    if _shadowed_package(root, python=python) is None:
         return {}
     first = [str(home) for home in _package_homes(root)]
     already = os.environ.get("PYTHONPATH", "")
@@ -1412,8 +1412,14 @@ def _packages_in(parent: Path) -> list[str]:
             if (entry / "__init__.py").is_file() and not entry.name.startswith((".", "_", "test"))]
 
 
-def _shadowed_package(root: Path, env: dict[str, str] | None = None) -> tuple[str, str] | None:
+def _shadowed_package(root: Path, env: dict[str, str] | None = None,
+                      python: list[str] | None = None) -> tuple[str, str] | None:
     """A package that exists here but imports from somewhere else. Name and where.
+
+    Asked of `python`, the interpreter the suite is run with (`witness.python_for`), where the
+    caller has it. Asked of the gate's own, a `.venv` whose editable install pointed at
+    another tree answered for nothing: the system interpreter imported this tree's copy, the
+    suite imported the other's, and a regression here passed green.
 
     Found on a real repository: a clone of Flask with a genuine regression in `src/`
     pushed green, 491 tests passing, because a `.pth` from an unrelated editable install
@@ -1429,7 +1435,8 @@ def _shadowed_package(root: Path, env: dict[str, str] | None = None) -> tuple[st
 
     for name in candidates[:3]:
         proc = subprocess.run(
-            [sys.executable, "-c", f"import {name},os;print(os.path.dirname({name}.__file__))"],
+            [*(python or [sys.executable]), "-c",
+             f"import {name},os;print(os.path.dirname({name}.__file__))"],
             capture_output=True, encoding="utf-8", errors="surrogateescape",
             cwd=str(root.parent), timeout=60, env={**os.environ, **(env or {})},
         )
@@ -2306,6 +2313,10 @@ def record_red(ctx: GitContext, command: list[str], tail: str, suite=None, tree:
         },
         mode=0o644,
     )
+    # And a run of the BRANCH, where every tree reads it. The record above is this tree's
+    # file: judged from the main checkout, a merge of the branch that had just failed here
+    # found no red record, an older green, and nothing in its way (`unproven`).
+    record_run(ctx, command, passed=False)
 
 
 def _persistable(output: str) -> str:
@@ -2564,9 +2575,15 @@ def green_covers_tree(ctx: GitContext, branch: str = "") -> bool:
     return str(record.get("tree") or "") == here and _counted_by_this_gate(record)
 
 
-def record_green(ctx: GitContext, command: list[str], suite=None) -> bool:
+def record_green(ctx: GitContext, command: list[str], suite=None,
+                 ran_on: str | None = None) -> bool:
     """Remember that a run was OBSERVED to pass, positively. Returns whether it also
     cleared a recorded failure.
+
+    `ran_on` is the tree's hash as the run began, from a caller that took one. The stamp was
+    the hash read once the run was over: a commit that landed in the tree while the suite
+    ran was stamped green, and the pre-push hook then skipped its run over code nobody had
+    run. A tree that moved during the run is stamped as no tree, which only ever runs again.
 
     Needed because "no red record" and "verified green" are different states and were
     being reported as the same one. A repository where nothing has ever run has no red
@@ -2599,7 +2616,7 @@ def record_green(ctx: GitContext, command: list[str], suite=None) -> bool:
             # answer that could not differ. The tree hash is the same content-addressed
             # evidence this plugin uses everywhere else, and it fails safe: unreadable
             # means empty means re-run.
-            "tree": tree_hash(ctx),
+            "tree": _the_tree_that_ran(ctx, ran_on),
             # A green another version of this gate reached is not this gate's green, and
             # the stamp only ever lets a push skip its run (#234).
             "gate": __version__,
@@ -2656,6 +2673,13 @@ def _lasted(stamp: object) -> str:
         return "just now"
     days, hours = int(age // 86_400), int((age % 86_400) // 3600)
     return f"{days}d" if days else f"{hours}h" if hours else "just now"
+
+
+def _the_tree_that_ran(ctx: GitContext, ran_on: str | None) -> str:
+    """The hash a green is stamped with: the tree as it stands when no caller took one before
+    the run, the one it took when the tree is still that, and none when it has moved."""
+    now = tree_hash(ctx)
+    return now if ran_on is None or ran_on == now else ""
 
 
 def record_run(ctx: GitContext, command: list[str], passed: bool, cut_short: bool = False) -> None:
@@ -2759,9 +2783,14 @@ def unproven(ctx: GitContext, branch: str = "") -> str:
     composing the same false one: absence of a green was reported as absence of a run.
     """
     stopped = cut_short(ctx, branch)
-    if last_green(ctx, branch) and stopped is None:
-        return ""
+    green = last_green(ctx, branch)
     seen = last_run(ctx, branch)
+    # A green stands until a run after it fails: read alone, it stood for the work that
+    # failed since, from any tree whose own red record was not the failing tree's.
+    failed_since = bool(green and seen and seen.get("passed") is False
+                        and _at(seen) > _at(green))
+    if green and stopped is None and not failed_since:
+        return ""
     where = f" on {branch}" if branch else " on this branch"
     if stopped is not None:
         return (f"the Stop gate's run of the suite{where} was stopped "
@@ -2774,6 +2803,14 @@ def unproven(ctx: GitContext, branch: str = "") -> str:
     ran = " ".join(seen.get("command") or ["?"])
     return (f"the last run observed{where} FAILED ({_lasted(seen.get('at'))}) — `{ran}`; "
             "nothing has passed since")
+
+
+def _at(record: dict) -> float:
+    """When a run record was written, 0.0 where it does not say."""
+    try:
+        return float(record.get("at") or 0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _covers_the_red_run(ctx: GitContext, entry: dict, executed: int | None) -> bool:
