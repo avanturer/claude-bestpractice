@@ -520,6 +520,21 @@ def without_redirections(words: list[str]) -> list[str]:
     return kept
 
 
+def written_by_redirection(words: list[str]) -> list[str]:
+    """The files `words` redirect output into, as written: the word after each operator that
+    writes. `2>&1` and `>&-` name a descriptor, `<` reads, and a quoted `>` is text."""
+    targets: list[str] = []
+    operator = ""
+    for word in words:
+        if operator:
+            if ">" in operator and not word.isdigit() and word != "-":
+                targets.append(str(word))
+            operator = ""
+        elif not isinstance(word, (_Quoted, _Descriptor)) and _REDIRECTION.fullmatch(word):
+            operator = word
+    return targets
+
+
 def masked_by(line: str, argv: list[str]) -> str | None:
     """The operator that lets `line` exit 0 when its command `argv` failed, "" when none does.
     None when `argv` is not a command of `line`.
