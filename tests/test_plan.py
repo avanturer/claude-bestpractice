@@ -310,6 +310,33 @@ class TestBoardRendering(PlanCase):
         self.assertIn("visible on the board", body)
 
 
+class TestTheBoardIsNotSpentOnWhatWaits(PlanCase):
+    """A founder's board listed 132 paused cards, the oldest first, at every session start,
+    and what could be started was cut off behind them."""
+
+    def test_the_few_set_down_last_and_how_many_there_are(self):
+        ctx = self.ctx()
+        for n in range(9):
+            card = plan.add(ctx, f"waits on answer {n}")
+            plan.pause(ctx, card.id, f"the founder's answer about item {n}")
+            self.aged(card, hours=9 - n, state=plan.PAUSED)
+        plan.add(ctx, "something that can be started")
+
+        board = plan.render_for_board(ctx)
+
+        self.assertIn("PAUSED (9; the 4 set down last", board)
+        self.assertEqual(4, board.count("[waiting:"))
+        self.assertIn("waits on answer 8", board)
+        self.assertNotIn("waits on answer 0", board)
+        self.assertIn("something that can be started", board)
+
+    def test_a_few_are_listed_as_they_were(self):
+        ctx = self.ctx()
+        card = plan.add(ctx, "waits on a key")
+        plan.pause(ctx, card.id, "the key the founder has to issue")
+        self.assertIn("PAUSED:\n", plan.render_for_board(ctx) + "\n")
+
+
 class TestCli(PlanCase):
     def run_cli(self, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
@@ -1252,6 +1279,26 @@ class TestDeliveryClosesTheCard(PlanCase):
         task = self.in_flight("s1", "plugin/lib")
         closed = plan.settle_delivered(
             self.ctx(), "s1", ["plugin/lib/claude_bestpractice/plan.py"], "the merge")
+        self.assertEqual([task.id], [t.id for t in closed])
+
+    def test_a_card_the_chat_still_works_under_stays_open_and_says_what_it_waits_on(self):
+        """A card of 170 files closed on a merge that carried six, and every write under it
+        after that was refused as work no card claimed (a founder's clone, 2.12.0)."""
+        task = self.in_flight("s1", "src/app.py", "src/billing.py")
+        closed = plan.settle_delivered(self.ctx(), "s1", ["src/app.py"], "the merge of feat/a",
+                                       lambda card: ["#12", "proj-billing"])
+        self.assertEqual([], closed)
+        left = plan.find(self.ctx(), task.id)
+        self.assertEqual(plan.DOING, left.state)
+        self.assertIn("delivered in part — the merge of feat/a carried src/app.py; "
+                      "still under this card: #12, proj-billing.", left.body)
+
+    def test_and_closes_on_the_delivery_after_which_nothing_is_left(self):
+        task = self.in_flight("s1", "src/app.py", "src/billing.py")
+        plan.settle_delivered(self.ctx(), "s1", ["src/app.py"], "the merge of feat/a",
+                              lambda card: ["#12"])
+        closed = plan.settle_delivered(self.ctx(), "s1", ["src/billing.py"],
+                                       "the merge of feat/b", lambda card: [])
         self.assertEqual([task.id], [t.id for t in closed])
 
     def test_a_card_is_closed_on_any_of_its_files_not_all_of_them(self):

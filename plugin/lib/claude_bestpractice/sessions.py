@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -288,7 +289,12 @@ def _pid_says_dead(rec: SessionRecord) -> bool:
 
     A pid read in another pid namespace proves nothing either way: the same number here is
     a different process, or none. That is "cannot tell", and cannot tell is live.
+
+    Unless the record is from an earlier boot of this machine (`_from_an_earlier_boot`):
+    then no process it could name exists, whatever the namespace says.
     """
+    if _from_an_earlier_boot(rec):
+        return True
     if rec.pid_identity and rec.pid_identity != store.lock_identity():
         return False
     gone = not pid_alive(rec.pid)
@@ -300,6 +306,25 @@ def _pid_says_dead(rec: SessionRecord) -> bool:
     if rec.pid_trust == PID_TRUST_OWNER:
         return True
     return (time.time() - rec.heartbeat_at) > HEARTBEAT_STALE_SECONDS
+
+
+def _from_an_earlier_boot(rec: SessionRecord) -> bool:
+    """Was this record stamped on this machine, on a boot that has ended?
+
+    A reboot ends every process, so such a record's session is gone, and it is the one
+    death a pid cannot report: WSL gives each start of its machine a new pid namespace, so
+    every record from before a restart read as "another namespace, cannot tell", and stood
+    live for the 36 hours of the ceiling. A founder's chat resumed after a WSL restart found
+    its own card, claimed in another tree, held by that record, and its own trees another
+    session's (recorded under 2.12.0, three times).
+
+    The same host name and another boot id. A record from another host, or with no boot on
+    it, is as undecided as before.
+    """
+    here = current_boot()
+    if not (rec.boot_id and here) or rec.boot_id == here:
+        return False
+    return bool(rec.pid_identity) and rec.pid_identity.split("/", 1)[0] == platform.node()
 
 
 def _pid_proves_life(rec: SessionRecord) -> bool:

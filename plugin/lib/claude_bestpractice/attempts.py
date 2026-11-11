@@ -58,7 +58,37 @@ class Attempt:
 
 
 def attempts_dir(ctx: GitContext) -> Path:
-    return store.tier_a(ctx, ATTEMPTS_DIR)
+    """Where attempts are kept: this tree's own folder, which is committed with the work, or
+    the main checkout's where this is a linked tree in which git ignores that folder.
+
+    Ignored there, an attempt filed in a worktree was a file `git worktree remove` deletes
+    without a word and `claude-bp-attempt list` in the main checkout never showed: a dead end
+    went with the tree that found it (recorded on a founder's clone, twice). The main checkout
+    outlives every tree, which is why the ledger and the checkpoints live there.
+    """
+    here = store.tier_a(ctx, ATTEMPTS_DIR)
+    if not ctx.is_worktree or not ignored_in(ctx.worktree_root):
+        return here
+    from . import worktree
+
+    try:
+        return worktree.main_checkout(ctx) / store.TIER_A_DIRNAME / ATTEMPTS_DIR
+    except Exception:  # noqa: BLE001 - a clone that cannot name its main checkout keeps its own
+        return here
+
+
+def ignored_in(tree: Path) -> bool:
+    """Does git ignore an attempt written into this tree's folder for them?"""
+    import subprocess
+
+    try:
+        asked = subprocess.run(
+            ["git", "check-ignore", "-q", "--",
+             f"{store.TIER_A_DIRNAME}/{ATTEMPTS_DIR}/0000-probe.md"],
+            cwd=str(tree), capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return asked.returncode == 0
 
 
 def _one_line(text: str) -> str:

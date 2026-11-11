@@ -22,7 +22,7 @@ import unittest
 
 from helpers import BIN, RepoCase, git, session_record_for, sid
 
-from claude_bestpractice import plan, sessions
+from claude_bestpractice import plan, pullrequest, sessions
 from claude_bestpractice.gitctx import resolve
 
 # The process the founder's session runs as. Under test the walk up the process tree finds
@@ -230,6 +230,61 @@ class TestItsCardComesWithIt(MovedSession):
         self.assertEqual("deny", self.hook_decision(proc), proc.stdout + proc.stderr)
         self.assertIn(f"{self.tree} is removed", self.hook_reason(proc))
         self.assertFalse(self.tree.is_dir(), "the gate did not remove the tree")
+
+
+class TestACardOverSeveralPullRequests(MovedSession):
+    """The work under one card ships as more than one merge: what is still the chat's, and
+    not in the trunk, keeps the card open."""
+
+    def carrying(self, delivered: str = "feat/another"):
+        main = resolve(self.repo)
+        return pullrequest.still_carrying(main, sid(self.repo, "S"), main.branch, delivered)
+
+    def card(self):
+        return plan.find(resolve(self.repo), "0001")
+
+    def test_its_tree_with_uncommitted_work_on_the_cards_file_is_named(self):
+        self.edit_in_tree()
+        self.assertEqual([self.tree.name], self.carrying()(self.card()))
+
+    def test_its_tree_with_a_commit_the_trunk_lacks_is_named(self):
+        self.edit_in_tree()
+        git(["add", "-A"], self.tree)
+        git(["commit", "-qm", "reject empty input"], self.tree)
+        self.assertEqual([self.tree.name], self.carrying()(self.card()))
+
+    def test_a_tree_with_nothing_of_the_cards_is_not(self):
+        (self.tree / "notes.txt").write_text("unrelated\n", encoding="utf-8")
+        self.assertEqual([], self.carrying()(self.card()))
+
+    def test_the_tree_whose_branch_was_just_merged_is_not(self):
+        self.edit_in_tree()
+        merged = resolve(self.tree).branch
+        self.assertEqual([], self.carrying(merged)(self.card()))
+
+    def test_its_other_open_pull_request_over_the_cards_file_is_named_by_number(self):
+        self.edit_in_tree()
+        git(["add", "-A"], self.tree)
+        git(["commit", "-qm", "reject empty input"], self.tree)
+        here = resolve(self.tree)
+        pullrequest.opened(resolve(self.repo), here.branch, resolve(self.repo).branch,
+                           sid(self.tree, "S"), number=12)
+        self.assertIn("#12", self.carrying()(self.card()))
+
+    def test_another_chats_pull_request_is_not(self):
+        git(["branch", "feat/theirs"], self.repo)
+        pullrequest.opened(resolve(self.repo), "feat/theirs", resolve(self.repo).branch,
+                           "another-chat", number=13)
+        self.assertEqual([], self.carrying()(self.card()))
+
+    def test_the_merge_leaves_the_card_open_and_the_next_write_under_it_goes_through(self):
+        self.edit_in_tree()
+        main = resolve(self.repo)
+        closed = plan.settle_delivered(main, sid(self.repo, "S"), ["src/app.py"],
+                                       "the merge of feat/another", self.carrying())
+        self.assertEqual([], closed)
+        self.assertEqual(plan.DOING, self.card().state)
+        self.assertNotEqual("deny", self.hook_decision(self.write_in(self.tree)))
 
 
 class TestTheChatComesBackInANewProcess(MovedSession):

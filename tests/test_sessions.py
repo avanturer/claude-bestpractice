@@ -1058,6 +1058,53 @@ class TestAPidFromAnotherNamespaceProvesNothing(RepoCase):
         self.assertFalse(sessions.is_live(ctx, rec))
 
 
+class TestARecordFromBeforeARebootIsDead(RepoCase):
+    """WSL gives each start of its machine a new pid namespace: after a restart every record
+    read as "another namespace, cannot tell", and stood live for the 36 hours of the ceiling.
+    A founder's resumed chat found its own card held by its own record of before."""
+
+    def stamped_before(self, ctx, session: str = "before-the-restart", pid: int = 1,
+                       host: str = "") -> sessions.SessionRecord:
+        """A record as a boot that has ended left it, under a pid that is alive now."""
+        import platform
+
+        sessions.register(ctx, record(ctx, session))
+        rec = sessions.get(ctx, session)
+        rec.pid, rec.pid_trust = pid, sessions.PID_TRUST_OWNER
+        rec.boot_id = "a-boot-that-has-ended"
+        rec.pid_identity = f"{host or platform.node()}/pid:[4026530001]"
+        store.write_json(store.tier_b(ctx, sessions.SESSIONS_DIR, f"{session}.json"),
+                         rec.to_dict())
+        return rec
+
+    @unittest.skipUnless(sessions.current_boot(), "no boot id on this machine")
+    def test_it_is_dead_though_its_pid_names_a_live_process_in_another_namespace(self):
+        ctx = self.ctx()
+        self.assertFalse(sessions.is_live(ctx, self.stamped_before(ctx)))
+
+    @unittest.skipUnless(sessions.current_boot(), "no boot id on this machine")
+    def test_the_next_session_start_reaps_it_and_frees_what_it_held(self):
+        ctx = self.ctx()
+        self.stamped_before(ctx)
+        sessions.acquire_lease(ctx, "before-the-restart", "src/held.py")
+
+        self.run_hook("session-start", {"session_id": "after-the-restart",
+                                        "hook_event_name": "SessionStart", "source": "resume"})
+
+        self.assertIsNone(sessions.get(ctx, "before-the-restart"))
+        self.assertIsNone(sessions.acquire_lease(ctx, "after-the-restart", "src/held.py"))
+
+    def test_one_from_another_host_is_still_undecided(self):
+        ctx = self.ctx()
+        self.assertTrue(sessions.is_live(ctx, self.stamped_before(ctx, host="another-host")))
+
+    def test_one_with_no_boot_on_it_is_still_undecided(self):
+        ctx = self.ctx()
+        rec = self.stamped_before(ctx)
+        rec.boot_id = ""
+        self.assertTrue(sessions.is_live(ctx, rec))
+
+
 class TestAResumeDuringAReapStillFindsItsBaseline(RepoCase):
     def test_the_log_entry_is_written_before_the_record_goes(self):
         """Unlinked first, a resume landing between the two found neither the record nor
