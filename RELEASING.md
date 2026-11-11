@@ -27,28 +27,21 @@ The version is the only thing `claude plugin update` compares. It is the whole c
 
 ## While working
 
-`make check-fast` is the edit loop: every cheap check — lint, docs, slop, polyglot,
-knowledge, shipped, about two seconds together — plus the suite across shards. About 200s
-against 615s for the full `make check` on four cores, same 2199 tests (v1.70.1). Use it
-while you work.
+The module of every file you changed first: `python3 -m pytest tests/test_gitpolicy.py` is
+seconds, and most of a fix is answered by one file. In the v1.70.0 cycle a changed
+`sessions.py` went to the full run without `tests/test_sessions.py` having run, and the
+eleven-second failure was found fourteen minutes later.
 
-It is not the gate and cannot be: one process is what lets this suite catch state leaking
-between tests, and sharding is what hides it. `make check` stays serial and is what
-decides, once, before the commit.
+Then `make check-fast`, once, before the push: every cheap check (lint, docs, slop,
+polyglot, knowledge, shipped) and the suite across shards. That is the local gate. About six
+minutes for 3,086 tests on four cores (v2.14.0), and the cores are what bounds it: the suite
+is a process per hook call, about 115 ms each (12 the interpreter, about 55 its imports
+spread over 156 modules with none to single out, 15 compiling `pre-tool`, the rest the work).
 
-Until v1.68.0 the sharded runner was simply broken — it put `tests/` on `PYTHONPATH` and
-not `plugin/lib`, so any shard opening with a module that imports `claude_bestpractice`
-before `helpers` died on the import. Nothing noticed, because the fast runner is not the
-gate and nothing tested it. It is tested now (`TestTheFastRunnerIsUsable`).
-
-Reach for a single module before either — `python3 -m pytest tests/test_gitpolicy.py` is
-twelve seconds, and most of a fix is answered by one file.
-
-The order is what saves the time: the module of **every** file you changed, then
-`check-fast`, then one `make check`. A failure the serial run is first to find costs a whole
-second serial run. In the v1.70.0 cycle a changed `sessions.py` was released to `make check`
-without `tests/test_sessions.py` having run. That test takes eleven seconds, and waiting
-for `make check` to find the failure cost fourteen minutes.
+The serial `make check` runs once, in the release workflow, before it cuts the tag. One
+process is what catches state leaking between tests, which shards hide; run locally as well
+it was twenty more minutes a release for the answer the workflow gives. Run it here only
+where the workflow cannot run, or to chase a failure that shows only in one process.
 
 ## Proving a new test proves something
 
@@ -77,8 +70,8 @@ never reached, the other asserted tolerance that a lower layer was already provi
    change under `plugin/` without it).
 2. Write the CHANGELOG entry: what broke, how it was found, what changed. Not a list of
    commits — the reader is someone deciding whether this affects them.
-3. `make check` green.
-4. **If the branch had to merge the trunk, run `make check` again.** A green check before
+3. `make check-fast` green.
+4. **If the branch had to merge the trunk, run it again.** A green check before
    a conflict resolution says nothing about the tree after it. Resolving to "our" side is
    right only when our side is a superset — and it is not, whenever this branch *replaced*
    something the trunk also changed, because the merge then keeps both copies.
