@@ -2313,10 +2313,7 @@ def record_red(ctx: GitContext, command: list[str], tail: str, suite=None, tree:
         },
         mode=0o644,
     )
-    # And a run of the BRANCH, where every tree reads it. The record above is this tree's
-    # file: judged from the main checkout, a merge of the branch that had just failed here
-    # found no red record, an older green, and nothing in its way (`unproven`).
-    record_run(ctx, command, passed=False)
+    record_run(ctx, command, passed=False)  # the branch's, read from every tree (`unproven`)
 
 
 def _persistable(output: str) -> str:
@@ -2785,11 +2782,7 @@ def unproven(ctx: GitContext, branch: str = "") -> str:
     stopped = cut_short(ctx, branch)
     green = last_green(ctx, branch)
     seen = last_run(ctx, branch)
-    # A green stands until a run after it fails: read alone, it stood for the work that
-    # failed since, from any tree whose own red record was not the failing tree's.
-    failed_since = bool(green and seen and seen.get("passed") is False
-                        and _at(seen) > _at(green))
-    if green and stopped is None and not failed_since:
+    if green and stopped is None and not _failed_since(green, seen):
         return ""
     where = f" on {branch}" if branch else " on this branch"
     if stopped is not None:
@@ -2803,6 +2796,17 @@ def unproven(ctx: GitContext, branch: str = "") -> str:
     ran = " ".join(seen.get("command") or ["?"])
     return (f"the last run observed{where} FAILED ({_lasted(seen.get('at'))}) — `{ran}`; "
             "nothing has passed since")
+
+
+def _failed_since(green: dict, seen: dict | None) -> bool:
+    """Whether the last run observed failed after this green was recorded.
+
+    A green stands until a run after it fails: read alone, it stood for the work that failed
+    since, from any tree whose own red record was not the failing tree's. A run stopped for
+    the founder is no verdict (decision 0044), and `cut_short` says what it leaves standing.
+    """
+    return bool(seen and seen.get("passed") is False and not seen.get("cut_short")
+                and _at(seen) > _at(green))
 
 
 def _at(record: dict) -> float:

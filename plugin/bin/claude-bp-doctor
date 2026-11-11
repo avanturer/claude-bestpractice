@@ -1625,7 +1625,10 @@ def check_a_pull_request_is_merged_or_reported(repo: Path) -> Result:
     evidence.record_red(resolve(repo), ["pytest"], "1 failed")
     refused = call("mcp__github__merge_pull_request", {"pullNumber": 1})
 
+    # The suite passing again, as the gate records it: the red record cleared and a green
+    # after it. A failure the gate watched stands for the branch until a run after it passes.
     evidence.clear_red(resolve(repo), ["pytest"])
+    evidence.record_green(resolve(repo), ["pytest"])
 
     # Green is not accepted. Proved in both directions here, because the whole point of
     # the change is that one of them used to be missing: the gate read passing checks as

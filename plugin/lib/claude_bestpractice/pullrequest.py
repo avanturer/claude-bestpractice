@@ -1631,18 +1631,23 @@ def _api_merges(argv: list[str]) -> bool:
     whether one was merged, and a mutation is looked for in the whole line, where a document
     or a substitution holds it as often as a word does."""
     words = argv[2:]
-
-    def sent_as(method: str) -> bool:
-        return any(word.upper() in (f"-X{method}", f"-X={method}", f"--METHOD={method}") or
-                   (word in ("-X", "--method") and nxt.upper() == method)
-                   for word, nxt in zip(words, [*words[1:], ""]))
-
-    if sent_as("PUT") and any(_API_MERGE_PATH.search(word) for word in words):
+    if _api_sent_as(words, "PUT") and any(_API_MERGE_PATH.search(word) for word in words):
         return True
-    posts = sent_as("POST") or any(
-        word in _API_FIELDS or word.startswith(("--field=", "--raw-field=", "--input="))
-        or (len(word) > 2 and word[:2] in ("-f", "-F")) for word in words)
+    posts = _api_sent_as(words, "POST") or any(_api_field(word) for word in words)
     return posts and any(_API_BRANCH_MERGE.search(word) for word in words)
+
+
+def _api_sent_as(words: list[str], method: str) -> bool:
+    """Does a `gh api` call with these words name this HTTP method, however it is written?"""
+    return any(word.upper() in (f"-X{method}", f"-X={method}", f"--METHOD={method}") or
+               (word in ("-X", "--method") and nxt.upper() == method)
+               for word, nxt in zip(words, [*words[1:], ""]))
+
+
+def _api_field(word: str) -> bool:
+    """Is this word a field or a body handed to `gh api`, which makes the call a POST?"""
+    return (word in _API_FIELDS or word.startswith(("--field=", "--raw-field=", "--input="))
+            or (len(word) > 2 and word[:2] in ("-f", "-F")))
 
 
 _UNREADABLE_MERGE = (

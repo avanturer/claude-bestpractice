@@ -510,6 +510,14 @@ def _pid_alive(pid: int) -> bool:
 RECLAIM_GUARD_SECONDS = 5.0
 
 
+def _older_than(path: Path, seconds: float) -> bool:
+    """Was this file last written more than `seconds` ago? False for one that is gone."""
+    try:
+        return time.time() - path.stat().st_mtime > seconds
+    except OSError:
+        return False
+
+
 def _reclaim(lock_path: Path, stale_after: float = LOCK_STALE_SECONDS) -> None:
     """Remove a stale lock without ever removing a live one.
 
@@ -527,11 +535,8 @@ def _reclaim(lock_path: Path, stale_after: float = LOCK_STALE_SECONDS) -> None:
     try:
         fd = os.open(str(guard), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except OSError:
-        try:
-            if time.time() - guard.stat().st_mtime > RECLAIM_GUARD_SECONDS:
-                guard.unlink(missing_ok=True)
-        except OSError:
-            pass
+        if _older_than(guard, RECLAIM_GUARD_SECONDS):
+            guard.unlink(missing_ok=True)
         return
     try:
         os.close(fd)

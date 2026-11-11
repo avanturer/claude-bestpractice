@@ -16,6 +16,8 @@ STATE = ".claude/claude-bestpractice"
 TIER_B = '"$(git rev-parse --git-common-dir)/claude-bestpractice'
 
 TAKEN = (
+    f"cp /tmp/another.json {STATE}/config.json",
+    f"cp -t {STATE} /tmp/config.json",
     f"rm {STATE}/failing-*.json",
     f"rm -f {STATE}/{{failing-suite,last-green}}.json",
     f'f={STATE}/config.json; echo "{{}}" > "$f"',
@@ -35,6 +37,8 @@ TAKEN = (
 )
 
 LEFT_ALONE = (
+    f"cp {STATE}/config.json /tmp/config-as-it-is.json",
+    f"W=$(mktemp -d); cp -a {STATE}/config.json \"$W/copy/\"",
     f"cat {STATE}/config.json",
     f"cat {STATE}/config.json | jq .",
     f"ls -la {STATE}/",

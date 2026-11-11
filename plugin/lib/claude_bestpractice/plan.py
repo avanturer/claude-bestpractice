@@ -467,20 +467,16 @@ def withdraw_unplanned(ctx: GitContext, opener: str) -> list[Task]:
     Read and moved under the lock a claim takes. The Stop gate runs once the turn is over
     (decision 0046), beside the session's next step: a card listed here as untouched and
     claimed before it was moved went to `withdrawn/` with its owner on it, since the move
-    finds the card by its number wherever it stands. Where the lock is not to be had, the
-    cards wait for the next finish.
+    finds the card by its number wherever it stands.
     """
     if not opener:
         return []
     taken: list[Task] = []
-    try:
-        with store.file_lock(store.tier_b(ctx, CLAIM_LOCK)):
-            for task in load_all(ctx, NEXT):
-                if (task.source == FROM_THE_FOUNDER and task.opened_by == opener
-                        and _untouched(task) and _move_every(ctx, task.id, WITHDRAWN) is not None):
-                    taken.append(task)
-    except store.LockTimeout:
-        pass
+    with store.file_lock(store.tier_b(ctx, CLAIM_LOCK)):
+        for task in load_all(ctx, NEXT):
+            if (task.source == FROM_THE_FOUNDER and task.opened_by == opener
+                    and _untouched(task) and _move_every(ctx, task.id, WITHDRAWN) is not None):
+                taken.append(task)
     return taken
 
 

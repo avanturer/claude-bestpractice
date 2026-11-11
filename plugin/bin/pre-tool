@@ -176,6 +176,21 @@ def _reads_what_it_names(argv: list[str]) -> bool:
     return vouch.own_command(shlex.join(argv))
 
 
+def _may_be_written(run: list[str]) -> list[str]:
+    """The words of a command that can name what it writes: every one, save for `cp`, which
+    writes its destination and only reads the rest. A session copies a record out to look at
+    it, and that copy is a read of the record."""
+    words = [str(word) for word in shellcmd.without_redirections(run[1:])]
+    if run[0].rsplit("/", 1)[-1] != "cp":
+        return words
+    for at, word in enumerate(words):
+        if word in ("-t", "--target-directory"):
+            return words[at + 1:at + 2]
+        if word.startswith("--target-directory="):
+            return [word.split("=", 1)[1]]
+    return [word for word in words if not word.startswith("-")][-1:]
+
+
 def guarded_state_named(command: str, cwd: Path, tier_b: Path) -> str:
     """The word of this shell line that names enforcement state where something on the line
     is not a plain read, or "" when nothing does.
@@ -219,8 +234,7 @@ def guarded_state_named(command: str, cwd: Path, tier_b: Path) -> str:
                 continue
             reads = _reads_what_it_names(run)
             acts = acts or not reads
-            named = named or next((str(word) for word in shellcmd.without_redirections(run[1:])
-                                   if names(str(word))), "")
+            named = named or next((word for word in _may_be_written(run) if names(word)), "")
             if not named and not reads and _inline(run):
                 named = next((" ".join(found.group(0).split())[:120]
                               for found in _HEREDOC.finditer(literal)

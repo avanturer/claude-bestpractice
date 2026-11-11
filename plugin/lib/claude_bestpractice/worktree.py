@@ -1593,41 +1593,43 @@ def _changed_unseen(tree: Path) -> list[str] | None:
     copies are left out: this plugin marks them that way itself before a removal
     (`_set_the_ledger_copies_aside`), and a removal git then refused leaves them marked.
     """
+    marked = _marked_unseen(tree)
+    if not marked:
+        return marked
+    held = _git_said(tree, ["-c", "core.quotePath=false", "ls-files", "-s", "-z", "--", *marked])
+    now = _git_said(tree, ["hash-object", "--stdin-paths"], "\n".join(marked) + "\n")
+    if held is None or now is None or len(now.split()) != len(marked):
+        return None
+    in_index = {entry.split("\t", 1)[1]: entry.split()[1]
+                for entry in held.split("\0") if "\t" in entry}
+    return [rel for rel, digest in zip(marked, now.split()) if in_index.get(rel) != digest]
+
+
+def _marked_unseen(tree: Path) -> list[str] | None:
+    """The tracked files of `tree` marked `--skip-worktree` or `--assume-unchanged` that are
+    on disk, the ledger's copies aside; None when git will not list them."""
     from . import plan
 
     ledger = f"{store.TIER_A_DIRNAME}/{plan.PLAN_DIR}/"
-    try:
-        listing = subprocess.run(
-            ["git", "-c", "core.quotePath=false", "ls-files", "-v", "-z"], cwd=str(tree),
-            env=quiet_env(), capture_output=True, encoding="utf-8", errors="surrogateescape",
-            timeout=60)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if listing.returncode != 0:
+    listing = _git_said(tree, ["-c", "core.quotePath=false", "ls-files", "-v", "-z"])
+    if listing is None:
         return None
     # `ls-files -v`: `S` is skip-worktree, a lowercase tag is assume-unchanged.
-    marked = [entry[2:] for entry in listing.stdout.split("\0")
-              if len(entry) > 2 and (entry[0] == "S" or entry[0].islower())
-              and not entry[2:].startswith(ledger) and (tree / entry[2:]).is_file()]
-    if not marked:
-        return []
+    return [entry[2:] for entry in listing.split("\0")
+            if len(entry) > 2 and (entry[0] == "S" or entry[0].islower())
+            and not entry[2:].startswith(ledger) and (tree / entry[2:]).is_file()]
+
+
+def _git_said(tree: Path, args: list[str], stdin: str | None = None) -> str | None:
+    """What git printed for `args` in `tree`, without taking the index lock; None where it
+    failed or could not be run, which is not the same answer as printing nothing."""
     try:
-        held = subprocess.run(
-            ["git", "-c", "core.quotePath=false", "ls-files", "-s", "-z", "--", *marked],
-            cwd=str(tree), env=quiet_env(), capture_output=True, encoding="utf-8",
-            errors="surrogateescape", timeout=60)
-        now = subprocess.run(
-            ["git", "hash-object", "--stdin-paths"], cwd=str(tree), env=quiet_env(),
-            input="\n".join(marked) + "\n", capture_output=True, encoding="utf-8",
-            errors="surrogateescape", timeout=60)
+        proc = subprocess.run(
+            ["git", *args], cwd=str(tree), env=quiet_env(), input=stdin, capture_output=True,
+            encoding="utf-8", errors="surrogateescape", timeout=60)
     except (OSError, subprocess.SubprocessError):
         return None
-    hashes = now.stdout.split()
-    if held.returncode != 0 or now.returncode != 0 or len(hashes) != len(marked):
-        return None
-    in_index = {entry.split("\t", 1)[1]: entry.split()[1]
-                for entry in held.stdout.split("\0") if "\t" in entry}
-    return [rel for rel, digest in zip(marked, hashes) if in_index.get(rel) != digest]
+    return proc.stdout if proc.returncode == 0 else None
 
 
 def _regrows(rel: str) -> bool:

@@ -933,6 +933,19 @@ def trunk_pushed(args: list[str], branch: str, trunks: frozenset[str],
     the colon is the one written, and a name alone is written under itself. A tag, another
     branch and the deletion of another branch write no trunk.
     """
+    words = _push_words(args)
+    if words is None:
+        return default or next(iter(sorted(trunks)), "")
+    for refspec in words[1:] or [branch]:
+        written = _written_by(refspec, branch)
+        if written in trunks:
+            return written
+    return ""
+
+
+def _push_words(args: list[str]) -> list[str] | None:
+    """A push's own words, the remote first and its refspecs after; None for a push that
+    sends every branch (`--all`, `--mirror`). A flag's value is no word of it."""
     words: list[str] = []
     takes_value = False
     for word in args:
@@ -941,18 +954,19 @@ def trunk_pushed(args: list[str], branch: str, trunks: frozenset[str],
         elif word in _PUSH_VALUE_FLAGS:
             takes_value = True
         elif word in ("--all", "--mirror"):
-            return default or next(iter(sorted(trunks)), "")
+            return None
         elif not word.startswith("-"):
             words.append(word)
-    for refspec in words[1:] or [branch]:
-        source, colon, target = refspec.lstrip("+").partition(":")
-        written = target if colon else source
-        written = branch if written in ("HEAD", "@") else written
-        if written.startswith("refs/heads/"):
-            written = written[len("refs/heads/"):]
-        if written and written in trunks:
-            return written
-    return ""
+    return words
+
+
+def _written_by(refspec: str, branch: str) -> str:
+    """The branch one refspec writes on the remote, pushed from a tree standing on `branch`."""
+    source, colon, target = refspec.lstrip("+").partition(":")
+    written = target if colon else source
+    if written in ("HEAD", "@"):
+        written = branch
+    return written.removeprefix("refs/heads/")
 
 
 def _subcommand_of(argv: list[str]) -> tuple[str, list[str]]:
