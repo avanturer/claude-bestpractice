@@ -853,7 +853,7 @@ class TestThisRepositoryRunsUnderItsOwnPlugin(unittest.TestCase):
         both copies. That shipped a broken `main`: two definitions of one function, Python
         taking the older, `NameError` in the path the Stop gate runs suites with."""
         body = (REPO_ROOT / "RELEASING.md").read_text(encoding="utf-8")
-        self.assertIn("run `make check` again", body)
+        self.assertIn("run `make check-fast` again", body)
         self.assertIn("the check that counts is the one after", body.lower())
 
     def test_the_release_checklist_names_the_scope_the_update_needs(self):

@@ -10,6 +10,10 @@ Fable, Sonnet 5 and Opus 4.7 onward compact only near 967,000.
 This reads every request once and says where the spend went, and what the same conversation
 would have cost compacted at a ceiling. Read-only, and nothing here is sent to the model.
 
+The replay is the least a ceiling costs in quality and the most it saves: after a compaction
+a session reads again what it needs, which the replay does not count, and works from a
+summary of what it had read. The founder runs the large context on purpose (decision 0085).
+
 Spend is in input-token equivalents at list-price ratios: fresh input 1, a cache write 1.25
 (five minutes) or 2 (one hour), a cache read 0.1, output 5.
 """
@@ -28,7 +32,7 @@ from .gitctx import GitContext
 READ, WRITE_5M, WRITE_1H, FRESH, OUT = 0.1, 1.25, 2.0, 1.0, 5.0
 
 # The ceilings a history is replayed under. `autoCompactWindow` takes 100,000 to 1,000,000.
-CEILINGS = (200_000, 300_000, 400_000)
+CEILINGS = (300_000, 500_000, 800_000)
 # Where a context's size is counted: under, between and past the ceilings above.
 BANDS = ((0, 100_000), (100_000, 200_000), (200_000, 400_000), (400_000, 0))
 
@@ -333,6 +337,8 @@ def render(report: Report, ceiling: tuple[int, str]) -> str:
         "the check on the replay):",
         *(f"  at {limit // 1000}k: {_share(report.replayed[limit], report.spend)} of the spend, "
           f"{report.compactions[limit]} compaction(s)" for limit in CEILINGS),
+        "What a session reads again after a compaction is not counted, so a ceiling saves "
+        "less than this, and each compaction leaves the session a summary of what it had read.",
         "", _ceiling_line(ceiling),
     ]
     return "\n".join(lines)
@@ -343,9 +349,8 @@ def _ceiling_line(ceiling: tuple[int, str]) -> str:
     if size:
         return f"Ceiling in effect here: {size // 1000}k, set in {where}."
     return ("Ceiling in effect here: none, so a session compacts near the model's window "
-            "(about 967k on Fable, Sonnet 5 and Opus 4.7 onward). "
-            '`"autoCompactWindow": 300000` in ~/.claude/settings.json, or in the project\'s '
-            ".claude/settings.json, sets one.")
+            "(about 967k on Fable, Sonnet 5 and Opus 4.7 onward). `autoCompactWindow` in "
+            "~/.claude/settings.json, or in the project's .claude/settings.json, sets one.")
 
 
 def _band(band: tuple[int, int]) -> str:
