@@ -181,6 +181,52 @@ class TestTheWorkaroundIsTakenOver(RepoCase):
         self.assertIn(migrate.POINTER, left)
         self.assertIn(task_id, left)
 
+    def test_a_note_git_never_held_is_kept_whole(self):
+        """A card's body is cut at two thousand characters, and the pointer said the rest
+        was "in git history" for a file git had never seen: an untracked note came out of a
+        first session start as a pointer, its end nowhere on disk."""
+        whole = "# Ideas\n\n" + "\n".join(f"- idea {n}, written by hand" for n in range(400)) \
+            + "\nTHE LAST LINE\n"
+        original = self.write("notes/TODO-ideas.md", whole)
+
+        task_id = migrate.adopt(self.ctx(), original)
+
+        kept = self.repo / ".claude/claude-bestpractice" / migrate.ADOPTED / f"{task_id}-TODO-ideas.md"
+        self.assertEqual(whole, kept.read_text(encoding="utf-8"))
+        pointer = original.read_text(encoding="utf-8")
+        self.assertIn(f"{migrate.ADOPTED}/{task_id}-TODO-ideas.md", pointer)
+        self.assertNotIn("git history", pointer)
+
+    def test_a_note_edited_since_its_commit_is_kept_whole_too(self):
+        original = self.seed()
+        self.commit("park it")
+        original.write_text(self.NOTE + "\nAdded after the commit.\n", encoding="utf-8")
+
+        task_id = migrate.adopt(self.ctx(), original)
+
+        kept = self.repo / ".claude/claude-bestpractice" / migrate.ADOPTED / f"{task_id}-{original.name}"
+        self.assertIn("Added after the commit.", kept.read_text(encoding="utf-8"))
+
+    def test_a_committed_note_is_left_to_git(self):
+        original = self.seed()
+        self.commit("park it")
+
+        migrate.adopt(self.ctx(), original)
+
+        self.assertFalse((self.repo / ".claude/claude-bestpractice" / migrate.ADOPTED).exists())
+        self.assertIn("git history", original.read_text(encoding="utf-8"))
+
+    def test_a_lowercase_name_is_an_ordinary_document(self):
+        """`docs/todo-app-architecture.md` describes a to-do application. Read in any case,
+        it was a parked task, and installing the plugin rewrote it to a pointer."""
+        self.write("docs/todo-app-architecture.md", "# Todo app architecture\n\nprose\n")
+        self.write("examples/todo-list.md", "# A list\n\nprose\n")
+        self.commit("ordinary documents")
+
+        self.assertEqual([], migrate.parked_by_hand(self.ctx()))
+        migrate.repair(self.ctx())
+        self.assertEqual("", git(["status", "--porcelain"], self.repo))
+
     def test_adopting_twice_does_not_file_it_twice(self):
         """Without recognising its own pointer, a second run adopts that, and a third
         adopts the pointer it left — one task per invocation, forever."""

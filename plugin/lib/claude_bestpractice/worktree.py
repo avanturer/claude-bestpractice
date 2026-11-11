@@ -645,7 +645,11 @@ def level_with_the_trunk(ctx: GitContext, others: list) -> str:
     if ahead:
         return (f"the main checkout has {ahead} commit(s) {trunk} does not, and is {behind} "
                 f"behind it: nothing here moves it")
-    merged = subprocess.run(["git", "merge", "--ff-only", "--quiet", trunk], cwd=str(main),
+    # `--no-overwrite-ignore`: git refuses a fast-forward over a modified or untracked file and
+    # writes over an ignored one without a word. The founder's own `local.json`, ignored here
+    # and tracked on the trunk since, came out of a session start holding the trunk's copy.
+    merged = subprocess.run(["git", "merge", "--ff-only", "--no-overwrite-ignore", "--quiet",
+                             trunk], cwd=str(main),
                             capture_output=True, encoding="utf-8", errors="surrogateescape",
                             timeout=60)
     if merged.returncode == 0:
@@ -808,6 +812,11 @@ def reap_unused(ctx: GitContext, live: set) -> list[str]:
         # The one thing git's refusal does not cover: it takes every ignored file. A tree
         # holding data no other tree has stays, and `stranded` names it.
         if lost_with(ctx, Path(tree[0])) != []:
+            continue
+        # And the other: commits on a detached HEAD are on no branch, so there is no branch
+        # for `_release` to keep, and a clean tree over them went with them, under a line
+        # saying nothing committed was gone. `sweep_named` already left such a tree standing.
+        if _adrift(Path(tree[0])):
             continue
         # The branch is proven by `_release` itself, never handed a proof from here. This
         # passed one along — computed for the branch the tree stood on NOW — and the branch
@@ -1087,6 +1096,23 @@ def _branch_in(tree: Path) -> str:
         return ""
     name = proc.stdout.strip() if proc.returncode == 0 else ""
     return "" if name in ("", "HEAD") else name
+
+
+def _adrift(tree: Path) -> bool:
+    """Whether this tree stands on a detached HEAD whose commit no branch holds, here or on a
+    remote. False for a tree that is gone, which has nothing left to lose."""
+    if not tree.is_dir() or _branch_in(tree):
+        return False
+    try:
+        held = subprocess.run(
+            ["git", "for-each-ref", "--contains", "HEAD", "--format=%(refname)",
+             "refs/heads", "refs/remotes"],
+            cwd=str(tree), capture_output=True,
+            encoding="utf-8", errors="surrogateescape", timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return held.returncode == 0 and not held.stdout.strip()
 
 
 def _holds_work(tree: Path) -> bool:

@@ -49,6 +49,24 @@ class TestTheMainCheckoutIsBroughtUp(RepoCase):
         self.assertNotEqual(self.trunk, self.head())
         self.assertEqual("mine\n", (self.repo / "src" / "a.py").read_text())
 
+    def test_an_ignored_file_the_trunk_now_tracks_is_kept_and_named(self):
+        """git refuses a fast-forward over a modified or untracked file, and writes over an
+        ignored one without a word: the founder's own copy came out holding the trunk's."""
+        git(["checkout", "-q", "origin/main"], self.repo)
+        self.write("local.json", '{"key": "the trunk\'s placeholder"}\n')
+        self.commit("the trunk starts tracking it")
+        git(["update-ref", "refs/remotes/origin/main", "HEAD"], self.repo)
+        git(["checkout", "-q", "main"], self.repo)
+        self.trunk = git(["rev-parse", "origin/main"], self.repo).strip()
+        (self.repo / ".git" / "info" / "exclude").write_text("local.json\n", encoding="utf-8")
+        self.write("local.json", '{"key": "the founder\'s own"}\n')
+
+        said = self.start()
+
+        self.assertEqual('{"key": "the founder\'s own"}\n', (self.repo / "local.json").read_text())
+        self.assertIn("was refused", said)
+        self.assertNotEqual(self.trunk, self.head())
+
     def test_another_live_session_in_it_leaves_it_where_it_is(self):
         sessions.register(self.ctx(), self.session_record("someone-else"))
         self.assertNotIn("level with it", self.start())
