@@ -165,6 +165,24 @@ def _is_prose(value: str) -> bool:
     return first.isalpha() and not first.isascii()
 
 
+# The name of an HTTP header, as code keeps it in a constant: words joined by hyphens, written
+# `X-Csrf-Token` or `x-csrf-token`, one of them a word headers are made of. A lowercase one
+# starts `x-`: `"test-key"` is a test's literal, and stays one. `CSRF_TOKEN =
+# "X-Csrf-Token"` names where a token travels and is no token; refused as a credential, the
+# file could not be written (recorded on a founder's clone under 2.12.0).
+_HEADER_NAME = re.compile(r"^(?:[A-Z][A-Za-z]*(?:-[A-Z][A-Za-z]*)+|x(?:-[a-z]+)+)$")
+_HEADER_WORDS = frozenset({
+    "x", "token", "key", "csrf", "xsrf", "auth", "authorization", "api", "signature",
+    "session", "id", "request", "idempotency", "device", "client", "access", "refresh",
+})
+
+
+def _is_header_name(value: str) -> bool:
+    name = value.strip()
+    return bool(_HEADER_NAME.match(name)) and bool(
+        _HEADER_WORDS.intersection(name.lower().split("-")))
+
+
 # What a credential's NAME says it is not: the identifier of a key, not the key. App Store
 # Connect's key id and issuer id sit beside the path to the key itself in fuddy's `eas.json`.
 _IDENTIFIES = re.compile(r"(?i)(?:key|issuer)[_-]?id$")
@@ -321,7 +339,7 @@ def _is_not_a_secret(match: "re.Match") -> bool:
 
 # Quoted or bare. A bare value is also code in the shapes after these; a quoted one is a literal.
 _NEVER_A_CREDENTIAL = (_is_indirection, _is_measurement, _is_address, _is_elided, _is_path,
-                       _is_prose)
+                       _is_prose, _is_header_name)
 _CODE_WHEN_BARE = (_is_reference, _is_expression, _is_coordinate, _is_regex_literal)
 
 

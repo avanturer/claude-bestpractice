@@ -9,7 +9,8 @@ date: 2026-11-11
 names it is a plain read** (`cat`, `ls`, `grep`, `head`, `jq`, `git log`, `find` without an
 action) with no redirection onto it. What the state is stays what `pre-tool` already guards:
 Tier B, the config, the stage ratchet, the records no session may write. Compared without
-regard to case, and resolved against a `cd` earlier on the line.
+regard to case, and resolved against a `cd` earlier on the line. A path kept in a variable is
+judged where the variable is used; a command handed it in its environment names it.
 
 ## Why
 > точно пойми что лучше в плагине нашем добавить или исправить, для такой разработки,
