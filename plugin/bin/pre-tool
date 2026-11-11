@@ -112,7 +112,13 @@ _PLAIN_READERS = frozenset({
     "diff", "cmp", "file", "stat", "basename", "dirname", "realpath", "readlink", "ls", "tree",
     "du", "less", "more", "echo", "printf", "cd", "pwd", "pushd", "popd", "true", ":", "test",
     "[", "sha256sum", "md5sum",
+    # Filters: each reads what it is given and writes its answer to stdout, never to a file
+    # it names. Not `tee`, `split` or `xxd`, which do.
+    "tr", "paste", "fold", "fmt", "rev", "tac", "od", "strings", "base64", "comm", "join",
+    "expand", "numfmt", "date", "seq", "sleep",
 })
+# Words that make a shell name a variable: what follows them is read as an assignment.
+_DECLARES = frozenset({"export", "local", "declare", "readonly", "typeset"})
 # git's subcommands that leave every file in the working tree as it is.
 _GIT_LEAVES_FILES = frozenset({
     "log", "diff", "status", "show", "rev-parse", "ls-files", "blame", "describe", "shortlog",
@@ -173,6 +179,10 @@ def _reads_what_it_names(argv: list[str]) -> bool:
     if program in ("sort", "uniq"):
         return not any(word == "-o" or word.startswith("--output") for word in words) and \
             (program == "sort" or len([word for word in words if not word.startswith("-")]) < 2)
+    if program in ("awk", "gawk", "mawk"):
+        # Its program can write a file or run a command, and says so with these.
+        return not any(word == "-i" or mark in str(word) for word in words
+                       for mark in (">", "system(", "|"))
     return vouch.own_command(shlex.join(argv))
 
 
@@ -201,31 +211,34 @@ def guarded_state_named(command: str, cwd: Path, tier_b: Path) -> str:
     line in, and a document an interpreter reads as its code are each asked as well: every
     one is a way the state was written with its path never standing where a path is looked
     for. A pipeline that cannot be read as words is asked as text.
+
+    A name the line gives a variable names the state wherever the variable is used after it,
+    and is judged there like the path itself: `C=<state>; ls "$C"` is a read, and was refused
+    with every line that kept the path in a variable, 37 of the 21,527 a founder's sessions
+    ran in a week, nearly all of them looking at why a gate had refused. A command the name
+    is handed to in its environment (`T=<state> python3 …`) is one that names it.
     """
     if "claude-bestpractice" not in command.casefold():
         return ""
     where = str(tier_b)
+    held: set[str] = set()
     for _segment, literal, here, _start in _segments_with_cwd(_blanked(command), cwd, command):
         inside = here.as_posix() if {".claude", ".git"} & set(here.parts) else ""
 
         def names(word: str) -> bool:
-            return _names_guarded_state(word, where) or bool(
+            return _names_guarded_state(word, where) or _uses(word, held) or bool(
                 inside and word[:1] not in ("-", "/", "~", "$")
                 and _names_guarded_state(f"{inside}/{word}", where))
 
         body = _EDGE_BRACKETS.sub("", _HEREDOC.sub(lambda m: " " * len(m.group(0)), literal))
         parsed = shellcmd.segments(body)
         if not parsed:
-            if _names_guarded_state(literal, where):
+            if _names_guarded_state(literal, where) or _uses(literal, held):
                 return " ".join(literal.split())[:120]
             continue
         named, acts = "", False
         for argv in parsed:
-            at = 0
-            while at < len(argv) and _SETS_A_NAME.match(argv[at]):
-                if names(argv[at].split("=", 1)[1]):
-                    return str(argv[at])
-                at += 1
+            at, handed = _named_so_far(argv, names, held)
             run = argv[_past_what_stands_in_front(argv, at):]
             for target in shellcmd.written_by_redirection(run):
                 if names(target):
@@ -234,6 +247,7 @@ def guarded_state_named(command: str, cwd: Path, tier_b: Path) -> str:
                 continue
             reads = _reads_what_it_names(run)
             acts = acts or not reads
+            named = named or handed
             named = named or next((word for word in _may_be_written(run) if names(word)), "")
             if not named and not reads and _inline(run):
                 named = next((" ".join(found.group(0).split())[:120]
@@ -242,6 +256,28 @@ def guarded_state_named(command: str, cwd: Path, tier_b: Path) -> str:
         if named and acts:
             return named
     return ""
+
+
+def _uses(word: str, held: set[str]) -> bool:
+    """Does this word expand a variable the line gave a path of the state?"""
+    return any(re.search(rf"\$\{{?{re.escape(name)}\b", str(word)) for name in held)
+
+
+def _named_so_far(argv: list[str], names, held: set[str]) -> tuple[int, str]:
+    """Read the assignments a command begins with into `held`, and answer where its program
+    starts and the assignment that hands the program a path of the state in its environment,
+    "" where none does. `export NAME=…` and its like are assignments with a word in front."""
+    at = 1 if argv and argv[0] in _DECLARES else 0
+    handed = ""
+    while at < len(argv) and _SETS_A_NAME.match(argv[at]):
+        name, value = argv[at].split("=", 1)
+        if names(value):
+            held.add(name)
+            handed = str(argv[at])
+        at += 1
+    if argv and argv[0] in _DECLARES:
+        return len(argv), ""
+    return at, handed if at < len(argv) else ""
 
 
 def _past_what_stands_in_front(argv: list[str], at: int) -> int:

@@ -238,6 +238,22 @@ class TestTheScanTakesTimeInProportionToTheText(RepoCase):
                 self.assertNotIn(secret, redact.scrub(text))
 
 
+class TestAHeadersNameIsNotACredential(unittest.TestCase):
+    """Recorded on a founder's clone: a constant holding the NAME of a header was refused."""
+
+    def test_the_name_of_a_header_is_left_as_written(self):
+        for line in ('_MAIN_TOKEN = "X-Csrf-Token"', "CSRF_TOKEN_HEADER = 'x-csrf-token'",
+                     'API_KEY_HEADER = "X-Api-Key"', 'TOKEN_HEADER: "Idempotency-Key"'):
+            with self.subTest(line=line):
+                self.assertEqual(line, redact.scrub(line))
+
+    def test_words_joined_by_hyphens_that_name_no_header_are_still_taken(self):
+        for line in ('DB_PASSWORD = "correct-horse-battery"', 'API_TOKEN = "Abcd-Efgh-Ijkl"',
+                     'SESSION_SECRET = "x9-token-8f2a61c0"'):
+            with self.subTest(line=line):
+                self.assertIn(redact.REDACTED, redact.scrub(line))
+
+
 class TestTheWholeCredentialIsTakenOut(unittest.TestCase):
     """A batch of error-tracker signals reached `.claude/signals/` with a private key's body
     and END line, a Redis password, a Basic credential and an API key in it: only the BEGIN

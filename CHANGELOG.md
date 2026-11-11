@@ -1,5 +1,19 @@
 # Changelog
 
+## v2.14.2
+
+Found by `tools/drill.py` over a copy of fuddy and its state on the founder's machine: 2.14.1
+starts there cleanly, and its rule on state named on a shell line would have refused 37 of the
+21,527 distinct lines fuddy's sessions ran in a week, nearly all of them reads.
+
+- A path of the state kept in a variable is judged where the variable is used: `C=<state>;
+  ls "$C"` is a read. A command handed it in its environment, or a loop over it, is still
+  refused. `tr`, `paste`, `fold` and their like, and an `awk` that writes nothing, read
+  (decision 0084).
+- The credential scan lets through the name of an HTTP header (`"X-Csrf-Token"`): recorded on
+  fuddy under 2.12.0.
+- `tools/drill.py` drops an active virtualenv from the hooks' environment.
+
 ## v2.14.1
 
 - This repository's context ceiling is 850,000, not 300,000: the large context is used on

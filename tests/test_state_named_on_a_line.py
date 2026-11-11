@@ -16,6 +16,11 @@ STATE = ".claude/claude-bestpractice"
 TIER_B = '"$(git rev-parse --git-common-dir)/claude-bestpractice'
 
 TAKEN = (
+    f"T={STATE} python3 -c 'import os, shutil; shutil.rmtree(os.environ[\"T\"])'",
+    f'C={STATE}; for f in "$C"/*.json; do rm "$f"; done',
+    f'C={STATE}; cat /tmp/another.json | tee "$C/config.json"',
+    f"C={STATE}; awk '{{print > \"/tmp/x\"}}' \"$C/config.json\"",
+    f'export C={STATE}; rm -rf "$C"',
     f"cp /tmp/another.json {STATE}/config.json",
     f"cp -t {STATE} /tmp/config.json",
     f"rm {STATE}/failing-*.json",
@@ -37,6 +42,12 @@ TAKEN = (
 )
 
 LEFT_ALONE = (
+    f'C={STATE}; ls -la "$C"; du -sh "$C"/*',
+    f"C={STATE}; find \"$C\" -maxdepth 1 -type f -printf '%s %p\\n' | sort -rn | head -20 | awk -F'\\t' '{{print $2}}'",
+    f'C={STATE}; tail -n 40 "$C/config.json" > /tmp/config-tail.txt',
+    f"ls {STATE} | tr '\\n' ' '",
+    f'export C={STATE}; stat -c %y "$C/config.json"',
+    f'C="$(git rev-parse --git-common-dir)/claude-bestpractice"; ls "$C"; wc -c "$C"/*.json',
     f"cp {STATE}/config.json /tmp/config-as-it-is.json",
     f"W=$(mktemp -d); cp -a {STATE}/config.json \"$W/copy/\"",
     f"cat {STATE}/config.json",

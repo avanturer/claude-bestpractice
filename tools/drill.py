@@ -16,7 +16,8 @@ The clone itself is read and never written. What keeps the run inside the copy:
   - HOME is a directory of the copy's, so no settings of the founder's are written;
   - `psql`, `dropdb`, `docker`, `gh`, `claude`, `make` and their like are stubs that fail
     and write down what called them: a repair that would drop a database drops nothing;
-  - no variable Claude Code exports reaches the hooks, so no live session is written to.
+  - no variable Claude Code exports reaches the hooks, so no live session is written to,
+    and no active virtualenv does, whose interpreter could reach the project's database.
 The shell lines are only parsed, by the functions the gate uses, never run.
 """
 
@@ -27,6 +28,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -93,8 +95,13 @@ def sealed(out: Path) -> dict:
         stub.chmod(0o755)
     (out / "home").mkdir(exist_ok=True)
     kept = {key: value for key, value in os.environ.items()
-            if not key.startswith(("CLAUDE", "GIT_", "PG", "DATABASE"))}
-    return {**kept, "HOME": str(out / "home"), "PATH": f"{stubs}{os.pathsep}{kept.get('PATH', '')}",
+            if not key.startswith(("CLAUDE", "GIT_", "PG", "DATABASE", "VIRTUAL_ENV", "PYTHON"))}
+    # An active virtualenv is the project's own interpreter, with its database driver: a
+    # setup line run through it reaches the shared database past every stub.
+    venv = os.environ.get("VIRTUAL_ENV", "")
+    path = os.pathsep.join(entry for entry in kept.get("PATH", "").split(os.pathsep)
+                           if not (venv and entry.startswith(venv)))
+    return {**kept, "HOME": str(out / "home"), "PATH": f"{stubs}{os.pathsep}{path}",
             "CLAUDE_BESTPRACTICE_NO_AGENTS": "1", "GIT_AUTHOR_NAME": "drill",
             "GIT_AUTHOR_EMAIL": "drill@localhost", "GIT_COMMITTER_NAME": "drill",
             "GIT_COMMITTER_EMAIL": "drill@localhost"}
@@ -188,13 +195,42 @@ def refused_anew(clone: Path, copy: Path, days: float) -> list[str]:
     return said
 
 
+SESSION_ID = re.compile(r'"sessionId"\s*:\s*"([0-9a-f-]{8,})"')
+
+
+def continued(files: list[Path]) -> list[str]:
+    """The chats whose transcript carries lines of another session id than its own: a chat
+    resumed, or forked, under a new id. The plugin knows a session by that id, so such a chat
+    comes back as a stranger to its own card, leases and trees."""
+    own = [path for path in files if "subagents" not in path.parts]
+    mixed = []
+    for path in own:
+        ids = _session_ids(path)
+        others = sorted(((count, ident) for ident, count in ids.items() if ident != path.stem),
+                        reverse=True)
+        if others:
+            mixed.append(f"  {path.stem[:8]} ({ids.get(path.stem, 0)} lines) also carries "
+                         + ", ".join(f"{ident[:8]} ({count})" for count, ident in others[:4]))
+    return [f"{len(mixed)} of {len(own)} transcript(s) carry another session's id",
+            *mixed[:SHOWN]]
+
+
+def _session_ids(path: Path) -> Counter:
+    """How many lines of a transcript each session id is written on."""
+    try:
+        with path.open(encoding="utf-8", errors="replace") as lines:
+            return Counter(found.group(1) for found in map(SESSION_ID.search, lines) if found)
+    except OSError:
+        return Counter()
+
+
 def recorded(copy: Path) -> list[str]:
     """The defects the clone's sessions recorded against the plugin, newest last."""
     found = defects.load(resolve(copy))
     said = [f"{len(found)} on record, {sum(1 for row in found if not row.get('sent_at'))} unsent"]
     for row in found:
         said.append(f"  v{row.get('version', '?')} {row.get('gate', '?')} "
-                    f"x{row.get('count', 1)}: {str(row.get('error', ''))[:260]}")
+                    f"x{row.get('count', 1)}: {str(row.get('error', ''))[:320]}")
     return said
 
 
@@ -230,6 +266,8 @@ def main() -> int:
             (status.stdout + status.stderr).strip().splitlines()[-45:])
     section("defects on record", recorded(copy))
     section("shell lines this version would refuse", refused_anew(clone, copy, args.days))
+    section("chats continued under another session id",
+            continued(spend.transcripts(resolve(clone), args.days)))
     blocked = out / "blocked.log"
     section("programs a hook reached for, blocked",
             blocked.read_text(errors="replace").splitlines()[:20] if blocked.exists() else [])
