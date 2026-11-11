@@ -37,6 +37,9 @@ sessions in parallel, and reads almost none of the resulting code.
   in `migrate._REPAIRS`.
 - **A card before the code.** No file is written until a task on the board says who is
   doing what; the board is how the other sessions decide what is safe to touch.
+- **Written for Claude sessions, and for nobody else.** Code, comments, docs, commit
+  messages and pull requests say what a later session needs in order to act. Nothing is
+  written for a human reader: the founder reads almost none of it.
 
 ## Hard constraints
 - Standard library only. These hooks run on every tool call; a dependency is latency,

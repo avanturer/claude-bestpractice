@@ -1,6 +1,5 @@
 # Decisions
 
-- [0075] A pause ends a turn on the founder's words, or after refusals that held — `decisions/0075-a-pause-ends-a-turn-on-the-founders-words.md`
 - [0076] The founder sees the board beside the chat, and the model is never sent it — `decisions/0076-the-founder-sees-the-board-beside-the-chat.md`
 - [0077] The tree a chat's agent ran in is put away once it is spent — `decisions/0077-an-agents-tree-is-put-away-once-spent.md`
 - [0078] An agent is told the card it works under — `decisions/0078-an-agent-is-told-the-card-it-works-under.md`
@@ -11,4 +10,5 @@
 - [0083] A push that writes the trunk is refused, however the line names it — `decisions/0083-a-push-that-writes-the-trunk-is-refused.md`
 - [0084] Enforcement state named on a shell line is refused unless the line only reads it — `decisions/0084-state-named-on-a-shell-line-is-refused-unless-the-line-only-reads.md`
 - [0085] What sessions spend is measured from their transcripts, and this repository's context has a ceiling — `decisions/0085-what-a-session-spends-is-measured-and-the-context-has-a-ceiling-here.md`
-- ... 72 older, see `decisions/`
+- [0086] A draft named by number in the message a `+merge` answers is named by that word — `decisions/0086-a-draft-named-in-the-message-is-named-by-the-word.md`
+- ... 73 older, see `decisions/`

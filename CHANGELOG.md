@@ -33,6 +33,9 @@ newest is ever read back: a founder's clone held 169.
   writes that setting nowhere else: it is the founder's (decision 0008).
 - The checkpoint hook removes the session's older checkpoints as it writes a new one, and any
   session's left for thirty days.
+- `+merge` names a draft pull request the message it answers named by number, whoever opened
+  it: another chat's release draft, named as waiting for the founder, was refused after their
+  word (#300, decision 0086).
 
 ## v2.13.0
 

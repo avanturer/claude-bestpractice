@@ -2343,20 +2343,26 @@ def prompted(ctx: GitContext, session_id: str, *moments: float) -> None:
         kept = {float(when) for when in chat.get("prompts", [])} | set(moments)
         chat["prompts"] = sorted(kept)[-_PROMPTS_KEPT:]
         oldest = chat["prompts"][0]
-        chat["numbers"] = {key: when for key, when in chat.get("numbers", {}).items()
-                           if when >= oldest}
+        for kept_as in ("numbers", "named"):
+            chat[kept_as] = {key: when for key, when in chat.get(kept_as, {}).items()
+                             if when >= oldest}
     _rewrite_shown(ctx, session_id, note)
 
 
-def shown(ctx: GitContext, session_id: str, numbers: list[int]) -> None:
-    """Note that this chat showed the founder these pull requests, by number, now."""
+def shown(ctx: GitContext, session_id: str, numbers: list[int], named: bool = False) -> None:
+    """Note that this chat showed the founder these pull requests, by number, now.
+
+    `named` for the ones its message to them names. A draft among those is named by the word
+    that answers the message (decision 0086); one only looked at is not (decision 0043).
+    """
     wanted = [number for number in numbers if number > 0]
     if not wanted:
         return
     now = time.time()
 
     def note(chat: dict[str, Any]) -> None:
-        chat.setdefault("numbers", {}).update({str(number): now for number in wanted})
+        for kept_as in ("numbers", "named") if named else ("numbers",):
+            chat.setdefault(kept_as, {}).update({str(number): now for number in wanted})
     _rewrite_shown(ctx, session_id, note)
 
 
@@ -2420,21 +2426,23 @@ def _used_since(ctx: GitContext, session_id: str, said: float) -> list[str]:
 def _shown_before(ctx: GitContext, session_id: str, said: float,
                   still_open: dict[str, dict[str, Any]]) -> set[str]:
     """What this chat showed the founder between their previous message and the word, as the
-    pool names it: a recorded pull request by its entry, and any other by `#<number>`. Not a
-    draft, nor one recorded here as merged or closed: a word naming only what cannot merge
-    would have taken away the one merge it allows."""
+    pool names it: a recorded pull request by its entry, and any other by `#<number>`. Not one
+    recorded here as merged or closed: a word naming only what cannot merge would have taken
+    away the one merge it allows. Not a draft either, unless the message they answered named
+    it: paused work was put to them by number, and their word is about it (decision 0086)."""
     chat = _chat(ctx, session_id)
     if not chat:
         return set()
     # The word's own message is noted after it is heard, so the latest before it is the last one.
     since = max((when for when in chat.get("prompts", []) if when < said), default=0.0)
-    numbers = {int(key) for key, when in chat.get("numbers", {}).items()
-               if since < when <= said and str(key).isdigit()}
+    numbers, named = ({int(key) for key, when in chat.get(kept_as, {}).items()
+                       if since < when <= said and str(key).isdigit()}
+                      for kept_as in ("numbers", "named"))
     by_number = {_as_number(record.get("number")): entry for entry, record in still_open.items()}
     drafts = {_as_number(record.get("number")) for record in still_open.values()
               if record.get("draft")}
     return {by_number.get(number, f"#{number}")
-            for number in numbers - drafts - _settled_numbers(ctx)}
+            for number in (numbers - drafts | named) - _settled_numbers(ctx)}
 
 
 def _settled_numbers(ctx: GitContext) -> set[int]:

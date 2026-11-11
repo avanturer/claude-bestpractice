@@ -922,7 +922,8 @@ def main() -> None:
     if cfg.manage_pull_requests:
         message = event.raw.get("last_assistant_message")
         if isinstance(message, str) and message:
-            pullrequest.shown(ctx, event.session_id, pullrequest.named_in_message(ctx, message))
+            pullrequest.shown(ctx, event.session_id,
+                              pullrequest.named_in_message(ctx, message), named=True)
 
     rec = sessions.get(ctx, event.session_id)
     if rec is None:
