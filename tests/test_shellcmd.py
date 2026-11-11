@@ -539,3 +539,31 @@ class TestWhatAShellRunsFromAString(unittest.TestCase):
                     subprocess.run(["bash", "-c", line], cwd=tmp, capture_output=True, timeout=30,
                                    env={"PATH": f"{tmp}:/usr/bin:/bin", "MARK": str(mark)})
                     self.assertEqual(ran, mark.exists())
+
+
+class TestGhOptionsBeforeItsSubcommand(unittest.TestCase):
+    """`gh` takes `-R/--repo` in front of its subcommand and between its two words."""
+
+    def test_the_subcommand_is_found_past_them(self):
+        for line in ("gh -R acme/shop pr merge 5 --squash", "gh --repo acme/shop pr merge 5",
+                     "gh --repo=acme/shop pr merge 5", "gh pr -R acme/shop merge 5",
+                     "gh -Racme/shop pr merge 5", "gh --hostname ghe.example pr merge 5"):
+            with self.subTest(line=line):
+                found = shellcmd.runs(line, "gh", "pr", "merge")
+                self.assertEqual(1, len(found))
+                self.assertEqual(["gh", "pr", "merge"], found[0][:3])
+                self.assertIn("5", found[0])
+
+    def test_the_option_is_kept_for_whoever_reads_the_repository(self):
+        found = shellcmd.runs("gh -R acme/shop pr merge 5", "gh", "pr", "merge")
+        self.assertEqual(["gh", "pr", "merge", "-R", "acme/shop", "5"], found[0])
+
+    def test_an_api_calls_own_options_stay_where_they_are(self):
+        found = shellcmd.runs("gh api -X PUT repos/o/r/pulls/5/merge", "gh", "api")
+        self.assertEqual(["gh", "api", "-X", "PUT", "repos/o/r/pulls/5/merge"], found[0])
+
+    def test_a_script_printed_into_a_shell_is_run(self):
+        self.assertTrue(shellcmd.hidden("echo 'gh pr merge 5' | bash", "gh", "pr", "merge"))
+        self.assertTrue(shellcmd.hidden("printf 'gh pr merge 5' | sudo sh", "gh", "pr", "merge"))
+        self.assertFalse(shellcmd.hidden("echo 'gh pr merge 5' | tee notes", "gh", "pr", "merge"))
+        self.assertFalse(shellcmd.hidden("echo 'gh pr merge 5'", "gh", "pr", "merge"))

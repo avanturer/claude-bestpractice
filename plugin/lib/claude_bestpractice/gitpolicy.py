@@ -898,6 +898,63 @@ _GLOBAL_WITH_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace",
                       "--exec-path", "--config-env"}
 
 
+def pushes_the_trunk(ctx: GitContext, tree: Path, args: list[str]) -> str:
+    """The trunk a `git push` run in `tree` with these arguments writes, or "" for none.
+
+    The trunk is the default branch and every name a project calls one. The branch the tree
+    stands on is asked of git only when the arguments leave it to decide.
+    """
+    default = default_branch(ctx)
+    trunks = frozenset({*TRUNK_NAMES, default} - {""})
+    named = trunk_pushed(args, "", trunks, default)
+    if named:
+        return named
+    try:
+        proc = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=str(tree),
+                              capture_output=True, encoding="utf-8",
+                              errors="surrogateescape", timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    branch = proc.stdout.strip() if proc.returncode == 0 else ""
+    return trunk_pushed(args, branch, trunks, default) if branch not in ("", "HEAD") else ""
+
+
+# The options of `git push` that take the next word as their value.
+_PUSH_VALUE_FLAGS = {"--repo", "-o", "--push-option", "--receive-pack", "--exec"}
+
+
+def trunk_pushed(args: list[str], branch: str, trunks: frozenset[str],
+                 default: str = "") -> str:
+    """The trunk branch a `git push` with these arguments writes, or "" for none. `default` is
+    the one named for a push of every branch at once.
+
+    `branch` is the one checked out where the push runs, which is what a push with no refspec,
+    or one naming `HEAD`, sends. A refspec is read as git reads it: `+` forces, the name after
+    the colon is the one written, and a name alone is written under itself. A tag, another
+    branch and the deletion of another branch write no trunk.
+    """
+    words: list[str] = []
+    takes_value = False
+    for word in args:
+        if takes_value:
+            takes_value = False
+        elif word in _PUSH_VALUE_FLAGS:
+            takes_value = True
+        elif word in ("--all", "--mirror"):
+            return default or next(iter(sorted(trunks)), "")
+        elif not word.startswith("-"):
+            words.append(word)
+    for refspec in words[1:] or [branch]:
+        source, colon, target = refspec.lstrip("+").partition(":")
+        written = target if colon else source
+        written = branch if written in ("HEAD", "@") else written
+        if written.startswith("refs/heads/"):
+            written = written[len("refs/heads/"):]
+        if written and written in trunks:
+            return written
+    return ""
+
+
 def _subcommand_of(argv: list[str]) -> tuple[str, list[str]]:
     """A git argv split into its subcommand and that subcommand's own arguments."""
     index = 1

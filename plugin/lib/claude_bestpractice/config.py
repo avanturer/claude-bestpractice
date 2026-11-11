@@ -543,8 +543,12 @@ MERGE_POOL = "approve:merge:pool"
 # it (#147). `+` carries no language. The nouns stay because they are already the words
 # spoken in both — «мерж», «релиз», «миграция» are these words.
 #
-# A token of its own: `+merge` and not `+merged`, `a+merge` or `C++merge`.
-_TOKEN = re.compile(r"(?<![\w+])\+(?P<subject>merge|release|deploy|migration)(?![\w-])", re.I)
+# A token of its own: `+merge` and not `+merged`, `a+merge` or `C++merge`. And not the end of
+# a name the session chose: «удали ветку feat/+merge» granted a merge, and so did `PATH=+merge`
+# and a file called `docs/+merge` in a line of this plugin's the founder pasted back. A colon
+# or a full stop in front ends a clause before this is asked, and «итог: +merge» is the word.
+_TOKEN = re.compile(
+    r"(?<![\w+/\\=@#~-])\+(?P<subject>merge|release|deploy|migration)(?![\w-])", re.I)
 
 # What the founder quotes rather than says: code, a quotation, a quoted line, something pasted.
 # This plugin's own messages put every literal in backticks, so one pasted back is code here.

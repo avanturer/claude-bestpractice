@@ -340,5 +340,26 @@ class TestTheStopGateLetsTheFounderIn(RepoCase):
         self.assertEqual("", evidence.unproven(self.ctx()))
 
 
+class TestTheWordIsNotTheEndOfAName(unittest.TestCase):
+    """A branch, a path and an assignment are names the session chooses, and the founder says
+    them without saying the word: «удали ветку feat/+merge» granted a merge."""
+
+    def test_a_name_ending_in_the_word_grants_nothing(self):
+        from claude_bestpractice import config
+
+        for said in ("удали ветку feat/+merge", "PATH=+merge", "docs/+merge is stale",
+                     "branch fix-+merge", "user@+release", "issue #+merge"):
+            with self.subTest(said=said):
+                self.assertEqual({}, config.approvals_in(said))
+
+    def test_the_word_itself_still_does(self):
+        from claude_bestpractice import config
+
+        for said in ("+merge", "да, +merge", "ок (+merge)", "готово,+merge", "+merge +release",
+                     "итог: +merge", "Готово. +merge"):
+            with self.subTest(said=said):
+                self.assertIn(config.APPROVE_MERGE, config.approvals_in(said))
+
+
 if __name__ == "__main__":
     unittest.main()

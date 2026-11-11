@@ -274,6 +274,26 @@ def written_for_a_turn(tool_name: str, tool_input: Any) -> list[str]:
     return granted + [f"`{key} {value}`" for key, value in switches_said(text).items()]
 
 
+def spoken_to_a_session(command: str) -> list[str]:
+    """What a shell line that starts `claude` would hand it as the founder's, as a refusal
+    names it. Empty for a line that runs no `claude`, and for one whose words grant nothing.
+
+    `claude -p '+merge'` is a turn like a scheduled one: the child's UserPromptSubmit carries
+    the parent's session id and nothing that says who typed it, so its prompt was recorded as
+    the founder's word and the parent's next merge went through on it (decision 0072). Read
+    off the words the shell hands each command, the quotes gone, because a prompt arrives in
+    quotes and the founder's reader takes a quoted word as one quoted, not said.
+    """
+    from . import shellcmd
+
+    if not (shellcmd.runs(command, "claude") or shellcmd.hidden(command, "claude")):
+        return []
+    said = "\n".join(word for argv in shellcmd.commands(command) for word in argv[1:]
+                     if not word.startswith("-"))
+    granted = [_NAMED[key] for key in approvals_said(said) if key in _NAMED]
+    return granted + [f"`{key} {value}`" for key, value in switches_said(said).items()]
+
+
 def written_for_a_turn_refusal(tool_name: str, words: list[str]) -> str:
     """Why such a call is refused, and how to send what it meant without granting anything."""
     named = ", ".join(words)

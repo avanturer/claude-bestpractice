@@ -1450,6 +1450,21 @@ def _without_environment(literal: str, segment: str) -> str:
     return "".join(out)
 
 
+def trunk_push(command: str, cwd: Path, ctx) -> str:
+    """The trunk a `git push` on this line writes, or "" when none does: asked of each push
+    in the tree it runs in, as its `cd`s and `-C`s place it."""
+    for _segment, literal, here, _start in _segments_with_cwd(_blanked(command), cwd, command):
+        for argv in _commands_in(literal):
+            pointed, verb, args = gitpolicy.split_git(_launched(argv, "git"))
+            if verb != "push":
+                continue
+            tree = _resolve(here, pointed[-1]) if pointed else here
+            written = gitpolicy.pushes_the_trunk(ctx, tree or here, args)
+            if written:
+                return written
+    return ""
+
+
 def _written(event: hookio.HookEvent, cwd: str) -> list[Path]:
     """The absolute paths this call writes or deletes, as the rules below read them: from
     outside every repository, the first of them in one places the call there.
@@ -1524,6 +1539,14 @@ def main() -> None:
             hookio.deny_tool(founder.written_for_a_turn_refusal(event.tool_name, carried)
                              + REFUSAL_IS_YOURS)
         hookio.emit_silent()
+
+    # And a prompt handed to another `claude` on a shell line is such a turn too: the child's
+    # hook records it under this session's id, and `claude -p '+merge'` was a grant.
+    if event.tool_name == "Bash" and "claude" in str(event.tool_input.get("command", "")):
+        carried = founder.spoken_to_a_session(str(event.tool_input.get("command", "")))
+        if carried:
+            hookio.deny_tool(founder.written_for_a_turn_refusal("shell line's `claude`", carried)
+                             + REFUSAL_IS_YOURS)
 
     rec = sessions.get(ctx, event.session_id)
     if rec is None:
@@ -2235,6 +2258,22 @@ def main() -> None:
                     "  Either one stands the whole plugin down on the next tool call, with no "
                     "restart. Do not work around this by editing the file another way."
                 )
+
+    # A push that writes the trunk delivers work no pull request carried, so no word of the
+    # founder's was asked for it and no merge was judged: `git push origin HEAD:main` went
+    # through beside a gate that refuses `gh pr merge` without `+merge` (decision 0083).
+    if cfg.protect_trunk and event.tool_name == "Bash" and "push" in str(ti.get("command", "")):
+        written = trunk_push(str(ti.get("command", "")), session_cwd, ctx)
+        if written:
+            deny(
+                ctx, rec,
+                f"claude-bestpractice: this pushes straight to `{written}`, the trunk. Work "
+                "reaches the trunk through a pull request the founder has accepted: a push "
+                "there is a merge nobody was asked about and no check was run for.\n"
+                "  Push your own branch and open a pull request for it:\n"
+                "  claude-bp-ship --pr\n"
+                + config.switch_advice("protect_trunk", False)
+            )
 
     # The push gate's own verbs, and whose they are. The hook's bookkeeping records runs the
     # hook watched, and `git push` is what starts it — never a tool call — so a session

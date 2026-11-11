@@ -115,8 +115,16 @@ _MERGE_VALUE_FLAGS = frozenset({"-A", "--author-email", "-b", "--body", "-F", "-
 _MERGE_VALUE_LETTERS = "AbFtR"
 
 # `gh api` merging: the REST endpoint written to with PUT, or the GraphQL mutations.
-_API_MERGE_PATH = re.compile(r"(?:^|/)pulls/\d+/merge/?$")
-_API_MERGE_ENDPOINT = re.compile(r"\bpulls/\d+/merge\b")
+#
+# The number is whatever stands between the slashes: `pulls/$PR/merge` merged, and read for
+# digits it was no merge. `repos/<owner>/<repo>/merges` is the other endpoint that merges, one
+# branch into another with no pull request at all, and `gh api` posts as soon as it is given a
+# field.
+_API_MERGE_PATH = re.compile(r"(?:^|/)pulls/[^/\s]+/merge/?$")
+_API_MERGE_ENDPOINT = re.compile(r"\bpulls/[^/\s\"']+/merge\b")
+_API_BRANCH_MERGE = re.compile(r"(?:^|/)repos/[^/\s]+/[^/\s]+/merges/?$")
+_API_BRANCH_MERGE_ENDPOINT = re.compile(r"\brepos/[^/\s\"']+/[^/\s\"']+/merges\b")
+_API_FIELDS = frozenset({"-f", "-F", "--field", "--raw-field", "--input"})
 _API_MERGE_MUTATION = re.compile(r"\b(?:mergePullRequest|enablePullRequestAutoMerge)\b")
 
 
@@ -1607,7 +1615,8 @@ def _api_merge_written(command: str) -> bool:
     """Does this line call `gh api` and write a merge for it anywhere: a mutation that merges, or
     a pull request's merge endpoint? Asked where the call itself cannot be read."""
     return bool(re.search(r"\bgh\s+api\b", command)) and bool(
-        _API_MERGE_MUTATION.search(command) or _API_MERGE_ENDPOINT.search(command))
+        _API_MERGE_MUTATION.search(command) or _API_MERGE_ENDPOINT.search(command)
+        or _API_BRANCH_MERGE_ENDPOINT.search(command))
 
 
 def _api_merges(argv: list[str]) -> bool:
@@ -1615,10 +1624,18 @@ def _api_merges(argv: list[str]) -> bool:
     whether one was merged, and a mutation is looked for in the whole line, where a document
     or a substitution holds it as often as a word does."""
     words = argv[2:]
-    put = any(word.upper() in ("-XPUT", "-X=PUT", "--METHOD=PUT") or
-              (word in ("-X", "--method") and nxt.upper() == "PUT")
-              for word, nxt in zip(words, [*words[1:], ""]))
-    return put and any(_API_MERGE_PATH.search(word) for word in words)
+
+    def sent_as(method: str) -> bool:
+        return any(word.upper() in (f"-X{method}", f"-X={method}", f"--METHOD={method}") or
+                   (word in ("-X", "--method") and nxt.upper() == method)
+                   for word, nxt in zip(words, [*words[1:], ""]))
+
+    if sent_as("PUT") and any(_API_MERGE_PATH.search(word) for word in words):
+        return True
+    posts = sent_as("POST") or any(
+        word in _API_FIELDS or word.startswith(("--field=", "--raw-field=", "--input="))
+        or (len(word) > 2 and word[:2] in ("-f", "-F")) for word in words)
+    return posts and any(_API_BRANCH_MERGE.search(word) for word in words)
 
 
 _UNREADABLE_MERGE = (
