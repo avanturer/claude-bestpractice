@@ -1,6 +1,5 @@
 # Decisions
 
-- [0080] How often each of this plugin's skills is read is counted, and a skill nobody reads shows it — `decisions/0080-a-skill-nobody-reads-is-counted-as-read-none.md`
 - [0081] A stage the ratchet holds is not probed on every tool call for what cannot move it — `decisions/0081-a-held-stage-is-not-probed-for-what-cannot-move-it.md`
 - [0082] A pause keeps the agents it stops, and its card says which to resume — `decisions/0082-a-pause-keeps-the-agents-it-stops.md`
 - [0083] A push that writes the trunk is refused, however the line names it — `decisions/0083-a-push-that-writes-the-trunk-is-refused.md`
@@ -11,4 +10,5 @@
 - [0088] A closed card reopens as itself, and every state a card stands in has a way on — `decisions/0088-a-closed-card-reopens-as-itself.md`
 - [0089] A merge is judged on the commit it takes, and what the session clears is not put to the founder — `decisions/0089-a-merge-is-judged-on-the-commit-it-takes.md`
 - [0090] A session goes back into its tree without the founder being asked, wherever the tree was made — `decisions/0090-a-tree-is-entered-without-asking.md`
-- ... 77 older, see `decisions/`
+- [0091] A resumed chat's tree is its own, and a removal ends no process a session started — `decisions/0091-a-resumed-chats-tree-is-its-own-and-its-commands-keep-it.md`
+- ... 78 older, see `decisions/`

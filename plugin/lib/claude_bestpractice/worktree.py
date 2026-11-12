@@ -982,8 +982,47 @@ def sweep_named(ctx: GitContext) -> tuple[list[str], list[str], list[tuple[str, 
     return removed, kept, left
 
 
+def _stays_put(main: Path, tree: Path, notes: list[str] | None) -> bool:
+    """Is `tree` one `_release` leaves where it is before asking git: the main checkout, or a
+    tree a session's process still runs in?"""
+    return tree == main.resolve() or _a_session_still_works_in(tree, notes)
+
+
+def _a_session_still_works_in(tree: Path, notes: list[str] | None) -> bool:
+    """Does a process a Claude Code session started still run in `tree`? Said in `notes` when
+    it does: that keeps the tree, as that process is the session's to end (#310)."""
+    working = sessions_work_in(tree)
+    if working and notes is not None:
+        notes.append(f"kept: {_named_processes(working)} a Claude Code session started still "
+                     "run(s) in it")
+    return bool(working)
+
+
+def still_working(tree: Path, working: dict[int, tuple[str, str]], harness: str) -> str:
+    """Why `tree` is not removed while processes a session started run in it, and what ends
+    this chat's: `harness` is the id of the chat asking."""
+    mine = sorted(pid for pid, (_name, session) in working.items() if session == harness)
+    said = (f"claude-bestpractice: {tree} is not removed: {_named_processes(working)} still "
+            "run(s) in it, started by a Claude Code session"
+            + (", this chat" if len(mine) == len(working) else "") + ". This plugin ends no "
+            "process a session started, and the removal goes through once they have ended.")
+    if mine:
+        said += ("\n  Ending this chat's now, if they are done with:\n"
+                 f"  kill {' '.join(str(pid) for pid in mine)}")
+    return said
+
+
+def _named_processes(working: dict[int, tuple[str, str]]) -> str:
+    """`ssh` (pid 4242), `bash` (pid 4240): what runs, as a person reads it."""
+    named = ", ".join(f"`{name}` (pid {pid})" for pid, (name, _session) in sorted(working.items())[:6])
+    return named + (f" (+{len(working) - 6} more)" if len(working) > 6 else "")
+
+
 def _why_it_stays(ctx: GitContext, tree: Path, branch: str, said: str) -> str:
     """Why the sweep leaves a tree the board names, by what is in it; "" for one it removes."""
+    working = sessions_work_in(tree)
+    if working:
+        return f"{_named_processes(working)}, started by a Claude Code session, still run(s) in it"
     if said == IGNORED:
         lost = lost_with(ctx, tree) or []
         more = f" (+{len(lost) - 3} more)" if len(lost) > 3 else ""
@@ -1325,7 +1364,8 @@ def _release(ctx: GitContext, tree: tuple, record_path: Path, notes: list[str] |
              force: bool = False, kept: list[str] | None = None) -> bool:
     """Hand a tree back to git, and its branch, its database and its siblings with it.
 
-    False if git refused the removal. `notes` collects what went besides the tree, for the
+    False if git refused the removal, or a process a session started still runs in the tree.
+    `notes` collects what went besides the tree, for the
     one line the founder reads — the removal used to end at the directory, and everything
     it had created around that directory stayed (#224). `kept` collects the tree's branch
     when it stayed, because its work is not in the trunk: a caller that reports the branch
@@ -1340,7 +1380,7 @@ def _release(ctx: GitContext, tree: tuple, record_path: Path, notes: list[str] |
     path, branch = tree
     where = main_checkout(ctx)
     standing = Path(path).resolve()
-    if standing == where.resolve():
+    if _stays_put(where, standing, notes):
         return False
     ours = _database_of_ours(ctx, Path(path))
     # `--force` is never this plugin's idea: it is passed only where the session typed it
@@ -1382,10 +1422,12 @@ def stop_what_ran_in(tree: Path) -> list[str]:
     A dev server started in a tree outlives `git worktree remove`: Metro, expo and uvicorn
     went on holding the tree's port and its database, serving code no longer on disk, until
     somebody went looking. This user's only, only those whose directory was in the tree, and
-    never this process, its parents or a Claude Code session. Where processes cannot be read
-    that way, macOS and Windows among them, nothing is stopped.
+    never this process, its parents, a Claude Code session or anything a session started: a
+    command one ran keeps the tree instead (`sessions_work_in`), and its MCP server is as much
+    the session as the CLI is. Where processes cannot be read that way, macOS and Windows
+    among them, nothing is stopped.
     """
-    found = _running_in(tree)
+    found = {pid: name for pid, name in _running_in(tree).items() if not _part_of_a_session(pid)}
     _signal(found, signal.SIGTERM)
     deadline = time.monotonic() + STOP_GRACE_SECONDS
     while time.monotonic() < deadline and any(_alive(pid) for pid in found):
@@ -1414,6 +1456,58 @@ def _running_in(tree: Path) -> dict[int, str]:
             continue
         if Path(where).is_relative_to(tree) and not _a_claude_session(argv):
             found[int(entry.name)] = name
+    return found
+
+
+# What Claude Code puts in the environment of what it starts, by its env-vars reference: the
+# session's id on its tools' commands, its hooks and its stdio MCP servers, and the child flag
+# on the first two only. `CLAUDECODE=1` says nothing here: an IDE sets it in its own terminals,
+# where the founder's servers run.
+_SESSION_ENV = b"CLAUDE_CODE_SESSION_ID="
+_CHILD_FLAG = b"CLAUDE_CODE_CHILD_SESSION=1"
+
+
+def _environment(pid: int) -> list[bytes]:
+    """A process's environment as it was started; empty where it cannot be read."""
+    try:
+        return Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+    except OSError:
+        return []
+
+
+def _harness_in(environ: list[bytes]) -> str:
+    """The session id an environment carries, "" for none."""
+    for entry in environ:
+        if entry.startswith(_SESSION_ENV):
+            return os.fsdecode(entry[len(_SESSION_ENV):])
+    return ""
+
+
+def _session_of(pid: int) -> str:
+    """The harness id of the Claude Code session whose tool or hook ran this process, "-" where
+    that session gave none; "" for anything else, a session's MCP server among them."""
+    environ = _environment(pid)
+    return (_harness_in(environ) or "-") if _CHILD_FLAG in environ else ""
+
+
+def _part_of_a_session(pid: int) -> bool:
+    """Did a Claude Code session start this process: a command, a hook or its MCP server?"""
+    environ = _environment(pid)
+    return _CHILD_FLAG in environ or bool(_harness_in(environ))
+
+
+def sessions_work_in(tree: Path) -> dict[int, tuple[str, str]]:
+    """The processes in `tree` a Claude Code session started: pid -> (name, its harness id).
+
+    A session's background command is its own: a removal ended three of them, `ssh` waits on
+    a remote job among them, with exit code 144 and nothing said before (#310). So the plugin
+    stops none of them, and a tree they run in stays until they end.
+    """
+    found: dict[int, tuple[str, str]] = {}
+    for pid, name in _running_in(tree.resolve()).items():
+        session = _session_of(pid)
+        if session:
+            found[pid] = (name, session)
     return found
 
 

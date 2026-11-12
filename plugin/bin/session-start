@@ -56,7 +56,10 @@ def build_record(ctx: GitContext, event: hookio.HookEvent) -> sessions.SessionRe
     # make the diff since "start of work" wrong. The process is re-stamped, never merged:
     # this is what upgrades a record written by a version that recorded the hook's shell
     # wrapper and called it the session's owner.
-    existing = sessions.restarted(ctx, event.session_id, pid, pid_trust, ctx.branch)
+    # A resume says the chat came back in this process: whatever another process of it wrote
+    # before now is its past (`sessions._resumed_past`, #310).
+    resumed = str(event.raw.get("source") or "") == "resume"
+    existing = sessions.restarted(ctx, event.session_id, pid, pid_trust, ctx.branch, resumed)
     if existing:
         return existing
 
@@ -78,6 +81,7 @@ def build_record(ctx: GitContext, event: hookio.HookEvent) -> sessions.SessionRe
         heartbeat_at=now,
         model=str(event.raw.get("model") or ""),
         effort=str((event.raw.get("effort") or {}).get("level", "") if isinstance(event.raw.get("effort"), dict) else ""),
+        resumed_at=now if resumed else 0.0,
     )
     sessions.register(ctx, fresh)
     return fresh
