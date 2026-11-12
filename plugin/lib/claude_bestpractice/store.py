@@ -249,6 +249,21 @@ def ensure_dir(path: Path) -> Path:
     return path
 
 
+def files_under(root: Path, skip: frozenset[str] | set[str] = frozenset()) -> Iterator[Path]:
+    """Every file under `root`, from a walk that never enters a directory `skip` names and goes
+    on past one that is gone by the time it gets there. Names only: a caller that reads one asks
+    whether it is a file still.
+
+    On Python 3.10 `rglob` raised FileNotFoundError for a directory removed while it walked, a
+    sibling's tree or a reinstall: the session start that ran it ended there, three times on the
+    founder's machine on 2.7.1, and its board was never built (#340). `os.walk` passes such a
+    directory by, and one it cannot read. A walk left on `rglob` answers for its own `OSError`.
+    """
+    for where, dirs, files in os.walk(root):
+        dirs[:] = [name for name in dirs if name not in skip]
+        yield from (Path(where) / name for name in files)
+
+
 def atomic_write(path: Path, data: str | bytes, mode: int = 0o600,
                  follow_symlink: bool = False) -> None:
     """Write via temp-in-same-dir, fsync, rename. Text is written as UTF-8, bytes as they are.

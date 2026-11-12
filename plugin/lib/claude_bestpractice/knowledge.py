@@ -156,16 +156,12 @@ def existing_rules(ctx: GitContext) -> list[Path]:
     rules = root / RULES_DIR
     if not rules.is_dir():
         return found
-    try:
-        # Every level down, as Claude Code finds them; the decisions are this plugin's.
-        listed = sorted(p for p in rules.rglob("*.md") if p.name not in _OURS
-                        and Path(DECISIONS_DIR).name not in p.relative_to(rules).parts[:-1])
-    except OSError:
-        # An unreadable rules directory is not an empty one, and the caller's next move
-        # differs: `CLAUDE.md` alone is still a layer, and claiming none is here is the
-        # defect being fixed. Report what was readable.
-        return found
-    found.extend(listed)
+    # Every level down, as Claude Code finds them; the decisions are this plugin's. A directory
+    # that cannot be read, or is gone mid-walk (#340), is passed by: an unreadable rules
+    # directory is not an empty one, and `CLAUDE.md` alone is still a layer, so what was
+    # readable is reported.
+    found.extend(sorted(p for p in store.files_under(rules, {Path(DECISIONS_DIR).name})
+                        if p.name.endswith(".md") and p.name not in _OURS))
     return found
 
 
@@ -358,7 +354,8 @@ def anchor_resolves(ctx: GitContext, code: str) -> bool:
     # — was false for exactly the renames people actually perform.
     word = re.compile(rf"\b{re.escape(identifier)}\b")
     if target.is_dir():
-        return any(word.search(_read(p)) for p in target.rglob("*") if p.is_file())
+        # Past a directory gone mid-walk, which `rglob` raised for on Python 3.10 (#340).
+        return any(word.search(_read(p)) for p in store.files_under(target) if p.is_file())
     return bool(word.search(_read(target)))
 
 

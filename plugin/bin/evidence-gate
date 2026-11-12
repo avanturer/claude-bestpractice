@@ -51,10 +51,11 @@ LET_GO_AT = "_let_go_at"
 # a package — has to be able to come back green without anything in the tree changing.
 LET_GO_SECONDS = 3600.0
 
-# When this gate last let one of this session's turns end, however it ended. A card closed
-# after it was closed in the turn being judged, and that turn is a finish whatever else it
-# paused (#264).
-SETTLED_AT = "_settled_at"
+# When this gate last let one of this session's turns end, however it ended, with none of its
+# agents at work. A card closed after it was closed in the turn being judged, and that turn is
+# a finish whatever else it paused (#264). A merge reads it as the moment before which every
+# agent of the chat had reported back (#318).
+SETTLED_AT = sessions.SETTLED_AT
 # The pause this gate took after refusals, as `<card>@<the second it was set down>`.
 PAUSE_TAKEN = "_pause_taken"
 # The pause this gate refused once over agents of the session still at work, kept the same way.
@@ -537,10 +538,14 @@ def _card_commands(ctx, event, paths: list[str]) -> str:
     The card the founder's message already opened for this session, when there is one.
     Sent to `add` instead, every session filed a duplicate of it and left the original
     sitting in NEXT over finished work — a card inviting the next session to do the same
-    job again.
+    job again. And before either, the card this chat holds under another id that `claim`
+    would hand over, as `pre-tool` names it (`plan.to_take_back`, #320).
     """
     from claude_bestpractice import plan
 
+    held = plan.taking_it_back(ctx, event.session_id, paths)
+    if held:
+        return held
     named = shlex.quote(",".join(paths))
     opened = plan.opened_for(ctx, str(event.raw.get("session_id") or ""))
     if opened is not None:
@@ -925,11 +930,11 @@ def main() -> None:
             pullrequest.shown(ctx, event.session_id,
                               pullrequest.named_in_message(ctx, message), named=True)
 
-    rec = sessions.get(ctx, event.session_id)
-    if rec is None:
-        # Re-register rather than allow. A missing record used to mean "finish freely",
-        # which made the whole evidence requirement removable with `rm`.
-        rec = sessions.adopt(ctx, event.session_id)
+    # Re-registered rather than allowed when missing: a missing record used to mean "finish
+    # freely", which made the whole evidence requirement removable with `rm`. And stamped
+    # with this CLI where the record is the chat's past, before this turn is written to it
+    # as the old process's (`sessions.own_record`, #312).
+    rec = sessions.own_record(ctx, event.session_id)
 
     # Read and cleared here, at the top, so it can only ever be about THIS turn.
     pending_refusal = _take_refusal(ctx, rec)

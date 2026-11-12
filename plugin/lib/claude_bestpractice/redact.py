@@ -33,11 +33,15 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     # Assignment forms catch the long tail: FOO_TOKEN=..., "password": "..."
     # The optional quote before the separator matters: JSON keys are quoted, so
     # `"api_key": "..."` has a `"` between the name and the colon.
+    # A backtick is a quote at either end of the value. Markdown sets code in backticks, and a
+    # note quoting `self.out_of_tokens = out_of_tokens` read the closing one as the value's
+    # last character, so the name handed on no longer equalled itself (#336). Opening the
+    # value it is a template literal's quote, and `` token = `…` `` stays a literal.
     (
         "assigned-secret",
         re.compile(
             r"(?i)\b(?P<name>[A-Z0-9_]*(?:SECRET|PASSWORD|PASSWD|TOKEN|APIKEY|API_KEY|PRIVATE_KEY|CREDENTIAL)[A-Z0-9_]*)"
-            r"[\"']?\s*[:=]\s*(?P<quote>[\"']?)(?P<value>[^\s\"',;]{8,})"
+            r"[\"']?\s*[:=]\s*(?P<quote>[\"'`]?)(?P<value>[^\s\"'`,;]{8,})"
         ),
     ),
     # Connection strings leak credentials in the authority component. The scheme starts only
@@ -169,8 +173,10 @@ def _is_prose(value: str) -> bool:
 # `X-Csrf-Token` or `x-csrf-token`, one of them a word headers are made of. A lowercase one
 # starts `x-`: `"test-key"` is a test's literal, and stays one. `CSRF_TOKEN =
 # "X-Csrf-Token"` names where a token travels and is no token; refused as a credential, the
-# file could not be written (recorded on a founder's clone under 2.12.0).
-_HEADER_NAME = re.compile(r"^(?:[A-Z][A-Za-z]*(?:-[A-Z][A-Za-z]*)+|x(?:-[a-z]+)+)$")
+# file could not be written (recorded on a founder's clone under 2.12.0). `Authorization` is
+# the one such name of a single word long enough to be read: `_MAIN_TOKEN = "Authorization"`.
+_HEADER_NAME = re.compile(
+    r"^(?:[A-Z][A-Za-z]*(?:-[A-Z][A-Za-z]*)+|x(?:-[a-z]+)+|[Aa]uthorization)$")
 _HEADER_WORDS = frozenset({
     "x", "token", "key", "csrf", "xsrf", "auth", "authorization", "api", "signature",
     "session", "id", "request", "idempotency", "device", "client", "access", "refresh",
@@ -275,12 +281,81 @@ def _is_code(match: "re.Match") -> bool:
     value, text = match.group("value"), match.string
     between = text[match.end("name"):match.start("value")]
     if ":" not in between:
+        if _is_assigned_name(match, between):
+            return True
         shape, after = _IDENTIFIER, _OPERAND
     elif between[:1] in "\"'" and text[match.start("name") - 1:match.start("name")] == between[:1]:
         shape, after = _CODE_NAME, _ITEM_ENDS
+    elif _is_message_text(match):
+        return True
     else:
         shape, after = _TYPE_NAME, _TYPED
     return bool(shape.match(value) and after.match(text, match.end("value")))
+
+
+# A name assigned in code is no literal, read by its spelling and by where code puts it. Each was
+# refused in fuddy and renamed to be written, then named again by the reviewer on the merge:
+# - a constant, words in capitals joined by `_`, in any form: `api_key=NO_NETWORK,`, one
+#   argument per line in a test's offline client (#348). And `undefined`: every other
+#   language's empty value is shorter than the eight characters this rule reads;
+# - a name of words with no digit, snake or camel, where code assigns one: a space before the
+#   `=`, as every formatter writes it (`session_token = new_token`), or a comma after it under
+#   a key in lower case, an argument (`api_key=fake_key,`). A `.env` file, a shell, compose and
+#   a properties file write `KEY=value` with nothing between, and what they set stays a literal;
+# - any name a member of the object is assigned, `self._out_of_tokens = out_of_tokens` (#337):
+#   no `.env`, shell or YAML key is spelled `self.`, `this.` or `cls.`.
+# A sentence in a note that ends on the name ends it with a period, which is not part of it.
+#
+# Residual cost, stated: a passphrase spelled as such a name is missed where code would spell
+# it — `password = correct_horse_battery` in an INI file, `db_password=correct_horse_battery,`
+# in a line of prose, `DB_PASSWORD=CORRECT_HORSE_BATTERY` anywhere. The same passphrase in a
+# `.env`, a shell line or a compose file (`DB_PASSWORD=correct_horse_battery`) is still caught,
+# and so is any value carrying a digit, which is what a generated secret carries.
+_CONSTANT = re.compile(r"^_*[A-Z]+(?:_[A-Z]+)+\.?$")
+_WORDS = re.compile(r"^_*[a-z]+(?:_[a-z]+|[A-Z][a-z]+)+\.?$")
+_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\.?$")
+_MEMBER = re.compile(r"(?:.*\W)?(?:self|this|cls)\.")
+
+
+def _is_constant(value: str) -> bool:
+    return bool(_CONSTANT.match(value)) or value == "undefined"
+
+
+def _is_assigned_name(match: "re.Match", between: str) -> bool:
+    """The `=` form's names: anything a member is assigned, and a name of words where code
+    puts it (the rules above)."""
+    value, text, start = match.group("value"), match.string, match.start("name")
+    if not _NAME.match(value):
+        return False
+    if _MEMBER.fullmatch(text, max(0, start - 6), start):
+        return True
+    spaced = between[:1].isspace()
+    argument = not match.group("name").isupper() and text.startswith(",", match.end("value"))
+    return bool(_WORDS.match(value) and (spaced or argument))
+
+
+# A word of a message, after a label inside a string the line opened: `print("password:
+# incorrect")`, `ValueError("token: malformed")`, `f"tokens: unlimited {n}"`. #354 was refused
+# for a print of per-turn token counts; its line is redacted, and every way of writing it that
+# could be rebuilt already passes, so these are its neighbours. The string must go on in words
+# or close right after the word, with the quote that opened it, on the same line: a YAML value
+# has no quote open before its key, and a sentence in a note none that closes after it.
+#
+# Residual cost, stated: a lowercase word set after a label inside a string that closes on it,
+# `"token: abcdefghij"`, is read as the message it nearly always is.
+_OPENED = re.compile(r"([\"'`])[^\"'`\n]*\Z")
+_MESSAGE_WORD = re.compile(r"^[a-z]+[.!?]?$")
+_CLOSES = {quote: re.compile(rf"(?:[ \t]+[a-z{{][^\n]{{0,200}})?{quote}")
+           for quote in "\"'`"}
+
+
+def _is_message_text(match: "re.Match") -> bool:
+    """The colon form's value under a label it does not quote (`_is_code`), read as above."""
+    text, start = match.string, match.start("name")
+    opened = _OPENED.search(text, max(0, start - 200), start)
+    if not opened or not _MESSAGE_WORD.match(match.group("value")):
+        return False
+    return bool(_CLOSES[opened.group(1)].match(text, match.end("value")))
 
 
 # A JavaScript regular expression, `definitiveTokens: /paraben/i,` in fuddy's dietary matcher.
@@ -340,7 +415,7 @@ def _is_not_a_secret(match: "re.Match") -> bool:
 # Quoted or bare. A bare value is also code in the shapes after these; a quoted one is a literal.
 _NEVER_A_CREDENTIAL = (_is_indirection, _is_measurement, _is_address, _is_elided, _is_path,
                        _is_prose, _is_header_name)
-_CODE_WHEN_BARE = (_is_reference, _is_expression, _is_coordinate, _is_regex_literal)
+_CODE_WHEN_BARE = (_is_reference, _is_expression, _is_coordinate, _is_regex_literal, _is_constant)
 
 
 def scrub(text: str) -> str:

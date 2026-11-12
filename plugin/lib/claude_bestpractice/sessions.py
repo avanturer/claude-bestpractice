@@ -35,7 +35,7 @@ import re
 import shutil
 import subprocess
 import time
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -128,6 +128,11 @@ class SessionRecord:
     # because the cost being bounded is the fan-out — five agents at once — and not the
     # fifth question of a long conversation. `prompt-capture` puts it back to zero.
     spawns_this_turn: int = 0
+    # The calls those spawns were, by the id the harness gave each (`tool_use_id`), so that one
+    # that came back an error is given back: three spawns of an agent type nobody had defined
+    # started nothing, and refused the next three that would have (#316). A spawn whose event
+    # named no id stays counted, as every spawn was before.
+    spawn_calls: list[str] = field(default_factory=list)
     # The name Claude Code gives this session, which `SendMessage` takes as its address —
     # `fuddy-8b`, where everything here said `80672d34` and the only way to tell which chat
     # to write to was reading `~/.claude/sessions/` by hand (#253). As `running` last
@@ -600,11 +605,24 @@ def restamped(ctx: GitContext, rec: SessionRecord) -> SessionRecord:
     Only a stale stamp is replaced. A record whose own process still runs is that process's
     — a `claude -p` this chat started carries the same id — and taking it over would hand
     the record back and forth on every call.
+
+    Unless that process is the chat's past (`_resumed_past`), judged as the record stood
+    before this call wrote to it: the chat has resumed in another process since, so the
+    hook running for this id is not the old CLI's. Left with the old pid, this call's own
+    write made the record "written after the resume", live again: a chat that resumed in
+    the main checkout and went back into its tree with `EnterWorktree` was refused the
+    removal of that tree, the merge in it and its own card, all as "another process of this
+    chat" (#312, #319), and its agent's write in the agent's tree under the card it was
+    handed (#320, #321). Stamped with the CLI that is writing, the record is the chat's
+    again wherever this process acts. The old CLI writing for itself still finds its own pid
+    here and changes nothing: that is the process writing again, and live again (decision
+    0091).
     """
     pid, trust = resolve_owner()
     if trust != PID_TRUST_OWNER or (pid == rec.pid and rec.boot_id == current_boot()):
         return rec
-    if rec.boot_id == current_boot() and not _pid_says_dead(rec):
+    if (rec.boot_id == current_boot() and not _pid_says_dead(rec)
+            and not _resumed_past(rec, load_all(ctx))):
         return rec
 
     def stamp(record: SessionRecord) -> None:
@@ -612,6 +630,50 @@ def restamped(ctx: GitContext, rec: SessionRecord) -> SessionRecord:
         _stamp(record)
 
     return _rewrite(ctx, rec.session_id, stamp) or rec
+
+
+def taken_back_from_the_past(ctx: GitContext) -> int:
+    """Stamp a chat's resumed CLI onto each record an older version left naming the CLI before
+    the resume, though the resumed chat wrote it since. Returns how many.
+
+    Until `restamped` took a record of the chat's past over, the resumed chat's calls in a tree
+    it went back into wrote the old CLI's record as that CLI's, and it stood live, another
+    process of the chat, for as long as the old CLI ran (#312). Such a record predates the
+    resume and was written after it, by a process this version cannot name: the resumed chat,
+    by every account of the case, since a CLI left with nobody in it writes nothing.
+    """
+    records = load_all(ctx)
+    moved = 0
+    for rec in records:
+        harness = hookio.harness_of(rec.session_id, rec.worktree)
+        before = replace(rec, heartbeat_at=rec.started_at)
+        now = [other for other in records if harness and other.resumed_at <= rec.heartbeat_at
+               and _resumed_since(before, other, harness) and not _related(rec.pid, other.pid)]
+        if not now:
+            continue
+        chat = max(now, key=lambda other: other.resumed_at)
+
+        def stamp(record: SessionRecord, chat: SessionRecord = chat) -> None:
+            record.pid, record.pid_trust, record.pid_fingerprint = chat.pid, chat.pid_trust, \
+                chat.pid_fingerprint
+            record.pid_identity, record.boot_id = chat.pid_identity, chat.boot_id
+
+        moved += _rewrite(ctx, rec.session_id, stamp) is not None
+    return moved
+
+
+def own_record(ctx: GitContext, session_id: str) -> SessionRecord:
+    """The record of the session whose hook is running, as that hook is about to write it:
+    registered where it has none (`adopt`), stamped with this CLI where its stamp is stale or
+    the chat's past (`restamped`).
+
+    One door for every hook that writes the session's own record. Only `pre-tool` stamped, so
+    the founder's next message, heard in a tree the resumed chat had gone back into, wrote
+    the old CLI's record as if that CLI had written again, and the tree was another process's
+    from then on (#312).
+    """
+    rec = get(ctx, session_id)
+    return adopt(ctx, session_id) if rec is None else restamped(ctx, rec)
 
 
 def branch_point(ctx: GitContext) -> str:
@@ -813,6 +875,45 @@ def count(ctx: GitContext, session_id: str, counter: str, ceiling: int = 0,
     return before[0] if before else 0
 
 
+def spawn(ctx: GitContext, session_id: str, call: str, ceiling: int,
+          never_started: set[str] | frozenset[str] = frozenset()) -> int:
+    """Count one subagent spawn of this turn, and return how many had started before it.
+
+    `count` for `spawns_this_turn`, in the same one locked step and for the reason it gives,
+    with the turn's spawns that `never_started` names given back first: their call came back
+    an error, so no agent ran (#316). `call` is kept beside the count to be given back too.
+    """
+    before: list[int] = []
+
+    def add_one(rec: SessionRecord) -> None:
+        kept = [made for made in rec.spawn_calls if made not in never_started]
+        started = max(int(rec.spawns_this_turn or 0) - (len(rec.spawn_calls) - len(kept)), 0)
+        before.append(started)
+        if ceiling <= 0 or started < ceiling:
+            started += 1
+            kept += [call] if call else []
+        rec.spawns_this_turn, rec.spawn_calls = started, kept
+
+    _rewrite(ctx, session_id, add_one)
+    return before[0] if before else 0
+
+
+# When the Stop gate last let a turn of this session end with none of its agents at work, in
+# `tool_signatures`: every agent the chat had sent off before then had reported back.
+SETTLED_AT = "_settled_at"
+
+
+def settled_at(ctx: GitContext, session_id: str) -> float:
+    """`SETTLED_AT` for this chat, under any id it has had; 0.0 where no turn of it has."""
+    latest = 0.0
+    for identity in identities(ctx, session_id):
+        rec = get(ctx, identity)
+        value = rec.tool_signatures.get(SETTLED_AT) if rec is not None else None
+        if isinstance(value, (int, float)):
+            latest = max(latest, float(value))
+    return latest
+
+
 def unregister(ctx: GitContext, session_id: str) -> None:
     _record_path(ctx, session_id).unlink(missing_ok=True)
     release_all(ctx, session_id)
@@ -923,35 +1024,37 @@ def _still_running(ctx: GitContext, rec: SessionRecord, known: set[str],
     return is_live(ctx, rec, known, records) and not superseded(rec, live or {})
 
 
-def my_pid(ctx: GitContext, session_id: str) -> int:
-    """The process this session is running as, according to its own record.
-
-    Read from the registry rather than re-resolved, because that is the value every other
-    record is compared against and the two must be the same number. Zero when the session
-    is unknown or its pid was never resolved to the CLI itself — an unresolved pid is some
-    ancestor that real siblings genuinely share, and treating that as "me" would hide the
-    sibling this registry exists to surface.
-    """
-    record = get(ctx, session_id) if session_id else None
-    if record is None or record.pid_trust != PID_TRUST_OWNER or record.pid <= 0:
-        return 0
-    return record.pid
-
-
 def _process_of(record: SessionRecord) -> tuple[str, int, str] | None:
     """(harness id, CLI pid, its start time): what makes two records one running session.
 
     None where any half is unknown — an id that was not composed here, an anonymous one, or
-    a pid never resolved to the CLI itself, which `my_pid` refuses for the same reason.
+    a pid never resolved to the CLI itself (`_cli_of`).
     """
     harness = hookio.harness_of(record.session_id, record.worktree)
-    if not harness or record.pid_trust != PID_TRUST_OWNER or record.pid <= 0:
+    cli = _cli_of(record)
+    return (harness, *cli) if harness and cli else None
+
+
+def _cli_of(record: SessionRecord) -> tuple[int, str] | None:
+    """(CLI pid, its start time): the running CLI a record names, whichever conversation it
+    was written for. None where the pid was never resolved to the CLI itself: an unresolved
+    pid is some ancestor that real siblings genuinely share, and taking it for this session
+    would hide the sibling this registry exists to surface.
+    """
+    if record.pid_trust != PID_TRUST_OWNER or record.pid <= 0:
         return None
-    return harness, record.pid, record.pid_fingerprint
+    return record.pid, record.pid_fingerprint
 
 
-def identities(ctx: GitContext, session_id: str) -> set[str]:
+def identities(ctx: GitContext, session_id: str, proven: bool = False,
+               its_past: bool = False) -> set[str]:
     """Every id this ONE session is registered under: its own, and the ones it left behind.
+
+    The one answer to "is that record, that card, that lease, that tree this session's?"
+    Its readers answered it three ways — the tree gate by the pid alone, the staging gate and
+    the ledger by the chat and the process, the stamp by liveness — and a chat that resumed,
+    or cleared, was refused its own tree, its card and its own files, each as another
+    process's (#312, #361).
 
     Identity is (harness id, worktree), and Claude Code reports the tree as a hook's working
     directory from the first call after `cd` or `EnterWorktree` into it (measured on
@@ -968,20 +1071,31 @@ def identities(ctx: GitContext, session_id: str) -> set[str]:
     to match too, start time included, or a recycled pid would be taken for this session.
     Subagents share both halves: they are this session's own hands, and count as it.
 
+    `its_past` adds what this CLI left under another conversation id. `/clear` or `/resume`
+    inside one CLI moves it to a new id, and the record the conversation before left in a tree
+    names this very process (`superseded`): never a sibling, so nothing it named or holds is
+    in the way of what this session does there. `git add -A` was refused over the files it had
+    named, while the gate asking whose tree it was read the pid alone (#361). Its cards are
+    not this conversation's: decision 0028 hands them back to the board.
+
     Where the process cannot be named — every pid on a machine with no /proc, macOS and
     Windows among them — the tree registry answers instead (`_through_a_tree`), and it
-    never overrules two pids that were both resolved.
+    never overrules two pids that were both resolved. It answers for what the session holds,
+    never for whose tree it is: `proven` leaves it out, for the gate that lets a write, a
+    reset or a forced removal into a tree on the answer (decision 0032).
     """
     me = get(ctx, session_id) if session_id else None
-    harness = hookio.harness_of(me.session_id, me.worktree) if me is not None else ""
-    if not harness:
+    if me is None:
         return {session_id} if session_id else set()
     records = load_all(ctx)
-    linked = _through_a_tree(ctx, me, harness, records)
+    harness = hookio.harness_of(me.session_id, me.worktree)
+    linked = _through_a_tree(ctx, me, harness, records) if harness and not proven else set()
     process = _process_of(me)
+    left = _cli_of(me) if its_past else None
     return {session_id} | {
         record.session_id for record in records
         if _one_session(process, _process_of(record), record.session_id in linked)
+        or (left is not None and _cli_of(record) == left)
     }
 
 
@@ -1026,8 +1140,11 @@ def _through_a_tree(ctx: GitContext, me: SessionRecord, harness: str,
     the split stood — the card lost in the tree, `claim` refused as a sibling's, the
     database gate refusing the session over itself. The registry of trees this plugin made
     is the other account of who is who: a tree made for harness id H and the main checkout
-    it was made from hold one session between them. Between two such trees it says nothing —
-    a tree is tied to the checkout it was made from and to no other tree.
+    it was made from hold one session between them, and so do two such trees, each of them
+    that session's with the checkout. Tied to the checkout alone, an agent's tree and the
+    tree its parent entered were two sessions to each other and one to the main checkout:
+    the card the agent claimed in its tree did not cover its parent's write in the parent's
+    tree, and `claim` refused it as a live session's, which was the chat (#315).
     """
     from . import worktree
 
@@ -1036,7 +1153,7 @@ def _through_a_tree(ctx: GitContext, me: SessionRecord, harness: str,
         return set()
     main = ctx.common_dir.parent.resolve()
     here = Path(me.worktree).resolve()
-    places = trees if here == main else ({main} if here in trees else set())
+    places = trees | {main} if here == main or here in trees else set()
     return {
         record.session_id for record in records
         if Path(record.worktree).resolve() in places

@@ -1210,18 +1210,52 @@ class TestTheReportTheGateAsksForIsTheOneItReads(RepoCase):
         self.assertEqual("", git(["status", "--porcelain"], tree))
 
     def test_a_jest_project_is_told_a_jest_command(self):
-        """Reported on 2.2.0: fuddy's mobile app, which runs jest, was told to run vitest."""
+        """Reported on 2.2.0: fuddy's mobile app, which runs jest, was told to run vitest. Then
+        told to write JUnit through `jest-junit`, which it does not have (#358): jest's own JSON
+        needs nothing installed, and `jest-junit` is named only to a project that depends on it."""
         import json
+        import shlex
 
         from claude_bestpractice import evidence, suites
 
-        self.write("mobile/package.json", json.dumps(
-            {"scripts": {"test": "jest"}, "devDependencies": {"jest-expo": "~52.0.0"}}))
-        said = evidence.artifact_hint(self.ctx(), suites.Suite("mobile", (), False))
-        self.assertIn("npx jest", said)
-        self.assertNotIn("vitest", said)
+        mobile = suites.Suite("mobile", (), False)
+        report = shlex.quote(str(evidence.report_path(self.ctx(), mobile, evidence.JSON_REPORT)))
+        for manifest in ({"scripts": {"test": "jest"}, "devDependencies": {"jest-expo": "~52.0.0"}},
+                         {"scripts": {"test": "jest", "ci": "jest --reporters=jest-junit"}}):
+            with self.subTest(manifest=manifest):
+                self.write("mobile/package.json", json.dumps(manifest))
+                said = evidence.artifact_hint(self.ctx(), mobile)
+                self.assertTrue(said.endswith(f"&& npx jest --ci --json --outputFile={report}"), said)
+        junit = shlex.quote(str(evidence.report_path(self.ctx(), mobile)))
+        for section in ("devDependencies", "dependencies"):
+            with self.subTest(section=section):
+                self.write("mobile/package.json", json.dumps(
+                    {"scripts": {"test": "jest"}, section: {"jest": "^29", "jest-junit": "^16"}}))
+                said = evidence.artifact_hint(self.ctx(), mobile)
+                self.assertIn(f"JEST_JUNIT_OUTPUT_FILE={junit} npx jest", said)
+                self.assertIn("--reporters=jest-junit", said)
         self.write("web/package.json", json.dumps({"scripts": {"test": "vitest run"}}))
         self.assertIn("npx vitest", evidence.artifact_hint(self.ctx(), suites.Suite("web", (), False)))
+
+    def test_what_jests_own_line_writes_is_read(self):
+        """The report the line names, as jest writes it, read where it was asked for (#358)."""
+        import json
+
+        from claude_bestpractice import config, evidence, suites
+        from test_evidence import jest_report
+
+        mobile = suites.Suite("mobile", ("npm", "test"), False)
+        self.write("mobile/package.json", json.dumps({"scripts": {"test": "jest"}}))
+        self.write("mobile/app.test.js", "test('a', () => expect(1).toBe(1));\n")
+        self.commit("a jest app")
+        self.assertIn(evidence.JSON_REPORT, evidence.artifact_hint(self.ctx(), mobile))
+        evidence.report_path(self.ctx(), mobile, evidence.JSON_REPORT).write_text(
+            jest_report(passed=1), encoding="utf-8")
+        verdict = evidence._verify_by_reading(
+            self.ctx(), list(config.DEFAULT_ARTIFACT_GLOBS), ["mobile/app.test.js"], mobile)
+        self.assertTrue(verdict.ok, verdict.reason)
+        self.assertTrue(verdict.unverified, "read, not witnessed — the verdict must say so")
+        self.assertIn("test-reports/mobile/report.json: 1/1 passed", verdict.reason)
 
     def test_the_suites_own_directory_is_searched(self):
         """The artifact search follows the suite (decision 0012); it read the top of the tree,

@@ -691,17 +691,23 @@ def _holds_a_card(ctx, session_id: str, touched: list[str] | None = None) -> boo
     )
 
 
-def _card_commands(ctx, event, paths: str) -> str:
-    """The two commands that put this call's work on the board, as a refusal prints them.
+def _card_commands(ctx, event, paths: str, path: str = "") -> str:
+    """The commands that put this call's work on the board, as a refusal prints them.
 
-    The card a founder's message already opened for this session, when there is one. Sent to
-    `add` instead, a session filed a second card for the same instruction and left the first
-    sitting in NEXT over finished work — the duplicate a real session made, and the one the
-    Stop gate already stopped asking for. `--done-when` in both, because `claim` refuses a
+    The card this chat already holds under another id, when `claim` would hand it over
+    (`plan.to_take_back`), naming `path` where the call names one: sent to `add` and `update`
+    instead, the session filed a second card for the work its agent had claimed (#315, #320).
+    Else the card a founder's message already opened for this session, when there is one.
+    Sent to `add` instead, a session filed a second card for the same instruction and left the
+    first sitting in NEXT over finished work — the duplicate a real session made, and the one
+    the Stop gate already stopped asking for. `--done-when` in both, because `claim` refuses a
     card without one (decision 0020: every command a refusal names runs as printed).
     """
     from claude_bestpractice import plan
 
+    held = plan.taking_it_back(ctx, event.session_id, [path] if path else [])
+    if held:
+        return held
     done_when = '--done-when "<what has to become true>"'
     opened = plan.opened_for(ctx, str(event.raw.get("session_id") or ""))
     if opened is not None:
@@ -1748,6 +1754,18 @@ def main() -> None:
                              + REFUSAL_IS_YOURS)
         hookio.emit_silent()
 
+    # A dialog the session answers itself puts nothing to the founder, and its answer would come
+    # back as theirs (#326). The input the session sends is the one place that tells: the dialog
+    # writes the founder's answer into the same fields before the tool runs. A dialog asked
+    # without one is noted for `pr-opened`, which counts no answer of a dialog not noted here
+    # (decision 0094).
+    if event.tool_name == founder.QUESTION_TOOL:
+        carried = founder.answered_beforehand(event.tool_input)
+        if carried:
+            hookio.deny_tool(founder.answered_beforehand_refusal(carried) + REFUSAL_IS_YOURS)
+        founder.asked_without_answers(ctx, str(event.raw.get("tool_use_id") or ""))
+        hookio.emit_silent()
+
     # And a prompt handed to another `claude` on a shell line is such a turn too: the child's
     # hook records it under this session's id, and `claude -p '+merge'` was a grant.
     if event.tool_name == "Bash" and "claude" in str(event.tool_input.get("command", "")):
@@ -1756,18 +1774,14 @@ def main() -> None:
             hookio.deny_tool(founder.written_for_a_turn_refusal("shell line's `claude`", carried)
                              + REFUSAL_IS_YOURS)
 
-    rec = sessions.get(ctx, event.session_id)
-    if rec is None:
-        # No record means SessionStart never ran, or something deleted it. Re-register
-        # and keep enforcing. Allowing here — the previous behaviour — made every gate
-        # in this file switch off for any session whose record went missing, so the
-        # secret scan and the leases could be disabled with `rm`.
-        rec = sessions.adopt(ctx, event.session_id)
-    else:
-        # And a record whose stamp is a process from before a restart is this session's
-        # all the same: its own hook is running. Left as it was, every sibling read the
-        # live chat as dead and its card as theirs to take.
-        rec = sessions.restamped(ctx, rec)
+    # No record means SessionStart never ran, or something deleted it: re-registered, and
+    # enforcing goes on. Allowing here — the previous behaviour — made every gate in this
+    # file switch off for any session whose record went missing, so the secret scan and the
+    # leases could be disabled with `rm`. And a record whose stamp is a process from before
+    # a restart, or the chat's CLI from before a resume, is this session's all the same: its
+    # own hook is running. Left as it was, every sibling read the live chat as dead and its
+    # card as theirs to take, and the chat read its own tree as another process's (#312).
+    rec = sessions.own_record(ctx, event.session_id)
 
     # What another session needed this one to know, delivered into this session's own
     # inbox before the call it is about to make. The board is injected once at session
@@ -1879,7 +1893,16 @@ def main() -> None:
         # stopped is not work the session did. Checked and counted in ONE locked step:
         # read from `rec` and written back afterwards, six spawns in one message all
         # read 0 and all six went through a ceiling of three.
-        spawned = sessions.count(ctx, event.session_id, "spawns_this_turn", cfg.subagent_fanout)
+        #
+        # And a spawn whose call came back an error started nothing, so it is given back:
+        # three spawns of an agent type nobody had defined refused the next three that would
+        # have run (#316). Read off the transcript only where the ceiling would refuse this
+        # one, which is the one place the answer can change anything.
+        gone = (subagents.never_started(event.transcript_path, rec.spawn_calls)
+                if cfg.subagent_fanout > 0 and rec.spawns_this_turn >= cfg.subagent_fanout
+                else set())
+        spawned = sessions.spawn(ctx, event.session_id, str(event.raw.get("tool_use_id") or ""),
+                                 cfg.subagent_fanout, gone)
         if cfg.subagent_fanout > 0 and spawned >= cfg.subagent_fanout:
             deny(ctx, rec, subagents.fanout_refusal(spawned, cfg.subagent_fanout))
 
@@ -2007,13 +2030,17 @@ def main() -> None:
                     "again: it can reach you before it is recorded, so run the merge once "
                     "more first.\n"
                     "  Otherwise show them what changed and ask. When they are happy they "
-                    "say `+merge` — copy it exactly — and this allows every pull request "
+                    "say `+merge` — copy it exactly — typed in a message, or picked in an "
+                    "`AskUserQuestion` dialog as an option whose label is `+merge` and nothing "
+                    "else: either counts. It allows every pull request "
                     "you have open, and every one you put in front of them since their last "
                     "message, each once: named in the message they answer by its link, or "
                     "by `#<number>` where it is on record here, looked at with `gh pr view`, "
-                    "or refused to them like this one; with none of either, the next merge.\n"
-                    "  Their word is read from their own message; nothing you write "
-                    "can stand in for it."
+                    "or refused to them like this one; with none of either, the next merge. "
+                    "A question they answer names what it names the same way.\n"
+                    "  Their word is read from their own message, or from their own answer in "
+                    "the dialog: nothing you write can stand in for it, a question or an option "
+                    "they did not pick among it."
                 )
             gated = None if elsewhere else pullrequest.gated_by(here, number, current)
             # Held, and finished by `pr-opened` once the merge has run: PostToolUse fires only
@@ -2029,8 +2056,9 @@ def main() -> None:
                 merge["cover"] = pullrequest.bind(ctx, named, cover)
             else:
                 base = str(gated.get("base") or "") or gitpolicy.default_branch(here) or "main"
-                pr_branch = str(gated.get("branch") or "")
-                # The pull request's own head, not the tree this session is standing in.
+                # The pull request's own head, not the tree this session is standing in, as this
+                # clone names it: GitHub may have it under the name it was pushed as (#325).
+                pr_branch = pullrequest.local_branch(gated)
                 problems = pullrequest.blockers(here, base, pr_branch)
                 if pullrequest.awaits_the_founder(problems) or pullrequest.findings_in(problems):
                     # Their word on the finish, or on a finding, may be in the transcript and
@@ -2081,14 +2109,16 @@ def main() -> None:
             # which is the identity every check here is keyed by anyway.
             base = gitpolicy.default_branch(ctx) or "main"
             # The branch the pull request is opened FROM, which is not the session's own
-            # when the session coordinates from the main checkout (#79).
-            head = pullrequest.opened_from(ctx, event.tool_name, command, ti, str(session_cwd))
+            # when the session coordinates from the main checkout (#79), filed under the head
+            # GitHub opens it on, which is the name the branch was pushed as (#325).
+            head, local = pullrequest.opening(ctx, event.tool_name, command, ti, str(session_cwd))
             if head:
                 # And the one the call opens it INTO, a stack's being the branch below it,
                 # which decides where the founder's word goes once GitHub closes it (#293).
                 pullrequest.opened(ctx, head, base, event.session_id,
                                    draft=pullrequest.drafted(event.tool_name, command, ti),
-                                   into=pullrequest.base_of(event.tool_name, command, ti))
+                                   into=pullrequest.base_of(event.tool_name, command, ti),
+                                   local=local)
             if pullrequest.about_this_repository(ctx, event.tool_name, ti, command):
                 pr_vouch = vouch.PULL_REQUEST
                 # Where the chat opened one, for the Stop gate to know it as the chat's when
@@ -2658,7 +2688,7 @@ def main() -> None:
                     "  Every sibling session reads the board to decide what is safe to "
                     "touch, and unlisted work is invisible to all of them — so this is "
                     "asked BEFORE the write, while there is still something to protect.\n"
-                    + _card_commands(ctx, event, shlex.quote(unlisted))
+                    + _card_commands(ctx, event, shlex.quote(unlisted), unlisted)
                 )
 
         # And the work that never writes a file. The demand above reads the paths a call

@@ -1018,17 +1018,23 @@ def sweep_queue(ctx: GitContext, days: float = QUEUE_STALE_DAYS) -> list[Task]:
 
 def _released(task: Task) -> Task | None:
     """`task`, with its amended body, back in `next`; None when a sibling moved it first."""
-    try:
-        _rewrite_body(task)
-    except FileNotFoundError:
-        return None
-    return _move_if_there(task, NEXT)
+    return _move_if_there(task, NEXT) if _rewritten_if_there(task) else None
 
 
 def _rewrite_body(task: Task) -> None:
     """Persist an amended body in place, leaving the frontmatter as it stands."""
     meta, _ = _frontmatter(task.path.read_text(encoding="utf-8", errors="replace"))
     _write_as_it_stands(task.path, meta, task.body)
+
+
+def _rewritten_if_there(task: Task) -> bool:
+    """`_rewrite_body`, or False when a sibling moved or removed the card since it was read, for
+    the reason `_move_if_there` gives."""
+    try:
+        _rewrite_body(task)
+    except FileNotFoundError:
+        return False
+    return True
 
 
 def _write_as_it_stands(path: Path, meta: dict[str, str], body: str) -> None:
@@ -1575,14 +1581,9 @@ def complete(ctx: GitContext, task_id: str, session_id: str = "") -> tuple[Task 
     (`_not_theirs`).
     """
     with store.file_lock(store.tier_b(ctx, CLAIM_LOCK)):
-        task = find(ctx, task_id)
-        if task is None:
-            return None, no_task(ctx, task_id)
-        refused = _not_theirs(ctx, task, session_id)
-        if refused:
-            return None, refused
-        # Every copy, not the one this directory happens to hold: see `_move_every`.
-        landed = _move_every(ctx, task_id, DONE) or _move(task, DONE)
+        landed, refused = _close_every_copy(ctx, task_id, session_id)
+    if landed is None:
+        return None, refused
 
     # Whoever was waiting on this is waiting right now, in a session that will not be
     # restarted for hours. `startable` already answers "what can begin"; nobody reads it
@@ -1591,13 +1592,35 @@ def complete(ctx: GitContext, task_id: str, session_id: str = "") -> tuple[Task 
 
     live = {s.session_id for s in sessions.live_sessions(ctx)}
     for waiting in load_all(ctx):
-        if task.id in waiting.after and waiting.owner in live and not blockers(ctx, waiting):
+        if landed.id in waiting.after and waiting.owner in live and not blockers(ctx, waiting):
             inbox.post(
                 ctx, waiting.owner,
                 f"{task_id} is done — {waiting.id} is no longer blocked.",
                 sender=task_id,
             )
     return landed, ""
+
+
+def _close_every_copy(ctx: GitContext, task_id: str, session_id: str) -> tuple[Task | None, str]:
+    """Every copy of the card into `done`, under the claim lock: (the copy nearest this tree, "")
+    or (None, why not).
+
+    Every copy, not the one this directory happens to hold: see `_move_every`. And read again,
+    as `claim` reads, when a sibling moved the card first: a move that takes no lock had ended
+    a merge's hook with `FileNotFoundError` on the copy it was falling back to (#343).
+    """
+    for _ in range(CLAIM_READS):
+        task = find(ctx, task_id)
+        if task is None:
+            return None, no_task(ctx, task_id)
+        refused = _not_theirs(ctx, task, session_id)
+        if refused:
+            return None, refused
+        landed = _move_every(ctx, task_id, DONE) or _move_if_there(task, DONE)
+        if landed is not None:
+            return landed, ""
+    return None, (f"task {task_id} kept moving while it was being closed — close it again:\n"
+                  f"  claude-bp-plan done {task_id}")
 
 
 # The ledger had no closing half. `complete` had exactly one caller — the CLI — so a card
@@ -1675,17 +1698,23 @@ def settle_delivered(ctx: GitContext, session_id: str, delivered: list[str],
         if not carried or untouched_since_reopened(ctx, task):
             continue
         waits_on = still_carrying(task) if still_carrying else []
-        note = (f"[{stamp}] delivered in part — {what} carried {', '.join(carried[:6])}; "
-                f"still under this card: {', '.join(waits_on[:6])}." if waits_on else
-                f"[{stamp}] closed on delivery — {what} carried {', '.join(carried[:6])}.")
+        note = _delivery_note(stamp, what, carried, waits_on)
         task.body = f"{task.body}\n\n{note}".strip() if task.body else note
-        _rewrite_body(task)
-        if waits_on:
+        # A sibling that moved the card since it was read has it now (#343).
+        if not _rewritten_if_there(task) or waits_on:
             continue
         landed, _ = complete(ctx, task.id)
         if landed:
             closed.append(landed)
     return closed
+
+
+def _delivery_note(stamp: str, what: str, carried: list[str], waits_on: list[str]) -> str:
+    """The line a delivery writes into a card it carried: closed on it, or what it waits on."""
+    if waits_on:
+        return (f"[{stamp}] delivered in part — {what} carried {', '.join(carried[:6])}; "
+                f"still under this card: {', '.join(waits_on[:6])}.")
+    return f"[{stamp}] closed on delivery — {what} carried {', '.join(carried[:6])}."
 
 
 def held_by(ctx: GitContext, session_id: str, doing: list[Task] | None = None) -> list[Task]:
@@ -1700,6 +1729,51 @@ def held_by(ctx: GitContext, session_id: str, doing: list[Task] | None = None) -
     session a sweep of every tree's ledger for each one.
     """
     return _owned(ctx, session_id, DOING, doing)
+
+
+def to_take_back(ctx: GitContext, session_id: str, path: str = "") -> Task | None:
+    """A card in `doing` this chat holds under an id that is not this session's, naming `path`
+    when one is given, that `claim` would hand to this session. None where there is none.
+
+    The id it had in another tree, written by a process the chat has since left: its agent
+    claimed the card in the agent's tree before the connection dropped, or the records there
+    are from before a restart. A write under that card was refused for having nothing on the
+    board, and the refusal named `add` and `update`, a second card for the same work, while
+    `claim` of the first said it was held by "live session S-…", which was the chat itself
+    (#315, #320, #321). Only a card `claim` would take is named: one a live process of this
+    chat holds belongs to a session of its own (decision 0032), and a command the refusal names
+    must run as printed (decision 0020).
+    """
+    from . import hookio, sessions
+
+    harness = hookio.harness_of(session_id, str(ctx.worktree_root))
+    if not harness:
+        return None
+    mine = sessions.identities(ctx, session_id)
+    for card in load_all(ctx, DOING):
+        if card.owner in mine or not hookio.composed_from(card.owner, harness):
+            continue
+        if path and not carried_by(card, [path]):
+            continue
+        if _claimable(ctx, card.id, session_id)[0] is not None:
+            return card
+    return None
+
+
+def taking_it_back(ctx: GitContext, session_id: str, paths: list[str]) -> str:
+    """The lines a refusal over unclaimed work prints in place of `add` and `update`, where this
+    chat holds a card naming one of `paths` (any card in `doing`, for no paths) under another id
+    (`to_take_back`). "" where it holds none."""
+    from . import sessions
+
+    for path in paths or [""]:
+        held = to_take_back(ctx, session_id, path)
+        if held is not None:
+            names = f"names {path}" if path else "is in `doing`"
+            return (f"  This chat holds {held.id} under {sessions.called(ctx, held.owner)}, an id "
+                    f"it had in another tree or process that is not working now, and the card "
+                    f"{names}. Take it back:\n  claude-bp-plan claim {held.id}")
+    return ""
 
 
 def closed_by(ctx: GitContext, session_id: str) -> list[Task]:

@@ -68,6 +68,30 @@ def test_total():
     assert 1 + 1 == 3
 '''
 
+# A connection lost in the test's body, which pytest reports as a FAILURE and not an ERROR: the
+# server dropped it at the first query rather than when a fixture connected (#339, #355).
+LOST_IN_THE_BODY = '''
+
+class ServerGone(Exception):
+    pass
+
+
+def test_queries():
+    raise ServerGone("server closed the connection unexpectedly")
+'''
+
+# Lost in the body the first time, and answering the second.
+LOST_IN_THE_BODY_ONCE = '''import os
+
+FLAG = os.path.join(os.path.dirname(__file__), "..", "busy.flag")
+
+
+def test_queries():
+    if os.path.exists(FLAG):
+        os.remove(FLAG)
+        raise ConnectionResetError(104, "Connection reset by peer")
+'''
+
 
 class TestADroppedConnectionIsNoVerdictOnTheCode(GateRunCase):
     def test_the_report(self):
@@ -132,17 +156,76 @@ class TestADroppedConnectionIsNoVerdictOnTheCode(GateRunCase):
         self.assertTrue(list(self.kept().glob("*.xml")))
 
 
+class TestAConnectionLostInATestsBodyIsNoVerdictEither(GateRunCase):
+    """#339, #355: pytest calls a connection lost in the test's body a FAILURE, not an ERROR, and
+    one such FAILURE beside 54 ERRORs had the whole run filed red, with no second run. What the
+    exception says decides, not pytest's phase; a failed assertion is never a lost connection."""
+
+    def test_alone(self):
+        self.project(LOST_IN_THE_BODY, busy=False)
+        verdict = self.judge()
+        self.assertTrue(verdict.ok, verdict.reason)
+        self.assertTrue(verdict.unverified, verdict.reason)
+        self.assertIn("all 1 test(s) that broke", verdict.reason)
+        self.assertIn("broke the same way when the gate ran them again", verdict.reason)
+        self.assertIsNone(evidence.red(self.ctx()), "a dropped connection was filed as the code")
+
+    def test_beside_errors_at_setup(self):
+        """The shape of #355: ERRORs at setup and one FAILURE, every one the server's."""
+        self.project(DROPPED + LOST_IN_THE_BODY, busy=False)
+        verdict = self.judge()
+        self.assertTrue(verdict.unverified, verdict.reason)
+        self.assertIn("all 3 test(s) that broke", verdict.reason)
+        self.assertIsNone(evidence.red(self.ctx()))
+
+    def test_one_that_passes_the_second_time_is_a_pass(self):
+        """Decision 0034's second run, given to it as to an ERROR."""
+        self.project(LOST_IN_THE_BODY_ONCE)
+        verdict = self.judge()
+        self.assertTrue(verdict.ok, verdict.reason)
+        self.assertFalse(verdict.unverified, verdict.reason)
+        self.assertIn("1 of them ERRORed in its first run or lost a connection", verdict.reason)
+        self.assertIn("Connection reset by peer", verdict.reason)
+
+    def test_an_assertion_that_quotes_one_is_the_failure_it_was(self):
+        self.project(DROPPED + '\n\ndef test_log():\n    log = "Connection refused"\n'
+                     '    assert "Connection refused" not in log\n', busy=False)
+        self.assertFalse(self.judge().ok)
+        self.assertIsNotNone(evidence.red(self.ctx()))
+
+    def test_an_exception_of_the_codes_is_never_asked_twice(self):
+        """Raised in the body and gone the second time: the code answered, and asking it again
+        is asking for a different answer."""
+        self.project(LOST_IN_THE_BODY_ONCE.replace(
+            'ConnectionResetError(104, "Connection reset by peer")', 'KeyError("total")'))
+        verdict = self.judge()
+        self.assertFalse(verdict.ok, "an exception of the code's was run until it passed")
+        self.assertIsNotNone(evidence.red(self.ctx()))
+
+    def test_a_run_that_exited_1_with_nothing_broken_lost_nothing(self):
+        self.assertFalse(witness.Witnessed(1, 5, 0, "", "pytest").lost_connection)
+
+    def test_several_projects_count_what_answered_together(self):
+        one = witness.Witnessed(1, 3, 1, "", "pytest", answered=1)
+        other = witness.Witnessed(1, 3, 1, "", "pytest", disconnected=1)
+        self.assertEqual(1, witness._together(self.repo, [(self.repo, one), (self.repo / "b", other)])
+                         .answered)
+
+
 class TestWhatCountsAsADroppedConnection(unittest.TestCase):
-    def report(self, message: str, text: str = "") -> Path:
+    def report(self, message: str, text: str = "", tag: str = "error") -> Path:
+        import shutil
         import tempfile
         from xml.sax.saxutils import escape, quoteattr
 
         home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
         path = home / "report.xml"
+        errors, failures = (1, 0) if tag == "error" else (0, 1)
         path.write_text(
-            '<testsuites><testsuite tests="1" errors="1" failures="0" skipped="0">'
-            f'<testcase classname="t" name="test_a"><error message={quoteattr(message)}>'
-            f"{escape(text)}</error>"
+            f'<testsuites><testsuite tests="1" errors="{errors}" failures="{failures}" skipped="0">'
+            f'<testcase classname="t" name="test_a"><{tag} message={quoteattr(message)}>'
+            f"{escape(text)}</{tag}>"
             "</testcase></testsuite></testsuites>")
         return path
 
@@ -166,12 +249,34 @@ class TestWhatCountsAsADroppedConnection(unittest.TestCase):
                            "    # retry when the server says connection refused\nKeyError")
         self.assertEqual(0, evidence.parse_artifact(path).disconnected)
 
-    def test_a_failed_assertion_is_not(self):
-        path = self.report("x")
-        path.write_text(path.read_text().replace('errors="1" failures="0"', 'errors="0" failures="1"')
-                        .replace("<error", "<failure").replace("</error>", "</failure>")
-                        .replace('message="x"', 'message="Connection refused"'))
-        self.assertEqual(0, evidence.parse_artifact(path).disconnected)
+    def test_a_failed_assertion_is_not_whatever_it_quotes(self):
+        """As pytest writes one: named, unnamed where it rewrote the assert, `pytest.fail`, and a
+        fixture's own assertion at setup."""
+        for tag, message in (
+                ("failure", "AssertionError: Connection refused\nassert False"),
+                ("failure", "assert 'Connection refused' not in 'Connection refused'"),
+                ("failure", "Failed: connection refused by the server"),
+                ("error", 'failed on setup with "AssertionError: server closed the connection '
+                          'unexpectedly"')):
+            with self.subTest(message=message):
+                artifact = evidence.parse_artifact(self.report(message, tag=tag))
+                self.assertEqual(0, artifact.disconnected)
+                self.assertEqual(int(tag == "failure"), artifact.answered)
+
+    def test_one_the_driver_raised_in_a_tests_body_is(self):
+        """A FAILURE, where pytest names the exception first: #339's shape."""
+        for message in ("psycopg.OperationalError: server closed the connection unexpectedly",
+                        "ConnectionRefusedError: [Errno 111] Connection refused"):
+            with self.subTest(message=message):
+                artifact = evidence.parse_artifact(self.report(message, tag="failure"))
+                self.assertEqual(1, artifact.disconnected)
+                self.assertEqual(0, artifact.answered)
+
+    def test_any_other_failure_is_the_code_answering_and_an_error_is_not(self):
+        failed = evidence.parse_artifact(self.report("KeyError: 'total'", tag="failure"))
+        self.assertEqual((0, 1), (failed.disconnected, failed.answered))
+        errored = evidence.parse_artifact(self.report('failed on setup with "KeyError: x"'))
+        self.assertEqual((0, 0), (errored.disconnected, errored.answered))
 
 
 class TestARecordFiledForDroppedConnectionsGoes(RepoCase):
@@ -184,12 +289,16 @@ class TestARecordFiledForDroppedConnectionsGoes(RepoCase):
         kept.mkdir(parents=True, exist_ok=True)
         (kept / "report-0.xml").write_text(report)
 
-    def report(self, message: str, errors: int = 2) -> str:
+    def report(self, message: str, errors: int = 2, failure: str = "") -> str:
+        """`errors` ERRORs saying `message`, and one FAILURE saying `failure` where it is given."""
         cases = "".join(f'<testcase classname="t" name="test_{n}"><error message="{message}"/>'
                         "</testcase>" for n in range(errors))
-        return (f'<testsuites><testsuite tests="{errors + 1}" errors="{errors}" failures="0" '
-                f'skipped="0">{cases}<testcase classname="t" name="test_ok"/></testsuite>'
-                "</testsuites>")
+        if failure:
+            cases += f'<testcase classname="t" name="test_body"><failure message="{failure}"/></testcase>'
+        failures = int(bool(failure))
+        return (f'<testsuites><testsuite tests="{errors + failures + 1}" errors="{errors}" '
+                f'failures="{failures}" skipped="0">{cases}'
+                '<testcase classname="t" name="test_ok"/></testsuite></testsuites>')
 
     def repair(self) -> str:
         return migrate._forget_a_red_suite_of_lost_connections(self.ctx())
@@ -220,8 +329,28 @@ class TestARecordFiledForDroppedConnectionsGoes(RepoCase):
         self.assertEqual("", self.repair())
         self.assertIsNotNone(evidence.red(self.ctx()))
 
+    def test_one_with_a_connection_lost_in_a_tests_body_is_dropped(self):
+        """Revision 2 (#339): the first took 54 ERRORs and 1 FAILURE, every one the server's, for
+        the code's (#355)."""
+        self.filed(self.report("server closed the connection unexpectedly",
+                               failure="psycopg.OperationalError: server closed the connection "
+                                       "unexpectedly"))
+        self.assertIn("lost its connection", self.repair())
+        self.assertIsNone(evidence.red(self.ctx()))
+
+    def test_one_with_a_failed_assertion_beside_them_stays(self):
+        self.filed(self.report("Connection refused", failure="AssertionError: Connection refused"))
+        self.assertEqual("", self.repair())
+        self.assertIsNotNone(evidence.red(self.ctx()))
+
     def test_it_is_registered(self):
         self.assertIn("0044-forget-a-red-suite-of-lost-connections", migrate._REPAIRS)
+
+    def test_a_clone_that_had_its_first_revision_has_it_again(self):
+        """Which is how a record the first revision left reaches the second."""
+        name = "0044-forget-a-red-suite-of-lost-connections"
+        store.write_json(store.tier_b(self.ctx(), migrate.LEDGER), {name: {"revision": 1}})
+        self.assertIn(name, migrate.pending(self.ctx()))
 
 
 if __name__ == "__main__":

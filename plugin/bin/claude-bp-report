@@ -13,8 +13,9 @@ their own work to write it up.
 Sending lives here rather than in a hook, and that is the whole shape of this feature.
 A hook that talks to the network is a hook that can be slow, can fail, and can be
 stopped by an expired token — on a path that runs before every tool call. Capture is
-free and always on; sending is a command, or an explicit `"report_defects": "auto"` from
-someone who owns both ends.
+free and always on; sending is this command, which a capture starts on its own where
+reports are sent as they come (`defects.mode`): `gh` files as the owner of the reports'
+repository, or the founder wrote `"report_defects": "auto"`.
 """
 
 from __future__ import annotations
@@ -27,14 +28,53 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import __version__, config, defects, hookio  # noqa: E402
+from claude_bestpractice import __version__, defects, hookio, store, upgrade  # noqa: E402
 from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
+
+
+SEND_LOCK = "defects-send.lock"
+
+
+def newer_version() -> str:
+    """A version past this one, installed beside it or released, else empty.
+
+    A report filed from an old version asks for a fix a newer one may already have. On
+    disk first, as the board reads it; then the latest release, asked of the same `gh` that
+    files the issues. No answer from it is no newer version: sending never waits on it.
+    """
+    newer = upgrade.superseded_by() or upgrade.newer_in_the_cache()
+    if newer:
+        return newer
+    try:
+        proc = subprocess.run(
+            ["gh", "release", "view", "--repo", defects.REPORT_REPO,
+             "--json", "tagName", "--jq", ".tagName"],
+            capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    tag = proc.stdout.strip().removeprefix("v") if proc.returncode == 0 else ""
+    return tag if tag and upgrade.version_key(tag) > upgrade.version_key(__version__) else ""
+
+
+def held_line(ctx) -> str:
+    """What `send` leaves, and why, so an empty send is not read as nothing captured."""
+    held = defects.held_back(ctx)
+    if not held:
+        return ""
+    versions = sorted({str(r.get("version") or "?") for r in held}, key=upgrade.version_key)
+    seen_on = versions[0] if len(versions) == 1 else f"{versions[0]} to {versions[-1]}"
+    return (f"{len(held)} held back: last seen on {seen_on}, not on {__version__}, whose "
+            "code has changed since. A defect still here is captured again when it is hit.")
 
 
 def cmd_list(ctx) -> int:
     waiting = defects.unsent(ctx)
+    held = held_line(ctx)
     if not waiting:
-        print("no defects captured")
+        print(f"no defects captured on {__version__}")
+        if held:
+            print(held)
         return 0
 
     print(f"{len(waiting)} defect(s) captured, not sent:\n")
@@ -55,17 +95,44 @@ def cmd_list(ctx) -> int:
         print(f"\n  [{i}] {defects.title(report)}")
         print("\n".join("    " + line for line in defects.body(report).splitlines()))
     print("\nSend with: claude-bp-report send")
+    if held:
+        print(held)
     return 0
 
 
 def cmd_send(ctx) -> int:
+    """File what is sendable, one sender at a time.
+
+    Every capture starts one where reports go as they come, so two run at once: each reads
+    what is unsent inside the lock and marks it sent before letting go, and the second
+    files only what the first had not seen.
+    """
+    try:
+        with store.file_lock(store.tier_b(ctx, SEND_LOCK), timeout=300, stale_after=900):
+            return send_unsent(ctx)
+    except store.LockTimeout:
+        print("another send has been running for five minutes; nothing sent",
+              file=sys.stderr)
+        return 1
+
+
+def send_unsent(ctx) -> int:
     waiting = defects.unsent(ctx)
     if not waiting:
         print("nothing to send")
+        held = held_line(ctx)
+        if held:
+            print(held)
         return 0
     if not shutil.which("gh"):
         print("gh is not installed, so nothing can be filed. The reports are above.",
               file=sys.stderr)
+        return 1
+    newer = newer_version()
+    if newer:
+        print(f"nothing sent: this is {__version__}, and {newer} is out, which may have "
+              f"fixed what these report. Update with `{upgrade.update_command()}` and "
+              "restart Claude Code; a defect still there is captured again.", file=sys.stderr)
         return 1
 
     sent = 0
@@ -104,7 +171,7 @@ def main() -> int:
     args = parser.parse_args()
 
     ctx = resolve_for_cli()
-    if config.load(ctx).report_defects == defects.OFF:
+    if defects.mode(ctx) == defects.OFF:
         print("defect reporting is off for this repository")
         return 0
     if args.command == "defect":

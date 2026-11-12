@@ -81,6 +81,60 @@ class TestArtifactParsing(RepoCase):
         self.assertIsNone(evidence.parse_artifact(self.write("junit.xml", "not xml at all")))
 
 
+def jest_report(passed: int = 1, failed: int = 0, pending: int = 0, todo: int = 0,
+                could_not_run: int = 0, success: bool | None = None) -> str:
+    """What `jest --ci --json --outputFile=<path>` writes, in the fields jest 29.7 wrote for a
+    run of the same shape (`testResults` cut to what this gate does not read)."""
+    return json.dumps({
+        "numFailedTestSuites": int(bool(failed or could_not_run)), "numFailedTests": failed,
+        "numPassedTestSuites": 1, "numPassedTests": passed, "numPendingTestSuites": 0,
+        "numPendingTests": pending, "numRuntimeErrorTestSuites": could_not_run,
+        "numTodoTests": todo, "numTotalTestSuites": 1 + could_not_run,
+        "numTotalTests": passed + failed + pending + todo, "openHandles": [],
+        "startTime": 1794490972105,
+        "success": (not (failed or could_not_run)) if success is None else success,
+        "testResults": [], "wasInterrupted": False})
+
+
+class TestJestsOwnReportIsRead(RepoCase):
+    """#358: a jest project without `jest-junit` writes no JUnit, and `jest --json` needs
+    nothing installed. Its fields as jest's `formatTestResults` writes them."""
+
+    def parse(self, text: str):
+        return evidence.parse_artifact(self.write("report.json", text))
+
+    def test_a_pass(self):
+        art = self.parse(jest_report(passed=3, pending=1, todo=1))
+        self.assertTrue(art.passed, art.detail)
+        self.assertEqual((5, 0, 2), (art.total, art.failed, art.skipped))
+        self.assertEqual("3/3 passed, 2 skipped", art.detail)
+
+    def test_a_failure(self):
+        art = self.parse(jest_report(passed=3, failed=1))
+        self.assertFalse(art.passed)
+        self.assertEqual("3/4 passed", art.detail)
+        self.assertFalse(self.parse(jest_report(passed=3, failed=1, success=True)).passed,
+                         "a report calling a failure a success was taken at its word")
+
+    def test_a_file_that_could_not_run_is_a_broken_test(self):
+        """jest counts it in `numRuntimeErrorTestSuites` alone, with `numFailedTests` at 0."""
+        art = self.parse(jest_report(passed=1, could_not_run=1))
+        self.assertFalse(art.passed)
+        self.assertEqual("1/2 passed", art.detail)
+
+    def test_a_run_jest_says_did_not_succeed_did_not(self):
+        self.assertFalse(self.parse(jest_report(passed=2, success=False)).passed)
+
+    def test_a_run_that_skipped_everything_is_not_a_pass(self):
+        self.assertFalse(self.parse(jest_report(passed=0, pending=2)).passed)
+
+    def test_json_that_is_not_a_report_is_not_evidence(self):
+        for text in ('{"tests": []}', '{"numTotalTests": "many", "success": true}',
+                     '{"numTotalTests": 2, "numFailedTests": null, "numPendingTests": [1]}'):
+            with self.subTest(text=text):
+                self.assertIsNone(self.parse(text))
+
+
 class TestVerify(RepoCase):
     def changed(self) -> list[str]:
         from claude_bestpractice.gitctx import changed_files

@@ -125,7 +125,8 @@ def _migrations(root: Path, sig: StageSignals, held: str | None) -> None:
         sig.reasons.append(f"migrations directory present, not read: the ratchet holds {held}")
         return
     sig.reasons.append("migrations directory present")
-    files = (path for found in dirs for path in found.rglob("*") if path.is_file())
+    # Past a directory gone mid-walk, which `rglob` raised for on Python 3.10 (#340).
+    files = (path for found in dirs for path in store.files_under(found) if path.is_file())
     for path in itertools.islice(files, _MIGRATIONS_READ):
         if _USER_TABLE.search(_read(path, 40_000)):
             sig.has_user_table = True

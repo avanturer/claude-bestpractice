@@ -28,7 +28,6 @@ command.
 from __future__ import annotations
 
 import calendar
-import os
 import re
 import subprocess
 import time
@@ -980,6 +979,23 @@ def _clear_blockers_off_cards_not_paused(ctx: GitContext) -> str:
         if cleared else ""
 
 
+def _hand_a_resumed_chat_the_records_it_wrote(ctx: GitContext) -> str:
+    """Records of a resumed chat that still name its CLI from before the resume.
+
+    Until this version the chat's own calls in a tree it went back into wrote that CLI's record
+    as the old CLI's, and the record stood live, another process of the chat, for as long as the
+    old CLI ran: the tree, the merge in it and the card were refused to the chat (#312). The fix
+    stamps the chat's CLI from here on, and only onto a record of its past; one written since
+    the resume reads as the present, so these are stamped once, here
+    (`sessions.taken_back_from_the_past`).
+    """
+    from . import sessions
+
+    moved = sessions.taken_back_from_the_past(ctx)
+    return (f"{moved} record(s) of a resumed chat named its CLI from before the resume; they "
+            "name the one it runs in now") if moved else ""
+
+
 def _refresh_what_pull_requests_are_blocked_by(ctx: GitContext) -> str:
     """Open pull requests the founder's status line calls blocked by what an older gate listed.
 
@@ -1000,6 +1016,21 @@ def _refresh_what_pull_requests_are_blocked_by(ctx: GitContext) -> str:
         refreshed += pullrequest.refresh_blockers(tree, tree.branch)
     return f"{refreshed} open pull request(s) judged again for what blocks them" \
         if refreshed else ""
+
+
+def _mark_pull_requests_closed_by_a_branch_gone(ctx: GitContext) -> str:
+    """Closed records whose only reason was a branch gone from this clone, marked as such (#325).
+
+    Until this version a deleted local branch closed the pull request on record for it, though
+    GitHub had it open under the name the branch was pushed as, and the founder's `+merge` could
+    never name it again. Marked `GONE`, the record stays off the board and its number is one a
+    word names once it is put to them.
+    """
+    from . import pullrequest
+
+    marked = pullrequest.closed_as_gone(ctx)
+    return f"{marked} pull request(s) closed only by a branch gone from this clone, " \
+        "named by the founder's word again" if marked else ""
 
 
 def _staged_by_a_move(tree: Path) -> list[str]:
@@ -1382,17 +1413,19 @@ def _forget_a_red_suite_that_never_ran(ctx: GitContext) -> str:
 
 
 def _forget_a_red_suite_of_lost_connections(ctx: GitContext) -> str:
-    """A red record of the gate's own pytest whose every broken test ERRORed on a connection to
-    a server it uses, lost or refused.
+    """A red record of the gate's own pytest whose every broken test lost a connection to a
+    server it uses, or had it refused.
 
-    Until this release such a run was filed red: behind Docker's proxy on WSL the shared database
+    Until 2.10 such a run was filed red: behind Docker's proxy on WSL the shared database
     dropped connections, 146 tests ERRORed at setup in different files on every run, and the
     record held a merge the founder had said `+merge` to (#289). The gate files no such record
     now, and the one already written could be cleared only by a pass on that same database.
 
     Read off the reports the gate kept of that run, under `test-reports/<suite>/gate-run/`, the
     first run and the second run of its errors alike. Only where every test that broke in them
-    ERRORed that way; a record whose reports are gone, or say anything else, stays as it was.
+    broke that way; a record whose reports are gone, or say anything else, stays as it was.
+    Revision 2 counts a FAILURE whose exception lost its connection in the test's body, as the
+    gate now does (#339): the first took 54 such ERRORs beside 1 such FAILURE for the code's (#355).
     """
     from . import evidence
 
@@ -1434,11 +1467,11 @@ def _kept_reports(ctx: GitContext, suite: str) -> list:
 
 
 def _every_break_a_lost_connection(reports: list) -> bool:
-    """Do these reports, every one readable, hold a test that broke, and was each test that broke
-    an ERROR on a lost or refused connection?"""
+    """Do these reports, every one readable, hold a test that broke, and did each test that broke
+    break on a lost or refused connection, at setup or in its body?"""
     if not reports or None in reports:
         return False
-    return (all(report.failed == report.errors == report.disconnected for report in reports)
+    return (all(report.failed == report.disconnected for report in reports)
             and any(report.failed for report in reports))
 
 
@@ -1960,11 +1993,14 @@ _REPAIRS = {
     "0041-forget-a-red-suite-the-pytest-guard-left": (1, _forget_a_red_suite_the_pytest_guard_left),
     "0042-let-go-of-what-dead-runs-and-sessions-left": (1, _let_go_of_what_dead_runs_left),
     "0043-cut-the-logs-down-to-what-is-live": (1, _cut_the_logs_down_to_what_is_live),
-    "0044-forget-a-red-suite-of-lost-connections": (1, _forget_a_red_suite_of_lost_connections),
+    "0044-forget-a-red-suite-of-lost-connections": (2, _forget_a_red_suite_of_lost_connections),
     "0045-drop-drafts-nobody-typed": (1, _drop_drafts_nobody_typed),
     "0046-carry-attempts-out-of-trees": (1, _carry_attempts_out_of_trees),
     "0047-clear-blockers-off-cards-not-paused": (1, _clear_blockers_off_cards_not_paused),
     "0048-judge-open-pull-requests-again": (1, _refresh_what_pull_requests_are_blocked_by),
+    "0049-a-branch-gone-closes-no-pull-request": (1, _mark_pull_requests_closed_by_a_branch_gone),
+    "0050-hand-a-resumed-chat-the-records-it-wrote":
+        (1, _hand_a_resumed_chat_the_records_it_wrote),
 }
 
 
@@ -2090,7 +2126,7 @@ def registries(ctx: GitContext) -> list[Path]:
     root = ctx.worktree_root
     skip = _ignored(ctx)
     found: list[Path] = []
-    for path in _markdown_under(root):
+    for path in sorted(p for p in store.files_under(root, _SKIP) if p.name.endswith(".md")):
         relative = path.relative_to(root).as_posix()
         if _key(relative) in skip:
             continue
@@ -2104,22 +2140,6 @@ def registries(ctx: GitContext) -> list[Path]:
             continue
         found.append(path)
     return found
-
-
-def _markdown_under(root: Path) -> list[Path]:
-    """Every `.md` file under `root`, sorted, from a walk that never enters a directory `_SKIP`
-    names and goes on past one that is gone by the time it gets there.
-
-    `rglob` entered every `node_modules` and every tree under `.claude/worktrees` before the skip
-    list was asked, at each session start, and on Python 3.10 a directory removed while it walked,
-    a sibling's tree or a reinstall, ended the session start with FileNotFoundError: three times on
-    the founder's machine on 2.7.1, and that session's board was never built.
-    """
-    found: list[Path] = []
-    for where, dirs, files in os.walk(root):
-        dirs[:] = [name for name in dirs if name not in _SKIP]
-        found.extend(Path(where) / name for name in files if name.endswith(".md"))
-    return sorted(found)
 
 
 def _not_ours_to_judge(ctx: GitContext, relative: str) -> bool:

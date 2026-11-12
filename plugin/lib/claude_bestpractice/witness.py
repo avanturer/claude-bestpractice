@@ -164,14 +164,18 @@ class Witnessed:
     # assertions, and the first broken test with its message, from the run's own report.
     errors: int = 0
     first: str = ""
-    # ERRORs this run had that did not happen again when the gate ran those tests once more,
-    # with the first of them as it was. Already taken out of `failed` (#266).
+    # ERRORs this run had, and FAILUREs on a lost connection (#339), that did not happen again
+    # when the gate ran those tests once more, with the first of them as it was. Already taken
+    # out of `failed` (#266).
     recovered: int = 0
-    # ERRORs that did happen again, so the second run is no excuse for them.
+    # Breaks that did happen again, so the second run is no excuse for them.
     reproduced: bool = False
-    # How many of `errors` were a connection to a server lost or refused, in this run and, where
-    # one was made, in the second run of them as well (`evidence.DISCONNECTED`, #289).
+    # How many of `failed` were a connection to a server lost or refused, at setup or in the
+    # test's body, in this run and, where one was made, in the second run of them as well
+    # (`evidence.DISCONNECTED`, #289, #339).
     disconnected: int = 0
+    # How many of `failed` FAILED with the code under test answering (`evidence.Artifact`).
+    answered: int = 0
     # Where the report of a run that broke was kept, from the top of the tree. The gate's
     # reports were written to a temp directory deleted with the run, so the one thing that
     # could tell a database under load from a broken fixture was gone before anybody read it.
@@ -182,22 +186,25 @@ class Witnessed:
         return self.returncode == 0 and self.failed == 0 and self.executed > 0
 
     @property
-    def errors_only(self) -> bool:
-        """Every test that broke broke in setup, teardown or collection, and pytest ran the rest.
+    def unanswered(self) -> bool:
+        """Every test that broke broke before the code under test answered, and pytest ran the
+        rest: an ERROR in setup, teardown or collection, or a FAILURE whose exception was a lost
+        or refused connection. Not pytest's phase: a connection the test's body opened breaks
+        there, and one FAILURE beside 54 such ERRORs had the run filed red (#355, #339).
 
         Exit status 1, never 2: pytest stops the whole session at a collection error unless told
         otherwise, so a run interrupted there executed nothing past it, and a second run of the
         file that errored could not answer for the suite it never reached.
         """
         return (self.runner == "pytest" and self.returncode == 1
-                and 0 < self.errors == self.failed)
+                and self.failed > 0 and not self.answered)
 
     @property
     def lost_connection(self) -> bool:
-        """Every test that broke ERRORed on a connection to a server it uses, lost or refused,
-        and a second run of them did not pass: the database or service, before any of the code
-        under test answered (#289)."""
-        return self.errors_only and self.disconnected == self.errors
+        """Every test that broke lost a connection to a server it uses, or had it refused, and a
+        second run of them did not pass: the database or service, before any of the code under
+        test answered (#289, #339)."""
+        return self.unanswered and self.disconnected == self.failed
 
     @property
     def ran_nothing(self) -> bool:
@@ -814,36 +821,37 @@ def _run_pytest(ctx: GitContext, scratch: Path, env: dict[str, str] | None,
 
 def _once_more(ctx: GitContext, argv: list[str], report: Path, env: dict[str, str], home: Path,
                left: float, seen: Witnessed) -> Witnessed:
-    """`seen`, after running the tests that errored in it a second time, and those alone, when
-    every test that broke in it errored (`Witnessed.errors_only`).
+    """`seen`, after running the tests that broke in it a second time, and those alone, when
+    every one of them broke before the code under test answered (`Witnessed.unanswered`).
 
     An ERROR is a test that could not be set up, torn down or collected, and on a machine
     where several sessions run their suites at once it is as often the machine as the code.
     37 tests errored in the gate's run, in three files the branch did not touch; the same
     three files run straight after it passed 41 of 41, and `make check` on the same commit
-    in the same minute passed all 7419 (#266). A FAILED assertion is never run again: that is
-    the code answering, and asking it twice is asking for a different answer.
+    in the same minute passed all 7419 (#266). A connection lost in a test's body is the same
+    machine, reported as a FAILURE (#339). A failed assertion is never run again: that is the
+    code answering, and asking it twice is asking for a different answer.
 
     pytest picks the tests itself, from the cache of the run it just made: `--lf` runs what
     broke there, by node id, from a cache directory this gate gave both runs, outside the tree.
-    Errors that did not come back are taken out of the count and named; any that did, or a
+    Tests that did not break again are taken out of the count and named; any that did, or a
     second run that could not finish in the time left, leaves `seen` as it was, a failure.
     `argv` is the first run's, writing `report`; `--lfnf=none` makes a cache pytest cannot
     read run nothing rather than everything, which is no second run at all.
     """
-    if not seen.errors_only or left <= 0:
+    if not seen.unanswered or left <= 0:
         return seen
     try:
         proc = _spawn(ctx, [*argv, "--lf", "--lfnf=none"], env, home, left)
     except RanOutOfTime:
         return seen
     rerun = _reported(proc, report)
-    if rerun is None or not rerun.passed or rerun.executed < seen.errors:
+    if rerun is None or not rerun.passed or rerun.executed < seen.failed:
         # Still a lost connection only where whatever broke the second time broke that way too.
         lost = rerun is None or rerun.failed == rerun.disconnected
         return replace(seen, reproduced=rerun is not None and rerun.failed > 0,
                        disconnected=seen.disconnected if lost else 0)
-    return replace(seen, returncode=0, failed=0, errors=0, recovered=seen.errors)
+    return replace(seen, returncode=0, failed=0, errors=0, recovered=seen.failed)
 
 
 def _pytest_argv(python: list[str], config: Path, report: Path, ignored: list[Path],
@@ -887,7 +895,7 @@ def _reported(proc: subprocess.CompletedProcess | None, report: Path) -> Witness
     executed = max(artifact.total - artifact.skipped, 0)
     return Witnessed(proc.returncode, executed, artifact.failed, _tail(proc), "pytest",
                      errors=artifact.errors, first=artifact.first,
-                     disconnected=artifact.disconnected)
+                     disconnected=artifact.disconnected, answered=artifact.answered)
 
 
 def _together(base: Path, runs: list[tuple[Path, Witnessed]]) -> Witnessed:
@@ -920,6 +928,7 @@ def _what_broke_together(seen: list[Witnessed]) -> dict:
         "recovered": sum(one.recovered for one in seen),
         "reproduced": any(one.reproduced for one in seen),
         "disconnected": sum(one.disconnected for one in seen),
+        "answered": sum(one.answered for one in seen),
     }
 
 

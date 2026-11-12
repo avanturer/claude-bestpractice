@@ -21,6 +21,10 @@ The same call with `draft` marks one ready or pauses it again, and that is recor
 And it is the only event that says which agent a `TaskStop` stopped and what the agent was sent
 to do: kept for the card the session pauses, which the Stop gate writes them on (decision 0082).
 
+And the only one that hears what the founder answered in an `AskUserQuestion` dialog: no message
+of theirs starts a turn there, so `prompt-capture` never hears it, and a `+merge` they picked was
+no word at all (#326). Recorded as theirs, the way that hook records one they type (decision 0094).
+
 Fails open. A number that did not get learned costs a numbered merge its judgement and, once
 a `+merge` names the chat's pull requests, the word as well: the merge gate then says which
 pull request it could not place and names the merge that works. A hook that raised would
@@ -31,11 +35,19 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import config, gitpolicy, hookio, pullrequest, subagents  # noqa: E402
+from claude_bestpractice import (  # noqa: E402
+    config,
+    founder,
+    gitpolicy,
+    hookio,
+    pullrequest,
+    subagents,
+)
 
 
 def _an_agent_stopped(event: hookio.HookEvent) -> None:
@@ -48,10 +60,43 @@ def _an_agent_stopped(event: hookio.HookEvent) -> None:
     hookio.emit_silent()
 
 
+def _the_founder_answered(event: hookio.HookEvent) -> None:
+    """Record the grant the founder gave by answering a dialog, as `prompt-capture` records one
+    they type: what the chat showed them before it, the word, and the moment they spoke.
+
+    Not stood down with the pull-request flow, as that hook is not: the word is theirs whichever
+    gate reads it. Only their answer is read, never a question or an option the session wrote
+    that they did not pick (`founder.answered_in_a_dialog`), and only of a dialog `pre-tool` saw
+    asked with no answer of the session's own: the input this event carries holds the dialog's
+    answer whoever wrote it.
+    """
+    response = event.raw.get("tool_response")
+    approvals = founder.answered_in_a_dialog(event.tool_input, response)
+    if not approvals:
+        hookio.emit_silent()
+    event = hookio.placed(event)
+    ctx = hookio.repo(event.place)
+    if not founder.was_asked_without_answers(ctx, str(event.raw.get("tool_use_id") or "")):
+        hookio.emit_silent()
+    # What the chat showed them is counted from their message before this answer, which may be
+    # one sent while the session worked (#276); and as a typed word names what the message it
+    # answers named (decision 0066), this one names what the questions name by number.
+    pullrequest.prompted(ctx, event.session_id, *founder.interjected(event.transcript_path))
+    asked = founder.asked_in_a_dialog(event.tool_input, response)
+    pullrequest.shown(ctx, event.session_id, pullrequest.named_in_message(ctx, asked), named=True)
+    said = time.time()
+    founder.heard(ctx, approvals, event.session_id, at=said, source="question",
+                  ident=f"question:{event.raw.get('tool_use_id') or said}")
+    pullrequest.prompted(ctx, event.session_id, said)
+    hookio.emit_silent()
+
+
 def main() -> None:
     event = hookio.read_event()
     if event.tool_name == subagents.STOP_TOOL:
         _an_agent_stopped(event)
+    if event.tool_name == founder.QUESTION_TOOL:
+        _the_founder_answered(event)
     command = str(event.tool_input.get("command", "")) if event.tool_name == "Bash" else ""
     merges = pullrequest.merge_target(event.tool_name, command, event.tool_input) is not None
     # A shell line is here for the number `gh pr create` printed and for the merge that ran,
@@ -72,7 +117,8 @@ def main() -> None:
         # this call has run, and only now is the word spent and the work delivered.
         merge = pullrequest.ran(ctx, str(event.raw.get("tool_use_id") or event.session_id))
         if merge is not None:
-            pullrequest.complete(ctx, event.session_id, merge)
+            pullrequest.complete(ctx, event.session_id, merge, event.transcript_path,
+                                 str(event.raw.get("agent_id") or ""))
         hookio.emit_silent()
     if not pullrequest.opens_a_pull_request(event.tool_name, command):
         closed = pullrequest.closes(ctx, event.tool_name, command, event.tool_input,
@@ -88,8 +134,8 @@ def main() -> None:
     number = pullrequest.number_in(event.raw.get("tool_response"))
     # The same branch the obligation was filed under, derived the same way, or the
     # record this is meant to complete is not the one that gets stamped.
-    head = pullrequest.opened_from(ctx, event.tool_name, command, event.tool_input,
-                                   event.cwd or os.getcwd())
+    head, local = pullrequest.opening(ctx, event.tool_name, command, event.tool_input,
+                                      event.cwd or os.getcwd())
     if not head:
         hookio.emit_silent()
     if not pullrequest.learn_number(ctx, head, number):
@@ -100,7 +146,8 @@ def main() -> None:
         base = str(event.tool_input.get("base") or "") or gitpolicy.default_branch(ctx) or "main"
         pullrequest.opened(ctx, head, base, event.session_id, number=number,
                            draft=pullrequest.drafted(event.tool_name, command, event.tool_input),
-                           into=pullrequest.base_of(event.tool_name, command, event.tool_input))
+                           into=pullrequest.base_of(event.tool_name, command, event.tool_input),
+                           local=local)
     hookio.emit_silent()
 
 

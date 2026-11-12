@@ -417,3 +417,157 @@ class TestWhatTheWholeOfFuddyReadAsCredentials(unittest.TestCase):
     def test_a_literal_in_the_same_places_is_still_one(self):
         for line in self.STILL_SECRETS:
             self.assertTrue(redact.find(line), line)
+
+
+class TestANameInCodeIsNotACredential(unittest.TestCase):
+    """#336, #337, #348 and #354's neighbours: a name in code read as the literal it names. Each
+    file had to be renamed to be written, and the reviewer then named the line on the merge."""
+
+    def assertNotACredential(self, *lines: str) -> None:
+        for line in lines:
+            with self.subTest(line=line):
+                self.assertEqual([], redact.find(line))
+                self.assertEqual(line, redact.scrub(line))
+
+    def test_a_constant_handed_to_a_client_is_not_a_secret(self):
+        """#348: `NO_NETWORK` is a module constant, a placeholder for an offline transport."""
+        self.assertNotACredential(
+            "    api_key=NO_NETWORK,",
+            "client = Client(api_key=NO_NETWORK, transport=MockTransport(h))",
+            "api_key = NO_NETWORK",
+            "api_key=NO_NETWORK",
+            "    api_key=_OFFLINE_SENTINEL,",
+            "{ api_key: NO_NETWORK }",
+            "let token = undefined;",
+        )
+
+    def test_a_name_a_member_is_assigned_is_not_a_secret(self):
+        """#337: any attribute named `*_tokens` assigned from a parameter of the same name."""
+        self.assertNotACredential(
+            "self._out_of_tokens = out_of_tokens",
+            "        self._access_token = access_token",
+            "self.ran_out_of_tokens = out_of_tokens",
+            "self.out_of_tokens = truncated",
+            "    cls._token = token1234",
+            "    this.accessToken = accessToken2;",
+        )
+
+    def test_a_name_of_words_is_not_a_secret_where_code_assigns_one(self):
+        self.assertNotACredential(
+            "session_token = new_token",
+            "session_token = _new_token",
+            "SESSION_TOKEN = new_token",
+            "const apiKey = noNetworkKey;",
+            "    api_key=fake_key,",
+        )
+
+    def test_a_note_quoting_the_line_is_read_as_the_line(self):
+        """#336: a handoff note quoted llm.py:60 in backticks, and the closing backtick was read
+        as the value's last character. A sentence that ends on the name ends it with a period."""
+        self.assertNotACredential(
+            "llm.py:60 sets `self.out_of_tokens = out_of_tokens` (a bool).",
+            "- `self._access_token = access_token` was refused",
+            "llm.py:60 sets self._out_of_tokens = out_of_tokens.",
+            "llm.py:60 sets self.out_of_tokens = truncated.",
+            "the test builds it with session_token = new_token.",
+            "the client is built with api_key=NO_NETWORK.",
+        )
+
+    def test_a_word_of_a_message_is_not_a_secret(self):
+        """#354's neighbours: a word after a label, inside the string a message is written in."""
+        self.assertNotACredential(
+            'print("password: incorrect")',
+            'raise ValueError("token: malformed")',
+            'raise ValueError("token: malformed.")',
+            "print(f'tokens: unlimited {n}')",
+            "print(f\" per turn tokens: unlimited input {a['x'] / n:.0f}\")",
+            "raise AuthError('auth', \"password: incorrect\")",
+            "raise AuthError(\"auth\", 'password: incorrect')",
+            "raise AuthError('auth', `password: incorrect`)",
+            "log(`credentials: rejected for ${user}`)",
+        )
+
+    def test_the_name_of_the_authorization_header_is_not_a_secret(self):
+        self.assertNotACredential('_MAIN_TOKEN = "Authorization"',
+                                  "TOKEN_HEADER = 'authorization'")
+
+
+class TestALiteralBesideThoseNamesIsStillOne(unittest.TestCase):
+    """The readings above are by spelling and by place, and a literal keeps neither."""
+
+    def assertCaught(self, *lines: str) -> None:
+        for line in lines:
+            with self.subTest(line=line):
+                self.assertIn("assigned-secret", redact.find(line))
+
+    def test_what_the_triage_held_to_be_caught(self):
+        self.assertCaught(
+            "PASSWORD=correcthorsebatterystaple",
+            "PROD_DB_PASSWORD=postgres",
+            "SECRET_KEY=django_insecure_k3y_v4lue",
+            "spring.datasource.password=s3cretpass",
+            "`API_TOKEN=abcdef123456ghijkl`",
+            "API_KEY=aB3dE6gH9jK2mN5pQ8",
+        )
+
+    def test_a_passphrase_where_an_environment_sets_it(self):
+        """`KEY=value` with nothing between is how a `.env`, a shell and compose set a value;
+        a comma after it is a sentence going on, not an argument, under a key in capitals."""
+        self.assertCaught(
+            "DB_PASSWORD=correct_horse_battery",
+            "export DEPLOY_TOKEN=correct_horse_battery",
+            "      - POSTGRES_PASSWORD=correctHorseBattery",
+            "DB_PASSWORD=correct_horse_battery, then restart",
+            "db_password=correct_horse_battery",
+            "mysql --password=correct_horse_battery app",
+            'echo "DB_PASSWORD=correcthorse" >> .env',
+        )
+
+    def test_a_word_that_is_no_name_of_words(self):
+        """One word, a word in capitals, a word with a digit: spelled as a password is."""
+        self.assertCaught(
+            "password = correcthorse",
+            "API_KEY=CORRECTHORSE",
+            "API_KEY=ABCD_EFGH1234",
+            "session_token = new_token2",
+            "password = hunter22",
+        )
+
+    def test_only_a_member_of_the_object_is_one(self):
+        """A member of the object by its own name, assigned a name: not of another object, not
+        of a member, and not assigned what no language could name."""
+        self.assertCaught(
+            "myself.password = hunter22",
+            "obj.password = hunter22",
+            "cls.a.password = hunter22",
+            "this.password = p@ssw0rd!x",
+        )
+
+    def test_a_backtick_opens_a_literal_too(self):
+        self.assertCaught("token = `abc123def456`", "password: `hunter2hunter2`")
+
+    def test_a_value_that_is_no_message(self):
+        """Read in YAML, in a note with no string open, in one whose quote never closes on the
+        line, and in strings that do not go on in words."""
+        self.assertCaught(
+            "password: correcthorsebattery",
+            "  password: correcthorsebattery  # prod",
+            "Don't set password: correcthorsebattery in the file",
+            "Don't use password: correcthorsebattery for the `prod` stage",
+            'Set "x" first.\npassword: correcthorsebattery for the "prod" stage',
+            'print("token: s3cr3tv4lue")',
+            'print("token: AbCdEfGhIj")',
+            'print("token: abcdefghij, user")',
+            'print("token: correcthorse 2024")',
+        )
+
+
+class TestTheTradeTheseNamesMake(unittest.TestCase):
+    """Missed by the readings above, deliberately, as `redact.py` states where it makes them: a
+    passphrase spelled where code spells a name, and a word set inside a string after a label.
+    Do not "fix" one without reading the trade: each was a file a session could not write."""
+
+    def test_a_passphrase_spelled_as_code_spells_a_name_or_a_message(self):
+        for line in ("password = correct_horse_battery", "DB_PASSWORD=CORRECT_HORSE_BATTERY",
+                     'cfg = "token: abcdefghij"'):
+            self.assertEqual([], redact.find(line), line)

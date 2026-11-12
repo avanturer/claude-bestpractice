@@ -28,12 +28,13 @@ in the refusal and in the skill, where a reason belongs.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
 from pathlib import Path
 
-from . import store
+from . import founder, redact, store
 from .gitctx import GitContext
 
 # Both spellings the harness has used for the spawn. The tool is `Agent` in current
@@ -135,6 +136,115 @@ def tier_refusal(subagent_type: str, pinned: str) -> str:
     )
 
 
+# ---------------------------------------------------------------------------------------------
+# How each spawn stands, read off the chat's transcript.
+
+# Measured on Claude Code 2.1.322. A spawn is an assistant `tool_use` of `Agent`; its result is
+# a `tool_result` under the call's id, written as the call returns. A spawn of an agent type
+# nobody defined passed PreToolUse, failed inside the tool (PostToolUseFailure fired) and came
+# back `is_error`: no agent ran. One sent to the background came back at once, its
+# `toolUseResult` saying `async_launched` with the agent's id, and the agent reports back as a
+# `queue-operation` `enqueue` of a `<task-notification>` naming the call's `<tool-use-id>`, the
+# moment it ends, whether the turn is running or not.
+AT_WORK = "at work"
+NEVER_STARTED = "never started"
+BACK = "back"
+
+_A_SPAWN = re.compile(rb'"name":"(?:Agent|Task)"')
+_REPORTED = re.compile(r"<tool-use-id>([^<\s]+)</tool-use-id>")
+_NOTIFICATION = "<task-notification>"
+
+
+def standing(transcript_path: str, since: float = 0.0) -> dict[str, tuple[str, str, str]]:
+    """Each spawn the chat's transcript holds from `since` on, by its call's id: how it stands
+    (`AT_WORK`, `NEVER_STARTED`, `BACK`), what it was sent to do, and the agent's id once it went
+    to the background. Empty where the transcript cannot be read: its format is Claude Code's to
+    change, and a spawn nothing here can read stands as it did before this was asked."""
+    calls: dict[str, dict[str, str]] = {}
+    reported: set[str] = set()
+    for raw in founder.lines(transcript_path):
+        if b'"tool_use"' in raw and _A_SPAWN.search(raw):
+            _note_spawns(_decoded(raw), since, calls)
+        elif calls and b'"tool_result"' in raw:
+            _note_results(_decoded(raw), calls)
+        elif b'"queue-operation"' in raw and b"<tool-use-id>" in raw:
+            reported.update(_reports(_decoded(raw)))
+    return {call: (_how(row, call in reported), row["said"], row["agent"])
+            for call, row in calls.items()}
+
+
+def _decoded(raw: bytes) -> dict:
+    try:
+        entry = json.loads(raw)
+    except ValueError:
+        return {}
+    return entry if isinstance(entry, dict) else {}
+
+
+def _blocks(entry: dict) -> list[dict]:
+    message = entry.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    return [block for block in content if isinstance(block, dict)] if isinstance(content, list) else []
+
+
+def _note_spawns(entry: dict, since: float, calls: dict[str, dict[str, str]]) -> None:
+    if entry.get("type") != "assistant" or founder.moment(entry.get("timestamp")) < since:
+        return
+    for block in _blocks(entry):
+        if block.get("type") == "tool_use" and block.get("name") in SPAWN_TOOLS and block.get("id"):
+            sent = block.get("input") if isinstance(block.get("input"), dict) else {}
+            said = str(sent.get("description") or sent.get("subagent_type") or "an agent")
+            said = redact.scrub(" ".join(redact.strip_control(said).split()))[:DESCRIPTION_CHARS]
+            calls[str(block["id"])] = {"said": said, "result": "", "agent": ""}
+
+
+def _note_results(entry: dict, calls: dict[str, dict[str, str]]) -> None:
+    returned = entry.get("toolUseResult") if isinstance(entry.get("toolUseResult"), dict) else {}
+    for block in _blocks(entry):
+        row = calls.get(str(block.get("tool_use_id") or ""))
+        if row is None or block.get("type") != "tool_result":
+            continue
+        if block.get("is_error") is True:
+            row["result"] = NEVER_STARTED
+        elif returned.get("status") == "async_launched":
+            row["result"], row["agent"] = AT_WORK, str(returned.get("agentId") or "")
+        else:
+            row["result"] = BACK
+
+
+def _reports(entry: dict) -> list[str]:
+    """The calls a task's notification says have ended, as the harness queued it."""
+    said = str(entry.get("content") or "")
+    if entry.get("operation") != "enqueue" or not said.lstrip().startswith(_NOTIFICATION):
+        return []
+    return _REPORTED.findall(said)
+
+
+def _how(row: dict[str, str], reported: bool) -> str:
+    """No result yet is an agent still running beside the turn; launched, it is at work until it
+    reports. A notification can be filed before the result that launched it."""
+    if row["result"] == NEVER_STARTED:
+        return NEVER_STARTED
+    return BACK if reported or row["result"] == BACK else AT_WORK
+
+
+def never_started(transcript_path: str, calls: list[str]) -> set[str]:
+    """Which of these spawns' calls came back an error, so that no agent ran (#316)."""
+    wanted = {call for call in calls if call}
+    if not wanted:
+        return set()
+    return {call for call, (how, _, _) in standing(transcript_path).items()
+            if call in wanted and how == NEVER_STARTED}
+
+
+def at_work(transcript_path: str, since: float = 0.0, but: str = "") -> list[str]:
+    """What each agent the chat sent off from `since` on and that has not reported back was sent
+    to do: the question the Stop gate asks of `background_tasks`, asked where no event carries
+    them (#318). `but` is the agent asking, which is not waiting on itself."""
+    return [said for how, said, agent in standing(transcript_path, since).values()
+            if how == AT_WORK and not (but and agent == but)]
+
+
 def fanout_refusal(spawned: int, ceiling: int) -> str:
     """Why the next parallel agent is refused, in what it costs rather than in a rule."""
     return (
@@ -201,8 +311,6 @@ def stopped(ctx: GitContext, chat: str, response: object) -> str:
     "local_agent", "command": <its description>}` on Claude Code 2.1.319: the input names an id
     alone, and a shell's id looks like an agent's.
     """
-    from . import redact
-
     found = response if isinstance(response, dict) else {}
     ident = str(found.get("task_id") or "").strip()
     if not chat or not ident or str(found.get("task_type") or "").strip().lower() not in RESUMABLE:

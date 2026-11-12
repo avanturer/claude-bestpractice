@@ -8,7 +8,9 @@ was never recorded, and every merge after it was refused as if they had said not
 The harness writes every message it delivers into the session's transcript, and marks who it
 came from. So a gate that is about to refuse for want of the founder's word reads the
 transcript first (`catch_up`), and records what it finds exactly as `prompt-capture` records
-what it hears (`heard`): one road for the word, whichever door it came in by.
+what it hears (`heard`): one road for the word, whichever door it came in by. The third door is
+an `AskUserQuestion` dialog, whose answer is a tool result `pr-opened` hears and the transcript
+reader never reads (`answered_in_a_dialog`, decision 0094).
 
 Only what a person sent counts: a `user` entry or a queued message the harness marks as a
 human's, never a sidechain, a meta entry, a task notification or another agent's report. Of
@@ -24,7 +26,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from . import config, inbox, redact, store
 from .gitctx import GitContext
@@ -243,6 +245,160 @@ def switches_said(prompt: str) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------------------------
+# The founder's answer to a question the session put to them in a dialog.
+
+# The tool that asks. Its answer reaches no UserPromptSubmit: it is a tool result in the running
+# turn, and the transcript files it as one, which `_text_of` never reads. The founder picked
+# «+merge» in one and the merge was refused as if they had said nothing (#326).
+QUESTION_TOOL = "AskUserQuestion"
+
+
+def answered_in_a_dialog(tool_input: Any, tool_response: Any) -> dict[str, str]:
+    """The grants the founder gave by answering an `AskUserQuestion` dialog, as `prompt-capture`
+    records a message's: what they typed into it, read as a message of theirs, and each option
+    they picked whose label is the word and nothing else. Empty for anything else.
+
+    The session writes the questions and the labels, so neither counts by being there: only an
+    answer does, and a label only as `+merge` alone, as under a message of this plugin's only a
+    line holding nothing but the word counts (decision 0047). «Show me the diff, then +merge»
+    picked for the diff is no word. Nor is a dialog that closed on its own when the founder was
+    away (`afkTimeoutMs`), which submits what happened to be selected.
+
+    Read off the result Claude Code documents for the tool: `answers` maps each question's text
+    to the label picked, several joined with ", " or listed, or to the text typed under "Other";
+    `response` is a reply typed instead of answering; `annotations` hold notes typed beside one.
+    Any other shape says nothing, as an unreadable transcript does.
+    """
+    if not isinstance(tool_response, dict) or tool_response.get("afkTimeoutMs"):
+        return {}
+    granted: dict[str, str] = {}
+    for text in _answers_of(tool_input, tool_response) + _typed_beside(tool_response):
+        granted.update(approvals_said(text))
+    return granted
+
+
+def _answers_of(tool_input: Any, tool_response: dict[str, Any]) -> list[str]:
+    """What of a dialog's answers is the founder's: each label picked that is the word alone,
+    and what they typed under "Other"."""
+    labels = _labels_asked(_questions(tool_input, tool_response))
+    answers = tool_response.get("answers")
+    theirs: list[str] = []
+    for question, answer in (answers.items() if isinstance(answers, dict) else ()):
+        picked, typed = _picked(answer, labels.get(str(question), []))
+        theirs += [label for label in picked if config.only_approvals(label)] + typed
+    return theirs
+
+
+def _typed_beside(tool_response: dict[str, Any]) -> list[str]:
+    """What the founder typed in a dialog besides answering: a reply instead, notes beside."""
+    notes = tool_response.get("annotations")
+    typed = [note["notes"] for note in (notes.values() if isinstance(notes, dict) else ())
+             if isinstance(note, dict) and isinstance(note.get("notes"), str)]
+    reply = tool_response.get("response")
+    return typed + ([reply] if isinstance(reply, str) else [])
+
+
+# Where a dialog's answer travels. Claude Code 2.1.322 has the dialog write it into the call's
+# input before the tool runs (`answers`, "User answers collected by the permission component"),
+# so the input PostToolUse is handed holds it, and only the input the session sent can say
+# whether the session wrote it.
+ANSWERED_IN = ("answers", "response", "annotations")
+
+# Each dialog PreToolUse saw asked with no answer of the session's own, by its call's id: the
+# only dialogs whose answer `answered_in_a_dialog` is the founder's (decision 0094).
+ASKED = "questions-asked.json"
+_ASKED_SECONDS = 24 * 3600.0
+
+
+def answered_beforehand(tool_input: dict[str, Any]) -> list[str]:
+    """The fields of an answer that a dialog's call carries as the session sent it: the session
+    answering for the founder. Empty for a call that only asks."""
+    return [field for field in ANSWERED_IN if tool_input.get(field)]
+
+
+def answered_beforehand_refusal(fields: list[str]) -> str:
+    """Why such a call is refused, and the call that asks instead."""
+    named = ", ".join(f"`{field}`" for field in fields)
+    return (
+        f"claude-bestpractice: this {QUESTION_TOOL} call already carries {named}. Answers are the "
+        "founder's to give in the dialog, and one written into the call would come back as "
+        "theirs.\n"
+        "  Ask without them: send `questions` alone, and let the founder pick or type the answer."
+    )
+
+
+def asked_without_answers(ctx: GitContext, call: str) -> None:
+    """Note that PreToolUse saw this dialog's call, `call` its id, carry no answer of its own."""
+    if not call:
+        return
+    now = time.time()
+    with store.guarded_json(store.tier_b(ctx, ASKED), default={}) as box:
+        kept = box[0] if isinstance(box[0], dict) else {}
+        box[0] = {key: at for key, at in kept.items() if now - float(at) < _ASKED_SECONDS}
+        box[0][call] = now
+
+
+def was_asked_without_answers(ctx: GitContext, call: str) -> bool:
+    """Did PreToolUse see this dialog's call asked with no answer of its own? Spent once read.
+
+    The second line behind the refusal: a dialog whose PreToolUse never ran, or ran and refused
+    it, has no note, and its answer is no word of the founder's."""
+    with store.guarded_json(store.tier_b(ctx, ASKED), default={}) as box:
+        found = box[0].pop(call, None) if isinstance(box[0], dict) else None
+    return found is not None
+
+
+def asked_in_a_dialog(tool_input: Any, tool_response: Any = None) -> str:
+    """The questions a dialog put to the founder, one to a line: what their answer is about, as
+    the message a typed word answers is (decision 0066)."""
+    return "\n".join(str(question.get("question") or "")
+                     for question in _questions(tool_input, tool_response))
+
+
+def _questions(tool_input: Any, tool_response: Any) -> list[Any]:
+    """The questions a dialog asked, as its result echoes them, else as the call sent them."""
+    for source in (tool_response, tool_input):
+        questions = source.get("questions") if isinstance(source, dict) else None
+        if isinstance(questions, list):
+            return [question for question in questions if isinstance(question, dict)]
+    return []
+
+
+def _labels_asked(questions: list[Any]) -> dict[str, list[str]]:
+    """Each question's text, with the labels of the options it offered."""
+    asked: dict[str, list[str]] = {}
+    for question in questions:
+        options = question.get("options") if isinstance(question.get("options"), list) else []
+        asked[str(question.get("question") or "")] = [
+            str(option["label"]) for option in options
+            if isinstance(option, dict) and isinstance(option.get("label"), str)]
+    return asked
+
+
+def _picked(answer: Any, labels: list[str]) -> tuple[list[str], list[str]]:
+    """(labels picked, text typed) in one answer: a label, several joined with commas as a
+    multi-select joins them (", " in Claude Code), a list of them, or the founder's own text
+    under "Other" beside them.
+
+    The longest label first, so a label holding a shorter one between its commas is taken whole:
+    «Show the diff, then +merge» picked is that label, never «Show the diff» and a typed rest.
+    """
+    if isinstance(answer, list):
+        said = [part for part in answer if isinstance(part, str)]
+        return [part for part in said if part in labels], [part for part in said
+                                                           if part not in labels]
+    if not isinstance(answer, str):
+        return [], []
+    rest, picked = answer, []
+    for label in sorted(labels, key=len, reverse=True):
+        alone = re.compile(rf"(?:^|(?<=,))\s*{re.escape(label)}\s*(?=,|$)")
+        if alone.search(rest):
+            picked.append(label)
+            rest = alone.sub("", rest)
+    return picked, [rest]
+
+
+# ---------------------------------------------------------------------------------------------
 # Text a session writes that comes back as a turn.
 
 # The tools whose text Claude Code later hands a session as a turn of its own, by the field the
@@ -351,7 +507,7 @@ def _reading(transcript_path: str) -> tuple[list[Word], list[float]]:
     key = (str(path), stamp.st_size, stamp.st_mtime_ns)
     if key not in _READ:
         _READ.clear()
-        _READ[key] = _read(path, stamp.st_size)
+        _READ[key] = _read(path)
     return _READ[key]
 
 
@@ -360,21 +516,30 @@ def _reading(transcript_path: str) -> tuple[list[Word], list[float]]:
 _READ: dict[tuple[str, int, int], tuple[list[Word], list[float]]] = {}
 
 
-def _read(path: Path, size: int) -> tuple[list[Word], list[float]]:
+def _read(path: Path) -> tuple[list[Word], list[float]]:
     words: list[Word] = []
     moments: list[float] = []
-    try:
-        with path.open("rb") as handle:
-            if size > _MOST_BYTES:
-                handle.seek(size - _MOST_BYTES)
-                handle.readline()
-            for raw in handle:
-                literal = _A_LITERAL.search(raw) is not None
-                if literal or _QUEUED in raw:
-                    _note(raw, literal, words, moments)
-    except OSError:
-        return [], []
+    for raw in lines(str(path)):
+        literal = _A_LITERAL.search(raw) is not None
+        if literal or _QUEUED in raw:
+            _note(raw, literal, words, moments)
     return words, moments
+
+
+def lines(transcript_path: str, most_bytes: int = _MOST_BYTES) -> Iterator[bytes]:
+    """The lines of the last `most_bytes` of a transcript, oldest first, as the harness wrote
+    them; none once it cannot be read. Where that stretch starts inside a line, from the next one:
+    half a line is no JSON. The one reader of a transcript's end, for whatever is looked for in it.
+    """
+    try:
+        with open(transcript_path, "rb") as handle:
+            size = handle.seek(0, 2)
+            handle.seek(max(size - most_bytes, 0))
+            if size > most_bytes:
+                handle.readline()
+            yield from handle
+    except (OSError, TypeError, ValueError):
+        return
 
 
 def _note(raw: bytes, literal: bool, words: list[Word], moments: list[float]) -> None:
@@ -399,17 +564,8 @@ def messages(transcript_path: str, most_bytes: int = _MOST_BYTES) -> list[str]:
     """What a person typed into this chat, oldest first, from the last `most_bytes` of its
     transcript: turns they started and messages they sent while the session worked, and
     nothing else the harness files as a user entry (`_from_a_person`)."""
-    try:
-        with open(transcript_path, "rb") as handle:
-            size = handle.seek(0, 2)
-            handle.seek(max(size - most_bytes, 0))
-            if size > most_bytes:
-                handle.readline()
-            lines = handle.read().splitlines()
-    except (OSError, TypeError, ValueError):
-        return []
     said: list[str] = []
-    for raw in lines:
+    for raw in lines(transcript_path, most_bytes):
         try:
             entry = json.loads(raw)
         except ValueError:
@@ -444,7 +600,7 @@ def _from_a_person(entry: dict[str, Any]) -> tuple[str, str, float] | None:
         return None
     source, content, ident = found
     text = _text_of(content)
-    at = _moment(source.get("timestamp") or entry.get("timestamp"))
+    at = moment(source.get("timestamp") or entry.get("timestamp"))
     if not text or not at or not _a_persons(source):
         return None
     return str(ident or f"at:{at:.3f}"), text, at
@@ -491,7 +647,7 @@ def _text_of(content: Any) -> str:
     return ""
 
 
-def _moment(stamp: Any) -> float:
+def moment(stamp: Any) -> float:
     """An ISO timestamp as the harness writes it, in seconds. 0.0 when it is not one."""
     if not isinstance(stamp, str) or not stamp:
         return 0.0
@@ -572,7 +728,7 @@ def _the_session_went_on(raw: bytes, since: float) -> bool:
         entry = json.loads(raw)
     except ValueError:
         return False
-    if not isinstance(entry, dict) or _moment(entry.get("timestamp")) < since:
+    if not isinstance(entry, dict) or moment(entry.get("timestamp")) < since:
         return False
     if entry.get("type") == "assistant":
         return True

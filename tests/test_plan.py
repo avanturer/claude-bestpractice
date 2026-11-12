@@ -1607,6 +1607,66 @@ class TestACardIsJudgedAndWrittenUnderOneLock(PlanCase):
         self.assertEqual(plan.DOING, plan.find(self.ctx(), self.card.id).state)
 
 
+class TestACardASiblingMovedSinceItWasRead(PlanCase):
+    """`resume`, the sweeps and the reaper move cards without the claim lock. A card read, moved
+    by one of them, then moved or written where it had been read ended the hook doing it with
+    FileNotFoundError, at a session start and at a merge (#343)."""
+
+    def in_flight(self) -> plan.Task:
+        ctx = self.ctx()
+        task = plan.add(ctx, "the work", paths=["src/app.py"], done_when="stated")
+        return plan.claim(ctx, task.id, "s1", ctx.branch)[0]
+
+    def moved_under_each_listing(self, times: int):
+        """`copies` as a sibling's move between the listing and the rename makes it, `times`
+        times over: the copy listed is gone by the time it is moved."""
+        from unittest import mock
+
+        listed = plan.copies
+        moved: list[str] = []
+
+        def copies(ctx, task_id, *rest, **named):
+            found = listed(ctx, task_id, *rest, **named)
+            if found and len(moved) < times:
+                away = plan.NEXT if found[0].state == plan.PAUSED else plan.PAUSED
+                moved.append(plan._move(found[0], away).state)
+            return found
+
+        return mock.patch.object(plan, "copies", copies)
+
+    def test_a_delivery_passes_by_a_card_a_sibling_moved_first(self):
+        from unittest import mock
+
+        task = self.in_flight()
+        read = plan.held_by(self.ctx(), "s1")
+        plan.pause(self.ctx(), task.id, "waiting on the schema decision")
+
+        with mock.patch.object(plan, "held_by", return_value=read):
+            closed = plan.settle_delivered(self.ctx(), "s1", ["src/app.py"], "the merge")
+
+        self.assertEqual([], closed)
+        self.assertEqual([plan.PAUSED], [c.state for c in plan.copies(self.ctx(), task.id)])
+
+    def test_a_close_reads_the_card_again_when_it_moved_under_the_move(self):
+        task = self.in_flight()
+
+        with self.moved_under_each_listing(1):
+            landed, error = plan.complete(self.ctx(), task.id)
+
+        self.assertEqual("", error)
+        self.assertEqual(plan.DONE, landed.state)
+        self.assertEqual([plan.DONE], [c.state for c in plan.copies(self.ctx(), task.id)])
+
+    def test_a_card_that_keeps_moving_is_left_with_the_close_to_run_again(self):
+        task = self.in_flight()
+
+        with self.moved_under_each_listing(plan.CLAIM_READS):
+            landed, error = plan.complete(self.ctx(), task.id)
+
+        self.assertIsNone(landed)
+        self.assertIn(f"claude-bp-plan done {task.id}", error)
+
+
 class TestOneCardInAnotherEncodingStopsNothing(PlanCase):
     """A card saved in cp1251 raised UnicodeDecodeError out of every reader of the ledger:
     `claude-bp-plan list` died on a traceback, and every Write in every session was refused

@@ -1,5 +1,122 @@
 # Changelog
 
+## v2.16.0
+
+The plugin's own defect reports reach the issue tracker as they happen, and only about the code
+that runs now: fifty held for a month went in one burst, most about defects fixed long before
+(#313–#362). Every one of them was checked against the code; what was still broken is fixed here.
+A chat is one session wherever its own process acts (#312), a pull request is filed under its
+GitHub head and a `+merge` picked in a dialog counts (#325, #326), a name in code is not a
+credential (#336, #337, #348), and a lost connection is no verdict wherever it broke (#339, #355).
+
+- **The owner's defect reports are filed the moment they are captured.** Where this machine's
+  `gh` files as the owner of the reports' repository, an unset `report_defects` is `auto`, and a
+  session's `claude-bp-report defect` or a crashed gate starts the sender at once, detached.
+  Anyone else still holds reports until they send them; a written `report_defects` wins either
+  way (decision 0092).
+- **A report is sent only if this version was seen to do it.** One last seen on an older version
+  is held back, and `claude-bp-report` names how many and from which versions. Nothing is sent
+  while a newer version is installed or released: it may have fixed what the reports describe.
+  Two senders at once file each report once: they read what is unsent inside a lock.
+- **A chat back in its tree after a resume is one session there.** It resumed in the main
+  checkout while its old CLI ran on, went back into its tree with `EnterWorktree`, and its own
+  calls there wrote the old CLI's record as that CLI's: the removal of the tree, the merge in it
+  and its own card were refused from the main checkout as "another process of this chat" (#312,
+  #313, #319, #351). A hook now stamps the CLI it runs under onto a record that is the chat's
+  past before writing it, from the tool gate, the founder's message and the finish alike; the old
+  CLI writing for itself is still live again (decision 0093, revising 0091). Repair 0050 hands a
+  resumed chat back the records an older version wrote for it as its old CLI's.
+- **An agent writes the files of the card its chat handed it.** After a resume its tree's record
+  named the old CLI, so the card SubagentStart named covered nothing there and `claim` called the
+  holder a live session, which was the chat (#320, #321). Where no pid is readable, the trees made
+  for one chat now hold one session with each other as well as with the main checkout, so a
+  parent's write is covered by the card its agent claimed in the agent's tree (#315).
+- **`git add -A` after `/clear` takes the session's own files.** The record the conversation
+  before `/clear` left in the tree names the same CLI and is no longer read as a sibling's (#361).
+  The gates asking whose tree, whose files and whose card now read one definition of this
+  session, `sessions.identities`.
+- **A refusal over a card the chat holds under another id names `claude-bp-plan claim <id>`.**
+  Where the card naming the path is the chat's and `claim` would hand it over, the write, merge
+  and finish refusals name that claim instead of `add` and `update`, which filed the same work
+  twice (#315, #320).
+- **A pull request is filed under the head GitHub opened it on.** `gh pr create` from a branch
+  pushed under another name (`git push -u origin tmp/x:fix/y`) opens it on `fix/y`, and the
+  record said `tmp/x`: deleting `tmp/x` closed a pull request GitHub still had open, and every
+  `+merge` after skipped it. It is now filed under `fix/y` with `tmp/x` beside it, and every gate
+  that asks about the branch a tree has checked out finds it under either name (#325, decision
+  0095).
+- **A branch gone from the clone settles nothing GitHub may still have open.** The record leaves
+  the board as before, marked `branch gone`, and the founder's `+merge` names its number again
+  where the message they answer names it or a refusal puts it to them; a merge of it that runs
+  records it as merged. Records an older version closed that way are marked by repair 0049
+  (#325).
+- **`+merge` picked in an `AskUserQuestion` dialog is the founder's word.** The answer starts no
+  turn, so no hook heard it. `pr-opened` now reads it on the PostToolUse entry it already had:
+  what they typed into the dialog, as a message of theirs, and an option they picked whose label
+  is the word and nothing else. A question, an option nobody picked, a label that buries the word
+  in a sentence and a dialog that closed while they were away grant nothing. The merge refusal
+  says a pick in a dialog and a typed message both count (#326, decision 0094).
+- **A session cannot answer its own dialog.** An `AskUserQuestion` call that already carries
+  `answers`, `response` or `annotations` is refused at PreToolUse: the answers are the founder's
+  to give in the dialog. Claude Code writes the dialog's answer into the call's input, so only
+  PreToolUse sees what the session sent, and an answer counts only from a dialog it saw asked
+  without one (#326, decision 0094).
+- **A name in code is not a credential, in the write gate or on the merge.** A constant handed to
+  a client (`api_key=NO_NETWORK,`), a name of words assigned the way code assigns one
+  (`session_token = new_token`) and anything a member of the object is assigned
+  (`self._out_of_tokens = out_of_tokens`) are read as names, not literals; the same passphrase
+  where a `.env`, a shell or compose sets it (`DB_PASSWORD=correct_horse_battery`) is still
+  refused, and so is any value with a digit (#337, #348).
+- **A note quoting code in backticks is read as the code it quotes.** A closing backtick, or the
+  period ending a sentence, was taken into the value, so `` `self.out_of_tokens = out_of_tokens`
+  `` in a handoff note was refused as a credential; a backtick that opens a value still marks a
+  literal (#336).
+- **A word of a message is not a password.** `print("password: incorrect")`, `ValueError("token:
+  malformed")` and `f"tokens: unlimited {n}"` are written: a lowercase word under a label, inside
+  a string that goes on in words or closes after it. #354's own line is redacted and every rebuilt
+  form of it already passed; these are its neighbours (#354).
+- **A finding an older version filed over such a line stops blocking the merge by itself.** It is
+  re-asked of the file at the merge, as every finding is (#80), so no repair is owed (#337).
+- **A connection lost in a test's body is no verdict on the code either.** pytest reports a
+  connection a fixture opened as an ERROR at setup, and one the test's body opened as a FAILURE.
+  One such FAILURE beside 54 ERRORs, every one `server closed the connection unexpectedly`, got no
+  second run and was filed red (#355, #339, and #327, #334, #349 wherever the break came in a test
+  body). The gate now goes by what the exception says, not by pytest's phase. A FAILURE on a lost
+  or refused connection is run again with the ERRORs, and a run in which every test that broke lost
+  its connection is UNVERIFIED for the founder's `+merge`. A failed assertion never counts, whatever
+  it quotes, and neither does any other exception (decision 0097, revising 0067 and 0034).
+- **A red record an older gate filed over such a run goes on the upgrade.** Repair 0044 is now at
+  revision 2, so clones that already ran it run it again. It reads the reports the gate kept and
+  counts a body disconnect the way the gate now does.
+- **A jest project without `jest-junit` is asked for a report it can write.** The gate named
+  `--reporters=jest-junit` to a jest app that does not have it (#358). It now names
+  `npx jest --ci --json --outputFile=…/test-reports/<suite>/report.json`, which needs nothing
+  installed, and reads that report: passed, failed, pending and todo tests, a file that could not
+  run counted as a broken test, and jest's own `success`. `jest-junit` is named only to a project
+  that depends on it.
+- **A spawn that never started no longer counts toward the fan-out ceiling.** Three `Agent` calls
+  for an agent type nobody had defined failed inside the tool, and the next three spawns of the
+  turn were refused as past `subagent_fanout` (#316). A spawn whose call came back an error, as
+  the transcript files it under the call's id, is now given back the moment the ceiling would
+  refuse another; one the transcript does not show yet still counts (decision 0098).
+- **A merge no longer closes a card while an agent the chat sent off is still at work.** A merge
+  of other files closed the card a subagent was writing under, and the agent's next write was
+  refused as work no card claimed (#318). As the Stop gate closes none then, the merge now leaves
+  each card it carried in `doing`, written what was delivered and that an agent is at work, for
+  a later delivery or finish to close. An agent sent off before the chat's last turn that ended
+  with none at work is not waited on, nor is the agent that merged (decision 0098).
+- **A card a sibling moved first no longer ends a close or a delivery with FileNotFoundError.**
+  `done`'s fallback move and a delivery's note on the card went to the path it had been read at;
+  a close now reads the card again, as `claim` does, and a delivery passes it by (#343).
+- **The walks a hook runs over the repository go on past a directory removed mid-walk.** The
+  stage's migrations scan, a directory anchor and the founder's rules were still read with
+  `rglob`, which on Python 3.10 raised FileNotFoundError for a sibling's tree or a reinstall
+  removed while it walked (#340). They share the one walk the TODO-registry scan already had.
+- **The suite carries nothing of the Claude Code session it runs under.** It inherited the
+  session's messaging socket, so a fixture's "feat/other was merged" was delivered into the live
+  session running it as a peer's message; every `CLAUDE*` variable but the plugin's own switches
+  is dropped now, as CI has none.
+
 ## v2.15.1
 
 A chat resumed after its window went away owns the tree it worked in, and a removal no longer
