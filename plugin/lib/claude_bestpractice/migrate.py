@@ -979,6 +979,23 @@ def _clear_blockers_off_cards_not_paused(ctx: GitContext) -> str:
         if cleared else ""
 
 
+def _hand_a_resumed_chat_the_records_it_wrote(ctx: GitContext) -> str:
+    """Records of a resumed chat that still name its CLI from before the resume.
+
+    Until this version the chat's own calls in a tree it went back into wrote that CLI's record
+    as the old CLI's, and the record stood live, another process of the chat, for as long as the
+    old CLI ran: the tree, the merge in it and the card were refused to the chat (#312). The fix
+    stamps the chat's CLI from here on, and only onto a record of its past; one written since
+    the resume reads as the present, so these are stamped once, here
+    (`sessions.taken_back_from_the_past`).
+    """
+    from . import sessions
+
+    moved = sessions.taken_back_from_the_past(ctx)
+    return (f"{moved} record(s) of a resumed chat named its CLI from before the resume; they "
+            "name the one it runs in now") if moved else ""
+
+
 def _refresh_what_pull_requests_are_blocked_by(ctx: GitContext) -> str:
     """Open pull requests the founder's status line calls blocked by what an older gate listed.
 
@@ -1982,6 +1999,8 @@ _REPAIRS = {
     "0047-clear-blockers-off-cards-not-paused": (1, _clear_blockers_off_cards_not_paused),
     "0048-judge-open-pull-requests-again": (1, _refresh_what_pull_requests_are_blocked_by),
     "0049-a-branch-gone-closes-no-pull-request": (1, _mark_pull_requests_closed_by_a_branch_gone),
+    "0050-hand-a-resumed-chat-the-records-it-wrote":
+        (1, _hand_a_resumed_chat_the_records_it_wrote),
 }
 
 

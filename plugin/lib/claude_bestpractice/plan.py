@@ -1731,6 +1731,51 @@ def held_by(ctx: GitContext, session_id: str, doing: list[Task] | None = None) -
     return _owned(ctx, session_id, DOING, doing)
 
 
+def to_take_back(ctx: GitContext, session_id: str, path: str = "") -> Task | None:
+    """A card in `doing` this chat holds under an id that is not this session's, naming `path`
+    when one is given, that `claim` would hand to this session. None where there is none.
+
+    The id it had in another tree, written by a process the chat has since left: its agent
+    claimed the card in the agent's tree before the connection dropped, or the records there
+    are from before a restart. A write under that card was refused for having nothing on the
+    board, and the refusal named `add` and `update`, a second card for the same work, while
+    `claim` of the first said it was held by "live session S-…", which was the chat itself
+    (#315, #320, #321). Only a card `claim` would take is named: one a live process of this
+    chat holds belongs to a session of its own (decision 0032), and a command the refusal names
+    must run as printed (decision 0020).
+    """
+    from . import hookio, sessions
+
+    harness = hookio.harness_of(session_id, str(ctx.worktree_root))
+    if not harness:
+        return None
+    mine = sessions.identities(ctx, session_id)
+    for card in load_all(ctx, DOING):
+        if card.owner in mine or not hookio.composed_from(card.owner, harness):
+            continue
+        if path and not carried_by(card, [path]):
+            continue
+        if _claimable(ctx, card.id, session_id)[0] is not None:
+            return card
+    return None
+
+
+def taking_it_back(ctx: GitContext, session_id: str, paths: list[str]) -> str:
+    """The lines a refusal over unclaimed work prints in place of `add` and `update`, where this
+    chat holds a card naming one of `paths` (any card in `doing`, for no paths) under another id
+    (`to_take_back`). "" where it holds none."""
+    from . import sessions
+
+    for path in paths or [""]:
+        held = to_take_back(ctx, session_id, path)
+        if held is not None:
+            names = f"names {path}" if path else "is in `doing`"
+            return (f"  This chat holds {held.id} under {sessions.called(ctx, held.owner)}, an id "
+                    f"it had in another tree or process that is not working now, and the card "
+                    f"{names}. Take it back:\n  claude-bp-plan claim {held.id}")
+    return ""
+
+
 def closed_by(ctx: GitContext, session_id: str) -> list[Task]:
     """The cards this session has closed, under any id it has had. `done` keeps the owner
     precisely so this can be asked (#220)."""

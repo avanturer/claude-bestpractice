@@ -691,17 +691,23 @@ def _holds_a_card(ctx, session_id: str, touched: list[str] | None = None) -> boo
     )
 
 
-def _card_commands(ctx, event, paths: str) -> str:
-    """The two commands that put this call's work on the board, as a refusal prints them.
+def _card_commands(ctx, event, paths: str, path: str = "") -> str:
+    """The commands that put this call's work on the board, as a refusal prints them.
 
-    The card a founder's message already opened for this session, when there is one. Sent to
-    `add` instead, a session filed a second card for the same instruction and left the first
-    sitting in NEXT over finished work — the duplicate a real session made, and the one the
-    Stop gate already stopped asking for. `--done-when` in both, because `claim` refuses a
+    The card this chat already holds under another id, when `claim` would hand it over
+    (`plan.to_take_back`), naming `path` where the call names one: sent to `add` and `update`
+    instead, the session filed a second card for the work its agent had claimed (#315, #320).
+    Else the card a founder's message already opened for this session, when there is one.
+    Sent to `add` instead, a session filed a second card for the same instruction and left the
+    first sitting in NEXT over finished work — the duplicate a real session made, and the one
+    the Stop gate already stopped asking for. `--done-when` in both, because `claim` refuses a
     card without one (decision 0020: every command a refusal names runs as printed).
     """
     from claude_bestpractice import plan
 
+    held = plan.taking_it_back(ctx, event.session_id, [path] if path else [])
+    if held:
+        return held
     done_when = '--done-when "<what has to become true>"'
     opened = plan.opened_for(ctx, str(event.raw.get("session_id") or ""))
     if opened is not None:
@@ -1768,18 +1774,14 @@ def main() -> None:
             hookio.deny_tool(founder.written_for_a_turn_refusal("shell line's `claude`", carried)
                              + REFUSAL_IS_YOURS)
 
-    rec = sessions.get(ctx, event.session_id)
-    if rec is None:
-        # No record means SessionStart never ran, or something deleted it. Re-register
-        # and keep enforcing. Allowing here — the previous behaviour — made every gate
-        # in this file switch off for any session whose record went missing, so the
-        # secret scan and the leases could be disabled with `rm`.
-        rec = sessions.adopt(ctx, event.session_id)
-    else:
-        # And a record whose stamp is a process from before a restart is this session's
-        # all the same: its own hook is running. Left as it was, every sibling read the
-        # live chat as dead and its card as theirs to take.
-        rec = sessions.restamped(ctx, rec)
+    # No record means SessionStart never ran, or something deleted it: re-registered, and
+    # enforcing goes on. Allowing here — the previous behaviour — made every gate in this
+    # file switch off for any session whose record went missing, so the secret scan and the
+    # leases could be disabled with `rm`. And a record whose stamp is a process from before
+    # a restart, or the chat's CLI from before a resume, is this session's all the same: its
+    # own hook is running. Left as it was, every sibling read the live chat as dead and its
+    # card as theirs to take, and the chat read its own tree as another process's (#312).
+    rec = sessions.own_record(ctx, event.session_id)
 
     # What another session needed this one to know, delivered into this session's own
     # inbox before the call it is about to make. The board is injected once at session
@@ -2686,7 +2688,7 @@ def main() -> None:
                     "  Every sibling session reads the board to decide what is safe to "
                     "touch, and unlisted work is invisible to all of them — so this is "
                     "asked BEFORE the write, while there is still something to protect.\n"
-                    + _card_commands(ctx, event, shlex.quote(unlisted))
+                    + _card_commands(ctx, event, shlex.quote(unlisted), unlisted)
                 )
 
         # And the work that never writes a file. The demand above reads the paths a call

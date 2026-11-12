@@ -326,12 +326,16 @@ def _occupied(ctx: GitContext, tree: Path, session_id: str = "") -> bool:
 
 
 def _occupants(ctx: GitContext, tree: Path, session_id: str = "") -> list | None:
-    """The live records standing in `tree`, but this session's own process; None where the
-    registry cannot be read, which every caller takes as somebody being there."""
+    """The live records standing in `tree`, but this session's own; None where the registry
+    cannot be read, which every caller takes as somebody being there."""
     from . import sessions
 
-    mine = sessions.my_pid(ctx, session_id)
     try:
+        # Its own on the proof of its process alone: what it is let do in that tree is a
+        # write, a reset or a forced removal, and the tree registry cannot tell a `claude -p`
+        # the chat started from the chat (decision 0032).
+        mine = (sessions.identities(ctx, session_id, proven=True, its_past=True)
+                if session_id else set())
         live = sessions.live_sessions(ctx)
     except Exception:  # noqa: BLE001 - an unreadable registry is not permission to write
         return None
@@ -340,8 +344,9 @@ def _occupants(ctx: GitContext, tree: Path, session_id: str = "") -> list | None
         # Not me under an older identity. A resumed chat gets a NEW session id, so the
         # record it left in its previous tree is live and is not excluded by id — and the
         # session was refused its own former worktree, by a refusal telling it to go ask
-        # the owner, who was the reader (#89). The process is what survives a resume.
-        if mine and record.pid == mine:
+        # the owner, who was the reader (#89). The process is what survives a resume, and
+        # `identities` reads it, as the gate staging this tree does (#361).
+        if record.session_id in mine:
             continue
         try:
             if Path(record.worktree).resolve() == tree:
@@ -1057,12 +1062,13 @@ def _claimed_here(ctx: GitContext, session_id: str) -> set[str]:
     Never this session's, under any id it has had. It files its card in the main checkout
     and then moves into its own tree, which makes it a second identity with the first one
     still live — and that first record, naming the very paths being staged, was read as a
-    sibling's, refusing the ordinary commit in the tree this plugin sent it to.
+    sibling's, refusing the ordinary commit in the tree this plugin sent it to. Nor the
+    conversation this CLI held before a `/clear` (#361).
     """
     from . import sessions
 
     here = ctx.worktree_root.resolve()
-    mine = sessions.identities(ctx, session_id)
+    mine = sessions.identities(ctx, session_id, its_past=True)
     claimed: set[str] = set()
     for record in sessions.live_sessions(ctx):
         if record.session_id in mine or Path(record.worktree).resolve() != here:
