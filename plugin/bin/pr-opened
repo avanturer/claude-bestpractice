@@ -64,9 +64,11 @@ def _the_founder_answered(event: hookio.HookEvent) -> None:
     """Record the grant the founder gave by answering a dialog, as `prompt-capture` records one
     they type: what the chat showed them before it, the word, and the moment they spoke.
 
-    Not stood down with the pull-request flow or the plugin, as that hook is not: the word is
-    theirs whichever gate reads it. Only their answer is read, never a question or an option
-    the session wrote that they did not pick (`founder.answered_in_a_dialog`).
+    Not stood down with the pull-request flow, as that hook is not: the word is theirs whichever
+    gate reads it. Only their answer is read, never a question or an option the session wrote
+    that they did not pick (`founder.answered_in_a_dialog`), and only of a dialog `pre-tool` saw
+    asked with no answer of the session's own: the input this event carries holds the dialog's
+    answer whoever wrote it.
     """
     response = event.raw.get("tool_response")
     approvals = founder.answered_in_a_dialog(event.tool_input, response)
@@ -74,6 +76,8 @@ def _the_founder_answered(event: hookio.HookEvent) -> None:
         hookio.emit_silent()
     event = hookio.placed(event)
     ctx = hookio.repo(event.place)
+    if not founder.was_asked_without_answers(ctx, str(event.raw.get("tool_use_id") or "")):
+        hookio.emit_silent()
     # What the chat showed them is counted from their message before this answer, which may be
     # one sent while the session worked (#276); and as a typed word names what the message it
     # answers named (decision 0066), this one names what the questions name by number.

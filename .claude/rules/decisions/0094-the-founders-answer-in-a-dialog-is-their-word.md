@@ -13,6 +13,10 @@ they typed into the dialog (under "Other", as a reply, as a note) is read as a m
 A question, an option nobody picked, and a dialog that closed on its own while they were away
 count for nothing. Heard by `pr-opened`, on the PostToolUse entry it already has.
 
+**A dialog's call that already carries `answers`, `response` or `annotations` is refused at
+PreToolUse**: the answers are the founder's to give in the dialog. A call that asks without them
+is noted by its id, and no answer of a dialog not noted counts.
+
 This revises decision 0010: the word is read from the founder's own message, or from their own
 answer to a dialog.
 
@@ -21,17 +25,17 @@ answer to a dialog.
 > запись считается только из обычного сообщения.
 
 No hook heard the pick: it starts no turn, and the transcript files it as a tool result, which
-the reader of their words skips (#326). The merge refusal told the session to ask, and asked in a
-dialog, the founder answered into nothing.
+the reader of their words skips (#326). Read in Claude Code 2.1.322: the dialog writes the answer
+into the call's input before the tool runs, so PostToolUse's input holds it whoever wrote it, and
+only PreToolUse sees the input the session sent.
 
 ## Rejected
-- **A thirteenth hook entry.** The budget is twelve; `pr-opened` already runs on PostToolUse.
-- **Any label holding the word.** The session writes the labels: «Show the diff, then +merge»
-  picked for the diff would merge.
-- **Reading the dialog out of the transcript.** Its result's text quotes questions and labels
-  the session wrote, unmarked.
+- **A thirteenth hook entry.** The budget is twelve; both gates already run on these events.
+- **Any label holding the word.** «Show the diff, then +merge» picked for the diff would merge.
+- **Reading the dialog out of the transcript.** Its text quotes what the session wrote, unmarked.
 
 ## Cost accepted
-Whatever answers a dialog for the founder answers as them, a hook or a `claude -p` permission host
-included, whoever set it up: Claude Code's result does not say who picked. A label that explains
-itself beside the word is not read; the explanation goes in the option's description.
+A hook or a `claude -p` permission host set up outside the session's own call answers a dialog as
+the founder: Claude Code's result does not say who picked. A label that explains itself beside
+the word is not read; the explanation goes in the option's description. A dialog answered where
+`pre-tool` did not run, the plugin switched off among them, grants nothing.

@@ -1748,6 +1748,18 @@ def main() -> None:
                              + REFUSAL_IS_YOURS)
         hookio.emit_silent()
 
+    # A dialog the session answers itself puts nothing to the founder, and its answer would come
+    # back as theirs (#326). The input the session sends is the one place that tells: the dialog
+    # writes the founder's answer into the same fields before the tool runs. A dialog asked
+    # without one is noted for `pr-opened`, which counts no answer of a dialog not noted here
+    # (decision 0094).
+    if event.tool_name == founder.QUESTION_TOOL:
+        carried = founder.answered_beforehand(event.tool_input)
+        if carried:
+            hookio.deny_tool(founder.answered_beforehand_refusal(carried) + REFUSAL_IS_YOURS)
+        founder.asked_without_answers(ctx, str(event.raw.get("tool_use_id") or ""))
+        hookio.emit_silent()
+
     # And a prompt handed to another `claude` on a shell line is such a turn too: the child's
     # hook records it under this session's id, and `claude -p '+merge'` was a grant.
     if event.tool_name == "Bash" and "claude" in str(event.tool_input.get("command", "")):

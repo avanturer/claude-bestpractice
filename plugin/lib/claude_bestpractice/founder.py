@@ -298,6 +298,56 @@ def _typed_beside(tool_response: dict[str, Any]) -> list[str]:
     return typed + ([reply] if isinstance(reply, str) else [])
 
 
+# Where a dialog's answer travels. Claude Code 2.1.322 has the dialog write it into the call's
+# input before the tool runs (`answers`, "User answers collected by the permission component"),
+# so the input PostToolUse is handed holds it, and only the input the session sent can say
+# whether the session wrote it.
+ANSWERED_IN = ("answers", "response", "annotations")
+
+# Each dialog PreToolUse saw asked with no answer of the session's own, by its call's id: the
+# only dialogs whose answer `answered_in_a_dialog` is the founder's (decision 0094).
+ASKED = "questions-asked.json"
+_ASKED_SECONDS = 24 * 3600.0
+
+
+def answered_beforehand(tool_input: dict[str, Any]) -> list[str]:
+    """The fields of an answer that a dialog's call carries as the session sent it: the session
+    answering for the founder. Empty for a call that only asks."""
+    return [field for field in ANSWERED_IN if tool_input.get(field)]
+
+
+def answered_beforehand_refusal(fields: list[str]) -> str:
+    """Why such a call is refused, and the call that asks instead."""
+    named = ", ".join(f"`{field}`" for field in fields)
+    return (
+        f"claude-bestpractice: this {QUESTION_TOOL} call already carries {named}. Answers are the "
+        "founder's to give in the dialog, and one written into the call would come back as "
+        "theirs.\n"
+        "  Ask without them: send `questions` alone, and let the founder pick or type the answer."
+    )
+
+
+def asked_without_answers(ctx: GitContext, call: str) -> None:
+    """Note that PreToolUse saw this dialog's call, `call` its id, carry no answer of its own."""
+    if not call:
+        return
+    now = time.time()
+    with store.guarded_json(store.tier_b(ctx, ASKED), default={}) as box:
+        kept = box[0] if isinstance(box[0], dict) else {}
+        box[0] = {key: at for key, at in kept.items() if now - float(at) < _ASKED_SECONDS}
+        box[0][call] = now
+
+
+def was_asked_without_answers(ctx: GitContext, call: str) -> bool:
+    """Did PreToolUse see this dialog's call asked with no answer of its own? Spent once read.
+
+    The second line behind the refusal: a dialog whose PreToolUse never ran, or ran and refused
+    it, has no note, and its answer is no word of the founder's."""
+    with store.guarded_json(store.tier_b(ctx, ASKED), default={}) as box:
+        found = box[0].pop(call, None) if isinstance(box[0], dict) else None
+    return found is not None
+
+
 def asked_in_a_dialog(tool_input: Any, tool_response: Any = None) -> str:
     """The questions a dialog put to the founder, one to a line: what their answer is about, as
     the message a typed word answers is (decision 0066)."""

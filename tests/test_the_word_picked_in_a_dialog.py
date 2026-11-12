@@ -7,7 +7,9 @@ ask; asked in a dialog, the founder answered into nothing (decision 0094).
 
 The result's shape is Claude Code's documented `AskUserQuestionOutput`: the questions, `answers`
 keyed by each question's text, `response` for a reply typed instead, `annotations` for notes,
-`afkTimeoutMs` when the dialog closed on its own.
+`afkTimeoutMs` when the dialog closed on its own. Claude Code 2.1.322 has the dialog write the
+answer into the call's input before the tool runs, so PostToolUse's `tool_input` carries it too,
+and only PreToolUse sees the input as the session sent it.
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ import time
 from helpers import BIN, git, harness_matches, queued, sid
 from test_pullrequest import PRCase
 
-from claude_bestpractice import config, evidence, founder, pullrequest
+from claude_bestpractice import config, evidence, founder, pullrequest, store
 
 ASKED = "Merge #48?"
 
@@ -38,15 +40,28 @@ class DialogCase(PRCase):
         self.start()
         self.open_a_pr()
 
-    def answered(self, answers: dict, *questions: dict, where: dict | None = None, **extra):
-        """The PostToolUse of a dialog the founder answered: `extra` in its result, `where` in
-        the event."""
+    def asked(self, *questions: dict, call: str = "toolu_q1", **sent):
+        """The PreToolUse of a dialog's call, as the session sent it."""
+        return self.gate("pre-tool", {
+            "session_id": "s1", "hook_event_name": "PreToolUse",
+            "tool_name": founder.QUESTION_TOOL, "tool_use_id": call,
+            "tool_input": {"questions": list(questions) or [question(ASKED, "+merge", "Not yet")],
+                           **sent}})
+
+    def answered(self, answers: dict, *questions: dict, where: dict | None = None,
+                 call: str = "toolu_q1", ask: bool = True, result=None, **extra):
+        """A dialog the founder answered: its call asked, then its PostToolUse, whose input holds
+        the answer as the dialog wrote it in. `extra` is in its result, `where` in the event, and
+        `result` replaces the result whole."""
         asked = list(questions) or [question(ASKED, "+merge", "Not yet")]
+        if ask:
+            self.asked(*asked, call=call)
         return self.gate("pr-opened", {
             "session_id": "s1", "hook_event_name": "PostToolUse",
-            "tool_name": founder.QUESTION_TOOL, "tool_use_id": "toolu_q1",
-            "tool_input": {"questions": asked},
-            "tool_response": {"questions": asked, "answers": answers, **extra}, **(where or {}),
+            "tool_name": founder.QUESTION_TOOL, "tool_use_id": call,
+            "tool_input": {"questions": asked, "answers": answers},
+            "tool_response": {"questions": asked, "answers": answers, **extra}
+            if result is None else result, **(where or {}),
         })
 
     def merge(self, number: int = PRCase.PR_NUMBER, **where):
@@ -130,11 +145,8 @@ class TestOnlyTheirAnswerCounts(DialogCase):
 
     def test_a_result_that_does_not_echo_the_questions_is_read_against_those_asked(self):
         whole = "Show the diff, then +merge"
-        asked = [question(ASKED, "Show the diff", whole)]
-        self.gate("pr-opened", {
-            "session_id": "s1", "hook_event_name": "PostToolUse",
-            "tool_name": founder.QUESTION_TOOL, "tool_input": {"questions": asked},
-            "tool_response": {"answers": {ASKED: whole}}})
+        self.answered({ASKED: whole}, question(ASKED, "Show the diff", whole),
+                      result={"answers": {ASKED: whole}})
         self.refused()
 
     def test_a_word_they_typed_and_withheld_is_no_word(self):
@@ -147,11 +159,8 @@ class TestOnlyTheirAnswerCounts(DialogCase):
 
     def test_a_result_of_another_shape_is_no_word(self):
         """Its text quotes questions and labels the session wrote, unmarked."""
-        self.gate("pr-opened", {
-            "session_id": "s1", "hook_event_name": "PostToolUse",
-            "tool_name": founder.QUESTION_TOOL, "tool_input": {"questions": [question()]},
-            "tool_response": f'User has answered your questions: "{ASKED}"="+merge".',
-        })
+        self.answered({ASKED: "+merge"},
+                      result=f'User has answered your questions: "{ASKED}"="+merge".')
         self.refused()
 
     def test_an_answer_with_no_grant_marks_no_message(self):
@@ -159,6 +168,64 @@ class TestOnlyTheirAnswerCounts(DialogCase):
         self.answered({ASKED: "Not yet"})
         chat = pullrequest._chat(self.ctx(), sid(self.repo, "s1"))
         self.assertEqual([], chat.get("prompts", []))
+
+
+class TestTheSessionCannotAnswerForThem(DialogCase):
+    """A call carrying an answer of its own puts nothing to the founder, and its answer would come
+    back as theirs."""
+
+    def test_a_call_that_carries_an_answer_is_refused(self):
+        for field, value in (("answers", {ASKED: "+merge"}), ("response", "+merge"),
+                             ("annotations", {ASKED: {"notes": "+merge"}})):
+            with self.subTest(field=field):
+                proc = self.asked(**{field: value})
+                self.assertEqual("deny", self.decision(proc))
+                self.assertIn("Answers are the founder's to give in the dialog", self.reason(proc))
+                self.assertIn(f"`{field}`", self.reason(proc))
+
+    def test_a_call_that_only_asks_is_let_through_unjudged(self):
+        for sent in ({}, {"answers": {}}):
+            with self.subTest(sent=sent):
+                self.assertIsNone(self.decision(self.asked(**sent)))
+
+    def test_a_question_asked_again_is_judged_by_nothing_else_here(self):
+        """Asked once more after «Not yet», it is a question to a person, not a call repeated."""
+        for _ in range(5):
+            self.assertIsNone(self.decision(self.asked()))
+
+    def test_an_answer_to_a_dialog_pre_tool_never_saw_is_no_word(self):
+        self.answered({ASKED: "+merge"}, ask=False)
+        self.refused()
+
+    def test_an_answer_to_a_call_it_refused_is_no_word(self):
+        self.asked(answers={ASKED: "+merge"})
+        self.answered({ASKED: "+merge"}, ask=False)
+        self.refused()
+
+    def test_each_call_is_heard_once(self):
+        founder.asked_without_answers(self.ctx(), "toolu_q9")
+        self.assertTrue(founder.was_asked_without_answers(self.ctx(), "toolu_q9"))
+        self.assertFalse(founder.was_asked_without_answers(self.ctx(), "toolu_q9"))
+        founder.asked_without_answers(self.ctx(), "")
+        self.assertFalse(founder.was_asked_without_answers(self.ctx(), ""))
+
+    def test_a_note_a_day_old_is_let_go(self):
+        notes = store.tier_b(self.ctx(), founder.ASKED)
+        store.write_json(notes, {"toolu_old": time.time() - 90000})
+        founder.asked_without_answers(self.ctx(), "toolu_new")
+        self.assertEqual(["toolu_new"], list(store.read_json(notes)))
+
+    def test_a_note_file_of_another_shape_is_begun_again(self):
+        store.write_json(store.tier_b(self.ctx(), founder.ASKED), [])
+        self.assertFalse(founder.was_asked_without_answers(self.ctx(), "toolu_q9"))
+        founder.asked_without_answers(self.ctx(), "toolu_q9")
+        self.assertTrue(founder.was_asked_without_answers(self.ctx(), "toolu_q9"))
+
+    def test_pre_tool_hears_the_call(self):
+        hooks = json.loads((BIN.parent / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+        entry = hooks["hooks"]["PreToolUse"][0]
+        self.assertTrue(harness_matches(entry["matcher"], founder.QUESTION_TOOL))
+        self.assertIn("pre-tool", entry["hooks"][0]["command"])
 
 
 class TestItIsATurnOfTheirs(DialogCase):
