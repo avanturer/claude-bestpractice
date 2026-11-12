@@ -981,6 +981,28 @@ def _clear_blockers_off_cards_not_paused(ctx: GitContext) -> str:
         if cleared else ""
 
 
+def _refresh_what_pull_requests_are_blocked_by(ctx: GitContext) -> str:
+    """Open pull requests the founder's status line calls blocked by what an older gate listed.
+
+    The list is written once, at the hand-off, and until 2.15.0 nothing wrote it again: one
+    handed off with a file outside it, or a run the founder's message stopped, read as blocked
+    to its merge, and still does once this version merges it (#309). Judged again in each tree
+    whose branch has one, where the merge would be judged; a branch no tree has stays as it is.
+    """
+    from . import plan, pullrequest
+    from .gitctx import resolve
+
+    refreshed = 0
+    for root in plan.sibling_worktrees(ctx) or [ctx.worktree_root]:
+        try:
+            tree = resolve(root)
+        except Exception:  # noqa: BLE001 - a tree that cannot be read keeps what it had
+            continue
+        refreshed += pullrequest.refresh_blockers(tree, tree.branch)
+    return f"{refreshed} open pull request(s) judged again for what blocks them" \
+        if refreshed else ""
+
+
 def _staged_by_a_move(tree: Path) -> list[str]:
     """Card paths staged as deleted in `tree` whose card a transition moved inside it."""
     from . import plan
@@ -1554,8 +1576,9 @@ def _unstamp_greens_a_changed_tracked_file_could_hide(ctx: GitContext) -> str:
     unstamped = 0
     for path in sorted(store.tier_b(ctx, "green").glob("*.json")):
         record = store.read_json(path, default=None)
-        if isinstance(record, dict) and record.get("tree"):
-            store.write_json(path, {k: v for k, v in record.items() if k != "tree"}, mode=0o644)
+        if isinstance(record, dict) and (record.get("tree") or record.get("passed_trees")):
+            store.write_json(path, {k: v for k, v in record.items()
+                                    if k not in ("tree", "passed_trees")}, mode=0o644)
             unstamped += 1
     if not unstamped:
         return ""
@@ -1942,6 +1965,7 @@ _REPAIRS = {
     "0045-drop-drafts-nobody-typed": (1, _drop_drafts_nobody_typed),
     "0046-carry-attempts-out-of-trees": (1, _carry_attempts_out_of_trees),
     "0047-clear-blockers-off-cards-not-paused": (1, _clear_blockers_off_cards_not_paused),
+    "0048-judge-open-pull-requests-again": (1, _refresh_what_pull_requests_are_blocked_by),
 }
 
 

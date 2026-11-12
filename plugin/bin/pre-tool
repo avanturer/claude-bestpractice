@@ -2028,13 +2028,18 @@ def main() -> None:
                     # back (#268, #283).
                     founder.catch_up(ctx, event.session_id, event.transcript_path)
                     problems = pullrequest.blockers(here, base, pr_branch)
+                # What the founder's status line says of it, as it stands now (#309).
+                pullrequest.refresh_blockers(here, pr_branch, problems)
                 if problems:
                     # Put to the founder by this refusal, so that their next word is a word
                     # about what it lists (#243), at this commit and in this chat (#268).
                     pullrequest.note_refusal(ctx, pr_branch, here.head, problems, event.session_id)
                     pullrequest.put_to_the_founder(ctx, event.session_id, event.tool_name,
                                                    command, ti, str(session_cwd), number)
-                    deny_for_founder(ctx, rec, pullrequest.merge_refusal(gated, problems))
+                    # The founder's, unless every item is the session's to clear (#309).
+                    refuse = deny if pullrequest.the_sessions_to_clear(problems) else \
+                        deny_for_founder
+                    refuse(ctx, rec, pullrequest.merge_refusal(gated, problems))
                 # Bound to this pull request once its blockers are judged, and never before:
                 # the refusal above promises the merge "as soon as the list is empty", so a
                 # merge refused over them keeps the word exactly as it was.

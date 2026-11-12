@@ -291,11 +291,36 @@ def _unverified_here(ctx: GitContext) -> bool:
 # How many uncommitted paths a refusal names before it counts the rest.
 SHOWN = 3
 
+# What every sentence about uncommitted work on a merge's list carries, which the merge refusal
+# knows it by: setting files aside is the session's to do, never a question for the founder.
+UNCOMMITTED = "uncommitted changes"
 
-def ready(ctx: GitContext, base: str) -> list[str]:
-    """Reasons this branch is not ready to open a pull request. Empty when it is."""
+
+def merged_tree(ctx: GitContext, branch: str) -> str:
+    """The tree of the commit a merge of `branch`'s pull request takes: the head this clone last
+    pushed or fetched for it, else the branch itself. "" where git cannot say."""
+    for ref in (f"refs/remotes/origin/{branch}", f"refs/heads/{branch}"):
+        out = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{tree}}"],
+            cwd=str(ctx.worktree_root), capture_output=True, encoding="utf-8",
+            errors="surrogateescape", timeout=30,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    return ""
+
+
+def ready(ctx: GitContext, base: str, merging: bool = False) -> list[str]:
+    """Reasons this branch is not ready to open a pull request. Empty when it is.
+
+    `merging` asks it of the merge of this branch, which takes the pushed commit and nothing
+    else the tree holds: the suite passing on that commit's tree stands for it, whatever ran or
+    was stopped since on a tree with more in it, and files outside the pull request are no part
+    of it then (#309). Without such a pass the tree is all the evidence there is, as before.
+    """
     from . import evidence
 
+    merged = merged_tree(ctx, ctx.branch) if merging else ""
     problems: list[str] = []
     state = merge_state(ctx)
     if state.in_progress:
@@ -308,20 +333,57 @@ def ready(ctx: GitContext, base: str) -> list[str]:
     said = evidence.red_problem(ctx, ctx.branch)
     if said:
         problems.append(said)
-    unproven = evidence.unproven(ctx)
+    unproven = evidence.unproven(ctx, merged_tree=merged)
     if unproven:
         problems.append(unproven)
     if _unverified_here(ctx):
         problems.append(f"this branch {UNVERIFIED}")
-
-    # Named, because the merge refusal hands this list to the founder word for word, and
-    # "there are uncommitted changes" left them to find out that the only one was the test
-    # report the Stop gate had asked for (#261).
-    left = uncommitted(ctx)
+    left = _uncommitted_in_the_way(ctx, base, merged)
     if left:
-        more = f" (+{len(left) - SHOWN} more)" if len(left) > SHOWN else ""
-        problems.append(f"there are uncommitted changes: {', '.join(left[:SHOWN])}{more}")
+        problems.append(left)
     return problems
+
+
+def _uncommitted_in_the_way(ctx: GitContext, base: str, merged: str) -> str:
+    """What uncommitted work stands in the way, with what sets it aside; "" where none does.
+
+    Named, because the merge refusal hands this list to the founder word for word, and "there
+    are uncommitted changes" left them to find out that the only one was the test report the
+    Stop gate had asked for (#261). Where the suite passed on the commit a merge takes, only
+    the pull request's own files are: the rest is work for later, beside a commit that was run
+    without it. Where git cannot say which files are the pull request's, every one is.
+    """
+    from . import evidence, pullrequest
+
+    left = uncommitted(ctx)
+    if not left:
+        return ""
+    if merged and evidence.suite_passed_on(ctx, merged):
+        theirs = pullrequest.files_of(ctx, base)
+        if theirs is not None:
+            left = [path for path in left if _among(path, theirs)]
+            if not left:
+                return ""
+            return (f"files this pull request changes have {UNCOMMITTED}: {_named(left)}; the "
+                    "merge takes the pushed commit without them, so commit and push them, or "
+                    "set them aside with `git stash push --include-untracked`")
+    said = f"there are {UNCOMMITTED}: {_named(left)}"
+    if merged:
+        said += ("; no run has passed on the pushed commit without them, and one that does "
+                 "lets them stay: `git stash push --include-untracked`, then `git push`, whose "
+                 "pre-push hook runs the suite (`claude-bp-ci status`), then `git stash pop`")
+    return said
+
+
+def _named(paths: list[str]) -> str:
+    """The first few paths of a list, and how many more there are."""
+    more = f" (+{len(paths) - SHOWN} more)" if len(paths) > SHOWN else ""
+    return f"{', '.join(paths[:SHOWN])}{more}"
+
+
+def _among(path: str, files: set[str]) -> bool:
+    """Is `path`, as `git status` names it, one of `files` or a directory holding one?"""
+    return path in files or (path.endswith("/") and any(f.startswith(path) for f in files))
 
 
 def carries_its_own(ctx: GitContext, base: str) -> bool:

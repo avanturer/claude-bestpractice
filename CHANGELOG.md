@@ -3,7 +3,23 @@
 ## v2.15.0
 
 `claude-bp-plan reopen`, and a ledger in which every state a card can stand in has a command
-that moves it on (#307).
+that moves it on (#307). A merge judged on the commit it takes, so a new file for the next pull
+request and a run the founder's message stopped no longer hold a pushed commit that passed (#309).
+
+- **A merge is judged on the commit it takes.** The founder said `+merge` and the gate refused
+  over a file for the next pull request and a Stop run their message had stopped; the session
+  reported, they wrote again, and that stopped the next run. The suite passing on the pushed
+  commit's tree, as the pre-push hook stamps it, now stands for that merge; uncommitted edits to
+  the pull request's own files and a failure still hold it. Records 2.12.0 left merge as they
+  are, with nothing to repair (decision 0089).
+- **A branch's green keeps the clean trees its suite passed on**, the last eight, so a pass beside
+  a new file, which hashes to no tree, no longer takes the pushed commit's green away.
+- **A merge refusal the session can clear is the session's.** One whose every item is a stray
+  file or a stopped run says that none of it is the founder's to decide, instead of "tell the
+  founder and stop", which is what made the loop.
+- **What a pull request is blocked by is judged again.** The status line read the list its
+  one-time hand-off wrote, so a pull request stayed "blocked" after its blockers had gone. Each
+  Stop on its branch and each merge write it again, and repair 0048 does it once after the upgrade.
 
 - **A done or withdrawn card goes back to the queue as the same card.** `done` was the one state
   nothing left: `resume` said "not paused", `claim` "already done", and the rest of the work was

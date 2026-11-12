@@ -2600,7 +2600,9 @@ def record_green(ctx: GitContext, command: list[str], suite=None,
     does not have.
     """
     cleared = clear_red(ctx, command, None, suite)
+    previous = last_green(ctx)
     record_run(ctx, command, passed=True)
+    tree = _the_tree_that_ran(ctx, ran_on)
     store.write_json(
         _green_path(ctx),
         {
@@ -2613,7 +2615,11 @@ def record_green(ctx: GitContext, command: list[str], suite=None,
             # answer that could not differ. The tree hash is the same content-addressed
             # evidence this plugin uses everywhere else, and it fails safe: unreadable
             # means empty means re-run.
-            "tree": _the_tree_that_ran(ctx, ran_on),
+            "tree": tree,
+            # And every clean tree the repository's suite passed on before it, the latest few:
+            # a merge takes a commit, and the green that answers for it is that commit's.
+            "passed_trees": _passed_trees(previous, "" if suite is not None and suite.path
+                                          else tree),
             # A green another version of this gate reached is not this gate's green, and
             # the stamp only ever lets a push skip its run (#234).
             "gate": __version__,
@@ -2626,6 +2632,41 @@ def record_green(ctx: GitContext, command: list[str], suite=None,
         mode=0o644,
     )
     return cleared
+
+
+# How many clean trees a branch's green record keeps the repository's suite passing on.
+PASSED_TREES_KEPT = 8
+
+
+def _passed_trees(previous: dict | None, tree: str) -> list[str]:
+    """The clean trees the repository's suite passed on, newest last, with `tree` among them.
+
+    One green per branch, overwritten by every pass: the pre-push hook's green of the commit it
+    pushed went the moment a Stop passed on that commit with a new file beside it, which hashes
+    to no tree, and the merge of the very commit the hook had passed was refused over the file
+    (#309). A record written before this list was kept carries its own tree, which counts.
+    """
+    kept: list[str] = []
+    if previous:
+        kept = [t for t in previous.get("passed_trees") or [] if isinstance(t, str) and t]
+        if previous.get("tree") and not previous.get("path"):
+            kept.append(str(previous["tree"]))
+    if tree:
+        kept.append(tree)
+    return list(dict.fromkeys(reversed(kept)))[:PASSED_TREES_KEPT][::-1]
+
+
+def suite_passed_on(ctx: GitContext, tree: str, branch: str = "") -> bool:
+    """Was the repository's suite seen passing on exactly `tree`, a clean tree's hash?
+
+    Never for "": a tree with uncommitted work in it hashes to nothing, so nothing is claimed for
+    content no commit holds. A scoped suite's pass is no pass of the repository's.
+    """
+    green = last_green(ctx, branch) or {}
+    if not tree:
+        return False
+    own = "" if green.get("path") else str(green.get("tree") or "")
+    return tree == own or tree in (green.get("passed_trees") or [])
 
 
 def last_green(ctx: GitContext, branch: str = "") -> dict | None:
@@ -2721,7 +2762,7 @@ def record_cut_short(ctx: GitContext, command: list[str]) -> None:
     record_run(ctx, command or ["the Stop gate's run"], passed=False, cut_short=True)
 
 
-def cut_short(ctx: GitContext, branch: str = "") -> dict | None:
+def cut_short(ctx: GitContext, branch: str = "", merged_tree: str = "") -> dict | None:
     """The branch's last run, where it was stopped for the founder's message and still stands
     for the work it was judging. None otherwise.
 
@@ -2730,11 +2771,18 @@ def cut_short(ctx: GitContext, branch: str = "") -> dict | None:
     and the Stop after it runs the suite on that tree again, since no pass is remembered
     (decision 0013). Stopped there, the run was judging what had passed already, and the push it
     named as the way out skips a tree that is covered.
+
+    Nor for a merge of `merged_tree`, the commit the merge takes, where the suite passed on that
+    tree: whatever the stopped run was judging beside it is not in the merge. The founder's
+    `+merge` stopped the run over a new file next to a commit the pre-push hook had passed, and
+    the merge of that commit was refused until a run nobody was let finish passed (#309).
     """
     seen = last_run(ctx, branch)
     if not seen or not seen.get("cut_short"):
         return None
     if _passed_on(seen, last_green(ctx, branch)) or _failed_after(ctx, seen, branch):
+        return None
+    if merged_tree and suite_passed_on(ctx, merged_tree, branch):
         return None
     return seen
 
@@ -2773,20 +2821,26 @@ def last_run(ctx: GitContext, branch: str = "") -> dict | None:
     return {**green, "passed": True} if green else None
 
 
-def unproven(ctx: GitContext, branch: str = "") -> str:
+# How the sentence a stopped run leaves on a merge's list begins, which the merge refusal knows
+# it by: a run is the session's to have made, never a question for the founder.
+STOPPED_RUN = "the Stop gate's run of the suite"
+
+
+def unproven(ctx: GitContext, branch: str = "", merged_tree: str = "") -> str:
     """Why this branch has no passing run, in terms of what was actually seen. "" when green.
 
     One sentence for the three surfaces that used to compose their own, because they were
     composing the same false one: absence of a green was reported as absence of a run.
+    `merged_tree` is the commit a merge takes, asked about by the merge (`cut_short`).
     """
-    stopped = cut_short(ctx, branch)
+    stopped = cut_short(ctx, branch, merged_tree)
     green = last_green(ctx, branch)
     seen = last_run(ctx, branch)
     if green and stopped is None and not _failed_since(green, seen):
         return ""
     where = f" on {branch}" if branch else " on this branch"
     if stopped is not None:
-        return (f"the Stop gate's run of the suite{where} was stopped "
+        return (f"{STOPPED_RUN}{where} was stopped "
                 f"({_lasted(stopped.get('at'))}) because the founder wrote, or the session went "
                 "back to work, while it ran, and nothing has passed on that work since: it runs "
                 "again at the session's next finish, and on `git push` where the pre-push hook "

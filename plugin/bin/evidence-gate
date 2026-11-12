@@ -1047,6 +1047,10 @@ def main() -> None:
             hookio.block(pullrequest.open_demand(
                 ctx.branch, base, asked, accepted=bool(pullrequest.acceptance(ctx, None))
             ))
+        else:
+            # Handed off once, and read by the founder's status line from then on: what blocked
+            # it then said "blocked" over a pull request nothing stood in the way of (#309).
+            pullrequest.refresh_blockers(ctx, ctx.branch)
 
     if not changed:
         # A turn that wrote nothing is the commonest way to end on a block: the write was

@@ -18,7 +18,7 @@ import sys
 import time
 import unittest
 
-from helpers import BIN, RepoCase
+from helpers import BIN, RepoCase, git
 from test_pullrequest import TranscriptCase
 
 from claude_bestpractice import evidence, store, suites
@@ -84,12 +84,14 @@ class TestTheWordOnAFinishReachesTheMergeItWasGivenFor(TranscriptCase):
         """Refused over something else at this commit, the finish filed after: nobody put it
         to them, so their word is not about it (#243)."""
         self.an_open_pull_request(finished=False)
-        self.write("notes.py", "draft = 1\n")
+        # The pull request's own file: a file outside it is no part of a commit the suite
+        # passed on (#309).
+        self.write("src/app.py", "x = 5\n")
         self.accept()
         refused = self.merge()
         self.assertIn("uncommitted changes", self.reason(refused))
         self.assertNotIn("UNVERIFIED", self.reason(refused))
-        (self.repo / "notes.py").unlink()
+        git(["checkout", "--", "src/app.py"], self.repo)
         self.finish_unverified(at=time.time() + 1)
         self.accept()
         self.refused_over_the_finish()
