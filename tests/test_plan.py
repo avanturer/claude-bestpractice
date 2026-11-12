@@ -1603,7 +1603,7 @@ class TestACardIsJudgedAndWrittenUnderOneLock(PlanCase):
             lambda ctx: plan.resume(ctx, self.card.id))
 
         self.assertTrue(held)
-        self.assertIn("not paused", problem)
+        self.assertIn("is in flight", problem)
         self.assertEqual(plan.DOING, plan.find(self.ctx(), self.card.id).state)
 
 

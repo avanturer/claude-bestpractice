@@ -2083,6 +2083,181 @@ def mine(ctx: GitContext, session_id: str) -> Path | None:
     return None
 
 
+def own_tree(ctx: GitContext, session_id: str) -> Path | None:
+    """The tree this session's work is in: the one this plugin made for it, else the one checked
+    out on the branch of a card it holds, where no other chat works.
+
+    `mine` knows only the trees this plugin made. A chat whose tree was made by hand, or by
+    Claude Code's `--worktree`, came back in the main checkout after its machine restarted:
+    the board named no tree, the refused write was sent to a new one cut beside its own, and
+    the work the chat had left uncommitted was in the tree nobody sent it back to.
+    """
+    made = mine(ctx, session_id)
+    if made is not None or not session_id:
+        return made
+    from . import plan
+
+    trees = trees_by_branch(ctx)
+    main = main_checkout(ctx).resolve()
+    held = [trees.get(card.branch) for card in plan.held_by(ctx, session_id) if card.branch]
+    for tree in [*held, _where_the_chat_worked(ctx, session_id)]:
+        if tree is not None and tree != main and tree.is_dir() \
+                and not _another_chat_in(ctx, tree, session_id):
+            return tree
+    return None
+
+
+def _where_the_chat_worked(ctx: GitContext, session_id: str) -> Path | None:
+    """The tree of the clone this chat last worked in, read off its records, live or reaped.
+
+    An identity is the chat's harness id composed with a tree, so each tree is asked whether
+    this chat has an identity there. A card claimed in the main checkout names the trunk, and
+    is no way back to a tree made by hand; the record the chat left there is.
+    """
+    from . import hookio
+    from .gitctx import worktree_paths
+
+    harness = hookio.harness_of(session_id, str(ctx.worktree_root))
+    if not harness:
+        return None
+    seen = _last_seen(ctx)
+    main = main_checkout(ctx).resolve()
+    worked = []
+    for tree in worktree_paths(ctx):
+        ident = hookio.compose_session_id(harness, str(tree))
+        if tree != main and ident in seen:
+            worked.append((seen[ident], str(tree)))
+    return Path(max(worked)[1]) if worked else None
+
+
+def _last_seen(ctx: GitContext) -> dict[str, float]:
+    """When each identity was last seen: its record's heartbeat, or when the reaper took it."""
+    from . import sessions
+
+    seen: dict[str, float] = {}
+    for record in sessions.load_all(ctx):
+        seen[record.session_id] = max(seen.get(record.session_id, 0.0),
+                                      float(record.heartbeat_at or 0))
+    for entry in store.read_jsonl(store.tier_b(ctx, sessions.REAPED_LOG)):
+        if isinstance(entry, dict) and entry.get("session_id"):
+            ident = str(entry["session_id"])
+            seen[ident] = max(seen.get(ident, 0.0), float(entry.get("reaped_at") or 0))
+    return seen
+
+
+def trees_by_branch(ctx: GitContext) -> dict[str, Path]:
+    """Each branch checked out in a tree of this clone, and where, as git lists them."""
+    out = subprocess.run(
+        ["git", "worktree", "list", "--porcelain"], cwd=str(ctx.worktree_root),
+        capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=30,
+    ).stdout
+    found: dict[str, Path] = {}
+    path = ""
+    for line in out.splitlines():
+        if line.startswith("worktree "):
+            path = line[len("worktree "):]
+        elif line.startswith("branch refs/heads/") and path:
+            found[line[len("branch refs/heads/"):]] = Path(path).resolve()
+    return found
+
+
+def _another_chat_in(ctx: GitContext, tree: Path, session_id: str) -> str:
+    """The label of a live session of another chat working in `tree`, or ""."""
+    from . import hookio, sessions
+
+    mine_ = hookio.harness_of(session_id, str(ctx.worktree_root))
+    for record in sessions.live_sessions(ctx):
+        if Path(record.worktree).resolve() != tree.resolve():
+            continue
+        theirs = hookio.harness_of(record.session_id, record.worktree)
+        if not mine_ or theirs != mine_:
+            return sessions.label(record)
+    return ""
+
+
+def bring_home(ctx: GitContext, tree: Path, session_id: str) -> tuple[Path | None, str]:
+    """Move a tree of this clone under `.claude/worktrees/`, where entering it asks nobody:
+    (where it is now, "") or (None, why it stays where it is).
+
+    Claude Code asks the founder before `EnterWorktree` takes a path outside that directory,
+    and "an `EnterWorktree` permission rule or choosing 'don't ask again' doesn't suppress
+    this prompt; only `bypassPermissions` mode skips it" (Claude Code's worktree docs). A hook
+    allow does not either (#91). So a session sent back to a tree made beside the repository,
+    as one is after its machine restarts, asked the founder whether it could go home.
+
+    Moved as repair 0005 moves this plugin's trees: `git worktree move` without `--force`, so
+    a locked tree or one with submodules stays, carrying its branch and its uncommitted work.
+    Never from under another chat's live session, nor a process working in it (an editor, a
+    server), which a move breaks; where processes cannot be read, only a tree this plugin made.
+    """
+    home = home_of(ctx)
+    tree = tree.resolve()
+    if _within(tree, home):
+        return tree, ""
+    target = home / tree.name
+    why = _why_it_cannot_go_home(ctx, tree, target, session_id)
+    if why:
+        return None, why
+    hide(ctx)
+    home.mkdir(parents=True, exist_ok=True)
+    moved = subprocess.run(
+        ["git", "worktree", "move", str(tree), str(target)], cwd=str(main_checkout(ctx)),
+        capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=120,
+    )
+    if moved.returncode != 0:
+        said = (moved.stderr or moved.stdout).strip().splitlines()
+        return None, f"git refused the move: {said[0] if said else moved.returncode}"
+    for body_path in sorted(store.tier_b(ctx, "worktrees").glob("*.json")):
+        body = store.read_json(body_path, default={}) or {}
+        if Path(str(body.get("path") or "")).resolve() == tree:
+            store.write_json(body_path, {**body, "path": str(target)})
+    _follow_the_move(ctx, tree, target)
+    return target, ""
+
+
+def _follow_the_move(ctx: GitContext, was: Path, now: Path) -> None:
+    """Carry each identity a moved tree held to where the tree is now, with its cards.
+
+    An identity is a harness id and its tree, and a record whose tree git no longer lists is
+    reaped at the next session start, its cards released: left as they were, the session that
+    asked to go home would have found its own card handed back to the queue.
+    """
+    from . import hookio, plan, sessions
+
+    for record in sessions.load_all(ctx):
+        if Path(record.worktree).resolve() != was:
+            continue
+        harness = hookio.harness_of(record.session_id, record.worktree)
+        if not harness:
+            continue
+        before = record.session_id
+        record.session_id = hookio.compose_session_id(harness, str(now))
+        record.worktree = now.as_posix()
+        sessions.register(ctx, record)
+        for card in plan.load_all(ctx, plan.DOING):
+            if card.owner == before:
+                plan.claim(ctx, card.id, record.session_id, card.branch)
+        sessions.unregister(ctx, before)
+
+
+def _why_it_cannot_go_home(ctx: GitContext, tree: Path, target: Path, session_id: str) -> str:
+    """Why `tree` is not moved to `target`, or "" when nothing keeps it where it is."""
+    from .gitctx import worktree_paths
+
+    if tree not in worktree_paths(ctx) or tree == main_checkout(ctx).resolve():
+        return f"{tree} is no working tree of this repository's to move"
+    who = _another_chat_in(ctx, tree, session_id)
+    if who:
+        return f"{who} works in it"
+    running = sorted(set(_running_in(tree).values()))
+    if running:
+        return f"{', '.join(running[:3])} runs in it, and a move breaks what runs there"
+    if not Path("/proc").is_dir() and tree not in {Path(str(b.get("path") or "")).resolve()
+                                                   for b in _provisioned(ctx)}:
+        return "what runs in it cannot be read on this machine"
+    return f"{target} is taken" if target.exists() else ""
+
+
 def _provisioned(ctx: GitContext) -> list[dict]:
     """Every record this plugin wrote for a tree it provisioned, in the registry's order."""
     try:
@@ -2172,7 +2347,7 @@ def provision(ctx: GitContext, task: str = "", session_id: str = "") -> Path | N
     # session that was refused under one instruction and again under the next got a second
     # tree with a second branch, named after a slug of whatever the founder had just said.
     # Forty-two of them across four transcripts of one day, each removed by hand (#81).
-    already = mine(ctx, session_id)
+    already = own_tree(ctx, session_id)
     if already is not None:
         return already
 
@@ -2491,53 +2666,22 @@ def add_tree(ctx: GitContext, absolute: str, branch: str) -> bool:
     return attach.returncode == 0
 
 
-# The founder settings file the permission layer reads. Project settings cannot grant this:
-# `EnterWorktree` is judged by the tool's own `checkPermissions`, and only a rule in user
-# settings resolves ahead of it.
-USER_SETTINGS = ".claude/settings.json"
-ENTER = "EnterWorktree"
-
-
-def entry_permitted(home: Path | None = None) -> bool:
-    """Is `EnterWorktree` already allowed in the founder's own settings?
-
-    Read so the advice can STOP. A line that keeps appearing after it has been acted on is
-    one the founder learns to scroll past, which costs the lines that matter.
-    """
-    import json
-
-    path = (home or Path.home()) / USER_SETTINGS
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False
-    allow = ((raw.get("permissions") or {}).get("allow") or []) if isinstance(raw, dict) else []
-    return any(str(rule).split("(")[0].strip() == ENTER for rule in allow)
-
-
 def permission_advice(ctx: GitContext | None = None, session_id: str = "") -> str:
-    """The one line that removes the prompt, or nothing when there is no prompt left.
+    """What entering this session's tree costs, where it is outside `.claude/worktrees/`.
 
-    A `PreToolUse` hook CANNOT close this, which is worth stating because it is the obvious
-    idea and it is wrong: `EnterWorktree.checkPermissions` returns `ask` for any path that
-    is not a Claude-managed worktree, with `decisionReason.type == "safetyCheck"` — and a
-    safety-check ask overrides a hook's allow by design. The plugin approves the call and
-    the founder is asked anyway, one layer below the approval (#91).
-
-    Which is why the trees moved rather than the advice improving. Since they are made
-    under `.claude/worktrees/` there is nothing to authorise, and this speaks only for a
-    tree an older version left beside the repository — where the prompt is still real and
-    the founder is entitled to know it is not this plugin asking (#111).
+    It used to say that `"EnterWorktree"` in the founder's `permissions.allow` ends the
+    prompt. Claude Code's worktree docs say it does not: "An `EnterWorktree` permission rule
+    or choosing 'don't ask again' doesn't suppress this prompt; only `bypassPermissions` mode
+    skips it." So the line now says what does: the gate moves the tree home on the way in
+    (`bring_home`), and the session asks nobody.
     """
-    if entry_permitted():
+    if ctx is None:
         return ""
-    if ctx is not None:
-        standing = mine(ctx, session_id)
-        if standing is None or _within(standing, home_of(ctx)):
-            return ""
+    standing = own_tree(ctx, session_id)
+    if standing is None or _within(standing, home_of(ctx)):
+        return ""
     return (
-        "\nthe founder is asked to authorise every worktree entry, which this gate then "
-        "requires of every session. One line in ~/.claude/settings.json ends it: add "
-        '"EnterWorktree" (and "ExitWorktree") to permissions.allow. A hook cannot do this — '
-        "the prompt is the tool's own safety check, which overrides any hook approval."
+        f"\n`{standing}` is outside .claude/worktrees/, and Claude Code asks the founder before "
+        "`EnterWorktree` takes such a path, whatever a hook or permission rule says. "
+        "`EnterWorktree` into it has this gate move it there first and name where it went."
     )

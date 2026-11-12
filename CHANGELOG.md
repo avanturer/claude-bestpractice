@@ -1,5 +1,64 @@
 # Changelog
 
+## v2.15.0
+
+`claude-bp-plan reopen`, and a ledger in which every state a card can stand in has a command
+that moves it on (#307). A merge judged on the commit it takes, so a new file for the next pull
+request and a run the founder's message stopped no longer hold a pushed commit that passed (#309).
+A session goes back into its own tree, wherever it was made, without the founder being asked.
+
+- **A merge is judged on the commit it takes.** The founder said `+merge` and the gate refused
+  over a file for the next pull request and a Stop run their message had stopped; the session
+  reported, they wrote again, and that stopped the next run. The suite passing on the pushed
+  commit's tree, as the pre-push hook stamps it, now stands for that merge; uncommitted edits to
+  the pull request's own files and a failure still hold it. Records 2.12.0 left merge as they
+  are, with nothing to repair (decision 0089).
+- **A branch's green keeps the clean trees its suite passed on**, the last eight, so a pass beside
+  a new file, which hashes to no tree, no longer takes the pushed commit's green away.
+- **A merge refusal the session can clear is the session's.** One whose every item is a stray
+  file or a stopped run says that none of it is the founder's to decide, instead of "tell the
+  founder and stop", which is what made the loop.
+- **What a pull request is blocked by is judged again.** The status line read the list its
+  one-time hand-off wrote, so a pull request stayed "blocked" after its blockers had gone. Each
+  Stop on its branch and each merge write it again, and repair 0048 does it once after the upgrade.
+- **A session goes back into its tree without the founder being asked.** After a WSL crash a
+  chat came back in the main checkout and asked the founder whether it could enter its tree,
+  made beside the repository: Claude Code asks before entering any path outside
+  `.claude/worktrees/`, and no allow rule or hook ends that. `EnterWorktree` into such a tree has
+  the gate move it there first (its branch, uncommitted work, records and cards with it) and name
+  where it went, unless another chat or a process works in it (decision 0090).
+- **A session's tree is found wherever it was made.** The board and the main-checkout refusal
+  knew only trees this plugin made; now also the tree of a card the session holds, or the one
+  its chat last worked in. A refused write went to a new tree beside it.
+- **No advice says an `EnterWorktree` allow rule ends the prompt.** Claude Code's docs say it
+  does not.
+- **`make slop` refuses a definition that replaces another of the same name** in a module or a
+  class, hook scripts with no suffix included (`shadowed_definitions`, budget zero). This release
+  added a helper under a name `worktree.py` already used, and Python kept the new one for the
+  sweep's callers without a word; the sharded suite was the first to say.
+
+- **A done or withdrawn card goes back to the queue as the same card.** `done` was the one state
+  nothing left: `resume` said "not paused", `claim` "already done", and the rest of the work was
+  filed as a second card, its history split and every pointer to the first redone by hand. Its
+  files, condition, order and history are kept, a line says it was reopened, and every copy in
+  every tree moves, since a `done` copy left anywhere outranks the rest. Whoever holds a card
+  `--after` it is told it has not landed after all (decision 0088).
+- **The delivery a card was reopened over does not close it again.** The Stop gate closes a
+  session's cards whose files reached the trunk, and a card reopened after its work merged would
+  have closed at the end of the turn that reopened it, or been demanded closed. The reopen
+  fingerprints the card's files where their work can be read back; a delivery of nothing newer
+  passes over it.
+- **Every refusal about a card's state names the command that works from there**, read off one
+  table, and `tests/test_a_closed_card_reopens.py` runs each one from every state. A number a
+  Stop withdrew says so and names `reopen`, where it said "no task".
+- **A pause's blocker stays with the pause.** It rode `claim` into `doing` and `done` past it,
+  and `show` printed WAITING ON over work in flight and work finished. Repair 0047 takes it off
+  every card that is not paused, keeping its time.
+- **A long card keeps its newest history.** Every move cut a card's body to its first 2,000
+  characters, so the line the plugin appends — a reopen, a delivery in part, the agents a pause
+  stopped (decision 0082) — was the first thing lost. Past the cap the middle goes: the handoff
+  at the top and the last 700 characters of history stay.
+
 ## v2.14.3
 
 The cause of three refusals fuddy recorded under 2.12.0, each over a path the session's own

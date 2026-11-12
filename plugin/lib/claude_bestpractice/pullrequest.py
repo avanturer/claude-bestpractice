@@ -763,6 +763,28 @@ def hand_off(ctx: GitContext, record: dict[str, Any], blockers: list[str],
                  **_shown(ctx.head, blockers, session_id)})
 
 
+def refresh_blockers(ctx: GitContext, branch: str, problems: list[str] | None = None) -> bool:
+    """Write what stands in the way of a handed-off pull request now, `problems` where the caller
+    has just judged them. Whether the record changed.
+
+    The founder's status line and `claude-bp status` call a pull request blocked by what its
+    hand-off listed, and a pull request is handed off once: one listed with a stray file, or a
+    run their own message stopped, read as blocked to its merge, whatever had cleared since and
+    whatever a release changed about it (#309). Neither a draft nor one never handed off: the
+    hand-off writes those itself.
+    """
+    record = _records(ctx).get(branch)
+    if (not record or record.get("state") != OPEN or record.get("draft")
+            or not record.get("handed_off_at")):
+        return False
+    now = list(problems if problems is not None
+               else blockers(ctx, str(record.get("base") or "main"), branch))[:8]
+    if now == list(record.get("blockers") or []):
+        return False
+    _write(ctx, {**record, "blockers": now})
+    return True
+
+
 def blockers(ctx: GitContext, base: str, head: str = "") -> list[str]:
     """Everything standing between this branch and a merge, in plain language.
 
@@ -785,7 +807,7 @@ def blockers(ctx: GitContext, base: str, head: str = "") -> list[str]:
     if branch == base:
         return []
     problems = (
-        list(delivery.ready(ctx, base)) if branch == ctx.branch
+        list(delivery.ready(ctx, base, merging=True)) if branch == ctx.branch
         else _about_the_pull_request(ctx, base, branch)
     )
     from . import migration_numbers
@@ -1087,7 +1109,7 @@ def _about_the_pull_request(ctx: GitContext, base: str, head: str) -> list[str]:
     said = evidence.red_problem(ctx, head)
     if said:
         problems.append(said)
-    unproven = evidence.unproven(ctx, head)
+    unproven = evidence.unproven(ctx, head, delivery.merged_tree(ctx, head))
     if unproven:
         problems.append(unproven)
     if delivery.unverified_on(ctx, head):
@@ -1118,6 +1140,12 @@ def _files_against(ctx: GitContext, base: str, head: str = "HEAD") -> set[str] |
         if code == 0:
             return {line.strip() for line in listed.splitlines() if line.strip()}
     return None
+
+
+def files_of(ctx: GitContext, base: str, head: str = "HEAD") -> set[str] | None:
+    """The files a pull request of `head` into `base` changes, or None when git cannot say:
+    a caller that narrows on the answer then narrows nothing."""
+    return _files_against(ctx, base, head)
 
 
 def delivered_paths(ctx: GitContext, base: str, head: str = "") -> list[str]:
@@ -1191,10 +1219,33 @@ def _trees_at_work(ctx: GitContext, session_id: str, base: str,
     return found
 
 
+def the_sessions_to_clear(problems: list[str]) -> bool:
+    """Is every item on a merge's list one the session clears with nothing changed in the code
+    and nothing asked of the founder: files set aside, or a run made of the commit it merges?"""
+    from . import delivery, evidence
+
+    return bool(problems) and all(
+        delivery.UNCOMMITTED in problem or problem.startswith(evidence.STOPPED_RUN)
+        for problem in problems)
+
+
 def merge_refusal(record: dict[str, Any], problems: list[str]) -> str:
-    """Why this merge is refused, and what the model is to do instead of fixing it."""
+    """Why this merge is refused, and what the model is to do instead of fixing it.
+
+    Where every item is the session's to clear, the founder is not where it goes. Told to take
+    a stopped run and a stray file to them, a session did, they answered, and their answer
+    stopped the next run: the merge they had accepted was refused round and round (#309).
+    """
     named = record.get("number") and f"#{record['number']}" or record.get("branch", "this branch")
     listed = "\n".join(f"  - {p}" for p in problems[:6])
+    if the_sessions_to_clear(problems):
+        return (
+            f"claude-bestpractice: refusing to merge {named} for now — the final check found "
+            f"{len(problems)} thing(s) in the way:\n{listed}\n"
+            "None of them is the founder's to decide, and the word that covers this merge "
+            "stands: each says what clears it, and the merge goes through once the list is "
+            "empty. Put to the founder, their answer stops the next run of the suite."
+        )
     return (
         f"claude-bestpractice: refusing to merge {named} — the final check found "
         f"{len(problems)} thing(s) in the way:\n{listed}\n"

@@ -1047,6 +1047,10 @@ def main() -> None:
             hookio.block(pullrequest.open_demand(
                 ctx.branch, base, asked, accepted=bool(pullrequest.acceptance(ctx, None))
             ))
+        else:
+            # Handed off once, and read by the founder's status line from then on: what blocked
+            # it then said "blocked" over a pull request nothing stood in the way of (#309).
+            pullrequest.refresh_blockers(ctx, ctx.branch)
 
     if not changed:
         # A turn that wrote nothing is the commonest way to end on a block: the write was
@@ -1154,13 +1158,16 @@ def main() -> None:
         # a card this session added, claimed, did and closed answers it, and refusing on it
         # made closing the card the thing that triggered the refusal (#220).
         closed = plan.closed_by(ctx, rec.session_id)
-        if mine and delivered:
+        # Not a card reopened over the work that landed: it was reopened because that work did
+        # not finish it, and demanding its close sent the session to undo the reopen (#307).
+        owed = [card for card in mine if not plan.untouched_since_reopened(ctx, card)]
+        if owed and delivered:
             # What the closure above could not account for: a card whose named files are
             # not in this session's diff at all. Refused rather than noted, because a note
             # is precisely the thing that was being forgotten — and the exit is `done` or
             # `pause`, never a question put to the founder, who accepted this work when
             # they accepted the merge (decision 0010).
-            problems.append(plan.closure_demand(mine))
+            problems.append(plan.closure_demand(owed))
         # And the card it ended this turn by pausing: the board says what the work is and
         # what it waits on. Asked to `claim` instead, a session was told to take back the
         # card it had just set down at the founder's word (#264).
