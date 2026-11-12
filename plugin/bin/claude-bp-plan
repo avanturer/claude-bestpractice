@@ -127,6 +127,17 @@ def cmd_done(ctx, task_id: str) -> int:
     return 0
 
 
+def cmd_reopen(ctx, task_id: str) -> int:
+    # Who is asking, so a live sibling's closed card is refused here as `done` refuses it.
+    task, error = plan.reopen(ctx, task_id, hookio.current_session_id(str(ctx.worktree_root)))
+    if error:
+        print(error, file=sys.stderr)
+        return 1
+    print(f"reopened {task.id}  {task.title} — back in the queue")
+    print(f"  claude-bp-plan claim {task.id}")
+    return 0
+
+
 def cmd_park(ctx, title: str, paths: str, note: str, source: str = "",
              done_when: str = "", after: str = "", together: str = "") -> int:
     wanted = [p.strip() for p in paths.split(",") if p.strip()]
@@ -163,7 +174,7 @@ def cmd_park(ctx, title: str, paths: str, note: str, source: str = "",
 def cmd_show(ctx, task_id: str) -> int:
     task = plan.find(ctx, task_id)
     if task is None:
-        print(f"no task {task_id}", file=sys.stderr)
+        print(plan.no_task(ctx, task_id), file=sys.stderr)
         return 1
     print(plan.show(task))
     return 0
@@ -284,6 +295,9 @@ def main() -> int:
                         help="the decision, credential, merge or answer this waits on")
     resumed = sub.add_parser("resume", help="return a paused task to the queue")
     resumed.add_argument("id")
+    reopened = sub.add_parser("reopen", help="return a done or withdrawn task to the queue, "
+                                             "with its history and files")
+    reopened.add_argument("task_id")
     amended = sub.add_parser("update", help="amend what a task knows, keeping its identity")
     amended.add_argument("id")
     amended.add_argument("--note", default="", help="replace the handoff")
@@ -332,6 +346,8 @@ def main() -> int:
         return cmd_claim(ctx, args.task_id, args.session)
     if args.command == "done":
         return cmd_done(ctx, args.task_id)
+    if args.command == "reopen":
+        return cmd_reopen(ctx, args.task_id)
     if args.command == "pause":
         task, problem = plan.pause(ctx, args.id, args.blocker,
                                    hookio.current_session_id(str(ctx.worktree_root)))

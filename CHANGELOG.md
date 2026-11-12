@@ -1,5 +1,32 @@
 # Changelog
 
+## v2.15.0
+
+`claude-bp-plan reopen`, and a ledger in which every state a card can stand in has a command
+that moves it on (#307).
+
+- **A done or withdrawn card goes back to the queue as the same card.** `done` was the one state
+  nothing left: `resume` said "not paused", `claim` "already done", and the rest of the work was
+  filed as a second card, its history split and every pointer to the first redone by hand. Its
+  files, condition, order and history are kept, a line says it was reopened, and every copy in
+  every tree moves, since a `done` copy left anywhere outranks the rest. Whoever holds a card
+  `--after` it is told it has not landed after all (decision 0088).
+- **The delivery a card was reopened over does not close it again.** The Stop gate closes a
+  session's cards whose files reached the trunk, and a card reopened after its work merged would
+  have closed at the end of the turn that reopened it, or been demanded closed. The reopen
+  fingerprints the card's files where their work can be read back; a delivery of nothing newer
+  passes over it.
+- **Every refusal about a card's state names the command that works from there**, read off one
+  table, and `tests/test_a_closed_card_reopens.py` runs each one from every state. A number a
+  Stop withdrew says so and names `reopen`, where it said "no task".
+- **A pause's blocker stays with the pause.** It rode `claim` into `doing` and `done` past it,
+  and `show` printed WAITING ON over work in flight and work finished. Repair 0047 takes it off
+  every card that is not paused, keeping its time.
+- **A long card keeps its newest history.** Every move cut a card's body to its first 2,000
+  characters, so the line the plugin appends — a reopen, a delivery in part, the agents a pause
+  stopped (decision 0082) — was the first thing lost. Past the cap the middle goes: the handoff
+  at the top and the last 700 characters of history stay.
+
 ## v2.14.3
 
 The cause of three refusals fuddy recorded under 2.12.0, each over a path the session's own

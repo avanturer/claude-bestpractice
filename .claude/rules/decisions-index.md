@@ -1,6 +1,5 @@
 # Decisions
 
-- [0077] The tree a chat's agent ran in is put away once it is spent — `decisions/0077-an-agents-tree-is-put-away-once-spent.md`
 - [0078] An agent is told the card it works under — `decisions/0078-an-agent-is-told-the-card-it-works-under.md`
 - [0079] What the plugin puts in front of the model states facts, never orders — `decisions/0079-what-the-model-is-shown-states-facts.md`
 - [0080] How often each of this plugin's skills is read is counted, and a skill nobody reads shows it — `decisions/0080-a-skill-nobody-reads-is-counted-as-read-none.md`
@@ -11,4 +10,5 @@
 - [0085] What sessions spend is measured from their transcripts, and this repository's context has a ceiling — `decisions/0085-what-a-session-spends-is-measured-and-the-context-has-a-ceiling-here.md`
 - [0086] A draft named by number in the message a `+merge` answers is named by that word — `decisions/0086-a-draft-named-in-the-message-is-named-by-the-word.md`
 - [0087] A delivery closes a card only when the chat carries nothing else under it — `decisions/0087-a-delivery-closes-a-card-the-chat-carries-nothing-else-under.md`
-- ... 74 older, see `decisions/`
+- [0088] A closed card reopens as itself, and every state a card stands in has a way on — `decisions/0088-a-closed-card-reopens-as-itself.md`
+- ... 75 older, see `decisions/`

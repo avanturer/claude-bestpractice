@@ -24,6 +24,7 @@ ever committed.
 from __future__ import annotations
 
 import calendar
+import hashlib
 import re
 import subprocess
 import time
@@ -52,6 +53,12 @@ WITHDRAWN = "withdrawn"
 MAX_TITLE_CHARS = 120
 MAX_BODY_CHARS = 2_000
 
+# Past `MAX_BODY_CHARS` a card's body loses its middle. The head is the handoff a session wrote;
+# the tail is the history the plugin appends — a reopen, a delivery in part, the agents a pause
+# stopped — and cutting the end, as every move did, dropped the newest line first (#307).
+KEPT_HISTORY_CHARS = 700
+CUT = "\n[...]\n"
+
 # What a card says when nobody said anything. Named rather than spelled out twice, because
 # a reader that asks "has this card been written to?" has to compare against it — and a
 # literal in two files drifts the moment one of them is reworded, leaving that reader
@@ -63,6 +70,10 @@ OPENED_BY = "opened_by"
 
 # The front-matter key naming the session that paused a card, kept only while it is paused.
 PAUSED_BY = "paused_by"
+
+# The front-matter key holding what a reopened card's files were when it was reopened: one
+# fingerprint per place they were read from (`reopen`). Kept until the card is closed again.
+REOPENED_OVER = "reopened_over"
 
 
 @dataclass
@@ -106,6 +117,9 @@ class Task:
     # The session that paused this card, while it is paused. A pause hands the work back,
     # so the owner goes; this is what still says whose turn ended on it (#264).
     paused_by: str = ""
+    # What its files held when the card was reopened, until it is closed again: a delivery of
+    # nothing newer is the work it was reopened over, and closes nothing (#307).
+    reopened_over: list[str] = field(default_factory=list)
 
     @property
     def number(self) -> int:
@@ -219,7 +233,13 @@ def _load(path: Path, state: str) -> Task | None:
         together=_ids(meta.get("with", "")),
         opened_by=meta.get(OPENED_BY, ""),
         paused_by=meta.get(PAUSED_BY, ""),
+        reopened_over=_listed(meta.get(REOPENED_OVER, "")),
     )
+
+
+def _listed(raw: str) -> list[str]:
+    """A comma-separated front-matter field as its items, empty ones dropped."""
+    return [item.strip() for item in raw.split(",") if item.strip()]
 
 
 def _ids(raw: str) -> list[str]:
@@ -277,10 +297,10 @@ def _answering_copies(ctx: GitContext) -> list[tuple[Path, str, str]]:
     return [(path, name, label) for _, path, name, label in best.values()]
 
 
-def _cards_under(root: Path) -> list[tuple[str, Path]]:
-    """Every card file in one checkout, with the state its directory says, unread."""
+def _cards_under(root: Path, states: tuple[str, ...] = STATES) -> list[tuple[str, Path]]:
+    """Every card file in one checkout in `states`, with the state its directory says, unread."""
     out: list[tuple[str, Path]] = []
-    for name in STATES:
+    for name in states:
         directory = root / store.TIER_A_DIRNAME / PLAN_DIR / name
         if directory.is_dir():
             out.extend((name, path) for path in sorted(directory.glob("[0-9][0-9][0-9][0-9]-*.md")))
@@ -299,6 +319,10 @@ def _cards_under(root: Path) -> list[tuple[str, Path]]:
 # in another. That costs the session working on it nothing — it holds its own file — and
 # it costs the board one wrong row, against a board that was wrong about everything ever
 # closed. A local copy still wins a tie, so a claim acts on a file we own.
+#
+# `reopen` is the one move back past a closure, and the ranking is why it moves EVERY copy
+# under the claim lock: a `done` copy it left in any tree would outrank the reopened card
+# and close it again on the next read (#307).
 _ADVANCEMENT = {DONE: 4, PAUSED: 3, DOING: 2, NEXT: 1}
 
 
@@ -370,7 +394,8 @@ def _render(task_id: str, title: str, state: str, owner: str, branch: str, body:
             paths: list[str] | None = None, source: str = "",
             done_when: str = "", blocker: str = "", created_at: str = "",
             after: list[str] | None = None, together: list[str] | None = None,
-            opened_by: str = "", paused_by: str = "", stamped: str = "") -> str:
+            opened_by: str = "", paused_by: str = "", stamped: str = "",
+            reopened_over: list[str] | None = None) -> str:
     """One card file. `stamped` keeps an `updated_at` a rewrite is no move of the card's."""
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     lines = [
@@ -385,6 +410,7 @@ def _render(task_id: str, title: str, state: str, owner: str, branch: str, body:
         # Only on the cards they concern, so every other card keeps the shape it always had.
         *([f"{OPENED_BY}: {_one_line(opened_by)}"] if opened_by else []),
         *([f"{PAUSED_BY}: {_one_line(paused_by)}"] if paused_by else []),
+        *([f"{REOPENED_OVER}: {_one_line(', '.join(reopened_over))}"] if reopened_over else []),
         f"done_when: {_one_line(done_when)[:MAX_TITLE_CHARS]}",
         f"blocker: {_one_line(blocker)[:MAX_TITLE_CHARS]}",
         f"after: {_one_line(', '.join(after or []))}",
@@ -396,10 +422,29 @@ def _render(task_id: str, title: str, state: str, owner: str, branch: str, body:
         f"updated_at: {stamped or now}",
         "---",
         "",
-        body[:MAX_BODY_CHARS].strip() or NO_DETAIL,
+        _bounded(body) or NO_DETAIL,
         "",
     ]
     return "\n".join(lines)
+
+
+def _bounded(body: str) -> str:
+    """`body` within `MAX_BODY_CHARS`: its head and its newest lines, the middle cut once.
+
+    Cut again, it keeps the head it kept before and moves the window of history on, so the
+    card a hundred moves old reads like the one ten moves old: the handoff, then the latest.
+    """
+    body = body.strip()
+    if len(body) <= MAX_BODY_CHARS:
+        return body
+    head, cut, rest = body.partition(CUT)
+    head = head[:MAX_BODY_CHARS - KEPT_HISTORY_CHARS - len(CUT)].rstrip()
+    history = rest if cut else body
+    tail = history[-KEPT_HISTORY_CHARS:]
+    if len(history) > KEPT_HISTORY_CHARS and history[-KEPT_HISTORY_CHARS - 1] != "\n" \
+            and "\n" in tail:
+        tail = tail.split("\n", 1)[1]
+    return f"{head}{CUT}{tail.strip()}"
 
 
 MIN_HANDOFF_CHARS = 80
@@ -611,7 +656,7 @@ def find(ctx: GitContext, task_id: str) -> Task | None:
     return None
 
 
-def copies(ctx: GitContext, task_id: str) -> list[Task]:
+def copies(ctx: GitContext, task_id: str, states: tuple[str, ...] = STATES) -> list[Task]:
     """Every file in this clone that IS this task — one per worktree carrying a copy.
 
     `find` answers "which copy speaks for this task"; this answers "which files have to
@@ -627,12 +672,15 @@ def copies(ctx: GitContext, task_id: str) -> list[Task]:
 
     Matched by id and not by filename, because the same task carries a different slug in a
     tree where its title was amended, and those copies are the ones that outlive the board.
+
+    `states` widens it past the board, for the one transition that starts off it: `reopen`
+    of a withdrawn card.
     """
     wanted = task_id.zfill(4)
     out: list[Task] = []
     for root in sibling_worktrees(ctx) or [ctx.worktree_root]:
         label = "" if root.resolve() == ctx.worktree_root.resolve() else root.name
-        for name, path in _cards_under(root):
+        for name, path in _cards_under(root, states):
             task = _load(path, name) if path.name.split("-", 1)[0] in (wanted, task_id) else None
             if task:
                 task.worktree = label
@@ -649,8 +697,8 @@ def reconcile_copies(ctx: GitContext) -> int:
     advanced copy — read correctly, right up until the tree holding the advanced copy was
     removed and the task came back from the dead (#210, #212).
 
-    Forward only, because a task file only ever moves forward: this can bring a stale copy
-    up to a closure, never undo one.
+    Forward only: this can bring a stale copy up to a closure, never undo one. The one move
+    back past a closure, `reopen`, moves every copy itself, so it leaves none behind here.
     """
     moved = 0
     for task in load_all(ctx):
@@ -773,7 +821,8 @@ def stranded_deletions(root: Path, base: Path) -> list[Path]:
 
 
 def _move(task: Task, state: str, owner: str = "", branch: str = "",
-          blocker: str | None = None, paused_by: str = "") -> Task:
+          blocker: str | None = None, paused_by: str = "",
+          reopened_over: list[str] | None = None) -> Task:
     """A state transition is a rename in the working tree, and never an addition in git.
 
     Where git still tracks the card, `follow_in_git` takes it out of the index rather than
@@ -793,19 +842,12 @@ def _move(task: Task, state: str, owner: str = "", branch: str = "",
 
     text = task.path.read_text(encoding="utf-8", errors="replace")
     meta, body = _frontmatter(text)
+    owner, blocker, reopened_over = _bound_to_state(meta, state, owner, blocker, reopened_over)
     updated = _render(
         task.id,
         meta.get("title", task.title),
         state,
-        # The owner survives a CLOSURE, and only a closure. `done` used to clear it, so a
-        # card carried no trace of who finished it — and the gates ask exactly that: a
-        # session that added a card with the right paths, claimed it, did the work and
-        # closed it was then told "nothing on the board says this session is working", with
-        # `claim` answering "task is already done". The only way to keep the gate quiet was
-        # to leave the card open until the session ended, which is the opposite of what
-        # closing means (#220). `pause` and `next` still release it: those hand the work
-        # back, and an unclaimed card is the point of them.
-        owner or (meta.get("owner", "") if state in (DOING, DONE) else ""),
+        owner,
         branch or meta.get("branch", ""),
         body,
         # Carried, not dropped. A transition that forgets the files and the finish
@@ -813,7 +855,7 @@ def _move(task: Task, state: str, owner: str = "", branch: str = "",
         [p.strip() for p in meta.get("paths", "").split(",") if p.strip()],
         meta.get("source", ""),
         meta.get("done_when", ""),
-        meta.get("blocker", "") if blocker is None else blocker,
+        blocker,
         meta.get("created_at", ""),
         _ids(meta.get("after", "")),
         _ids(meta.get("with", "")),
@@ -821,6 +863,7 @@ def _move(task: Task, state: str, owner: str = "", branch: str = "",
         # Written by a pause and by nothing else: any other move takes the card out of
         # `paused`, and with it the claim that some session's turn ended by setting it down.
         paused_by=paused_by,
+        reopened_over=reopened_over,
     )
     store.atomic_write(target, updated, mode=0o644)
     if target != task.path:
@@ -833,6 +876,29 @@ def _move(task: Task, state: str, owner: str = "", branch: str = "",
     if moved:
         moved.worktree = task.worktree
     return moved
+
+
+def _bound_to_state(meta: dict[str, str], state: str, owner: str, blocker: str | None,
+                    reopened_over: list[str] | None) -> tuple[str, str, list[str]]:
+    """The owner, blocker and reopen mark a card carries into `state`, where the move names none.
+
+    Each lives only in the states it says something about. The owner survives a CLOSURE, and
+    only a closure: `done` used to clear it, so a card carried no trace of who finished it, and
+    the gates ask exactly that — a session that claimed a card, did the work and closed it was
+    told "nothing on the board says this session is working", with `claim` answering "task is
+    already done" (#220). `pause` and `next` still release it: they hand the work back.
+
+    The blocker is what a PAUSED card waits on. Carried by every move, a pause's blocker rode
+    `claim` into `doing` and on into `done`, and `show` printed WAITING ON over work in flight
+    and work finished (#307). The reopen mark lasts until the card is closed again, when it no
+    longer says what the reopen was over.
+    """
+    owner = owner or (meta.get("owner", "") if state in (DOING, DONE) else "")
+    if blocker is None:
+        blocker = meta.get("blocker", "") if state == PAUSED else ""
+    if reopened_over is None:
+        reopened_over = [] if state == DONE else _listed(meta.get(REOPENED_OVER, ""))
+    return owner, blocker, reopened_over
 
 
 def _move_if_there(task: Task, state: str, **kwargs) -> Task | None:
@@ -1068,14 +1134,54 @@ def pause(ctx: GitContext, task_id: str, blocker: str,
     with store.file_lock(store.tier_b(ctx, CLAIM_LOCK)):
         task = find(ctx, task_id)
         if task is None:
-            return None, f"no task {task_id}"
+            return None, no_task(ctx, task_id)
         if task.state == DONE:
-            return None, f"task {task.id} is already done"
+            return None, where_it_stands(task)
         refused = _not_theirs(ctx, task, session_id)
         if refused:
             return None, refused
         moved = _move_every(ctx, task_id, PAUSED, blocker=blocker.strip(), paused_by=session_id)
         return moved or task, ""
+
+
+# What each state a card can stand in is, and the command that moves it on from there. Every
+# refusal about a card's state is read off this, so it names a command that runs as printed
+# (decision 0020). A state no command leaves is a card the ledger can no longer move: `done` was
+# one — `resume` said "not paused", `claim` "already done" — and a card closed by mistake was
+# filed again, its history split across two numbers (#307). `tests/test_a_closed_card_reopens.py`
+# runs each command a refusal here names, from every state.
+_ONWARD = {
+    NEXT: ("is in the queue", "`claim` takes it", "claude-bp-plan claim {id}"),
+    DOING: ("is in flight", "`claim` takes it over where its holder is gone",
+            "claude-bp-plan claim {id}"),
+    PAUSED: ("is paused", "`resume` returns it to the queue", "claude-bp-plan resume {id}"),
+    DONE: ("is already done", "`reopen` returns it to the queue with its history and files",
+           "claude-bp-plan reopen {id}"),
+    WITHDRAWN: ("was withdrawn: no work followed the message that opened it",
+                "`reopen` returns it to the queue", "claude-bp-plan reopen {id}"),
+}
+
+
+def where_it_stands(task: Task) -> str:
+    """Why a command that cannot act on `task` in its state refused, and the one that can."""
+    stands, does, command = _ONWARD[task.state]
+    return f"task {task.id} {stands} — {does}:\n  {command.format(id=task.id)}"
+
+
+def withdrawn(ctx: GitContext, task_id: str) -> Task | None:
+    """The card by this number `withdraw_unplanned` took off the board, if it is off it."""
+    found = copies(ctx, task_id, (WITHDRAWN,))
+    return found[0] if found else None
+
+
+def no_task(ctx: GitContext, task_id: str) -> str:
+    """Why no card on the board answers to this number: none was filed, or it was withdrawn.
+
+    "no task 0123" was all a session told to claim 0123 heard about a card a Stop had withdrawn
+    (decision 0027), which keeps it on disk precisely because somebody may have its number.
+    """
+    gone = withdrawn(ctx, task_id)
+    return where_it_stands(gone) if gone is not None else f"no task {task_id}"
 
 
 def _not_theirs(ctx: GitContext, task: Task, session_id: str) -> str:
@@ -1103,10 +1209,148 @@ def resume(ctx: GitContext, task_id: str) -> tuple[Task | None, str]:
     with store.file_lock(store.tier_b(ctx, CLAIM_LOCK)):
         task = find(ctx, task_id)
         if task is None:
-            return None, f"no task {task_id}"
+            return None, no_task(ctx, task_id)
         if task.state != PAUSED:
-            return None, f"task {task.id} is not paused"
+            return None, where_it_stands(task)
         return _move_every(ctx, task_id, NEXT, blocker="") or task, ""
+
+
+def reopen(ctx: GitContext, task_id: str, session_id: str = "") -> tuple[Task | None, str]:
+    """Put a closed card, or a withdrawn one, back in the queue as the same card.
+
+    `done` had no way back: `resume` answered "not paused", `claim` "already done", and a card
+    closed by mistake was filed again, with its history and whatever named its number — notes,
+    a scheduled reminder — left on the first (#307). The same card returns, its files, its
+    condition, its order and its history kept, and a line on it saying it was reopened. Every
+    copy in every tree moves, under the lock a claim takes: a `done` copy left anywhere would
+    outrank it (`_ADVANCEMENT`). To `next` and unclaimed, which is what the queue means.
+
+    What its files hold is written on it (`_fingerprints`), because the delivery that carried
+    them before is the work it was reopened over: settled by the Stop gate as delivered, it
+    closed the card again at the end of the turn that reopened it (`untouched_since_reopened`).
+
+    A live sibling's card is its own to reopen (`_not_theirs`). Whoever holds a card that comes
+    `--after` this one is told it has not landed after all, as `complete` told them it had.
+    """
+    from . import sessions
+
+    with store.file_lock(store.tier_b(ctx, CLAIM_LOCK)):
+        task, refused = _reopenable(ctx, task_id, session_id)
+        if task is None:
+            return None, refused
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        by = f" by {sessions.called(ctx, session_id)}" if session_id else ""
+        landed = _reopen_every_copy(ctx, task_id, f"[{stamp}] reopened from {task.state}{by}.",
+                                    _fingerprints(ctx, task))
+    _tell_who_comes_after(ctx, task.id)
+    return landed or task, ""
+
+
+def _reopenable(ctx: GitContext, task_id: str, session_id: str) -> tuple[Task | None, str]:
+    """The card as it stands now, when this session may reopen it. (None, why not) otherwise."""
+    task = find(ctx, task_id) or withdrawn(ctx, task_id)
+    if task is None:
+        return None, f"no task {task_id}"
+    if task.state not in (DONE, WITHDRAWN):
+        return None, where_it_stands(task)
+    refused = _not_theirs(ctx, task, session_id)
+    return (None, refused) if refused else (task, "")
+
+
+def _reopen_every_copy(ctx: GitContext, task_id: str, note: str, over: list[str]) -> Task | None:
+    """Every copy of the card, wherever it stands, into `next` with `note` added to its history
+    and `over` as its reopen mark; the copy nearest this tree, or None if none was left to move."""
+    landed: Task | None = None
+    for copy in copies(ctx, task_id, (*STATES, WITHDRAWN)):
+        try:
+            copy.body = _with(copy, note).strip()
+            _rewrite_body(copy)
+        except FileNotFoundError:
+            continue
+        moved = _move_if_there(copy, NEXT, blocker="", reopened_over=over)
+        if moved is not None and (landed is None or (landed.worktree and not copy.worktree)):
+            landed = moved
+    return landed
+
+
+def _tell_who_comes_after(ctx: GitContext, task_id: str) -> None:
+    """Tell each live session holding a card `--after` this one that it has not landed now."""
+    from . import inbox, sessions
+
+    live = {s.session_id for s in sessions.live_sessions(ctx)}
+    for waiting in load_all(ctx, DOING):
+        if task_id in waiting.after and waiting.owner in live:
+            inbox.post(ctx, waiting.owner,
+                       f"{task_id} was reopened — {waiting.id} comes after it, and it has not "
+                       "landed after all.", sender=task_id)
+
+
+def _fingerprint(ctx: GitContext, paths: list[str], ref: str) -> str:
+    """One hash over what `ref` holds at each of `paths`, or "" where git cannot say.
+
+    Each path as git stores it: a file's blob, a directory's tree, a dash where nothing is.
+    Content and not commits, so a squash merge or a rebase of the same work reads as the same
+    work; and one hash per card, because whether its work moved is all a delivery asks of it.
+    """
+    names = sorted({path.strip().rstrip("/") for path in paths if path.strip().rstrip("/")})
+    if not names or not ref:
+        return ""
+    code, out = _git(["--literal-pathspecs", "ls-tree", "-z", "--full-tree", ref, "--", *names],
+                     ctx.worktree_root)
+    if code != 0:
+        return ""
+    held: dict[str, str] = {}
+    for entry in out.split("\0"):
+        described, _, path = entry.partition("\t")
+        if path and described.split():
+            held[path] = described.split()[-1]
+    said = "\n".join(f"{name} {held.get(name, '-')}" for name in names)
+    return hashlib.sha256(said.encode("utf-8", "surrogateescape")).hexdigest()[:16]
+
+
+def _fingerprints(ctx: GitContext, task: Task) -> list[str]:
+    """What `task`'s files hold wherever its work could be read back from at a reopen: this
+    tree, the trunk as this clone last fetched it and as it holds it, and the card's branch."""
+    from . import gitpolicy
+    from .gitctx import trunk_ref
+
+    refs = ("HEAD", trunk_ref(ctx), gitpolicy.default_branch(ctx), task.branch)
+    prints = (_fingerprint(ctx, task.paths, ref) for ref in dict.fromkeys(r for r in refs if r))
+    return list(dict.fromkeys(found for found in prints if found))
+
+
+def untouched_since_reopened(ctx: GitContext, task: Task) -> bool:
+    """Was `task` reopened, with its files at this tree's HEAD what they were then?
+
+    A delivery of them then carries the work the card was reopened over, so it neither closes
+    the card nor is owed its close. False for a card no reopen marked, and where git cannot
+    say: those are judged as they always were.
+    """
+    if not task.reopened_over:
+        return False
+    now = _fingerprint(ctx, task.paths, "HEAD")
+    return bool(now) and now in task.reopened_over
+
+
+def clear_blockers_off_pause(ctx: GitContext) -> int:
+    """Take the blocker off each copy of a card that is not paused, its time kept. How many.
+
+    The state `_move` used to leave: a pause's blocker carried by `claim` into `doing` and by
+    `done` past it, so `show` said WAITING ON over work in flight and over work finished.
+    """
+    cleared = 0
+    off_pause = tuple(state for state in STATES if state != PAUSED)
+    with store.file_lock(store.tier_b(ctx, CLAIM_LOCK)):
+        for root in sibling_worktrees(ctx) or [ctx.worktree_root]:
+            for _, path in _cards_under(root, off_pause):
+                try:
+                    meta, body = _frontmatter(path.read_text(encoding="utf-8", errors="replace"))
+                    if meta.get("blocker", "").strip():
+                        _write_as_it_stands(path, {**meta, "blocker": ""}, body)
+                        cleared += 1
+                except OSError:
+                    continue
+    return cleared
 
 
 def amend(ctx: GitContext, task_id: str, note: str = "", paths: list[str] | None = None,
@@ -1124,7 +1368,7 @@ def amend(ctx: GitContext, task_id: str, note: str = "", paths: list[str] | None
     with store.file_lock(store.tier_b(ctx, CLAIM_LOCK)):
         task = find(ctx, task_id)
         if task is None:
-            return None, f"no task {task_id}"
+            return None, no_task(ctx, task_id)
         # Written into every copy for the same reason a transition moves every copy: a note
         # that reaches one worktree is a note the next reader does not get, and the copy it
         # did not reach is the one that survives `git worktree remove` (#210).
@@ -1164,6 +1408,7 @@ def _amended(task: Task, note: str, paths: list[str] | None, done_when: str, tit
         opened_by=meta.get(OPENED_BY, ""),
         paused_by=task.paused_by,
         stamped=stamped,
+        reopened_over=task.reopened_over,
     )
 
 
@@ -1278,9 +1523,9 @@ def _claimable(ctx: GitContext, task_id: str, session_id: str) -> tuple[Task | N
 
     task = find(ctx, task_id)
     if task is None:
-        return None, f"no task {task_id}"
+        return None, no_task(ctx, task_id)
     if task.state == DONE:
-        return None, f"task {task.id} is already done"
+        return None, where_it_stands(task)
     mine = sessions.identities(ctx, session_id)
     # This session's already, under the id it had where it claimed it: in the main
     # checkout, before it entered its own tree. Handed to the id it has now, never refused
@@ -1332,7 +1577,7 @@ def complete(ctx: GitContext, task_id: str, session_id: str = "") -> tuple[Task 
     with store.file_lock(store.tier_b(ctx, CLAIM_LOCK)):
         task = find(ctx, task_id)
         if task is None:
-            return None, f"no task {task_id}"
+            return None, no_task(ctx, task_id)
         refused = _not_theirs(ctx, task, session_id)
         if refused:
             return None, refused
@@ -1425,7 +1670,9 @@ def settle_delivered(ctx: GitContext, session_id: str, delivered: list[str],
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     for task in held_by(ctx, session_id):
         carried = carried_by(task, delivered)
-        if not carried:
+        # Nor a card reopened over what this delivery carries: that is the work it was reopened
+        # over, and closing on it undid the reopen at the end of the turn that made it (#307).
+        if not carried or untouched_since_reopened(ctx, task):
             continue
         waits_on = still_carrying(task) if still_carrying else []
         note = (f"[{stamp}] delivered in part — {what} carried {', '.join(carried[:6])}; "
@@ -1621,6 +1868,7 @@ def _move_to(path: Path, target_dir: Path, task: Task) -> None:
         meta.get("source", ""), meta.get("done_when", ""), "", meta.get("created_at", ""),
         _ids(meta.get("after", "")), _ids(meta.get("with", "")),
         opened_by=meta.get(OPENED_BY, ""),
+        reopened_over=_listed(meta.get(REOPENED_OVER, "")),
     )
     store.atomic_write(target_dir / path.name, updated, mode=0o644)
     if target_dir / path.name != path:

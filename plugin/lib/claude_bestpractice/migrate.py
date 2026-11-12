@@ -966,6 +966,21 @@ def _name_who_paused_a_card(ctx: GitContext) -> str:
     return f"{named} paused card(s) given the session that paused them" if named else ""
 
 
+def _clear_blockers_off_cards_not_paused(ctx: GitContext) -> str:
+    """Cards carrying the blocker of a pause they have since left.
+
+    Until 2.15.0 every move kept a card's blocker, so one paused and then claimed carried it
+    into `doing` and on into `done`, and `show` said WAITING ON over work in flight and over
+    work finished (#307). Only a paused card waits on anything; each copy elsewhere loses the
+    line, its time and everything else kept.
+    """
+    from . import plan
+
+    cleared = plan.clear_blockers_off_pause(ctx)
+    return f"{cleared} card(s) no longer paused had the blocker of their pause taken off" \
+        if cleared else ""
+
+
 def _staged_by_a_move(tree: Path) -> list[str]:
     """Card paths staged as deleted in `tree` whose card a transition moved inside it."""
     from . import plan
@@ -1926,6 +1941,7 @@ _REPAIRS = {
     "0044-forget-a-red-suite-of-lost-connections": (1, _forget_a_red_suite_of_lost_connections),
     "0045-drop-drafts-nobody-typed": (1, _drop_drafts_nobody_typed),
     "0046-carry-attempts-out-of-trees": (1, _carry_attempts_out_of_trees),
+    "0047-clear-blockers-off-cards-not-paused": (1, _clear_blockers_off_cards_not_paused),
 }
 
 
