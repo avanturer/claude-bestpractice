@@ -1,5 +1,21 @@
 # Changelog
 
+## v2.16.0
+
+The plugin's own defect reports reach the issue tracker as they happen, and only about the code
+that runs now. Fifty held for a month went in one burst, most about defects fixed long before
+(#313–#362).
+
+- **The owner's defect reports are filed the moment they are captured.** Where this machine's
+  `gh` files as the owner of the reports' repository, an unset `report_defects` is `auto`, and a
+  session's `claude-bp-report defect` or a crashed gate starts the sender at once, detached.
+  Anyone else still holds reports until they send them; a written `report_defects` wins either
+  way (decision 0092).
+- **A report is sent only if this version was seen to do it.** One last seen on an older version
+  is held back, and `claude-bp-report` names how many and from which versions. Nothing is sent
+  while a newer version is installed or released: it may have fixed what the reports describe.
+- **Two senders at once file each report once.** They read what is unsent inside a lock.
+
 ## v2.15.1
 
 A chat resumed after its window went away owns the tree it worked in, and a removal no longer
