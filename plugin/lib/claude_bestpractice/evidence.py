@@ -77,10 +77,15 @@ class Artifact:
     # was, and the report that did was deleted with the gate's temp directory (#266).
     errors: int = 0
     first: str = ""
-    # How many of `errors` broke because a connection to a server the test uses was lost or
+    # How many of `failed` broke because a connection to a server the test uses was lost or
     # refused, as the driver or the socket said it (`DISCONNECTED`): the database or service
-    # before any of the code under test answered (#289).
+    # before any of the code under test answered (#289). At setup or in the test's body alike,
+    # since pytest's phase says where the connection was first used, not who broke it (#339).
     disconnected: int = 0
+    # How many of `failed` FAILED on anything but a lost connection: an assertion, or an
+    # exception the code under test raised. The code answered there, so the gate never runs
+    # those a second time (decision 0034), and one of them makes the run a verdict (#339).
+    answered: int = 0
 
 
 @dataclass
@@ -105,14 +110,14 @@ def find_artifacts(root: Path, globs: list[str]) -> list[Path]:
 
 
 def parse_artifact(path: Path) -> Artifact | None:
-    """Understand JUnit XML and pytest's JSON report. Unknown formats are not evidence."""
+    """Understand JUnit XML, pytest's JSON report and jest's. Unknown formats are not evidence."""
     try:
         mtime = path.stat().st_mtime
     except OSError:
         return None
 
     if path.suffix == ".json":
-        return _parse_pytest_json(path, mtime)
+        return _parse_json(path, mtime)
     return _parse_junit(path, mtime)
 
 
@@ -140,9 +145,10 @@ def _parse_junit(path: Path, mtime: float) -> Artifact | None:
     executed = max(total - skipped, 0)
     passed = executed > 0 and failed == 0
     detail = _detail(executed, failed, skipped)
+    disconnected, answered = _junit_broken_by(root)
     return Artifact(path, mtime, passed, total, failed, detail, skipped,
                     failures=_junit_failures(root), errors=errors, first=_junit_first(root),
-                    disconnected=_junit_disconnected(root))
+                    disconnected=disconnected, answered=answered)
 
 
 # What a database driver or a socket says when the connection a test was given is lost or never
@@ -157,22 +163,39 @@ DISCONNECTED = re.compile(
     r"|\bConnection(?:Refused|Reset)Error\b")
 
 
-def _junit_disconnected(root: "ET.Element") -> int:
-    """How many test cases ERRORed on a lost or refused connection (`DISCONNECTED`).
+# What a failed assertion's message starts with as pytest writes it: `AssertionError: ...`, or
+# `assert ...` where pytest took the name off a rewritten assert, and `Failed: ...` for
+# `pytest.fail`, the test's own verdict. After `failed on setup with "` where a fixture asserted.
+# Whatever such a message quotes, the code answered: `assert "Connection refused" not in log` is
+# a test about connections, not one that lost its own.
+_ASSERTED = re.compile(r'(?:failed on \w+ with ")?(?:(?:AssertionError|Failed)\b|assert\b)')
 
-    Read off the error's message, where pytest puts the exception it failed on, or the last line
-    of its text where a writer leaves the message out: never the traceback above it, whose
-    source lines may say anything.
+
+def _junit_broken_by(root: "ET.Element") -> tuple[int, int]:
+    """How many of the run's ERRORs and FAILUREs broke on a lost or refused connection
+    (`DISCONNECTED`), and how many FAILUREs on anything else (`Artifact.answered`).
+
+    By what the exception said, never by pytest's phase. A connection the test body opened
+    breaks there as a FAILURE, and one a fixture opened breaks at setup as an ERROR: 54 ERRORs
+    and 1 FAILURE, all `server closed the connection unexpectedly`, were filed red because the
+    one in a body was counted as the code's (#355, #339). An assertion never counts, whatever
+    it quotes (`_ASSERTED`).
+
+    Read off the message, where pytest puts the exception a test broke on, or the last line of
+    the text where a writer leaves the message out: never the traceback above it, whose source
+    lines may say anything. Per element, as the suite's `failures` and `errors` count them.
     """
-    count = 0
+    disconnected = answered = 0
     for case in root.iter("testcase"):
-        error = case.find("error")
-        if error is None:
-            continue
-        said = error.get("message") or (error.text or "").strip().rsplit("\n", 1)[-1]
-        if DISCONNECTED.search(said):
-            count += 1
-    return count
+        for broke in case:
+            if broke.tag not in ("failure", "error"):
+                continue
+            said = broke.get("message") or (broke.text or "").strip().rsplit("\n", 1)[-1]
+            if DISCONNECTED.search(said) and not _ASSERTED.match(said):
+                disconnected += 1
+            elif broke.tag == "failure":
+                answered += 1
+    return disconnected, answered
 
 
 def _junit_failures(root: "ET.Element") -> tuple[str, ...]:
@@ -226,7 +249,8 @@ def _detail(executed: int, failed: int, skipped: int) -> str:
     return f"{out}, {skipped} skipped" if skipped else out
 
 
-def _parse_pytest_json(path: Path, mtime: float) -> Artifact | None:
+def _parse_json(path: Path, mtime: float) -> Artifact | None:
+    """pytest's JSON report (`pytest-json-report`), which carries a `summary`, or jest's own."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
@@ -235,7 +259,7 @@ def _parse_pytest_json(path: Path, mtime: float) -> Artifact | None:
         return None
     summary = data.get("summary")
     if not isinstance(summary, dict):
-        return None
+        return _parse_jest_json(path, mtime, data)
     total = int(summary.get("total") or summary.get("collected") or 0)
     errors = int(summary.get("error", 0))
     failed = int(summary.get("failed", 0)) + errors
@@ -244,6 +268,31 @@ def _parse_pytest_json(path: Path, mtime: float) -> Artifact | None:
     passed = executed > 0 and failed == 0 and data.get("exitcode", 0) == 0
     return Artifact(path, mtime, passed, total, failed, _detail(executed, failed, skipped), skipped,
                     failures=_json_failures(data), errors=errors)
+
+
+def _parse_jest_json(path: Path, mtime: float, data: dict) -> Artifact | None:
+    """jest's own report, which `jest --json --outputFile=<path>` writes with nothing installed.
+    None for JSON that is not one.
+
+    A jest project without `jest-junit` was told to write JUnit through it, a command it could
+    not run (#358). The fields are those jest's `formatTestResults` writes (its configuration
+    docs, `testResultsProcessor`; checked against jest 29.7's output and jest's source):
+    `numTotalTests` counts the passed, failed, pending and todo tests, and a test file that
+    could not run at all, an import that failed, has no test in it and is counted only in
+    `numRuntimeErrorTestSuites`, with `numFailedTests` at 0. Counted here as one broken test
+    each, as pytest counts a collection error, so such a run never reads "1/1 passed".
+    `success` is jest's own verdict, and nothing passes without it.
+    """
+    try:
+        broken = int(data.get("numRuntimeErrorTestSuites") or 0)
+        total = int(data["numTotalTests"]) + broken
+        failed = int(data.get("numFailedTests") or 0) + broken
+        skipped = int(data.get("numPendingTests") or 0) + int(data.get("numTodoTests") or 0)
+    except (KeyError, TypeError, ValueError):
+        return None
+    executed = max(total - skipped, 0)
+    passed = executed > 0 and failed == 0 and data.get("success") is True
+    return Artifact(path, mtime, passed, total, failed, _detail(executed, failed, skipped), skipped)
 
 
 def _json_failures(data: dict) -> tuple[str, ...]:
@@ -272,14 +321,20 @@ def _json_failures(data: dict) -> tuple[str, ...]:
 REPORTS_DIR = "test-reports"
 
 
-def report_path(ctx: GitContext, suite=None) -> Path:
-    """Where this gate asks `suite` to write its JUnit report, and reads it first.
+# The reports this gate names, by format: JUnit for every runner that writes it, and the JSON
+# jest writes with nothing installed (#358). Read in one place, so the one it asked for is read.
+JUNIT_REPORT = "junit.xml"
+JSON_REPORT = "report.json"
+
+
+def report_path(ctx: GitContext, suite=None, name: str = JUNIT_REPORT) -> Path:
+    """Where this gate asks `suite` to write its report called `name`, and reads it first.
 
     One per suite, under the suite's own path, so a report about `backend/` never answers for
     `mobile/`; `junit.xml` at the top for the repository's own suite.
     """
     where = PurePosixPath(suite.path).parts if suite is not None and suite.path else ()
-    return store.tier_a(ctx, REPORTS_DIR, *where, "junit.xml")
+    return store.tier_a(ctx, REPORTS_DIR, *where, name)
 
 
 def _ready(ctx: GitContext, report: Path) -> Path:
@@ -312,10 +367,13 @@ _ARTIFACT_HINTS: list[tuple[str, str]] = [
     ("package.json", "npx vitest run --reporter=junit --outputFile={report}"),
     ("pyproject.toml", _PYTEST),
 ]
-# Jest writes JUnit through the `jest-junit` reporter. Named for a project that runs jest: fuddy's
-# mobile app was told to run vitest, which it does not have, over its jest suite (on 2.2.0).
-_JEST = ("JEST_JUNIT_OUTPUT_FILE={report} npx jest --ci --reporters=default --reporters=jest-junit"
-         "   # needs jest-junit in devDependencies")
+# Jest writes JUnit through the `jest-junit` reporter, where the project has it. Named for a project
+# that runs jest: fuddy's mobile app was told to run vitest, which it does not have, over its jest
+# suite (on 2.2.0).
+_JEST = "JEST_JUNIT_OUTPUT_FILE={report} npx jest --ci --reporters=default --reporters=jest-junit"
+# Where it has not, jest's own JSON, which needs nothing installed: the same app had no
+# `jest-junit`, and the line above was a command it could not run (#358).
+_JEST_JSON = "npx jest --ci --json --outputFile={report}"
 
 # The runners this gate drives itself (`witness.detect`), by the name a run it stopped carries.
 _DRIVEN = {"pytest": _PYTEST, "go": _GO}
@@ -333,28 +391,34 @@ def artifact_hint(ctx: GitContext, suite=None, runner: str = "") -> str:
     from . import witness
 
     root = _root_of(ctx, suite)
-    report = shlex.quote(str(_ready(ctx, report_path(ctx, suite))))
     command = _DRIVEN.get(runner) or next(
         (line for marker, line in _ARTIFACT_HINTS if (root / marker).exists()), "")
-    if command == dict(_ARTIFACT_HINTS)["package.json"] and _runs_jest(root):
-        command = _JEST
+    if command == dict(_ARTIFACT_HINTS)["package.json"]:
+        command = _jest_line(root) or command
+    name = JSON_REPORT if command == _JEST_JSON else JUNIT_REPORT
+    report = shlex.quote(str(_ready(ctx, report_path(ctx, suite, name))))
     if not command:
         return f"run your test suite with a JUnit XML reporter writing {report}, then finish"
     python = shlex.join(witness.python_for(root, ctx.worktree_root))
     return f"cd {shlex.quote(str(root))} && {command.format(report=report, python=python)}"
 
 
-def _runs_jest(root: Path) -> bool:
-    """Whether the Node project at `root` tests with jest and not vitest, by its package.json."""
+def _jest_line(root: Path) -> str:
+    """The command that has the Node project at `root` write a report, where it tests with jest
+    and not vitest, by its package.json: JUnit through `jest-junit` where it depends on that,
+    else jest's own JSON. "" for any other project."""
     try:
         manifest = json.loads((root / "package.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return False
-    sections = ([manifest.get(key) for key in ("dependencies", "devDependencies", "scripts")]
-                if isinstance(manifest, dict) else [])
-    named = " ".join(f"{name} {value}" for section in sections if isinstance(section, dict)
+        return ""
+    sections = {key: manifest.get(key) for key in ("dependencies", "devDependencies", "scripts")
+                if isinstance(manifest, dict) and isinstance(manifest.get(key), dict)}
+    named = " ".join(f"{name} {value}" for section in sections.values()
                      for name, value in section.items())
-    return "jest" in named and "vitest" not in named
+    if "jest" not in named or "vitest" in named:
+        return ""
+    declared = {**sections.get("dependencies", {}), **sections.get("devDependencies", {})}
+    return _JEST if "jest-junit" in declared else _JEST_JSON
 
 
 def newest_source_mtime(root: Path, relpaths: list[str]) -> float:
@@ -1024,12 +1088,12 @@ def _too_long_to_witness(
 def _reports(ctx: GitContext, globs: list[str], suite=None) -> list[Path]:
     """Every report this gate reads for `suite`, newest first.
 
-    The one it names (`report_path`), then what the configured globs find in the suite's own
+    The ones it names (`report_path`), then what the configured globs find in the suite's own
     directory — the artifact search follows the suite (decision 0012) — and, as they always
     were, at the top of the tree.
     """
-    named = report_path(ctx, suite)
-    found = [named.resolve()] if named.is_file() else []
+    named = (report_path(ctx, suite, name) for name in (JUNIT_REPORT, JSON_REPORT))
+    found = [path.resolve() for path in named if path.is_file()]
     for root in dict.fromkeys((_root_of(ctx, suite), ctx.worktree_root)):
         found += find_artifacts(root, globs)
     return sorted(_untracked(ctx, list(dict.fromkeys(found))), key=_mtime, reverse=True)
@@ -1099,8 +1163,8 @@ def _verify_by_reading(ctx: GitContext, globs: list[str], changed: list[str], su
     if artifact is None:
         return Verdict(
             False,
-            f"Found {_shown(ctx, candidates[0])} but could not parse it as JUnit XML or a "
-            "pytest JSON report. Emit one of those formats.",
+            f"Found {_shown(ctx, candidates[0])} but could not parse it as JUnit XML, a "
+            "pytest JSON report or jest's `--json`. Emit one of those formats.",
         )
 
     source_mtime = newest_source_mtime(ctx.worktree_root, changed)
@@ -1268,8 +1332,9 @@ def _judge_witnessed(ctx: GitContext, seen: witness.Witnessed, suite=None, tree:
 
 
 def _lost_its_connection(ctx: GitContext, seen: witness.Witnessed) -> Verdict:
-    """The gate's own run, in which every test that broke ERRORed on a connection to a server it
-    uses, lost or refused, and did again when run on its own: no verdict on the code.
+    """The gate's own run, in which every test that broke lost a connection to a server it uses,
+    or had it refused, at setup or in its body, and did again when run on its own: no verdict
+    on the code (decisions 0067, 0097).
 
     Filed red, it held a merge the founder had said `+merge` to, and only a pass on a database
     that kept dropping connections could clear it: three runs of the same tree broke 1, 150 and
@@ -1283,8 +1348,8 @@ def _lost_its_connection(ctx: GitContext, seen: witness.Witnessed) -> Verdict:
     kept = f"\n  the gate's report: {seen.kept}" if seen.kept else ""
     return Verdict(
         True,
-        f"{seen.runner} could not judge the code: all {seen.errors} test(s) that broke ERRORed "
-        f"before they ran, because a connection to a server they use was lost or refused"
+        f"{seen.runner} could not judge the code: all {seen.failed} test(s) that broke did so "
+        f"before the code answered, because a connection to a server they use was lost or refused"
         f"{again}. {seen.executed - seen.failed} of {seen.executed} passed.{first}{kept}\n"
         "That is the database or service, not the code, so no red record is filed. Those tests "
         "ran nowhere, so this finish is UNVERIFIED and the founder's `+merge` decides it. Once "
@@ -1353,8 +1418,9 @@ def _recovered(seen: witness.Witnessed) -> str:
     """What a passing verdict says about the ERRORs its run had and a second run did not."""
     if not seen.recovered:
         return ""
-    return (f". {seen.recovered} of them ERRORed in its first run and passed when it ran them "
-            f"again on their own, so they are not counted as the code failing. First: {seen.first}")
+    return (f". {seen.recovered} of them ERRORed in its first run or lost a connection to a "
+            "server there, and passed when it ran them again on their own, so they are not "
+            f"counted as the code failing. First: {seen.first}")
 
 
 def _what_broke(seen: witness.Witnessed) -> str:

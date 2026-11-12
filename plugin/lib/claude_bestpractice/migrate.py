@@ -1382,17 +1382,19 @@ def _forget_a_red_suite_that_never_ran(ctx: GitContext) -> str:
 
 
 def _forget_a_red_suite_of_lost_connections(ctx: GitContext) -> str:
-    """A red record of the gate's own pytest whose every broken test ERRORed on a connection to
-    a server it uses, lost or refused.
+    """A red record of the gate's own pytest whose every broken test lost a connection to a
+    server it uses, or had it refused.
 
-    Until this release such a run was filed red: behind Docker's proxy on WSL the shared database
+    Until 2.10 such a run was filed red: behind Docker's proxy on WSL the shared database
     dropped connections, 146 tests ERRORed at setup in different files on every run, and the
     record held a merge the founder had said `+merge` to (#289). The gate files no such record
     now, and the one already written could be cleared only by a pass on that same database.
 
     Read off the reports the gate kept of that run, under `test-reports/<suite>/gate-run/`, the
     first run and the second run of its errors alike. Only where every test that broke in them
-    ERRORed that way; a record whose reports are gone, or say anything else, stays as it was.
+    broke that way; a record whose reports are gone, or say anything else, stays as it was.
+    Revision 2 counts a FAILURE whose exception lost its connection in the test's body, as the
+    gate now does (#339): the first took 54 such ERRORs beside 1 such FAILURE for the code's (#355).
     """
     from . import evidence
 
@@ -1434,11 +1436,11 @@ def _kept_reports(ctx: GitContext, suite: str) -> list:
 
 
 def _every_break_a_lost_connection(reports: list) -> bool:
-    """Do these reports, every one readable, hold a test that broke, and was each test that broke
-    an ERROR on a lost or refused connection?"""
+    """Do these reports, every one readable, hold a test that broke, and did each test that broke
+    break on a lost or refused connection, at setup or in its body?"""
     if not reports or None in reports:
         return False
-    return (all(report.failed == report.errors == report.disconnected for report in reports)
+    return (all(report.failed == report.disconnected for report in reports)
             and any(report.failed for report in reports))
 
 
@@ -1960,7 +1962,7 @@ _REPAIRS = {
     "0041-forget-a-red-suite-the-pytest-guard-left": (1, _forget_a_red_suite_the_pytest_guard_left),
     "0042-let-go-of-what-dead-runs-and-sessions-left": (1, _let_go_of_what_dead_runs_left),
     "0043-cut-the-logs-down-to-what-is-live": (1, _cut_the_logs_down_to_what_is_live),
-    "0044-forget-a-red-suite-of-lost-connections": (1, _forget_a_red_suite_of_lost_connections),
+    "0044-forget-a-red-suite-of-lost-connections": (2, _forget_a_red_suite_of_lost_connections),
     "0045-drop-drafts-nobody-typed": (1, _drop_drafts_nobody_typed),
     "0046-carry-attempts-out-of-trees": (1, _carry_attempts_out_of_trees),
     "0047-clear-blockers-off-cards-not-paused": (1, _clear_blockers_off_cards_not_paused),

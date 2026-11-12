@@ -137,15 +137,18 @@ class TestAnErrorThatDoesNotComeBackIsNotTheCode(GateRunCase):
         self.assertNotIn("broke again", verdict.reason)
 
     def test_a_second_run_that_ran_fewer_than_errored_answers_for_none_of_them(self):
-        """Two ERRORs, one test passing the second time: the other was never asked again."""
-        first = witness.Witnessed(1, 10, 2, "", "pytest", errors=2)
+        """Two ERRORs, one test passing the second time: the other was never asked again. The
+        same for two FAILUREs on a lost connection, which get the same second run (#339)."""
         again = witness.Witnessed(0, 1, 0, "", "pytest")
         done = subprocess.CompletedProcess([], 0, "", "")
-        with mock.patch.object(witness, "_spawn", return_value=done), \
-                mock.patch.object(witness, "_reported", return_value=again):
-            seen = witness._once_more(self.ctx(), [], self.repo / "again.xml", {}, self.repo, 60, first)
-        self.assertFalse(seen.passed)
-        self.assertEqual(0, seen.recovered)
+        for first in (witness.Witnessed(1, 10, 2, "", "pytest", errors=2),
+                      witness.Witnessed(1, 10, 2, "", "pytest", disconnected=2)):
+            with self.subTest(first=first), mock.patch.object(witness, "_spawn", return_value=done), \
+                    mock.patch.object(witness, "_reported", return_value=again):
+                seen = witness._once_more(self.ctx(), [], self.repo / "again.xml", {}, self.repo, 60,
+                                          first)
+                self.assertFalse(seen.passed)
+                self.assertEqual(0, seen.recovered)
 
 
 class TestTheReportOfARedRunOutlivesIt(GateRunCase):
