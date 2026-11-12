@@ -51,10 +51,11 @@ LET_GO_AT = "_let_go_at"
 # a package — has to be able to come back green without anything in the tree changing.
 LET_GO_SECONDS = 3600.0
 
-# When this gate last let one of this session's turns end, however it ended. A card closed
-# after it was closed in the turn being judged, and that turn is a finish whatever else it
-# paused (#264).
-SETTLED_AT = "_settled_at"
+# When this gate last let one of this session's turns end, however it ended, with none of its
+# agents at work. A card closed after it was closed in the turn being judged, and that turn is
+# a finish whatever else it paused (#264). A merge reads it as the moment before which every
+# agent of the chat had reported back (#318).
+SETTLED_AT = sessions.SETTLED_AT
 # The pause this gate took after refusals, as `<card>@<the second it was set down>`.
 PAUSE_TAKEN = "_pause_taken"
 # The pause this gate refused once over agents of the session still at work, kept the same way.

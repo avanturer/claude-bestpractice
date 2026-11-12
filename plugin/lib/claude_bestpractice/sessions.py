@@ -128,6 +128,11 @@ class SessionRecord:
     # because the cost being bounded is the fan-out — five agents at once — and not the
     # fifth question of a long conversation. `prompt-capture` puts it back to zero.
     spawns_this_turn: int = 0
+    # The calls those spawns were, by the id the harness gave each (`tool_use_id`), so that one
+    # that came back an error is given back: three spawns of an agent type nobody had defined
+    # started nothing, and refused the next three that would have (#316). A spawn whose event
+    # named no id stays counted, as every spawn was before.
+    spawn_calls: list[str] = field(default_factory=list)
     # The name Claude Code gives this session, which `SendMessage` takes as its address —
     # `fuddy-8b`, where everything here said `80672d34` and the only way to tell which chat
     # to write to was reading `~/.claude/sessions/` by hand (#253). As `running` last
@@ -811,6 +816,45 @@ def count(ctx: GitContext, session_id: str, counter: str, ceiling: int = 0,
 
     _rewrite(ctx, session_id, add_one)
     return before[0] if before else 0
+
+
+def spawn(ctx: GitContext, session_id: str, call: str, ceiling: int,
+          never_started: set[str] | frozenset[str] = frozenset()) -> int:
+    """Count one subagent spawn of this turn, and return how many had started before it.
+
+    `count` for `spawns_this_turn`, in the same one locked step and for the reason it gives,
+    with the turn's spawns that `never_started` names given back first: their call came back
+    an error, so no agent ran (#316). `call` is kept beside the count to be given back too.
+    """
+    before: list[int] = []
+
+    def add_one(rec: SessionRecord) -> None:
+        kept = [made for made in rec.spawn_calls if made not in never_started]
+        started = max(int(rec.spawns_this_turn or 0) - (len(rec.spawn_calls) - len(kept)), 0)
+        before.append(started)
+        if ceiling <= 0 or started < ceiling:
+            started += 1
+            kept += [call] if call else []
+        rec.spawns_this_turn, rec.spawn_calls = started, kept
+
+    _rewrite(ctx, session_id, add_one)
+    return before[0] if before else 0
+
+
+# When the Stop gate last let a turn of this session end with none of its agents at work, in
+# `tool_signatures`: every agent the chat had sent off before then had reported back.
+SETTLED_AT = "_settled_at"
+
+
+def settled_at(ctx: GitContext, session_id: str) -> float:
+    """`SETTLED_AT` for this chat, under any id it has had; 0.0 where no turn of it has."""
+    latest = 0.0
+    for identity in identities(ctx, session_id):
+        rec = get(ctx, identity)
+        value = rec.tool_signatures.get(SETTLED_AT) if rec is not None else None
+        if isinstance(value, (int, float)):
+            latest = max(latest, float(value))
+    return latest
 
 
 def unregister(ctx: GitContext, session_id: str) -> None:

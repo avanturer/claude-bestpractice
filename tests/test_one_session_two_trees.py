@@ -18,9 +18,11 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 import unittest
 
-from helpers import BIN, RepoCase, git, session_record_for, sid
+from helpers import (BIN, RepoCase, a_transcript, git, reported, session_record_for, sid,
+                     spawn_result, spawned)
 
 from claude_bestpractice import plan, pullrequest, sessions
 from claude_bestpractice.gitctx import resolve
@@ -285,6 +287,67 @@ class TestACardOverSeveralPullRequests(MovedSession):
         self.assertEqual([], closed)
         self.assertEqual(plan.DOING, self.card().state)
         self.assertNotEqual("deny", self.hook_decision(self.write_in(self.tree)))
+
+
+class TestAMergeWaitsForTheAgentsAtWork(MovedSession):
+    """The Stop gate closes no card while an agent of the chat works (decision 0070). A merge of
+    other files closed the card a subagent was still writing under, and the agent's next write
+    was refused as work no card claimed (#318)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.transcript = self.tmp / "chat.jsonl"
+        self.now = time.time()
+
+    def the_merge(self) -> dict:
+        main = resolve(self.repo)
+        return {"branch": "feat/other", "head": "feat/other", "base": main.branch,
+                "session": sid(self.repo, "S"), "delivered": ["src/app.py"]}
+
+    def merged(self, *entries: dict, agent: str = ""):
+        a_transcript(self.transcript, *entries)
+        main = resolve(self.repo)
+        pullrequest.complete(main, sid(self.repo, "S"), self.the_merge(), str(self.transcript),
+                             agent)
+        return plan.find(main, "0001")
+
+    def sent_off(self) -> list[dict]:
+        return [spawned("c1", self.now, "cover the parser"),
+                spawn_result("c1", self.now, agent="a1")]
+
+    def test_the_card_stays_open_while_an_agent_the_chat_sent_off_works(self):
+        card = self.merged(*self.sent_off())
+        self.assertEqual(plan.DOING, card.state)
+        self.assertIn("still under this card: an agent at work (cover the parser).", card.body)
+        self.assertNotEqual("deny", self.hook_decision(self.write_in(self.tree)))
+
+    def test_once_the_agent_reported_back_the_merge_closes_it(self):
+        self.assertEqual(plan.DONE, self.merged(*self.sent_off(), reported("c1", self.now)).state)
+
+    def test_with_no_agent_sent_off_the_merge_closes_it_as_before(self):
+        self.assertEqual(plan.DONE, self.merged().state)
+
+    def test_an_agent_sent_off_before_the_last_turn_that_ended_with_none_at_work_is_not_waited_on(self):
+        """That Stop's `background_tasks` named none, so whatever was sent off before had ended,
+        its report in the file or not: an agent of a process that is gone never reports. Read off
+        the chat's record in its tree, under any id the chat has had."""
+        ctx = resolve(self.tree)
+        rec = sessions.get(ctx, sid(self.tree, "S"))
+        sessions.touch(ctx, rec.session_id,
+                       tool_signatures={**rec.tool_signatures, sessions.SETTLED_AT: self.now + 1})
+        self.assertEqual(plan.DONE, self.merged(*self.sent_off()).state)
+
+    def test_the_agent_that_merged_is_not_waiting_on_itself(self):
+        self.assertEqual(plan.DONE, self.merged(*self.sent_off(), agent="a1").state)
+
+    def test_the_merge_hook_hands_over_the_chats_transcript_and_the_agent_that_merged(self):
+        a_transcript(self.transcript, *self.sent_off())
+        for call, agent, state in (("m1", "", plan.DOING), ("m2", "a1", plan.DONE)):
+            pullrequest.hold(resolve(self.repo), call, self.the_merge())
+            self.hook("pr-opened", self.repo, hook_event_name="PostToolUse", tool_name="Bash",
+                      tool_input={"command": "gh pr merge 5"}, tool_use_id=call,
+                      transcript_path=str(self.transcript), agent_id=agent)
+            self.assertEqual(state, plan.find(resolve(self.repo), "0001").state, call)
 
 
 class TestTheChatComesBackInANewProcess(MovedSession):

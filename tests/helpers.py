@@ -428,3 +428,62 @@ def queued(text: str, at: float, **extra) -> dict:
                   **extra}
     return {"type": "attachment", "uuid": "a-1", "timestamp": stamped(at), "isSidechain": False,
             "attachment": attachment}
+
+
+def gone_as_it_is_walked(name: str = "gone"):
+    """`os.scandir` meeting a directory a sibling's tree or a reinstall removed a moment before:
+    the directory called `name` goes as the walk reaches it (#340)."""
+    from unittest import mock
+
+    real = _os.scandir
+
+    def scandir(path="."):
+        if str(path).endswith(name):
+            shutil.rmtree(path, ignore_errors=True)
+        return real(path)
+
+    return mock.patch("os.scandir", scandir)
+
+
+# A spawn and what became of it, as Claude Code 2.1.322 wrote them: the `Agent` call, its result
+# under the call's id, and the notification an agent in the background ends with (#316, #318).
+def spawned(call: str, at: float, description: str = "look into it") -> dict:
+    """The assistant's `Agent` call."""
+    block = {"type": "tool_use", "id": call, "name": "Agent",
+             "input": {"description": description, "subagent_type": "general-purpose",
+                       "model": "sonnet", "prompt": description}}
+    return {"type": "assistant", "timestamp": stamped(at), "isSidechain": False,
+            "message": {"role": "assistant", "content": [block]}}
+
+
+def spawn_result(call: str, at: float, error: bool = False, agent: str = "") -> dict:
+    """The call's result: an error (no agent ran), the agent sent to the background (`agent` is
+    its id), or else a foreground agent's answer."""
+    if error:
+        said, returned = "Agent type 'x' not found.", "Error: Agent type 'x' not found."
+    elif agent:
+        said = "Async agent launched successfully."
+        returned = {"isAsync": True, "status": "async_launched", "agentId": agent}
+    else:
+        said, returned = "done", {"status": "completed"}
+    block = {"type": "tool_result", "tool_use_id": call, "content": said}
+    if error:
+        block["is_error"] = True
+    return {"type": "user", "timestamp": stamped(at), "isSidechain": False,
+            "toolUseResult": returned, "message": {"role": "user", "content": [block]}}
+
+
+def reported(call: str, at: float, agent: str = "a1") -> dict:
+    """An agent in the background ending, queued for the session the moment it does."""
+    said = (f"<task-notification>\n<task-id>{agent}</task-id>\n<tool-use-id>{call}</tool-use-id>\n"
+            "<status>completed</status>\n<summary>Agent completed</summary>\n</task-notification>")
+    return {"type": "queue-operation", "operation": "enqueue", "timestamp": stamped(at),
+            "content": said}
+
+
+def a_transcript(path, *entries: dict):
+    """A transcript holding these entries, a compact JSON line each, as the harness writes it."""
+    target = Path(path)
+    target.write_text("".join(json.dumps(e, separators=(",", ":")) + "\n" for e in entries),
+                      encoding="utf-8")
+    return target

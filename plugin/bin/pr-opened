@@ -72,7 +72,8 @@ def main() -> None:
         # this call has run, and only now is the word spent and the work delivered.
         merge = pullrequest.ran(ctx, str(event.raw.get("tool_use_id") or event.session_id))
         if merge is not None:
-            pullrequest.complete(ctx, event.session_id, merge)
+            pullrequest.complete(ctx, event.session_id, merge, event.transcript_path,
+                                 str(event.raw.get("agent_id") or ""))
         hookio.emit_silent()
     if not pullrequest.opens_a_pull_request(event.tool_name, command):
         closed = pullrequest.closes(ctx, event.tool_name, command, event.tool_input,

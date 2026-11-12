@@ -214,7 +214,7 @@ def main() -> None:
         sessions.instruct(ctx, event.session_id, fresh, statement, MAX_TASK_PATHS)
     # And the fan-out budget starts again. The founder asking a second question is a new
     # piece of work, not a continuation of the delegation the last one needed.
-    sessions.touch(ctx, event.session_id, spawns_this_turn=0)
+    sessions.touch(ctx, event.session_id, spawns_this_turn=0, spawn_calls=[])
 
     hookio.emit_silent()
 

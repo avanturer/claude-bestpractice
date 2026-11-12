@@ -1879,7 +1879,16 @@ def main() -> None:
         # stopped is not work the session did. Checked and counted in ONE locked step:
         # read from `rec` and written back afterwards, six spawns in one message all
         # read 0 and all six went through a ceiling of three.
-        spawned = sessions.count(ctx, event.session_id, "spawns_this_turn", cfg.subagent_fanout)
+        #
+        # And a spawn whose call came back an error started nothing, so it is given back:
+        # three spawns of an agent type nobody had defined refused the next three that would
+        # have run (#316). Read off the transcript only where the ceiling would refuse this
+        # one, which is the one place the answer can change anything.
+        gone = (subagents.never_started(event.transcript_path, rec.spawn_calls)
+                if cfg.subagent_fanout > 0 and rec.spawns_this_turn >= cfg.subagent_fanout
+                else set())
+        spawned = sessions.spawn(ctx, event.session_id, str(event.raw.get("tool_use_id") or ""),
+                                 cfg.subagent_fanout, gone)
         if cfg.subagent_fanout > 0 and spawned >= cfg.subagent_fanout:
             deny(ctx, rec, subagents.fanout_refusal(spawned, cfg.subagent_fanout))
 

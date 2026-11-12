@@ -24,7 +24,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from . import config, inbox, redact, store
 from .gitctx import GitContext
@@ -351,7 +351,7 @@ def _reading(transcript_path: str) -> tuple[list[Word], list[float]]:
     key = (str(path), stamp.st_size, stamp.st_mtime_ns)
     if key not in _READ:
         _READ.clear()
-        _READ[key] = _read(path, stamp.st_size)
+        _READ[key] = _read(path)
     return _READ[key]
 
 
@@ -360,21 +360,30 @@ def _reading(transcript_path: str) -> tuple[list[Word], list[float]]:
 _READ: dict[tuple[str, int, int], tuple[list[Word], list[float]]] = {}
 
 
-def _read(path: Path, size: int) -> tuple[list[Word], list[float]]:
+def _read(path: Path) -> tuple[list[Word], list[float]]:
     words: list[Word] = []
     moments: list[float] = []
-    try:
-        with path.open("rb") as handle:
-            if size > _MOST_BYTES:
-                handle.seek(size - _MOST_BYTES)
-                handle.readline()
-            for raw in handle:
-                literal = _A_LITERAL.search(raw) is not None
-                if literal or _QUEUED in raw:
-                    _note(raw, literal, words, moments)
-    except OSError:
-        return [], []
+    for raw in lines(str(path)):
+        literal = _A_LITERAL.search(raw) is not None
+        if literal or _QUEUED in raw:
+            _note(raw, literal, words, moments)
     return words, moments
+
+
+def lines(transcript_path: str, most_bytes: int = _MOST_BYTES) -> Iterator[bytes]:
+    """The lines of the last `most_bytes` of a transcript, oldest first, as the harness wrote
+    them; none once it cannot be read. Where that stretch starts inside a line, from the next one:
+    half a line is no JSON. The one reader of a transcript's end, for whatever is looked for in it.
+    """
+    try:
+        with open(transcript_path, "rb") as handle:
+            size = handle.seek(0, 2)
+            handle.seek(max(size - most_bytes, 0))
+            if size > most_bytes:
+                handle.readline()
+            yield from handle
+    except (OSError, TypeError, ValueError):
+        return
 
 
 def _note(raw: bytes, literal: bool, words: list[Word], moments: list[float]) -> None:
@@ -399,17 +408,8 @@ def messages(transcript_path: str, most_bytes: int = _MOST_BYTES) -> list[str]:
     """What a person typed into this chat, oldest first, from the last `most_bytes` of its
     transcript: turns they started and messages they sent while the session worked, and
     nothing else the harness files as a user entry (`_from_a_person`)."""
-    try:
-        with open(transcript_path, "rb") as handle:
-            size = handle.seek(0, 2)
-            handle.seek(max(size - most_bytes, 0))
-            if size > most_bytes:
-                handle.readline()
-            lines = handle.read().splitlines()
-    except (OSError, TypeError, ValueError):
-        return []
     said: list[str] = []
-    for raw in lines:
+    for raw in lines(transcript_path, most_bytes):
         try:
             entry = json.loads(raw)
         except ValueError:
@@ -444,7 +444,7 @@ def _from_a_person(entry: dict[str, Any]) -> tuple[str, str, float] | None:
         return None
     source, content, ident = found
     text = _text_of(content)
-    at = _moment(source.get("timestamp") or entry.get("timestamp"))
+    at = moment(source.get("timestamp") or entry.get("timestamp"))
     if not text or not at or not _a_persons(source):
         return None
     return str(ident or f"at:{at:.3f}"), text, at
@@ -491,7 +491,7 @@ def _text_of(content: Any) -> str:
     return ""
 
 
-def _moment(stamp: Any) -> float:
+def moment(stamp: Any) -> float:
     """An ISO timestamp as the harness writes it, in seconds. 0.0 when it is not one."""
     if not isinstance(stamp, str) or not stamp:
         return 0.0
@@ -572,7 +572,7 @@ def _the_session_went_on(raw: bytes, since: float) -> bool:
         entry = json.loads(raw)
     except ValueError:
         return False
-    if not isinstance(entry, dict) or _moment(entry.get("timestamp")) < since:
+    if not isinstance(entry, dict) or moment(entry.get("timestamp")) < since:
         return False
     if entry.get("type") == "assistant":
         return True

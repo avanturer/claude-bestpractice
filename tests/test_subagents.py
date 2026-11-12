@@ -9,17 +9,22 @@ rule the founder pays for and does not have.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
+import tempfile
+import time
 import unittest
+from pathlib import Path
 
-from helpers import BIN, RepoCase, harness_matches, sid
+from helpers import (BIN, RepoCase, a_transcript, harness_matches, reported, sid, spawn_result,
+                     spawned)
 
 from claude_bestpractice import sessions, subagents
 
 
 class SpawnCase(RepoCase):
-    def gate(self, tool_input: dict, session_id: str = "s1") -> subprocess.CompletedProcess:
+    def gate(self, tool_input: dict, session_id: str = "s1", **event) -> subprocess.CompletedProcess:
         return subprocess.run(
             [sys.executable, str(BIN / "pre-tool")],
             input=json.dumps({
@@ -28,6 +33,7 @@ class SpawnCase(RepoCase):
                 "hook_event_name": "PreToolUse",
                 "tool_name": "Agent",
                 "tool_input": tool_input,
+                **event,
             }),
             capture_output=True,
             text=True,
@@ -202,6 +208,136 @@ class CountIsBounded(SpawnCase):
             {"subagent_type": "Explore", "model": "haiku", "prompt": "the next thing"}
         ))
         self.assertNotEqual(decision, "deny")
+
+
+class ASpawnThatNeverStartedIsNotCounted(SpawnCase):
+    """Three `Agent` calls for an agent type nobody had defined failed inside the tool: no agent
+    ran, and the next three spawns of the turn were refused as past the ceiling (#316). Claude
+    Code 2.1.322 files such a call's result under the call's id, `is_error`."""
+
+    def setUp(self):
+        super().setUp()
+        self.start()
+        self.transcript = self.tmp / "chat.jsonl"
+        self.lines: list[dict] = []
+
+    def spawn(self, call: str, kind: str = "general-purpose") -> tuple[str, str]:
+        return self.decision(self.gate(
+            {"subagent_type": kind, "model": "sonnet", "prompt": f"work {call}"},
+            tool_use_id=call, transcript_path=str(self.transcript)))
+
+    def came_back(self, call: str, **how) -> None:
+        now = time.time()
+        self.lines += [spawned(call, now), spawn_result(call, now, **how)]
+        a_transcript(self.transcript, *self.lines)
+
+    def test_the_spawns_after_three_that_failed_go_through(self):
+        for call in ("c1", "c2", "c3"):
+            self.assertNotEqual("deny", self.spawn(call, "seo-technical")[0])
+            self.came_back(call, error=True)
+        for call in ("c4", "c5", "c6"):
+            decision, why = self.spawn(call)
+            self.assertNotEqual("deny", decision, why)
+            self.came_back(call, agent=f"agent-{call}")
+        self.assertEqual(3, self.record().spawns_this_turn)
+        self.assertEqual(["c4", "c5", "c6"], self.record().spawn_calls)
+        decision, why = self.spawn("c7")
+        self.assertEqual("deny", decision)
+        self.assertIn("already started 3", why)
+
+    def test_spawns_that_started_still_count(self):
+        for call in ("c1", "c2", "c3"):
+            self.spawn(call)
+            self.came_back(call, agent=f"agent-{call}")
+        self.assertEqual("deny", self.spawn("c4")[0])
+
+    def test_a_failure_the_transcript_does_not_hold_yet_is_still_counted(self):
+        """The harness writes the transcript behind the conversation: what it does not say yet is
+        no answer, and the spawn is counted as it always was."""
+        for call in ("c1", "c2", "c3"):
+            self.spawn(call, "seo-technical")
+        self.assertEqual("deny", self.spawn("c4")[0])
+
+    def test_an_error_under_a_call_this_turn_never_counted_gives_nothing_back(self):
+        """Another turn's failed spawns were never this turn's to give back."""
+        for call in ("o1", "o2", "o3"):
+            self.came_back(call, error=True)
+        for call in ("c1", "c2", "c3"):
+            self.spawn(call)
+            self.came_back(call, agent=f"agent-{call}")
+        self.assertEqual("deny", self.spawn("c4")[0])
+
+    def test_the_founders_next_message_clears_the_calls_with_the_count(self):
+        self.spawn("c1")
+        self.assertEqual(["c1"], self.record().spawn_calls)
+        self.run_hook("prompt-capture", {"session_id": "s1", "hook_event_name": "UserPromptSubmit",
+                                         "prompt": "now the next thing"})
+        self.assertEqual([], self.record().spawn_calls)
+
+
+class HowASpawnStandsIsReadOffTheTranscript(unittest.TestCase):
+    """The shapes Claude Code 2.1.322 wrote for a spawn and its end (#316, #318)."""
+
+    def setUp(self):
+        self.where = Path(tempfile.mkdtemp(prefix="claude-bestpractice-spawns-"))
+        self.addCleanup(shutil.rmtree, self.where, ignore_errors=True)
+        self.now = time.time()
+
+    def read(self, *entries: dict, since: float = 0.0) -> dict:
+        path = a_transcript(self.where / "chat.jsonl", *entries)
+        return {call: how for call, (how, _, _) in subagents.standing(str(path), since).items()}
+
+    def test_a_call_that_came_back_an_error_never_started(self):
+        self.assertEqual({"c1": subagents.NEVER_STARTED},
+                         self.read(spawned("c1", self.now), spawn_result("c1", self.now, error=True)))
+
+    def test_an_agent_sent_to_the_background_is_at_work_until_it_reports(self):
+        launched = [spawned("c1", self.now), spawn_result("c1", self.now, agent="a1")]
+        self.assertEqual({"c1": subagents.AT_WORK}, self.read(*launched))
+        self.assertEqual({"c1": subagents.BACK}, self.read(*launched, reported("c1", self.now)))
+
+    def test_a_report_filed_before_the_result_that_launched_it_still_counts(self):
+        self.assertEqual({"c1": subagents.BACK}, self.read(
+            spawned("c1", self.now), reported("c1", self.now), spawn_result("c1", self.now, agent="a1")))
+
+    def test_an_agent_in_the_foreground_is_at_work_until_its_answer(self):
+        self.assertEqual({"c1": subagents.AT_WORK}, self.read(spawned("c1", self.now)))
+        self.assertEqual({"c1": subagents.BACK},
+                         self.read(spawned("c1", self.now), spawn_result("c1", self.now)))
+
+    def test_the_old_name_of_the_tool_is_a_spawn_too(self):
+        call = spawned("c1", self.now)
+        call["message"]["content"][0]["name"] = "Task"
+        self.assertEqual({"c1": subagents.AT_WORK}, self.read(call))
+
+    def test_only_a_queued_notification_is_a_report(self):
+        """A message that quotes one, or the queue taking one off, ends no agent."""
+        quoted = {**reported("c1", self.now), "content": "see <tool-use-id>c1</tool-use-id>"}
+        removed = {**reported("c1", self.now), "operation": "remove"}
+        launched = [spawned("c1", self.now), spawn_result("c1", self.now, agent="a1")]
+        self.assertEqual({"c1": subagents.AT_WORK}, self.read(*launched, quoted, removed))
+
+    def test_a_spawn_from_before_since_is_not_read(self):
+        self.assertEqual({"c2": subagents.AT_WORK}, self.read(
+            spawned("c1", self.now - 60), spawned("c2", self.now), since=self.now - 1))
+
+    def test_what_an_agent_at_work_was_sent_to_do_is_named_on_one_line(self):
+        path = a_transcript(self.where / "chat.jsonl",
+                            spawned("c1", self.now, "fix\nthe   parser"),
+                            spawned("c2", self.now, "write the docs"),
+                            spawn_result("c2", self.now, agent="a2"))
+        self.assertEqual(["fix the parser", "write the docs"], subagents.at_work(str(path)))
+        self.assertEqual(["fix the parser"], subagents.at_work(str(path), but="a2"))
+
+    def test_only_the_calls_asked_about_are_answered(self):
+        path = a_transcript(self.where / "chat.jsonl",
+                            spawned("c1", self.now), spawn_result("c1", self.now, error=True),
+                            spawned("c2", self.now), spawn_result("c2", self.now, error=True))
+        self.assertEqual({"c1"}, subagents.never_started(str(path), ["c1"]))
+
+    def test_a_transcript_that_cannot_be_read_holds_no_spawn(self):
+        self.assertEqual({}, subagents.standing(str(self.where / "missing.jsonl")))
+        self.assertEqual(set(), subagents.never_started("", ["c1"]))
 
 
 class TheMatcherCarriesTheTool(unittest.TestCase):

@@ -218,3 +218,19 @@ class TestTheRoster(PauseCase):
         for response in (None, "stopped", ["a1"], {"task_type": "local_agent"}):
             self.assertEqual("", subagents.stopped(self.ctx(), "s1", response))
         self.assertFalse(store.tier_b(self.ctx(), subagents.ROSTER_DIR, "s1.json").exists())
+
+
+class TestAMergeReadsTheTurnThatEndedWithNoAgentAtWork(GateCase):
+    """A merge waits on the agents the chat sent off since its last turn that ended with none of
+    them at work (#318). That moment is the Stop gate's to stamp, under the key the merge reads."""
+
+    def test_a_turn_let_end_with_no_agent_at_work_is_that_moment(self):
+        self.start()
+        before = time.time()
+        self.stop(background_tasks=[])
+        self.assertGreaterEqual(sessions.settled_at(self.ctx(), sid(self.repo, "s1")), before)
+
+    def test_a_turn_let_end_to_wait_on_its_agents_is_not(self):
+        self.start()
+        self.stop(background_tasks=[at_work()])
+        self.assertEqual(0.0, sessions.settled_at(self.ctx(), sid(self.repo, "s1")))

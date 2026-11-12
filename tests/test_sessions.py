@@ -1151,6 +1151,41 @@ class TestParallelHooksOfOneSessionAllCount(RepoCase):
         self.assertEqual(3, sum('"deny"' not in out for out in said), said)
         self.assertEqual(3, sessions.get(self.ctx(), self.me).spawns_this_turn)
 
+    def test_a_spawn_that_never_started_is_given_back_in_the_same_step(self):
+        """Only the calls named, and only the turn's own: a spawn that came back an error is no
+        agent at work (#316)."""
+        ctx = self.ctx()
+        for call in ("c1", "c2", "c3"):
+            sessions.spawn(ctx, self.me, call, 3)
+
+        self.assertEqual(2, sessions.spawn(ctx, self.me, "c4", 3, {"c2", "another-turns"}))
+
+        rec = sessions.get(ctx, self.me)
+        self.assertEqual((3, ["c1", "c3", "c4"]), (rec.spawns_this_turn, rec.spawn_calls))
+
+    def test_a_count_with_no_calls_beside_it_is_kept_as_it_stands(self):
+        """A count with no call ids beside it, from a spawn whose event named none, stays."""
+        ctx = self.ctx()
+        sessions.touch(ctx, self.me, spawns_this_turn=3, spawn_calls=[])
+
+        self.assertEqual(3, sessions.spawn(ctx, self.me, "c4", 3, {"c1"}))
+        self.assertEqual([], sessions.get(ctx, self.me).spawn_calls)
+
+    def test_a_call_with_no_id_is_counted_and_not_kept(self):
+        ctx = self.ctx()
+        sessions.touch(ctx, self.me, spawns_this_turn=0, spawn_calls=[])
+
+        self.assertEqual(0, sessions.spawn(ctx, self.me, "", 3))
+        rec = sessions.get(ctx, self.me)
+        self.assertEqual((1, []), (rec.spawns_this_turn, rec.spawn_calls))
+
+    def test_what_is_given_back_never_takes_the_count_below_nothing(self):
+        ctx = self.ctx()
+        sessions.touch(ctx, self.me, spawns_this_turn=0, spawn_calls=["c1", "c2"])
+
+        self.assertEqual(0, sessions.spawn(ctx, self.me, "c3", 3, {"c1", "c2"}))
+        self.assertEqual(1, sessions.get(ctx, self.me).spawns_this_turn)
+
     def test_eight_parallel_calls_are_eight_calls(self):
         before = sessions.get(self.ctx(), self.me).tool_calls
 

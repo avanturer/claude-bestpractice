@@ -2821,14 +2821,18 @@ def queues(tool_name: str, command: str) -> bool:
     return bool(found) and bool(re.search(r"(?:^|\s)--auto\b", command))
 
 
-def complete(ctx: GitContext, session_id: str, merge: dict[str, Any]) -> None:
+def complete(ctx: GitContext, session_id: str, merge: dict[str, Any], transcript_path: str = "",
+             agent: str = "") -> None:
     """Finish a merge that ran: the word spent, the pull request settled, the cards the merge
     carried closed, and every other session told its baseline moved.
 
     An auto-merge has only been asked for. The word is spent on it, and the pull request stays
     open until its work is on the trunk, where `reconcile` settles it.
+
+    `transcript_path` is the chat's, and `agent` the agent that merged, if one did: a card
+    is not closed while an agent the chat sent off is still at work.
     """
-    from . import inbox, plan
+    from . import inbox, plan, sessions, subagents
 
     spend(ctx, merge.get("named"), str(merge.get("cover", "")), _as_number(merge.get("number")))
     _note_used(ctx, str(merge.get("session") or session_id), merge)
@@ -2839,9 +2843,15 @@ def complete(ctx: GitContext, session_id: str, merge: dict[str, Any]) -> None:
     sender = str(merge.get("session", session_id))
     if config.load(ctx).require_task:
         head = str(merge.get("head", branch))
+        carrying = still_carrying(ctx, sender, str(merge.get("base") or ""), head)
+        # Nor while an agent the chat sent off is still at work, as the Stop gate closes none
+        # then: a merge of other files closed the card a subagent was writing under, and its
+        # next write was refused as work no card claimed (#318). No event but Stop names the
+        # agents at work, so the transcript does, from the last turn that ended with none.
+        away = [f"an agent at work ({said})" for said in
+                subagents.at_work(transcript_path, sessions.settled_at(ctx, sender), agent)]
         plan.settle_delivered(ctx, sender, list(merge.get("delivered", [])),
-                              f"the merge of {head}",
-                              still_carrying(ctx, sender, str(merge.get("base") or ""), head))
+                              f"the merge of {head}", lambda card: carrying(card) + away)
     inbox.broadcast(
         ctx, sender,
         f"{branch} was merged. Your baseline is behind — take the base branch in before you "

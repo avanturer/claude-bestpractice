@@ -132,5 +132,23 @@ class TestTheTranscriptIsNotTheSessionsToWrite(TranscriptCase):
         self.assertFalse(founder.writes_the_record(self.transcript, ""))
 
 
+class TestATranscriptIsReadFromItsEnd(TranscriptCase):
+    """The one reader of a transcript's end, which the spawn count and the merge read through
+    as well as the founder's word (#316, #318)."""
+
+    def test_its_end_is_read_from_the_first_whole_line_in_it(self):
+        self.transcript.write_bytes(b"first line\nsecond line\nthird\n")
+        self.assertEqual([b"third\n"], list(founder.lines(str(self.transcript), most_bytes=11)))
+
+    def test_a_transcript_shorter_than_that_is_read_whole(self):
+        self.transcript.write_bytes(b"first line\nsecond line\n")
+        self.assertEqual([b"first line\n", b"second line\n"],
+                         list(founder.lines(str(self.transcript), most_bytes=1_000)))
+
+    def test_one_that_cannot_be_read_has_no_lines(self):
+        self.assertEqual([], list(founder.lines(str(self.tmp / "missing.jsonl"))))
+        self.assertEqual([], list(founder.lines("")))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -11,7 +11,7 @@ import contextlib
 import time
 import unittest
 
-from helpers import BIN, RepoCase, git
+from helpers import BIN, RepoCase, git, gone_as_it_is_walked
 
 from claude_bestpractice import limits, migrate, plan, store
 
@@ -736,23 +736,18 @@ class TestARegistryIsFoundByWhatIsInIt(RepoCase):
         self.write(".claude/commands/todo.md", self.REGISTRY)
         self.assertEqual([], migrate.registries(self.ctx()))
 
+    def test_only_a_markdown_document_is_read(self):
+        """The walk now hands over every file (#340); a log or a fixture is no backlog."""
+        self.write("docs/TODO.md", self.REGISTRY)
+        self.write("logs/run.txt", self.REGISTRY)
+        self.assertEqual(["TODO.md"], [p.name for p in migrate.registries(self.ctx())])
+
     def test_a_directory_gone_mid_walk_ends_nothing(self):
         """Three session starts on the founder's machine on 2.7.1 ended in FileNotFoundError
         here: a sibling removed a tree, or a reinstall a directory, while the walk was in it."""
-        import os
-        import shutil
-        from unittest import mock
-
         self.write("docs/TODO.md", self.REGISTRY)
         self.write("scratch/gone/notes.md", self.REGISTRY)
-        real = os.scandir
-
-        def scandir(path="."):
-            if str(path).endswith("gone"):
-                shutil.rmtree(path, ignore_errors=True)
-            return real(path)
-
-        with mock.patch("os.scandir", scandir):
+        with gone_as_it_is_walked():
             found = [p.name for p in migrate.registries(self.ctx())]
         self.assertEqual(["TODO.md"], found)
 
