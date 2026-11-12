@@ -942,6 +942,13 @@ def _read_config(path: Path) -> tuple[Any, str]:
         return {}, f"{CONFIG_NAME} does not parse ({exc})"
 
 
+def is_set(ctx: GitContext, key: str) -> bool:
+    """Whether the founder wrote `key` at all, where a default and their word mean different
+    things: `report_defects` unwritten is decided by who owns the reports' repository."""
+    raw, _broken = _read_config(config_path(ctx))
+    return isinstance(raw, dict) and key in raw
+
+
 def load_checked(ctx: GitContext) -> tuple[Config, list[str]]:
     """The config, and every complaint about it a human should be shown.
 

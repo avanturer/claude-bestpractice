@@ -13,8 +13,9 @@ their own work to write it up.
 Sending lives here rather than in a hook, and that is the whole shape of this feature.
 A hook that talks to the network is a hook that can be slow, can fail, and can be
 stopped by an expired token — on a path that runs before every tool call. Capture is
-free and always on; sending is a command, or an explicit `"report_defects": "auto"` from
-someone who owns both ends.
+free and always on; sending is this command, which a capture starts on its own where
+reports are sent as they come (`defects.mode`): `gh` files as the owner of the reports'
+repository, or the founder wrote `"report_defects": "auto"`.
 """
 
 from __future__ import annotations
@@ -27,8 +28,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import __version__, config, defects, hookio, upgrade  # noqa: E402
+from claude_bestpractice import __version__, defects, hookio, store, upgrade  # noqa: E402
 from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
+
+
+SEND_LOCK = "defects-send.lock"
 
 
 def newer_version() -> str:
@@ -97,6 +101,22 @@ def cmd_list(ctx) -> int:
 
 
 def cmd_send(ctx) -> int:
+    """File what is sendable, one sender at a time.
+
+    Every capture starts one where reports go as they come, so two run at once: each reads
+    what is unsent inside the lock and marks it sent before letting go, and the second
+    files only what the first had not seen.
+    """
+    try:
+        with store.file_lock(store.tier_b(ctx, SEND_LOCK), timeout=300, stale_after=900):
+            return send_unsent(ctx)
+    except store.LockTimeout:
+        print("another send has been running for five minutes; nothing sent",
+              file=sys.stderr)
+        return 1
+
+
+def send_unsent(ctx) -> int:
     waiting = defects.unsent(ctx)
     if not waiting:
         print("nothing to send")
@@ -151,7 +171,7 @@ def main() -> int:
     args = parser.parse_args()
 
     ctx = resolve_for_cli()
-    if config.load(ctx).report_defects == defects.OFF:
+    if defects.mode(ctx) == defects.OFF:
         print("defect reporting is off for this repository")
         return 0
     if args.command == "defect":

@@ -12,12 +12,13 @@ summarise, or decide about, is worse than the crash — it spends context on the
 problems instead of the founder's work. So capture writes to disk and injects nothing.
 The only visible trace is a count on a surface the founder already looks at.
 
-**It must not send anything on its own.** Filing a GitHub issue uses the installer's own
-credentials and posts publicly under their name, in a repository they do not own,
-carrying whatever the report holds. Nobody installing a plugin expects that, and the
-default is therefore capture-and-hold. `auto` exists for the one case where consent is
-real — the owner running it on their own machines — and is a deliberate act of turning it
-on, not a thing that happens to you.
+**It must not send anything on its own** for anyone but the owner. Filing a GitHub issue
+uses the installer's own credentials and posts publicly under their name, in a repository
+they do not own, carrying whatever the report holds. Nobody installing a plugin expects
+that, so for them the default is capture-and-hold. Where `gh` files as the owner of the
+repository the reports go to, consent is real — they own both ends — and a report is filed
+the moment it is captured: held, fifty piled up unread for a month and went in one burst,
+most of them about defects fixed long before (#313–#362).
 
 The network never touches a hook. That is the property the five-hour-limit audit rests
 on: a usage limit, an outage or an expired token cannot reach the gates, because the gates
@@ -28,10 +29,13 @@ and the only place allowed to fail.
 from __future__ import annotations
 
 import hashlib
+import os
 import platform
 import re
+import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import Any
 
 from . import store
@@ -140,6 +144,8 @@ def record(ctx: GitContext, gate: str, exc: BaseException) -> None:
         error = sanitize(f"{type(exc).__name__}: {exc}")
         where = _origin(exc)
         _file(ctx, signature(gate, error.split(":")[0], where), gate, error, where)
+        if mode(ctx) == AUTO:
+            send_soon(ctx)
     except Exception:  # noqa: BLE001 - a reporter that throws makes one defect into two
         return
 
@@ -164,9 +170,8 @@ def observed(ctx: GitContext, what: str, gate: str = "") -> tuple[bool, str]:
     a list the founder can clear.
     """
     try:
-        from . import config
-
-        if config.load(ctx).report_defects == OFF:
+        chosen = mode(ctx)
+        if chosen == OFF:
             return False, "defect capture is off (`report_defects`), so nothing was recorded"
         text = sanitize(_one_line(what))
         if len(text) < MIN_OBSERVATION_CHARS:
@@ -174,9 +179,87 @@ def observed(ctx: GitContext, what: str, gate: str = "") -> tuple[bool, str]:
                            "neither cannot be acted on")
         named = _one_line(gate)[:40] or UNNAMED_GATE
         _file(ctx, signature(named, text, OBSERVED), named, text, OBSERVED, kind=OBSERVED)
+        if chosen == AUTO:
+            send_soon(ctx)
+            return True, f"recorded against {named}, and being filed at {REPORT_REPO}"
         return True, f"recorded against {named} — `claude-bp-report` shows what would be sent"
     except Exception:  # noqa: BLE001 - a reporter that throws makes one defect into two
         return False, "the report could not be written"
+
+
+def mode(ctx: GitContext) -> str:
+    """`local`, `auto` or `off`: the founder's `report_defects` where they wrote one.
+
+    Unwritten, it is `auto` where this machine's `gh` files as the owner of the repository
+    the reports go to, and `local` everywhere else.
+    """
+    from . import config
+
+    if config.is_set(ctx, "report_defects"):
+        return config.load(ctx).report_defects
+    owner = REPORT_REPO.split("/", 1)[0].lower()
+    return AUTO if gh_account().lower() == owner else LOCAL
+
+
+def gh_account() -> str:
+    """The github.com account `gh` files issues as, read from its own config, else empty.
+
+    Local, so a hook may ask: the active account is the host's `user` in `hosts.yml`, in
+    the directory gh reads (`GH_CONFIG_DIR`, `XDG_CONFIG_HOME/gh`, `%AppData%/GitHub CLI`,
+    `~/.config/gh`). A token in the environment decides the account instead, and says
+    nothing here about whose it is.
+    """
+    if os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN"):
+        return ""
+    if os.environ.get("GH_CONFIG_DIR"):
+        where = Path(os.environ["GH_CONFIG_DIR"])
+    elif os.environ.get("XDG_CONFIG_HOME"):
+        where = Path(os.environ["XDG_CONFIG_HOME"]) / "gh"
+    elif os.name == "nt" and os.environ.get("APPDATA"):
+        where = Path(os.environ["APPDATA"]) / "GitHub CLI"
+    else:
+        where = Path.home() / ".config" / "gh"
+    try:
+        text = (where / "hosts.yml").read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return ""
+    return _active_user(text, "github.com")
+
+
+def _active_user(hosts_yml: str, host: str) -> str:
+    """`user` directly under `host`, not one nested in its `users` map of every account."""
+    inside, depth = False, None
+    for line in hosts_yml.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent == 0:
+            inside, depth = line.split(":", 1)[0].strip().strip("'\"") == host, None
+            continue
+        depth = indent if inside and depth is None else depth
+        key, _, value = line.strip().partition(":")
+        if inside and indent == depth and key == "user":
+            return value.strip().strip("'\"")
+    return ""
+
+
+def send_soon(ctx: GitContext) -> None:
+    """Start `claude-bp-report send` and walk away, when there is something to file.
+
+    Detached and never waited on: a hook must not pay for the network or fail because of
+    it, and what is not filed now stays captured for the next try.
+    """
+    if not unsent(ctx):
+        return
+    sender = Path(__file__).resolve().parents[2] / "bin" / "claude-bp-report"
+    try:
+        subprocess.Popen(
+            [sys.executable, str(sender), "send"], cwd=str(ctx.worktree_root),
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError:
+        return
 
 
 def _file(ctx: GitContext, key: str, gate: str, error: str, where: str,
