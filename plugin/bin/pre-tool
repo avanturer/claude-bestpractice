@@ -857,6 +857,17 @@ def deny_for_founder(ctx, rec, reason: str) -> None:
     hookio.deny_tool(reason)
 
 
+def _asks_the_founder(ctx, event: hookio.HookEvent, target: Path) -> bool:
+    """Would Claude Code ask the founder before `EnterWorktree` enters `target`? For a path
+    outside `.claude/worktrees/` it does, unless the session runs in `bypassPermissions`."""
+    if str(event.raw.get("permission_mode") or "") == "bypassPermissions":
+        return False
+    try:
+        return worktree.home_of(ctx).resolve() not in target.resolve().parents
+    except OSError:
+        return False
+
+
 def proposed_content(event: hookio.HookEvent) -> str:
     ti = event.tool_input
     parts = [str(ti.get(k, "")) for k in ("content", "new_string", "new_str", "command")]
@@ -2116,6 +2127,18 @@ def main() -> None:
         # left the creating call unapproved — and the founder was asked to authorise the
         # move this gate had just ordered, which is the interruption it exists to remove.
         made_here = ctx.worktree_root / ".claude" / "worktrees"
+        # Outside `.claude/worktrees/` Claude Code asks the founder whatever this says, and a
+        # session sent home after its machine restarted asked them whether it could go (the
+        # founder's report on 2.14.3). Moved there first, it is entered asking nobody.
+        if target is not None and target.is_dir() and _asks_the_founder(ctx, event, target):
+            home, _why = worktree.bring_home(ctx, target, event.session_id)
+            if home is not None:
+                deny(ctx, rec,
+                     "claude-bestpractice: Claude Code asks the founder before `EnterWorktree` "
+                     "takes a path outside .claude/worktrees/, whatever a hook or a permission "
+                     f"rule says. This gate moved {target} to {home} with `git worktree move`, "
+                     "its branch and uncommitted work with it, where it is entered without "
+                     f"asking anyone:\n  EnterWorktree with path {home}")
         if target is None or gitpolicy.owned_by_session(ctx, target) or \
                 target.resolve() in set(gitpolicy.working_trees(ctx)) or \
                 _within_dir(target, made_here) or _sibling_of_repo(ctx, target):

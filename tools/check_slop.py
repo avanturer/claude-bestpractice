@@ -50,6 +50,7 @@ DEFAULT_BUDGETS = {
     "unused_parameters": 0,
     "long_functions": 0,
     "complex_functions": 0,
+    "shadowed_definitions": 0,
 }
 
 MAX_FUNCTION_LINES = 60
@@ -143,6 +144,64 @@ def python_files(paths: list[str] | None) -> list[pathlib.Path]:
         if not _SKIP_DIRS & set(p.relative_to(ROOT).parts)
         and not _scope.is_inside(p, nested)
     ]
+
+
+# Python keeps the LAST of two definitions of one name in a module or a class, and says nothing.
+# A merge kept both sides of a replaced function and the older one won, in the path the Stop
+# gate runs suites with (RELEASING.md); a helper added under a name its module already used
+# replaced the sweep's, and five tests of the sweep died on its signature (2.15.0). Overloads
+# and property accessors redefine a name on purpose.
+_ON_PURPOSE = {"overload", "setter", "getter", "deleter", "register"}
+
+
+def _redefines_on_purpose(node: ast.AST) -> bool:
+    """Is this definition one that is meant to share its name: an overload or an accessor?"""
+    for decorator in getattr(node, "decorator_list", []):
+        named = decorator.attr if isinstance(decorator, ast.Attribute) else \
+            decorator.id if isinstance(decorator, ast.Name) else ""
+        if named in _ON_PURPOSE:
+            return True
+    return False
+
+
+def find_shadowed(path: pathlib.Path) -> list[Finding]:
+    """A function or class defined again under a name its module or class already had."""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError, UnicodeDecodeError):
+        return []
+    rel = path.relative_to(ROOT).as_posix()
+    found: list[Finding] = []
+    for body in [tree.body] + [n.body for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]:
+        seen: dict[str, int] = {}
+        for node in body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) \
+                    or _redefines_on_purpose(node):
+                continue
+            if node.name in seen:
+                found.append(Finding("shadowed_definition", rel, node.lineno,
+                                     f"{node.name} replaces the one defined at line "
+                                     f"{seen[node.name]}, which is never called again"))
+            seen[node.name] = node.lineno
+    return found
+
+
+def python_scripts(paths: list[str] | None) -> list[pathlib.Path]:
+    """Tracked files with no suffix that Python runs, the hook scripts among them."""
+    listed = paths if paths is not None else subprocess.run(
+        ["git", "ls-files"], cwd=ROOT, capture_output=True, text=True).stdout.splitlines()
+    out = []
+    for rel in listed:
+        path = ROOT / rel
+        if path.suffix or not path.is_file():
+            continue
+        try:
+            first = path.open("rb").readline()
+        except OSError:
+            continue
+        if first.startswith(b"#!") and b"python" in first:
+            out.append(path)
+    return out
 
 
 def complexity(node: ast.AST) -> int:
@@ -342,6 +401,7 @@ def main() -> int:
 
     if args.all:
         files = python_files(None)
+        scripts = python_scripts(None)
     else:
         changed = subprocess.run(
             ["git", "diff", "--name-only", "HEAD"], cwd=ROOT, capture_output=True, text=True
@@ -351,6 +411,7 @@ def main() -> int:
             cwd=ROOT, capture_output=True, text=True,
         ).stdout.splitlines()
         files = python_files(sorted(set(changed)))
+        scripts = python_scripts(sorted(set(changed)))
 
     # An empty file set still ratchets. Short-circuiting here would mean deleting the
     # offending code silently preserves its allowance, so the budget never reflects
@@ -376,6 +437,10 @@ def main() -> int:
     dup_findings, dup_total = find_duplicates(files)
     findings.extend(dup_findings)
     counts["duplicate_blocks"] = dup_total
+
+    shadowed = [finding for path in files + scripts for finding in find_shadowed(path)]
+    findings.extend(shadowed)
+    counts["shadowed_definitions"] = len(shadowed)
 
     abs_findings, abs_total = find_single_caller_abstractions(all_defined, all_calls)
     findings.extend(abs_findings)

@@ -5,6 +5,7 @@
 `claude-bp-plan reopen`, and a ledger in which every state a card can stand in has a command
 that moves it on (#307). A merge judged on the commit it takes, so a new file for the next pull
 request and a run the founder's message stopped no longer hold a pushed commit that passed (#309).
+A session goes back into its own tree, wherever it was made, without the founder being asked.
 
 - **A merge is judged on the commit it takes.** The founder said `+merge` and the gate refused
   over a file for the next pull request and a Stop run their message had stopped; the session
@@ -20,6 +21,21 @@ request and a run the founder's message stopped no longer hold a pushed commit t
 - **What a pull request is blocked by is judged again.** The status line read the list its
   one-time hand-off wrote, so a pull request stayed "blocked" after its blockers had gone. Each
   Stop on its branch and each merge write it again, and repair 0048 does it once after the upgrade.
+- **A session goes back into its tree without the founder being asked.** After a WSL crash a
+  chat came back in the main checkout and asked the founder whether it could enter its tree,
+  made beside the repository: Claude Code asks before entering any path outside
+  `.claude/worktrees/`, and no allow rule or hook ends that. `EnterWorktree` into such a tree has
+  the gate move it there first (its branch, uncommitted work, records and cards with it) and name
+  where it went, unless another chat or a process works in it (decision 0090).
+- **A session's tree is found wherever it was made.** The board and the main-checkout refusal
+  knew only trees this plugin made; now also the tree of a card the session holds, or the one
+  its chat last worked in. A refused write went to a new tree beside it.
+- **No advice says an `EnterWorktree` allow rule ends the prompt.** Claude Code's docs say it
+  does not.
+- **`make slop` refuses a definition that replaces another of the same name** in a module or a
+  class, hook scripts with no suffix included (`shadowed_definitions`, budget zero). This release
+  added a helper under a name `worktree.py` already used, and Python kept the new one for the
+  sweep's callers without a word; the sharded suite was the first to say.
 
 - **A done or withdrawn card goes back to the queue as the same card.** `done` was the one state
   nothing left: `resume` said "not paused", `claim` "already done", and the rest of the work was

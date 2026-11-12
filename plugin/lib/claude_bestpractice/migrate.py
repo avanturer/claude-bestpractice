@@ -435,9 +435,8 @@ def _worktree_repair_note(moved: list, theirs: list) -> str:
         said.append(
             f"{len(theirs)} worktree(s) this plugin did not make sit outside "
             f".claude/worktrees/, so entering them asks for approval every time: {shown}"
-            f"{more}. Move one with `git worktree move <path> "
-            "<repo>/.claude/worktrees/<name>`, or allow `EnterWorktree` once in "
-            "~/.claude/settings.json"
+            f"{more}. `EnterWorktree` into one has the gate move it there first, or `git "
+            "worktree move <path> <repo>/.claude/worktrees/<name>` moves it"
         )
     return "; ".join(said)
 

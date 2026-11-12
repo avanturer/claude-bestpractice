@@ -1029,6 +1029,37 @@ class TestTheCheckersStayOutOfProvisionedWorktrees(RepoCase):
         self.assertEqual([], inside, "the checker read files from inside the worktree")
 
 
+class TestADefinitionThatReplacesAnotherIsRefused(RepoCase):
+    """Python keeps the last of two definitions of one name and says nothing. A merge kept both
+    sides of a replaced function, the older won (RELEASING.md); in 2.15.0 a helper took the name
+    of the sweep's, and the sweep ran the new one with the old one's arguments."""
+
+    def slop(self) -> subprocess.CompletedProcess:
+        subprocess.run(["git", "add", "-A"], cwd=self.repo, check=True, capture_output=True)
+        return subprocess.run([sys.executable, str(REPO_ROOT / "tools" / "check_slop.py"), "--all"],
+                              cwd=self.repo, capture_output=True, text=True, timeout=120)
+
+    def test_in_a_module_and_in_a_hook_script_with_no_suffix(self):
+        self.write("lib.py", "def why(a):\n    return a\n\n\ndef why(a, b):\n    return b\n")
+        script = self.write("bin/gate", "#!/usr/bin/env python3\ndef run():\n    pass\n\n\n"
+                            "def run():\n    return 1\n")
+        script.chmod(0o755)
+        proc = self.slop()
+        self.assertEqual(1, proc.returncode, proc.stdout)
+        self.assertIn("lib.py:5: [shadowed_definition] why replaces", proc.stdout)
+        self.assertIn("bin/gate:6: [shadowed_definition] run replaces", proc.stdout)
+
+    def test_an_accessor_or_an_overload_is_meant_to_share_its_name(self):
+        self.write("lib.py", "from typing import overload\n\n\nclass Box:\n"
+                             "    @property\n    def size(self):\n        return 1\n\n"
+                             "    @size.setter\n    def size(self, value):\n        del value\n\n\n"
+                             "@overload\ndef read(a: int) -> int: ...\n\n\n"
+                             "def read(a):\n    return a\n")
+        proc = self.slop()
+        self.assertTrue(proc.stdout.startswith("slop:"), proc.stdout + proc.stderr)
+        self.assertNotIn("shadowed_definition", proc.stdout)
+
+
 class TestTheChangelogCountsItsOwnEntries(unittest.TestCase):
     """A release note that opens "Four things" over six sections is the shape this whole
     release was about: text that promises something the artifact does not carry.
