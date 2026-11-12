@@ -53,7 +53,7 @@ def known_bad(version: str | None = None) -> str:
     )
 
 
-def _key(name: str) -> tuple:
+def version_key(name: str) -> tuple:
     """Sortable, and total. `1.0.10` must outrank `1.0.9`, and a build suffix must not
     make the comparison throw — an unparseable component sorts below every number, which
     keeps a prerelease behind the release it precedes rather than ahead of it."""
@@ -94,8 +94,8 @@ def superseded_by(root: Path | None = None) -> str | None:
     except OSError:
         return None
 
-    newer = [name for name in siblings if _key(name) > _key(root.name)]
-    return max(newer, key=_key) if newer else None
+    newer = [name for name in siblings if version_key(name) > version_key(root.name)]
+    return max(newer, key=version_key) if newer else None
 
 
 def orphaned(root: Path | None = None) -> bool:
@@ -134,8 +134,8 @@ def newer_in_the_cache(home: Path | None = None) -> str | None:
         ]
     except OSError:
         return None
-    newer = [name for name in cached if _key(name) > _key(__version__)]
-    return max(newer, key=_key) if newer else None
+    newer = [name for name in cached if version_key(name) > version_key(__version__)]
+    return max(newer, key=version_key) if newer else None
 
 
 def stale_line(root: Path | None = None, home: Path | None = None) -> str:

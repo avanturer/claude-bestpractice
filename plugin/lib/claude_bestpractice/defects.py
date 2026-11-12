@@ -227,7 +227,23 @@ def load(ctx: GitContext) -> list[dict[str, Any]]:
 
 
 def unsent(ctx: GitContext) -> list[dict[str, Any]]:
-    return [r for r in load(ctx) if not r.get("sent_at")]
+    """What `send` files: not filed yet, and last seen on the version that runs now.
+
+    A report says what one version did. Held unsent across upgrades, it says nothing about
+    the code that runs now: one `send` filed fifty, captured over a month on 2.2.0 to
+    2.14.3, most about defects that hand-filed issues had long since had fixed (#313–#362).
+    A defect still there is seen again, and a sighting stamps the version it was seen on.
+    """
+    return [r for r in load(ctx) if not r.get("sent_at") and _seen_on_this_version(r)]
+
+
+def held_back(ctx: GitContext) -> list[dict[str, Any]]:
+    """Not filed, and not seen since an upgrade: kept for `claude-bp-report`, never sent."""
+    return [r for r in load(ctx) if not r.get("sent_at") and not _seen_on_this_version(r)]
+
+
+def _seen_on_this_version(report: dict[str, Any]) -> bool:
+    return str(report.get("version") or "") == _version()
 
 
 def mark_sent(ctx: GitContext, report: dict[str, Any], url: str = "") -> None:
