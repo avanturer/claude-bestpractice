@@ -8,7 +8,9 @@ was never recorded, and every merge after it was refused as if they had said not
 The harness writes every message it delivers into the session's transcript, and marks who it
 came from. So a gate that is about to refuse for want of the founder's word reads the
 transcript first (`catch_up`), and records what it finds exactly as `prompt-capture` records
-what it hears (`heard`): one road for the word, whichever door it came in by.
+what it hears (`heard`): one road for the word, whichever door it came in by. The third door is
+an `AskUserQuestion` dialog, whose answer is a tool result `pr-opened` hears and the transcript
+reader never reads (`answered_in_a_dialog`, decision 0094).
 
 Only what a person sent counts: a `user` entry or a queued message the harness marks as a
 human's, never a sidechain, a meta entry, a task notification or another agent's report. Of
@@ -240,6 +242,110 @@ def switches_said(prompt: str) -> dict[str, str]:
 
     typed = sessions.without_the_goal_command(strip_envelopes(prompt))
     return config.switches_in(redact.scrub(redact.strip_control(typed)))
+
+
+# ---------------------------------------------------------------------------------------------
+# The founder's answer to a question the session put to them in a dialog.
+
+# The tool that asks. Its answer reaches no UserPromptSubmit: it is a tool result in the running
+# turn, and the transcript files it as one, which `_text_of` never reads. The founder picked
+# «+merge» in one and the merge was refused as if they had said nothing (#326).
+QUESTION_TOOL = "AskUserQuestion"
+
+
+def answered_in_a_dialog(tool_input: Any, tool_response: Any) -> dict[str, str]:
+    """The grants the founder gave by answering an `AskUserQuestion` dialog, as `prompt-capture`
+    records a message's: what they typed into it, read as a message of theirs, and each option
+    they picked whose label is the word and nothing else. Empty for anything else.
+
+    The session writes the questions and the labels, so neither counts by being there: only an
+    answer does, and a label only as `+merge` alone, as under a message of this plugin's only a
+    line holding nothing but the word counts (decision 0047). «Show me the diff, then +merge»
+    picked for the diff is no word. Nor is a dialog that closed on its own when the founder was
+    away (`afkTimeoutMs`), which submits what happened to be selected.
+
+    Read off the result Claude Code documents for the tool: `answers` maps each question's text
+    to the label picked, several joined with ", " or listed, or to the text typed under "Other";
+    `response` is a reply typed instead of answering; `annotations` hold notes typed beside one.
+    Any other shape says nothing, as an unreadable transcript does.
+    """
+    if not isinstance(tool_response, dict) or tool_response.get("afkTimeoutMs"):
+        return {}
+    granted: dict[str, str] = {}
+    for text in _answers_of(tool_input, tool_response) + _typed_beside(tool_response):
+        granted.update(approvals_said(text))
+    return granted
+
+
+def _answers_of(tool_input: Any, tool_response: dict[str, Any]) -> list[str]:
+    """What of a dialog's answers is the founder's: each label picked that is the word alone,
+    and what they typed under "Other"."""
+    labels = _labels_asked(_questions(tool_input, tool_response))
+    answers = tool_response.get("answers")
+    theirs: list[str] = []
+    for question, answer in (answers.items() if isinstance(answers, dict) else ()):
+        picked, typed = _picked(answer, labels.get(str(question), []))
+        theirs += [label for label in picked if config.only_approvals(label)] + typed
+    return theirs
+
+
+def _typed_beside(tool_response: dict[str, Any]) -> list[str]:
+    """What the founder typed in a dialog besides answering: a reply instead, notes beside."""
+    notes = tool_response.get("annotations")
+    typed = [note["notes"] for note in (notes.values() if isinstance(notes, dict) else ())
+             if isinstance(note, dict) and isinstance(note.get("notes"), str)]
+    reply = tool_response.get("response")
+    return typed + ([reply] if isinstance(reply, str) else [])
+
+
+def asked_in_a_dialog(tool_input: Any, tool_response: Any = None) -> str:
+    """The questions a dialog put to the founder, one to a line: what their answer is about, as
+    the message a typed word answers is (decision 0066)."""
+    return "\n".join(str(question.get("question") or "")
+                     for question in _questions(tool_input, tool_response))
+
+
+def _questions(tool_input: Any, tool_response: Any) -> list[Any]:
+    """The questions a dialog asked, as its result echoes them, else as the call sent them."""
+    for source in (tool_response, tool_input):
+        questions = source.get("questions") if isinstance(source, dict) else None
+        if isinstance(questions, list):
+            return [question for question in questions if isinstance(question, dict)]
+    return []
+
+
+def _labels_asked(questions: list[Any]) -> dict[str, list[str]]:
+    """Each question's text, with the labels of the options it offered."""
+    asked: dict[str, list[str]] = {}
+    for question in questions:
+        options = question.get("options") if isinstance(question.get("options"), list) else []
+        asked[str(question.get("question") or "")] = [
+            str(option["label"]) for option in options
+            if isinstance(option, dict) and isinstance(option.get("label"), str)]
+    return asked
+
+
+def _picked(answer: Any, labels: list[str]) -> tuple[list[str], list[str]]:
+    """(labels picked, text typed) in one answer: a label, several joined with commas as a
+    multi-select joins them (", " in Claude Code), a list of them, or the founder's own text
+    under "Other" beside them.
+
+    The longest label first, so a label holding a shorter one between its commas is taken whole:
+    «Show the diff, then +merge» picked is that label, never «Show the diff» and a typed rest.
+    """
+    if isinstance(answer, list):
+        said = [part for part in answer if isinstance(part, str)]
+        return [part for part in said if part in labels], [part for part in said
+                                                           if part not in labels]
+    if not isinstance(answer, str):
+        return [], []
+    rest, picked = answer, []
+    for label in sorted(labels, key=len, reverse=True):
+        alone = re.compile(rf"(?:^|(?<=,))\s*{re.escape(label)}\s*(?=,|$)")
+        if alone.search(rest):
+            picked.append(label)
+            rest = alone.sub("", rest)
+    return picked, [rest]
 
 
 # ---------------------------------------------------------------------------------------------

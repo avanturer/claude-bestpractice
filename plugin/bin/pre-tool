@@ -2016,13 +2016,17 @@ def main() -> None:
                     "again: it can reach you before it is recorded, so run the merge once "
                     "more first.\n"
                     "  Otherwise show them what changed and ask. When they are happy they "
-                    "say `+merge` — copy it exactly — and this allows every pull request "
+                    "say `+merge` — copy it exactly — typed in a message, or picked in an "
+                    "`AskUserQuestion` dialog as an option whose label is `+merge` and nothing "
+                    "else: either counts. It allows every pull request "
                     "you have open, and every one you put in front of them since their last "
                     "message, each once: named in the message they answer by its link, or "
                     "by `#<number>` where it is on record here, looked at with `gh pr view`, "
-                    "or refused to them like this one; with none of either, the next merge.\n"
-                    "  Their word is read from their own message; nothing you write "
-                    "can stand in for it."
+                    "or refused to them like this one; with none of either, the next merge. "
+                    "A question they answer names what it names the same way.\n"
+                    "  Their word is read from their own message, or from their own answer in "
+                    "the dialog: nothing you write can stand in for it, a question or an option "
+                    "they did not pick among it."
                 )
             gated = None if elsewhere else pullrequest.gated_by(here, number, current)
             # Held, and finished by `pr-opened` once the merge has run: PostToolUse fires only
@@ -2038,8 +2042,9 @@ def main() -> None:
                 merge["cover"] = pullrequest.bind(ctx, named, cover)
             else:
                 base = str(gated.get("base") or "") or gitpolicy.default_branch(here) or "main"
-                pr_branch = str(gated.get("branch") or "")
-                # The pull request's own head, not the tree this session is standing in.
+                # The pull request's own head, not the tree this session is standing in, as this
+                # clone names it: GitHub may have it under the name it was pushed as (#325).
+                pr_branch = pullrequest.local_branch(gated)
                 problems = pullrequest.blockers(here, base, pr_branch)
                 if pullrequest.awaits_the_founder(problems) or pullrequest.findings_in(problems):
                     # Their word on the finish, or on a finding, may be in the transcript and
@@ -2090,14 +2095,16 @@ def main() -> None:
             # which is the identity every check here is keyed by anyway.
             base = gitpolicy.default_branch(ctx) or "main"
             # The branch the pull request is opened FROM, which is not the session's own
-            # when the session coordinates from the main checkout (#79).
-            head = pullrequest.opened_from(ctx, event.tool_name, command, ti, str(session_cwd))
+            # when the session coordinates from the main checkout (#79), filed under the head
+            # GitHub opens it on, which is the name the branch was pushed as (#325).
+            head, local = pullrequest.opening(ctx, event.tool_name, command, ti, str(session_cwd))
             if head:
                 # And the one the call opens it INTO, a stack's being the branch below it,
                 # which decides where the founder's word goes once GitHub closes it (#293).
                 pullrequest.opened(ctx, head, base, event.session_id,
                                    draft=pullrequest.drafted(event.tool_name, command, ti),
-                                   into=pullrequest.base_of(event.tool_name, command, ti))
+                                   into=pullrequest.base_of(event.tool_name, command, ti),
+                                   local=local)
             if pullrequest.about_this_repository(ctx, event.tool_name, ti, command):
                 pr_vouch = vouch.PULL_REQUEST
                 # Where the chat opened one, for the Stop gate to know it as the chat's when

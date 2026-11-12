@@ -527,7 +527,8 @@ def _a_switch(key: str) -> bool:
 #
 # Read where the founder writes it, in a sentence of theirs as on a line of its own, and as
 # many of them as they send in one message (decision 0047). Nothing the model writes reaches
-# this: only the founder's own turns pass through `prompt-capture`.
+# this: only the founder's own turns pass through `prompt-capture`, and only their own answer
+# to a dialog through `pr-opened` (decision 0094).
 APPROVE_MERGE = "approve:merge"
 APPROVE_RELEASE = "approve:release"
 APPROVE_MIGRATION = "approve:migration"

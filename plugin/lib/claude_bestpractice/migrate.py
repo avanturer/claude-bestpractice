@@ -1001,6 +1001,21 @@ def _refresh_what_pull_requests_are_blocked_by(ctx: GitContext) -> str:
         if refreshed else ""
 
 
+def _mark_pull_requests_closed_by_a_branch_gone(ctx: GitContext) -> str:
+    """Closed records whose only reason was a branch gone from this clone, marked as such (#325).
+
+    Until this version a deleted local branch closed the pull request on record for it, though
+    GitHub had it open under the name the branch was pushed as, and the founder's `+merge` could
+    never name it again. Marked `GONE`, the record stays off the board and its number is one a
+    word names once it is put to them.
+    """
+    from . import pullrequest
+
+    marked = pullrequest.closed_as_gone(ctx)
+    return f"{marked} pull request(s) closed only by a branch gone from this clone, " \
+        "named by the founder's word again" if marked else ""
+
+
 def _staged_by_a_move(tree: Path) -> list[str]:
     """Card paths staged as deleted in `tree` whose card a transition moved inside it."""
     from . import plan
@@ -1966,6 +1981,7 @@ _REPAIRS = {
     "0046-carry-attempts-out-of-trees": (1, _carry_attempts_out_of_trees),
     "0047-clear-blockers-off-cards-not-paused": (1, _clear_blockers_off_cards_not_paused),
     "0048-judge-open-pull-requests-again": (1, _refresh_what_pull_requests_are_blocked_by),
+    "0049-a-branch-gone-closes-no-pull-request": (1, _mark_pull_requests_closed_by_a_branch_gone),
 }
 
 

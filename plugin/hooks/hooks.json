@@ -121,9 +121,13 @@
           "`enable_pr_auto_merge` for the same reason: it is `gh pr merge --auto` as a tool.",
           "",
           "`TaskStop` because only its result says which agent it stopped and what the",
-          "agent was sent to do, which the card a session pauses keeps (decision 0082)."
+          "agent was sent to do, which the card a session pauses keeps (decision 0082).",
+          "",
+          "`AskUserQuestion` because the founder's answer in its dialog starts no turn, so",
+          "`prompt-capture` never hears it: a `+merge` they picked there is their word (#326,",
+          "decision 0094). Here, not in an entry of its own: the budget is twelve."
         ],
-        "matcher": "^TaskStop$|.*((create|update|merge)_pull_request|enable_pr_auto_merge)",
+        "matcher": "^(TaskStop|AskUserQuestion)$|.*((create|update|merge)_pull_request|enable_pr_auto_merge)",
         "hooks": [
           {
             "type": "command",

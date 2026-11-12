@@ -153,6 +153,45 @@ def _records(ctx: GitContext) -> dict[str, dict[str, Any]]:
     return latest
 
 
+# The local branch a pull request was opened from, on a record filed under the head GitHub opened
+# it on where the two are named otherwise. `git push -u origin tmp/x:fix/y` and `gh pr create`
+# opens the pull request on `fix/y`: filed under `tmp/x`, it read as closed once `tmp/x` was
+# deleted, while GitHub still had it open, and no `+merge` could name it again (#325, decision
+# 0095).
+LOCAL = "local"
+
+# How a record left the board, where that says nothing of GitHub: its branch went from this clone.
+SETTLED_BY = "settled_by"
+GONE = "branch gone"
+
+
+def _record_of(ctx: GitContext, branch: str) -> dict[str, Any] | None:
+    """The record about `branch`: filed under it, or opened from it as the local branch of a pull
+    request GitHub has under another name. None when none is.
+
+    Every gate here asks about the branch a tree has checked out, and a record is filed under
+    GitHub's head: both names find it. An open one before a settled one, then the one filed
+    under the name, then the newest opening.
+    """
+    records = _records(ctx)
+    about = [(row.get("state") == OPEN, name == branch, float(row.get("opened_at") or 0), name)
+             for name, row in records.items() if name == branch or row.get(LOCAL) == branch]
+    return records[max(about)[3]] if about else None
+
+
+def local_branch(record: dict[str, Any]) -> str:
+    """The branch of this clone a record's pull request was opened from: what its unverified
+    finishes, its review findings and its commits are filed and found under here."""
+    return str(record.get(LOCAL) or record.get("branch") or "")
+
+
+def _filed_names(ctx: GitContext) -> set[str]:
+    """Every branch name a record answers to: the one it is filed under, and the one it was
+    opened from."""
+    records = _records(ctx)
+    return set(records) | {str(row[LOCAL]) for row in records.values() if row.get(LOCAL)}
+
+
 def _write(ctx: GitContext, record: dict[str, Any]) -> None:
     store.append_jsonl(store.tier_b(ctx, PR_FILE), record, locked=True)
     compact(ctx, COMPACT_BYTES)
@@ -184,7 +223,8 @@ def _aged(record: dict[str, Any], now: float) -> bool:
 
 
 def opened(ctx: GitContext, branch: str, base: str, session_id: str,
-           number: int = 0, url: str = "", draft: bool = False, into: str = "") -> None:
+           number: int = 0, url: str = "", draft: bool = False, into: str = "",
+           local: str = "") -> None:
     """Record that this branch now has a pull request waiting on it.
 
     Recorded when the call is ALLOWED to proceed rather than after it returns, because a
@@ -204,6 +244,9 @@ def opened(ctx: GitContext, branch: str, base: str, session_id: str,
     `into` is the base the call named, `base` where it named none. `base` is what a merge is
     judged against, the trunk where a hook filed it before GitHub said otherwise; `into` is only
     where the founder's word goes when GitHub closes a stack's pull request (`_carried`).
+
+    `branch` is the head GitHub opens it on, and `local` the branch of this clone it was opened
+    from where that is named otherwise (#325).
     """
     existing = _records(ctx).get(branch, {})
     # One open past every obligation is no pull request anybody waits on, and it hid the one
@@ -221,12 +264,14 @@ def opened(ctx: GitContext, branch: str, base: str, session_id: str,
         "draft": draft,
         "handed_off_at": 0.0,
         "into": into or base,
+        **({LOCAL: local} if local else {}),
     }
     carried = _carried(ctx, existing, into or base)
     _write(ctx, {**record, MERGE_ACCEPTED_ON: carried} if carried else record)
     if carried:
         _pool_instead(ctx, _entry(existing), _entry(record))
-    close_answered(ctx, branch)
+    # The demand was made on the branch checked out, which is the local one (#325).
+    close_answered(ctx, local or branch)
 
 
 # The commit a pull request's branch stood at when the founder's `+merge` named it. GitHub closes
@@ -361,14 +406,16 @@ def learn_missing_number(ctx: GitContext, branch: str) -> int:
     Without it the founder's word cannot name the pull request and the trunk's history cannot
     settle it. Asked from the Stop gate, after the turn, only for the branch it stands on.
     """
-    record = _records(ctx).get(branch) or {}
+    record = _record_of(ctx, branch) or {}
     if not _number_unheard(record):
         return 0
-    listed = on_github(ctx, branch)
+    # Asked by the head GitHub has it under, which is what the record is filed under (#325).
+    head = str(record["branch"])
+    listed = on_github(ctx, head)
     if listed is None:
         return 0
     number = _number_against(listed, str(record.get("base") or ""))
-    if number and learn_number(ctx, branch, number):
+    if number and learn_number(ctx, head, number):
         return number
     if time.time() - float(record.get("opened_at") or 0) > NUMBER_ASKED_FOR_SECONDS:
         _write(ctx, {**record, "number_asked_at": time.time()})
@@ -388,11 +435,13 @@ def _number_unheard(record: dict[str, Any]) -> bool:
             and not record.get("number_asked_at"))
 
 
-def settle(ctx: GitContext, branch: str, state: str) -> None:
-    """Discharge the obligation — merged, or closed without merging."""
-    record = _records(ctx).get(branch)
+def settle(ctx: GitContext, branch: str, state: str, by: str = "") -> None:
+    """Discharge the obligation — merged, or closed without merging. `by` says how, where that
+    is not GitHub's word or the trunk's (`GONE`)."""
+    record = _record_of(ctx, branch)
     if record and record.get("state") == OPEN:
-        _write(ctx, {**record, "state": state, "settled_at": time.time()})
+        _write(ctx, {**record, "state": state, "settled_at": time.time(),
+                     **({SETTLED_BY: by} if by else {})})
 
 
 def landed(ctx: GitContext, record: dict[str, Any]) -> bool:
@@ -419,14 +468,19 @@ def landed(ctx: GitContext, record: dict[str, Any]) -> bool:
     the work reaching the trunk either way, which is what the obligation was about.
     """
     from . import evidence
-    from .gitctx import is_ancestor
+    from .gitctx import _status, is_ancestor
 
-    branch = str(record.get("branch") or "")
+    branch = local_branch(record)
     if not branch:
         return False
     base = str(record.get("base") or "") or "main"
+    # The branch as this clone has it; once that is gone, as the remote has the head GitHub
+    # opened it on, which is what the pull request holds (#325).
+    work = branch
+    if _status(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"], ctx.worktree_root)[0]:
+        work = f"origin/{record.get('branch')}"
     for trunk in (f"origin/{base}", "origin/HEAD"):
-        if is_ancestor(ctx, branch, trunk):
+        if is_ancestor(ctx, work, trunk):
             return True
     if branch != ctx.branch:
         return False
@@ -450,6 +504,13 @@ def reconcile(ctx: GitContext, branch: str = "") -> list[str]:
     "no movement" and on the board as "ready to merge", and nothing could clear it. What it
     cannot tell apart is a branch that only ever existed on GitHub and was never fetched.
 
+    That answer takes the record off the board and says nothing of GitHub, so it is settled
+    as `GONE`, which no word takes for a pull request that cannot merge (`_settled_numbers`).
+    A local branch deleted under a pull request GitHub still had open on another name settled
+    it as closed, and the founder's `+merge` naming it was refused over that (#325, decision
+    0095). Gone means gone under both: the head it is filed under, and the branch it was opened
+    from.
+
     So is the number GitHub writes into the trunk's history when it merges one, which is the
     one answer a squash-merged branch that is still here gives (`_merged_by_number`).
     """
@@ -463,14 +524,40 @@ def reconcile(ctx: GitContext, branch: str = "") -> list[str]:
         name = str(record.get("branch") or "")
         if _as_number(record.get("number")) in merged:
             settle(ctx, name, MERGED)
-        elif present is not None and name not in present:
-            settle(ctx, name, CLOSED)
-        elif (not branch or name == branch) and landed(ctx, record):
+        elif present is not None and not {name, local_branch(record)} & present:
+            settle(ctx, name, CLOSED, by=GONE)
+        elif (not branch or branch in (name, local_branch(record))) and landed(ctx, record):
             settle(ctx, name, MERGED)
         else:
             continue
         settled.append(name)
     return settled
+
+
+def closed_as_gone(ctx: GitContext) -> int:
+    """Mark as `GONE` each record an older `reconcile` closed because its branch had gone from
+    this clone, where nothing else says GitHub closed it. How many.
+
+    Those carry no mark, and every closed record whose number is known, whose branch this clone
+    has under neither name and whose number the trunk does not name as merged is read as one:
+    that is all the old rule looked at. A pull request a session closed with `gh pr close` and
+    then deleted the branch of reads the same, and a word may name it again, to a merge GitHub
+    refuses (#325).
+    """
+    from .gitctx import known_branches
+
+    records = list(_records(ctx).values())
+    unmarked = [row for row in records if row.get("state") == CLOSED
+                and not row.get(SETTLED_BY) and _as_number(row.get("number"))]
+    present = known_branches(ctx) if unmarked else None
+    if present is None:
+        return 0
+    merged = _merged_by_number(ctx, unmarked)
+    gone = [row for row in unmarked if not {str(row["branch"]), local_branch(row)} & present
+            and _as_number(row.get("number")) not in merged]
+    for row in gone:
+        _write(ctx, {**row, SETTLED_BY: GONE})
+    return len(gone)
 
 
 def _merged_by_number(ctx: GitContext, records: list[dict[str, Any]]) -> set[int]:
@@ -572,7 +659,7 @@ def readiness(ctx: GitContext, tool_name: str, command: str, tool_input: dict[st
 
 def redraft(ctx: GitContext, branch: str, draft: bool) -> None:
     """Record that this branch's open pull request is now a draft, or now ready for review."""
-    record = _records(ctx).get(branch)
+    record = _record_of(ctx, branch)
     if record and record.get("state") == OPEN and bool(record.get("draft")) != draft:
         _write(ctx, {**record, "draft": draft})
 
@@ -661,7 +748,7 @@ def branches_without_one(ctx: GitContext, hours: float) -> list[tuple[str, float
     trunk = trunk_ref(ctx)
     if not trunk:
         return []
-    known = set(_records(ctx))
+    known = _filed_names(ctx)
     try:
         known.update(record.branch for record in sessions.live_sessions(ctx) if record.branch)
     except Exception:  # noqa: BLE001 - a naming line must never fail a session start
@@ -722,7 +809,7 @@ def unhanded(ctx: GitContext, branch: str) -> dict[str, Any] | None:
     founder asked to hold (#239). Left unhanded rather than handed off, so the demand is
     still there, once, when the draft is marked ready.
     """
-    record = _records(ctx).get(branch)
+    record = _record_of(ctx, branch)
     if not record or record.get("state") != OPEN or record.get("draft"):
         return None
     return None if record.get("handed_off_at") else record
@@ -736,7 +823,7 @@ def handed_off(ctx: GitContext, branch: str) -> bool:
     still on an unchanged tree is a session doing as it was told — which is why the evidence
     gate reads this before refusing the same thing a third and fourth time (#206).
     """
-    record = _records(ctx).get(branch) or {}
+    record = _record_of(ctx, branch) or {}
     return bool(record.get("handed_off_at"))
 
 
@@ -773,7 +860,7 @@ def refresh_blockers(ctx: GitContext, branch: str, problems: list[str] | None = 
     whatever a release changed about it (#309). Neither a draft nor one never handed off: the
     hand-off writes those itself.
     """
-    record = _records(ctx).get(branch)
+    record = _record_of(ctx, branch)
     if (not record or record.get("state") != OPEN or record.get("draft")
             or not record.get("handed_off_at")):
         return False
@@ -800,6 +887,7 @@ def blockers(ctx: GitContext, base: str, head: str = "") -> list[str]:
     """
     from . import delivery
 
+    # As this clone names it, the local branch, where GitHub has it on another head (#325).
     branch = head or ctx.branch
     # A record whose head IS its base is misfiled, not strict — the branch can never gain
     # commits over itself, so the gate would refuse forever (#79). Judging it on the
@@ -831,7 +919,7 @@ def _with_the_founders_word(ctx: GitContext, branch: str, problems: list[str]) -
     unverified = [problem for problem in problems if delivery.UNVERIFIED in problem]
     if not unverified:
         return problems
-    record = _records(ctx).get(branch) or {}
+    record = _record_of(ctx, branch) or {}
     if _finish_accepted(ctx, branch, record):
         return [problem for problem in problems if problem not in unverified]
     past = _past_the_word(ctx, branch, record)
@@ -896,7 +984,7 @@ def _accept_its_finish(ctx: GitContext, record: dict[str, Any], said: float) -> 
     """
     from . import delivery
 
-    finishes = delivery.unverified_finishes(ctx, str(record.get("branch") or ""))
+    finishes = delivery.unverified_finishes(ctx, local_branch(record))
     if not finishes:
         return
     head = str(finishes[-1].get("head") or "")
@@ -924,7 +1012,7 @@ def _accept_its_findings(ctx: GitContext, branch: str, said: float) -> None:
     """
     from . import delivery
 
-    record = _records(ctx).get(branch) or {}
+    record = _record_of(ctx, branch) or {}
     shown = [str(text) for text in record.get(SHOWN_FINDINGS) or []]
     seen_at = max(delivery.stamp(record.get("handed_off_at")), delivery.stamp(record.get(REFUSED)))
     if shown and 0 < seen_at <= said:
@@ -966,7 +1054,7 @@ def note_refusal(ctx: GitContext, branch: str, head: str = "", problems: list[st
                  session_id: str = "") -> None:
     """Record that this branch's blockers, `problems`, were just put to the founder by a refused
     merge, read at `head` of the branch, in the chat `session_id` is."""
-    record = _records(ctx).get(branch)
+    record = _record_of(ctx, branch)
     if record and record.get("state") == OPEN:
         _write(ctx, {**record, REFUSED: time.time(), **_shown(head, problems or [], session_id)})
 
@@ -1039,7 +1127,7 @@ def _findings(ctx: GitContext, base: str, branch: str) -> list[str]:
 def _not_merged_past(ctx: GitContext, branch: str, findings: list[str]) -> list[str]:
     """`findings` without those the founder merged past, having been shown them
     (`_accept_its_findings`)."""
-    accepted = set((_records(ctx).get(branch) or {}).get(FINDINGS_ACCEPTED) or [])
+    accepted = set((_record_of(ctx, branch) or {}).get(FINDINGS_ACCEPTED) or [])
     return [text for text in findings if text not in accepted]
 
 
@@ -1351,7 +1439,7 @@ def known(ctx: GitContext, branch: str) -> bool:
     "is one open" here would demand a second pull request for work that has already
     landed.
     """
-    return branch in _records(ctx)
+    return _record_of(ctx, branch) is not None
 
 
 def demanded(ctx: GitContext, branch: str) -> bool:
@@ -1382,7 +1470,9 @@ def close_answered(ctx: GitContext, branch: str = "") -> int:
     """
     from . import board
 
-    records = _records(ctx)
+    # Filed under the branch the demand was made on, which a record names as the branch its
+    # pull request was opened from where GitHub has it under another (#325).
+    records = _filed_names(ctx)
     closed = 0
     for item in board.open_items(ctx, branch=branch or None, with_provenance=False, limit=None):
         if str(item.get("id", "")).startswith(MISSING_ITEM) and item.get("branch") in records:
@@ -1836,11 +1926,18 @@ def head_of(tool_name: str, command: str, tool_input: dict[str, Any], cwd: str =
     a branch cannot gain commits over itself (#79).
 
     Three sources, in order of authority: the structured tool says `head` outright, `gh`
-    accepts `--head`, and `cd <tree> && gh pr create` means the branch of that tree.
+    accepts `--head`, and `cd <tree> && gh pr create` means the branch of that tree, which
+    `opening` reads as GitHub does: by the branch it is pushed as.
     """
+    return _named_head(tool_name, command, tool_input) or (
+        "" if _OPENS_TOOL.search(tool_name) else _branch_where(command, "create", cwd))
+
+
+def _named_head(tool_name: str, command: str, tool_input: dict[str, Any]) -> str:
+    """The head a call that opens a pull request names outright: the tool's `head`, `--head`."""
     if _OPENS_TOOL.search(tool_name):
         return str(tool_input.get("head") or "")
-    return _create_option(command, "--head", "-H") or _branch_where(command, "create", cwd)
+    return _create_option(command, "--head", "-H")
 
 
 def base_of(tool_name: str, command: str, tool_input: dict[str, Any]) -> str:
@@ -1871,14 +1968,62 @@ def _create_option(command: str, long: str, short: str) -> str:
 
 def opened_from(ctx: GitContext, tool_name: str, command: str, tool_input: dict[str, Any],
                 cwd: str) -> str:
-    """The branch a pull request this call opens is recorded on. "" when it cannot be told.
+    """The branch a pull request this call opens is recorded on. "" when it cannot be told."""
+    return opening(ctx, tool_name, command, tool_input, cwd)[0]
+
+
+def opening(ctx: GitContext, tool_name: str, command: str, tool_input: dict[str, Any],
+            cwd: str) -> tuple[str, str]:
+    """(head, local) of a pull request this call opens: the head GitHub opens it on, which its
+    record is filed under, and the branch of this clone it is opened from where that is named
+    otherwise, else "". ("", "") when it cannot be told.
 
     The session's own branch only when the call names no other place: on a line that moves
     into a tree this cannot name, that branch is the one certainly wrong answer (#248), and so
     it is on a line that switches to a branch this cannot name (#295).
+
+    A head the call names is GitHub's as written. Named by no `--head`, `gh` opens it on the
+    branch the local one is pushed as, and `git push -u origin tmp/x:fix/y` pushes `tmp/x` as
+    `fix/y`: filed under `tmp/x`, the pull request read as closed once that local branch was
+    deleted, with GitHub still holding it open (#325).
     """
-    head = head_of(tool_name, command, tool_input, cwd)
-    return head if head or _elsewhere_on_the_line(command, "create", cwd) else ctx.branch
+    named = _named_head(tool_name, command, tool_input)
+    if named:
+        return named, ""
+    local = _branch_where(command, "create", cwd) or (
+        "" if _elsewhere_on_the_line(command, "create", cwd) else ctx.branch)
+    head = _pushed_as(ctx, local, base_of(tool_name, command, tool_input))
+    return (head, local) if head and head != local else (local, "")
+
+
+def _pushed_as(ctx: GitContext, branch: str, base: str = "") -> str:
+    """The branch of the remote that local `branch` is pushed as and stands level with: where
+    `git push` sends it, else what it tracks. "" where neither holds its commit.
+
+    The way `gh pr create` names the head it opens a pull request on: `@{push}` first, then the
+    upstream whose copy is the commit it would propose. Level with it, because a branch cut from
+    `origin/main` tracks `main` until it gains a commit, and the trunk or the base is never the
+    head of a pull request into it.
+    """
+    from .gitctx import _status
+    from .gitpolicy import TRUNK_NAMES
+
+    fields = ("%(refname)", "%(push)", "%(push:remotename)", "%(push:track)",
+              "%(upstream)", "%(upstream:remotename)", "%(upstream:track)")
+    listed = _status(["for-each-ref", f"--format={chr(9).join(fields)}", f"refs/heads/{branch}"],
+                     ctx.worktree_root)[1]
+    # The line of this branch alone: the pattern also lists the branches under its name. Padded,
+    # because git's output comes back stripped, and with it the empty fields that end a line.
+    row = next(((line.split("\t") + [""] * len(fields))[:len(fields)]
+                for line in listed.splitlines() if line.startswith(f"refs/heads/{branch}\t")), None)
+    if row is None:
+        return ""
+    for ref, remote, track in (row[1:4], row[4:7]):
+        prefix = f"refs/remotes/{remote}/"
+        name = ref[len(prefix):] if ref.startswith(prefix) else ""
+        if name and not track and name not in (*TRUNK_NAMES, base):
+            return name
+    return ""
 
 
 def merged_in(ctx: GitContext, command: str, cwd: str) -> GitContext | None:
@@ -2419,7 +2564,8 @@ def named_in_message(ctx: GitContext, text: str) -> list[int]:
     here = _remote_names(ctx)
     found = {int(match["number"]) for match in _LINKED.finditer(text)
              if f"{match['owner']}/{match['repo']}".lower() in here}
-    recorded = {_as_number(record.get("number")) for record in outstanding(ctx)} - {0}
+    # One whose branch went from this clone is still one GitHub may have open (#325).
+    recorded = _unsettled_numbers(ctx)
     for match in _HASHED.finditer(text):
         named = f"{match['owner']}/{match['repo']}".lower() if match["owner"] else ""
         if int(match["number"]) in recorded and (not named or named in here):
@@ -2557,9 +2703,18 @@ def _shown_before(ctx: GitContext, session_id: str, said: float,
 
 
 def _settled_numbers(ctx: GitContext) -> set[int]:
-    """The pull requests recorded here as merged or closed, by number."""
+    """The pull requests recorded here as merged or closed, by number. Not one that left the
+    board because its branch went from this clone: GitHub may still have it open (#325)."""
     return {_as_number(row.get("number")) for row in _records(ctx).values()
-            if row.get("state") != OPEN} - {0}
+            if row.get("state") != OPEN and row.get(SETTLED_BY) != GONE} - {0}
+
+
+def _unsettled_numbers(ctx: GitContext) -> set[int]:
+    """The pull requests on record here that may still merge, by number: open, or gone from
+    this clone with nothing to say GitHub closed them."""
+    gone = {_as_number(row.get("number")) for row in _records(ctx).values()
+            if row.get("state") != OPEN and row.get(SETTLED_BY) == GONE}
+    return ({_as_number(row.get("number")) for row in outstanding(ctx)} | gone) - {0}
 
 
 def _may_still_merge(entry: str, still_open: dict[str, dict[str, Any]],
@@ -2586,8 +2741,8 @@ def named_by(ctx: GitContext, number: int, current: bool = False) -> dict[str, A
     and a numbered merge of another branch is not. This answers "which pull request is
     it?", which is what a `+merge` that named several has to be asked.
     """
-    records = _records(ctx)
-    record = records.get(ctx.branch) if current or not number else records.get(_numbered(ctx, number))
+    record = _record_of(ctx, ctx.branch) if current or not number \
+        else _records(ctx).get(_numbered(ctx, number))
     return record if record and record.get("state") == OPEN else None
 
 
@@ -2732,6 +2887,11 @@ def _not_open(ctx: GitContext, number: int) -> str:
                     if number and _as_number(row.get("number")) == number), None)
     if settled is None:
         return ": no open pull request on record here is this one"
+    if settled.get(SETTLED_BY) == GONE:
+        # Its branch went from this clone, which says nothing of GitHub, and the word that
+        # answers this refusal names it (#325).
+        return (f": #{number} left the board here when {local_branch(settled)} went from this "
+                "clone, and no word since named it")
     return (f": #{number} is recorded here as {settled.get('state')} on "
             f"{settled.get('branch')}, so nothing open carried it")
 
@@ -2837,7 +2997,10 @@ def complete(ctx: GitContext, session_id: str, merge: dict[str, Any], transcript
     spend(ctx, merge.get("named"), str(merge.get("cover", "")), _as_number(merge.get("number")))
     _note_used(ctx, str(merge.get("session") or session_id), merge)
     branch = str(merge.get("branch", ""))
-    if not branch or merge.get("queued"):
+    if merge.get("queued"):
+        return
+    _merged_after_it_went(ctx, _as_number(merge.get("number")))
+    if not branch:
         return
     settle(ctx, branch, MERGED)
     sender = str(merge.get("session", session_id))
@@ -2859,6 +3022,17 @@ def complete(ctx: GitContext, session_id: str, merge: dict[str, Any], transcript
     )
 
 
+def _merged_after_it_went(ctx: GitContext, number: int) -> None:
+    """Record as merged the pull request `number` whose branch had gone from this clone (`GONE`):
+    a merge of it ran, which is GitHub's word, and no later word should name it again."""
+    if number <= 0:
+        return
+    for row in _records(ctx).values():
+        if row.get(SETTLED_BY) == GONE and _as_number(row.get("number")) == number:
+            kept = {key: value for key, value in row.items() if key != SETTLED_BY}
+            _write(ctx, {**kept, "state": MERGED, "settled_at": time.time()})
+
+
 def gated_by(ctx: GitContext, number: int, current: bool = False) -> dict[str, Any] | None:
     """The obligation this merge is judged against, or None to let it through.
 
@@ -2872,7 +3046,7 @@ def gated_by(ctx: GitContext, number: int, current: bool = False) -> dict[str, A
     judged when the call names the checked-out branch, because that is the one case where
     the local checks are known to be about it.
     """
-    record = _records(ctx).get(ctx.branch)
+    record = _record_of(ctx, ctx.branch)
     if not record or record.get("state") != OPEN:
         return {"branch": ctx.branch, "base": ""} if current else None
     if not number:
