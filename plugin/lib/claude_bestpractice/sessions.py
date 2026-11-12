@@ -133,6 +133,10 @@ class SessionRecord:
     # to write to was reading `~/.claude/sessions/` by hand (#253). As `running` last
     # reported it; empty until it has.
     name: str = ""
+    # When this chat resumed in the process this record names, from a SessionStart that said
+    # `resume`. A record of the chat's that another process wrote before then is its past
+    # (`_resumed_past`), however alive that process still is.
+    resumed_at: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -346,7 +350,10 @@ def _pid_proves_life(rec: SessionRecord) -> bool:
     )
 
 
-def is_live(ctx: GitContext, rec: SessionRecord, known_worktrees: set[str] | None = None) -> bool:
+def is_live(ctx: GitContext, rec: SessionRecord, known_worktrees: set[str] | None = None,
+            records: list[SessionRecord] | None = None) -> bool:
+    """Is this record's session running? `records`, every record as the caller read them,
+    spares a caller that asks of each of them a second reading for `_resumed_past`."""
     if _pid_says_dead(rec):
         return False
     # The ceiling is the backstop for a pid that cannot speak for itself — one resolved
@@ -359,7 +366,58 @@ def is_live(ctx: GitContext, rec: SessionRecord, known_worktrees: set[str] | Non
     # An empty set means `git worktree list` failed; do not reap on a failed probe.
     if known_worktrees and rec.worktree not in known_worktrees:
         return False
-    return True
+    return not _resumed_past(rec, load_all(ctx) if records is None else records)
+
+
+def _resumed_past(rec: SessionRecord, records: list[SessionRecord]) -> bool:
+    """Has this record's chat resumed in another process since the record last wrote?
+
+    A chat's CLI can outlive the window that drove it: the WSL connection dropped, VS Code
+    came back, the founder resumed the chat in a new process, and the old one went on running
+    with nobody in it, its records live by every test here. Its own tree was then refused to
+    the chat as "another process of this chat", and removing it went through only from inside
+    (#310). A `claude -p` the chat starts shares its harness id too, but it starts, never
+    resumes, and it is the chat's own descendant; a process that writes again after the resume
+    is not the chat's past either. Where ancestry cannot be read, nothing is anybody's past.
+    """
+    harness = hookio.harness_of(rec.session_id, rec.worktree)
+    if not harness:
+        return False
+    return any(_resumed_since(rec, other, harness) and not _related(rec.pid, other.pid)
+               for other in records)
+
+
+def _resumed_since(rec: SessionRecord, other: SessionRecord, harness: str) -> bool:
+    """Is `other` the chat of `rec`, resumed in another live process after `rec` last wrote?"""
+    if other.session_id == rec.session_id or float(other.resumed_at or 0) <= rec.heartbeat_at:
+        return False
+    theirs = _process_of(other)
+    return (hookio.harness_of(other.session_id, other.worktree) == harness
+            and theirs is not None and theirs != _process_of(rec) and not _pid_says_dead(other))
+
+
+def _related(one: int, other: int) -> bool:
+    """Is either process the other's ancestor? True where `/proc` cannot say, which keeps two
+    records of one chat apart as they always were."""
+    chains = [_ancestors(one), _ancestors(other)]
+    if any(chain is None for chain in chains):
+        return True
+    return one in chains[1] or other in chains[0]
+
+
+def _ancestors(pid: int) -> set[int] | None:
+    """Every process above `pid`, read off `/proc/<pid>/stat`; None where it cannot be read."""
+    seen: set[int] = set()
+    current = pid
+    while current > 1 and current not in seen:
+        seen.add(current)
+        try:
+            stat = Path(f"/proc/{current}/stat").read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None if current == pid else seen
+        fields = stat.rsplit(")", 1)[-1].split()
+        current = int(fields[1]) if len(fields) > 1 and fields[1].isdigit() else 0
+    return seen - {pid}
 
 
 def running() -> dict[str, dict]:
@@ -702,16 +760,19 @@ def _rewrite(ctx: GitContext, session_id: str, change) -> SessionRecord | None:
 
 
 def restarted(ctx: GitContext, session_id: str, pid: int, pid_trust: str,
-              branch: str) -> SessionRecord | None:
+              branch: str, resumed: bool = False) -> SessionRecord | None:
     """This session's record as a resume or a compaction leaves it, or None where it has none.
 
     The same record, naming the process it runs under now and the branch it stands on. Changed
     under the record's lock and read again inside it: a session start after a compaction runs
     beside the tool calls of the session's agents, which count in this file, and the start
     wrote back the record it had read before its git calls, taking their counts with it.
+    `resumed` stamps the moment the chat came back in this process (`resumed_at`).
     """
     def change(rec: SessionRecord) -> None:
         rec.pid, rec.pid_trust, rec.branch = pid, pid_trust, branch
+        if resumed:
+            rec.resumed_at = time.time()
         _stamp(rec)
 
     return _rewrite(ctx, session_id, change)
@@ -769,14 +830,15 @@ def reap(ctx: GitContext, exclude: str | None = None,
     """
     known = {p.as_posix() for p in worktree_paths(ctx)}
     dead: list[SessionRecord] = []
-    for rec in load_all(ctx):
+    records = load_all(ctx)
+    for rec in records:
         # The session firing SessionStart right now is alive by definition, and
         # reaping it here destroyed its baseline: the rebuild found no record and
         # re-derived from HEAD, so every commit already made fell outside the diff
         # and the Stop gate saw nothing to verify. An ordinary resume disarmed it.
         if rec.session_id == exclude:
             continue
-        if not _still_running(ctx, rec, known, live):
+        if not _still_running(ctx, rec, known, live, records):
             dead.append(rec)
             # The baseline goes into the reap log, not just the record. A crashed
             # session is reaped by a sibling, and when the founder resumes it the rebuild
@@ -846,17 +908,19 @@ def reaped_memory(ctx: GitContext, session_id: str) -> dict:
 def live_sessions(ctx: GitContext, exclude: str | None = None,
                   live: dict[str, dict] | None = None) -> list[SessionRecord]:
     known = {p.as_posix() for p in worktree_paths(ctx)}
+    records = load_all(ctx)
     return [
         r
-        for r in load_all(ctx)
-        if r.session_id != exclude and _still_running(ctx, r, known, live)
+        for r in records
+        if r.session_id != exclude and _still_running(ctx, r, known, live, records)
     ]
 
 
 def _still_running(ctx: GitContext, rec: SessionRecord, known: set[str],
-                   live: dict[str, dict] | None) -> bool:
+                   live: dict[str, dict] | None,
+                   records: list[SessionRecord] | None = None) -> bool:
     """Live by the record's own evidence, and not a conversation its process has left."""
-    return is_live(ctx, rec, known) and not superseded(rec, live or {})
+    return is_live(ctx, rec, known, records) and not superseded(rec, live or {})
 
 
 def my_pid(ctx: GitContext, session_id: str) -> int:

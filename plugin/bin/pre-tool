@@ -2303,6 +2303,14 @@ def main() -> None:
         # alone: removed from inside, either strands it there (#271). Asked only of a tree
         # the line removes, because who stands where is a read of every session's record.
         removals = worktree_removals(str(ti.get("command", "")), session_cwd)
+        # Said before, never done, whoever removes it: the gate's removal ended this chat's
+        # background `ssh` waits with exit code 144, and git's own takes the directory from
+        # under them (#310). A session's process keeps its tree until it ends.
+        for path in removals:
+            working = worktree.sessions_work_in(path)
+            if working:
+                deny(ctx, rec, worktree.still_working(path.resolve(), working,
+                                                      str(event.raw.get("session_id") or "")))
         own = next((path.resolve() for path in removals
                     if worktree.removable_by(ctx, rec.session_id, path)), None)
         if own is not None and not _removal_alone(str(ti.get("command", ""))):

@@ -1,5 +1,28 @@
 # Changelog
 
+## v2.15.1
+
+A chat resumed after its window went away owns the tree it worked in, and a removal no longer
+ends what a session started there (#310).
+
+- **A resumed chat's own tree is no longer another session's.** The WSL connection dropped, the
+  machine stayed up, and the chat's old CLI went on running with nobody in it. Every test of
+  life called it live, so the resumed chat was refused its own tree as "another process of this
+  chat". A record of the chat's is now its past once the chat resumed in another, unrelated live
+  process after the record last wrote. A `claude -p` the chat starts is still a session of its
+  own, and an old process that writes again is live again (decision 0091).
+- **A removal ends no process a session started.** The gate removed the tree and, with it, three
+  background `ssh` waits of the session that asked, with exit code 144. A process a Claude Code
+  tool or hook ran (`CLAUDE_CODE_CHILD_SESSION=1`) now keeps its tree. Its removal is refused
+  first, whether the gate or git would do it, with the `kill` that ends this chat's own. The Stop
+  gate, `claude-bp sweep` and agents' trees leave such a tree and say why.
+- **A session's MCP server is never stopped with a tree.** One started in the tree the session
+  was launched in was asked to stop with it, like the founder's own server.
+- **A server from an IDE's terminal is still the founder's.** VS Code sets `CLAUDECODE=1` in its
+  terminals, so that variable marks nothing; decision 0059 stands there.
+- **The suite runs the same inside a Claude Code session as in CI.** The tests inherited the
+  session's id and child flag, so a fixture's server would have kept its tree.
+
 ## v2.15.0
 
 `claude-bp-plan reopen`, and a ledger in which every state a card can stand in has a command

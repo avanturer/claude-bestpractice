@@ -61,6 +61,13 @@ for _token in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERP
     _os.environ.pop(_token, None)
 _os.environ["GH_CONFIG_DIR"] = _os.path.join(_os.environ["CLAUDE_BP_TEST_HOME"], "gh")
 
+# And nothing of the Claude Code session the suite may run under. Every process a test starts
+# would carry its id and its child flag, and a removal keeps a tree such a process runs in
+# (#310): a fixture's server would keep it, in a session and never in CI. The tests about a
+# session's processes set these on the processes they start.
+for _inherited in ("CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION", "CLAUDECODE"):
+    _os.environ.pop(_inherited, None)
+
 
 def harness_matches(matcher: str, value: str) -> bool:
     """Whether Claude Code fires a hook with this `matcher` for `value` (a tool's name).
