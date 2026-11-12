@@ -61,11 +61,16 @@ for _token in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERP
     _os.environ.pop(_token, None)
 _os.environ["GH_CONFIG_DIR"] = _os.path.join(_os.environ["CLAUDE_BP_TEST_HOME"], "gh")
 
-# And nothing of the Claude Code session the suite may run under. Every process a test starts
-# would carry its id and its child flag, and a removal keeps a tree such a process runs in
-# (#310): a fixture's server would keep it, in a session and never in CI. The tests about a
-# session's processes set these on the processes they start.
-for _inherited in ("CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION", "CLAUDECODE"):
+# And nothing of the Claude Code session the suite may run under: every variable it exports,
+# as CI has none of them. Named one by one, the list was always one short. Every process a test
+# starts carried the session's id and child flag, so a fixture's server kept its tree (#310);
+# then its messaging socket and token, so a fixture's "feat/other was merged" was delivered
+# into the live session running the suite; and `CLAUDE_CONFIG_DIR` points past the sandbox
+# HOME at the founder's own. The tests about these set them on what they start. The plugin's
+# own switches (`CLAUDE_BP_*`, `CLAUDE_BESTPRACTICE_*`) are the suite's, and stay.
+for _inherited in [name for name in _os.environ
+                   if name.startswith("CLAUDE")
+                   and not name.startswith(("CLAUDE_BP_", "CLAUDE_BESTPRACTICE_"))]:
     _os.environ.pop(_inherited, None)
 
 
