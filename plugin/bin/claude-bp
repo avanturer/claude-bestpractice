@@ -60,11 +60,10 @@ def cmd_status(ctx) -> int:
     if bad:
         print(f"  {bad}")
 
-    newer = upgrade.superseded_by()
-    if newer:
-        print(f"  {newer} is installed but NOT running — restart Claude Code to pick it up")
-    elif upgrade.orphaned():
-        print("  this copy has been superseded — restart Claude Code to pick up the new one")
+    # The board's own line, so the two never name different remedies.
+    stale = upgrade.stale_line().strip()
+    if stale:
+        print(f"  {stale}")
 
     # Before everything the config decides. A file that does not parse was read as no config
     # at all — `enabled: false` included — and this is where the founder looks.

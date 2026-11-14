@@ -3,9 +3,21 @@
 Those are two different things, and the gap between them is silent. `claude plugin update`
 answers with `Restart to apply changes.` and returns 0 — the new version is unpacked into a
 sibling directory, the old one is marked `.orphaned_at` and left in place, and every session
-already running keeps executing the old copy for as long as it lives. Nothing in the session
-says so. A founder who updates to get a fix, watches the update succeed, and then watches the
-fix not happen has no way to tell which of the two possible things went wrong.
+already running keeps executing the old copy until it runs `/reload-plugins` or is restarted.
+Nothing in the session says so. A founder who updates to get a fix, watches the update
+succeed, and then watches the fix not happen has no way to tell which of the two possible
+things went wrong.
+
+What this module tells them names `/reload-plugins` first and a restart second, because the
+reload keeps the session. Claude Code's plugin loading reference ("When auto-update runs")
+says the reload switches hook commands to the new version's path, so every
+`${CLAUDE_PLUGIN_ROOT}/bin/*` gate moves. The mods overview ("Install or update a mod") says it
+loads an updated hooks module, and `session.start` runs again in the fresh copy, so
+`hooks/bestpractice.ts` moves too. Monitors are the one component the reload leaves on the old
+path. This plugin ships none; if it ever does, the restart has to come first again. Its MCP
+servers are remote URLs with no install path in them, so an update that keeps the same two
+needs no `--force`. One that adds or removes a server makes the CLI hold the reload and
+name `/reload-plugins --force` itself.
 
 Purely local: the version is the name of the directory this file is in, and the alternatives
 are its siblings. No network, no manifest fetch, no cost when there is nothing to say. In a
@@ -26,6 +38,9 @@ _VERSION_DIR = re.compile(r"^\d+(?:\.\d+)*(?:[-+].*)?$")
 
 # Dropped by the CLI into the directory it has superseded, holding a millisecond timestamp.
 ORPHAN_MARKER = ".orphaned_at"
+
+# What moves a running session onto the version on disk, the same words wherever it is said.
+APPLY = "Run `/reload-plugins`, or restart Claude Code"
 
 
 # Versions that shipped a defect serious enough that staying on one is not a choice
@@ -79,8 +94,8 @@ def superseded_by(root: Path | None = None) -> str | None:
     """A newer version sitting beside this one, meaning this session is running stale code.
 
     The founder has already done everything asked of them at this point: they ran the
-    update and it worked. What is left is a restart, and this is the only thing that can
-    tell them so.
+    update and it worked. What is left is `/reload-plugins` or a restart, and this is the
+    only thing that can tell them so.
     """
     root = root or install_root()
     if root is None or not _VERSION_DIR.match(root.name):
@@ -155,13 +170,13 @@ def stale_line(root: Path | None = None, home: Path | None = None) -> str:
     if newer:
         return (
             f"\nthis session is running claude-bestpractice {__version__}, but {newer} is "
-            "installed on disk. Restart Claude Code to pick it up; nothing here is enforcing "
-            "the newer version's rules until you do."
+            "installed on disk, and nothing here enforces the newer version's rules until it "
+            f"is loaded. {APPLY}."
         )
     if orphaned(root):
         return (
             f"\nthis session is running claude-bestpractice {__version__} from a copy the "
-            "CLI has superseded. Restart Claude Code."
+            f"CLI has superseded. {APPLY}."
         )
     return ""
 

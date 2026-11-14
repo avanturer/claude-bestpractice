@@ -1,5 +1,37 @@
 # Changelog
 
+## v2.16.1
+
+A session running a superseded copy is told to run `/reload-plugins`, with a restart as the
+fallback, where it was told only to restart. And `make check` passes again on Claude Code 2.1.323
+and later, which type-checks the hooks module.
+
+- **The board's stale-version line names `/reload-plugins` first.** Claude Code's plugin
+  loading reference ("When auto-update runs") says the reload switches hook commands to the new
+  version's path, which covers every `${CLAUDE_PLUGIN_ROOT}/bin/*` gate. The mods overview ("Install
+  or update a mod") says it loads an updated hooks module, and `session.start` runs again in the
+  fresh copy. Monitors are the one component left on the old path, and this plugin ships none;
+  if it ever does, the restart has to come first again (`upgrade` module docstring). The MCP
+  servers are remote URLs with no install path in them, so an update that keeps them needs no
+  `--force`; one that adds or removes a server gets the CLI's own `--force` line.
+- **`claude-bp status` prints the board's line** instead of its own wording, so the two cannot
+  name different remedies. It now also reports a newer copy in the CLI's cache when this one runs
+  from a checkout, as the board already did.
+- **`claude-bp-report` names the reload too**, where it holds reports because a newer version is
+  out or on disk.
+- **The hooks module and its tests type-check under Claude Code 2.1.323 and later.** 2.1.323
+  made `claude plugin validate` type-check a plugin's TypeScript hooks module, and `--strict`
+  fails on any finding, so `make check` failed at `manifests` on every machine with that CLI,
+  `main` included. CI has no `claude` on PATH and never saw it. The three findings in
+  `hooks/bestpractice.ts` are fixed by narrowing, with no cast and no change at run time. The
+  search tools found by `PARALLEL_SEARCH` and `EXA_SEARCH` are typed `mcp__…__…`, which is what
+  `$.tool.call` takes and all either pattern can match. The sessions pane is drawn by calling
+  `Box` and `Text`, as the docs show for a `.ts` module. The 14 in `tests/bestpractice.test.ts`
+  were stubs missing what Claude Code now passes: `origin` and `presentation` on `command.run`,
+  and `tool_use_id`, `provider`, `parentModel`, `background` and `fork` on `agent.spawn`.
+  `claude plugin test plugin` passes 20 of 20, before and after.
+- No state changes, so no repair.
+
 ## v2.16.0
 
 The plugin's own defect reports reach the issue tracker as they happen, and only about the code

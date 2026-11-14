@@ -170,6 +170,8 @@ class TestNothingIsSentFromAVersionAReleasePassed(SeenOnVersionsCase):
         proc = self.report("send")
         self.assertEqual(1, proc.returncode)
         self.assertIn("99.1.0", proc.stderr)
+        # The update is already on disk, so what is left is to load it into the session.
+        self.assertIn("`/reload-plugins`", proc.stderr)
         self.assertEqual([], self.issues_filed())
 
     def test_nothing_to_send_asks_nobody(self):

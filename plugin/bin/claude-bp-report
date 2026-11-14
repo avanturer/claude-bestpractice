@@ -131,8 +131,8 @@ def send_unsent(ctx) -> int:
     newer = newer_version()
     if newer:
         print(f"nothing sent: this is {__version__}, and {newer} is out, which may have "
-              f"fixed what these report. Update with `{upgrade.update_command()}` and "
-              "restart Claude Code; a defect still there is captured again.", file=sys.stderr)
+              f"fixed what these report. Update with `{upgrade.update_command()}`. "
+              f"{upgrade.APPLY}; a defect still there is captured again.", file=sys.stderr)
         return 1
 
     sent = 0
