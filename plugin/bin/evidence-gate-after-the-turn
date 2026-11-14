@@ -11,5 +11,12 @@ import runpy
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+# An old copy's command runs the newest installed copy's instead, so a chat started
+# before an update is gated by the version on disk (decision 0102).
+from claude_bestpractice import upgrade as _upgrade  # noqa: E402
+
+_upgrade.handover(Path(__file__))
+
 sys.argv[1:] = ["--after-the-turn"]
 runpy.run_path(str(Path(__file__).resolve().with_name("evidence-gate")), run_name="__main__")

@@ -11,11 +11,20 @@ Purely local: the version is the name of the directory this file is in, and the 
 are its siblings. No network, no manifest fetch, no cost when there is nothing to say. In a
 development checkout there is no version directory and no siblings, so every function here
 returns the empty answer and the caller prints nothing.
+
+Since 2.19.0 the gap is closed where it can be (decision 0102): every command of an old copy
+hands over to the newest one installed (`handover`), so a chat's gates run the version on disk
+whenever the chat started. What Claude Code itself loaded at the chat's start, the skills and
+commands it lists and the hooks module, waits for a new chat or a `/reload-plugins` the founder
+types: Claude Code runs that command from their keyboard only.
 """
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 from . import MARKETPLACE, PLUGIN, __version__
@@ -26,6 +35,14 @@ _VERSION_DIR = re.compile(r"^\d+(?:\.\d+)*(?:[-+].*)?$")
 
 # Dropped by the CLI into the directory it has superseded, holding a millisecond timestamp.
 ORPHAN_MARKER = ".orphaned_at"
+
+# Set by `handover` for the copy it starts, naming the copy Claude Code loaded for the chat:
+# the one its hook commands still point at. Present, the process is already the newest copy.
+LOADED_FROM = "CLAUDE_BESTPRACTICE_LOADED_FROM"
+# The founder's way back to each copy running its own code: `1` in the environment.
+NO_HANDOVER = "CLAUDE_BESTPRACTICE_NO_HANDOVER"
+# Where the hook's process can become the newer copy's; Windows has no such `execve`.
+EXECVE = os.name == "posix"
 
 
 # Versions that shipped a defect serious enough that staying on one is not a choice
@@ -75,6 +92,12 @@ def install_root(start: Path | None = None) -> Path | None:
     return None
 
 
+def installed_copy(root: Path | None = None) -> bool:
+    """Whether this code runs from a version directory the CLI unpacked, not a checkout."""
+    root = root or install_root()
+    return bool(root and _VERSION_DIR.match(root.name))
+
+
 def superseded_by(root: Path | None = None) -> str | None:
     """A newer version sitting beside this one, meaning this session is running stale code.
 
@@ -96,6 +119,75 @@ def superseded_by(root: Path | None = None) -> str | None:
 
     newer = [name for name in siblings if version_key(name) > version_key(root.name)]
     return max(newer, key=version_key) if newer else None
+
+
+def newest_install(root: Path | None = None) -> Path | None:
+    """The newest copy the CLI has unpacked beside this one, when it is newer and the CLI has
+    not left it behind; None otherwise.
+
+    A copy marked `.orphaned_at` is one the CLI moved off, which is what a downgrade does to
+    the newer version: handing over to it would undo the founder's choice. A directory with no
+    manifest is one still being unpacked.
+    """
+    root = root or install_root()
+    if root is None or not _VERSION_DIR.match(root.name):
+        return None
+    try:
+        newer = [entry for entry in root.parent.iterdir()
+                 if entry.is_dir() and _VERSION_DIR.match(entry.name)
+                 and version_key(entry.name) > version_key(root.name)
+                 and not (entry / ORPHAN_MARKER).exists()
+                 and (entry / ".claude-plugin" / "plugin.json").is_file()]
+    except OSError:
+        return None
+    return max(newer, key=lambda entry: version_key(entry.name), default=None)
+
+
+def handover(script: Path) -> None:
+    """Run the newest installed copy's namesake of `script` in this process's place and end
+    with its status; return, doing nothing, where there is none.
+
+    A chat Claude Code started before an update keeps running the hook commands of the copy
+    it loaded until it is reloaded, and `/reload-plugins` runs only when the founder types
+    it: asked by a plugin it answers "/reload-plugins isn't available over a remote
+    connection in this session", measured on 2.1.325. So each command of an old copy hands
+    over. The newer copy gets this process's stdin, stdout and stderr untouched, the same
+    arguments, `CLAUDE_PLUGIN_ROOT` naming itself, and `LOADED_FROM` naming this copy.
+    Replaced with `execve` where the platform has it, so the hook's process is the newer
+    copy's and a timeout stops that; on Windows run as a child, its status passed on.
+    """
+    found = _handover_target(script)
+    if found is None:
+        return
+    loaded, newer, target = found
+    argv = [sys.executable, str(target), *sys.argv[1:]]
+    env = {**os.environ, LOADED_FROM: str(loaded), "CLAUDE_PLUGIN_ROOT": str(newer)}
+    try:
+        if EXECVE:
+            os.execve(sys.executable, argv, env)
+        code = subprocess.run(argv, env=env, check=False).returncode
+    except OSError:
+        return
+    sys.exit(code)
+
+
+def _handover_target(script: Path) -> tuple[Path, Path, Path] | None:
+    """(the copy `script` is in, the newest installed copy, its namesake of `script`), or None
+    where nothing is to be handed over: already handed over, switched off, a checkout, the
+    newest copy, or a newer copy without that command."""
+    if os.environ.get(LOADED_FROM) or os.environ.get(NO_HANDOVER) == "1":
+        return None
+    loaded = install_root(script.resolve())
+    newer = newest_install(loaded) if loaded else None
+    target = newer / "bin" / script.name if newer else None
+    return (loaded, newer, target) if loaded and newer and target and target.is_file() else None
+
+
+def loaded_version() -> str:
+    """The version Claude Code loaded for this chat, when a handover started this process
+    from an older copy; empty otherwise."""
+    loaded = os.environ.get(LOADED_FROM, "")
+    return Path(loaded).name if loaded and _VERSION_DIR.match(Path(loaded).name) else ""
 
 
 def orphaned(root: Path | None = None) -> bool:
@@ -150,18 +242,27 @@ def stale_line(root: Path | None = None, home: Path | None = None) -> str:
     rest of the CLI's cache, which is the only thing that can see a newer version when
     this copy is a git checkout and has no version directory to have siblings in.
     """
+    loaded = loaded_version()
+    if loaded:
+        return (
+            f"\nthis chat was started on claude-bestpractice {loaded}; its gates run "
+            f"{__version__}, the copy installed since. What {__version__} adds to the skills, "
+            "the commands and the board pane reaches it in a new chat, or after `/reload-plugins` "
+            "typed by the founder: Claude Code takes that command from their keyboard only."
+        )
     root = root or install_root()
     newer = superseded_by(root) or newer_in_the_cache(home)
     if newer:
         return (
             f"\nthis session is running claude-bestpractice {__version__}, but {newer} is "
-            "installed on disk. Restart Claude Code to pick it up; nothing here is enforcing "
-            "the newer version's rules until you do."
+            "installed on disk. A new chat, or `/reload-plugins` typed by the founder, picks "
+            "it up; nothing here is enforcing the newer version's rules until then."
         )
     if orphaned(root):
         return (
             f"\nthis session is running claude-bestpractice {__version__} from a copy the "
-            "CLI has superseded. Restart Claude Code."
+            "CLI has superseded. A new chat, or `/reload-plugins` typed by the founder, picks "
+            "up the copy that replaced it."
         )
     return ""
 

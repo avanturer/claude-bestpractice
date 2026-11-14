@@ -11,7 +11,7 @@
       "name": "bestpractice",
       "source": "./plugin",
       "description": "Enforcement, memory and parallel-session coordination for solo founders running several Claude Code sessions on one repository.",
-      "version": "2.18.0",
+      "version": "2.19.0",
       "category": "development",
       "author": { "name": "avanturer" },
       "homepage": "https://github.com/avanturer/claude-bestpractice",

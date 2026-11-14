@@ -90,7 +90,9 @@ never reached, the other asserted tolerance that a lower layer was already provi
    the last change to the tree.**
 5. Open the pull request, merge it. The release workflow cuts the tag and publishes the
    notes from the CHANGELOG. A session cannot push a tag; that is why this is a workflow.
-6. Re-arm this repository under what just shipped:
+6. Re-arm this repository under what just shipped. From 2.19.0 a session started here does it
+   itself within six hours, project scope included, and the chats already open hand their
+   hooks over to the new copy (decision 0102). By hand, to have it now:
 
    ```
    claude plugin marketplace update claude-bestpractice

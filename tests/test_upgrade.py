@@ -152,7 +152,7 @@ class TestRunningIsNotInstalled(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = self._cache(tmp, "1.0.1", "1.0.2")
             self.assertEqual(upgrade.superseded_by(root), "1.0.2")
-            self.assertIn("Restart", upgrade.stale_line(root))
+            self.assertIn("`/reload-plugins` typed by the founder", upgrade.stale_line(root))
 
     def test_an_older_sibling_is_not_a_reason_to_say_anything(self):
         import tempfile
@@ -184,7 +184,7 @@ class TestRunningIsNotInstalled(unittest.TestCase):
             root = self._cache(tmp, "1.0.1")
             (root / upgrade.ORPHAN_MARKER).write_text("1785789442308", encoding="utf-8")
             self.assertTrue(upgrade.orphaned(root))
-            self.assertIn("Restart", upgrade.stale_line(root))
+            self.assertIn("`/reload-plugins` typed by the founder", upgrade.stale_line(root))
 
     def test_the_running_copy_is_found_by_walking_up_from_the_code(self):
         """The whole mechanism rests on this: the version is the directory name, and
@@ -315,7 +315,7 @@ class TestACopyOutsideTheCacheIsStillTold(unittest.TestCase):
         """`root=None` here is the checkout case: no version directory to compare against."""
         said = upgrade.stale_line(root=None, home=self.cache("99.0.0"))
         self.assertIn("99.0.0", said)
-        self.assertIn("Restart", said)
+        self.assertIn("`/reload-plugins` typed by the founder", said)
 
     def test_nothing_is_said_when_nothing_is_newer(self):
         self.assertEqual("", upgrade.stale_line(root=None, home=self.cache()))
@@ -362,7 +362,7 @@ class TestAnUpdateMidSessionReachesTheSession(RepoCase):
         self.prompt()
         said = " ".join(self.notes())
         self.assertIn("99.0.0", said)
-        self.assertIn("Restart", said)
+        self.assertIn("`/reload-plugins` typed by the founder", said)
 
     def test_nothing_is_said_when_nothing_is_newer(self):
         self.prompt()
