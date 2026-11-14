@@ -9,7 +9,7 @@
 // What any of
 // that should be is asked of the plugin's Python library through
 // `bin/claude-bp-mod`; whatever goes wrong here leaves the call as Claude Code made it.
-import type { EngineInterface, Register, ToolCallResult } from 'claude-code'
+import type { EngineInterface, McpToolName, Register, RenderElement, RenderNode, ToolCallResult } from 'claude-code'
 
 // Below this a Bash result is not worth a process: `digest.MIN_CHARS` in the library.
 const MIN_CHARS = 6_000
@@ -49,6 +49,19 @@ let python: readonly string[] | null = null
 const searchedThroughParallel = new Map<string, number>()
 // The pane's rows as the library last gave them; a reload starts them over.
 let boardRows: readonly string[] = []
+
+// A tool `$.tool.list()` named that `$.tool.call` can be handed: since Claude Code 2.1.325 the
+// call takes a built-in's name or `mcp__<server>__<tool>`, never any string.
+function mcpTool(name: string | undefined): McpToolName | undefined {
+  return name !== undefined && /^mcp__.+__.+$/.test(name) ? (name as McpToolName) : undefined
+}
+
+// What a render hook answers. `h` is typed for any tag and answers `RenderNode | null |
+// undefined`; a Box always draws an element, and anything else falls to the hook's `catch`.
+function element(node: RenderNode | null | undefined): RenderElement {
+  if (node === null || node === undefined || typeof node === 'string') throw new Error('no element drawn')
+  return node
+}
 
 async function ask($: EngineInterface, what: string, request: Answer): Promise<Answer> {
   const script = `${$.plugin.root}/bin/claude-bp-mod`
@@ -165,8 +178,8 @@ export const register: Register = (on) => {
     const settings = await ask($, 'settings', {})
     if (settings.route_search !== true) return next(e)
     const tools = await $.tool.list()
-    const parallel = tools.find((tool) => PARALLEL_SEARCH.test(tool.name))?.name
-    const exa = tools.find((tool) => EXA_SEARCH.test(tool.name))?.name
+    const parallel = mcpTool(tools.find((tool) => PARALLEL_SEARCH.test(tool.name))?.name)
+    const exa = mcpTool(tools.find((tool) => EXA_SEARCH.test(tool.name))?.name)
     const started = Date.now()
     if (parallel) {
       const found = await $.tool.call({
@@ -239,7 +252,7 @@ export const register: Register = (on) => {
   on('ui.render', { component: 'Pane', requestId: BOARD_PANE }, async ($, e) => {
     const { Box, Text } = $.ui.resolve(e)
     const rows = boardRows.length > 0 ? boardRows : ['No other session, pull request or red suite here.']
-    return h(Box, { flexDirection: 'column' }, ...rows.map((row) => h(Text, null, row)))
+    return element(h(Box, { flexDirection: 'column' }, ...rows.map((row) => h(Text, null, row))))
   }).catch(async ($, e, next) => next(e))
 
   // Each time one of this plugin's skills is read, counted where `claude-bp status` reports it:

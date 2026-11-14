@@ -8,13 +8,25 @@ const LONG = 'PASSED\n'.repeat(2_000)
 
 function library(answers: Record<string, unknown>) {
   return async ($: unknown, e: { argv: readonly string[] }) => {
-    const asked = e.argv[e.argv.length - 1]
+    const asked = e.argv[e.argv.length - 1] ?? ''
     const answer = asked in answers ? answers[asked] : {}
     return { value: { exitCode: 0, stdout: JSON.stringify(answer), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   }
 }
 
 type On = (event: string, ...rest: unknown[]) => unknown
+
+// `/sessions` as the founder types it: Claude Code 2.1.325 hands `command.run` where it came
+// from and where its answer shows.
+const SESSIONS_TYPED = {
+  command: 'sessions', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 },
+} as const
+
+// An Agent call's spawn as Claude Code 2.1.325 makes it: a built-in agent, in the foreground.
+function spawned(task: { prompt: string, description: string, subagentType: string, model: string }) {
+  return { ...task, tool_use_id: 'toolu_test', provider: { plugin: 'engine', tier: 'core' as const },
+    parentModel: 'opus', background: false, fork: false }
+}
 
 function inASession(on: On) {
   on('session.cwd', async () => ({ value: '/work/repo' }))
@@ -130,7 +142,7 @@ test('a subagent named below the founder\'s floor runs on the floor', async ($, 
     started = e.model ?? ''
     return { model: started }
   })
-  await $.agent.spawn({ prompt: 'find the config', description: 'find', subagentType: 'Explore', model: 'haiku' })
+  await $.agent.spawn(spawned({ prompt: 'find the config', description: 'find', subagentType: 'Explore', model: 'haiku' }))
   expect(started).toBe('sonnet')
 })
 
@@ -142,7 +154,7 @@ test('a subagent at or above the floor runs on what it named', async ($, on) => 
     started = e.model ?? ''
     return { model: started }
   })
-  await $.agent.spawn({ prompt: 'design it', description: 'design', subagentType: 'Plan', model: 'opus' })
+  await $.agent.spawn(spawned({ prompt: 'design it', description: 'design', subagentType: 'Plan', model: 'opus' }))
   expect(started).toBe('opus')
 })
 
@@ -155,7 +167,7 @@ test('a subagent is handed the map of its own task', async ($, on) => {
     prompt = e.prompt
     return { model: 'sonnet' }
   })
-  await $.agent.spawn({ prompt: 'fix the OTA check', description: 'ota', subagentType: 'general-purpose', model: 'sonnet' })
+  await $.agent.spawn(spawned({ prompt: 'fix the OTA check', description: 'ota', subagentType: 'general-purpose', model: 'sonnet' }))
   expect(prompt).toContain('fix the OTA check')
   expect(prompt).toContain('mobile/src/ota/check.ts')
 })
@@ -193,7 +205,7 @@ test('the founder sees the board as a status line, which the model is never sent
   on('process.run', library({ board: BOARD }))
   on('ui.open', async () => ({ value: { isPlaced: true } }))
   const shown = statusLines(on as On)
-  await $.command.run({ command: 'sessions', args: '' })
+  await $.command.run(SESSIONS_TYPED)
   expect(shown).toContain(BOARD.line)
 })
 
@@ -202,7 +214,7 @@ test('the sessions pane draws a row for each session and pull request, in the te
   on('process.run', library({ board: BOARD }))
   on('ui.open', async () => ({ value: { isPlaced: true } }))
   statusLines(on as On)
-  await $.command.run({ command: 'sessions', args: '' })
+  await $.command.run(SESSIONS_TYPED)
   for (const surface of ['terminal', 'vscode'] as const) {
     const ui = await $.ui.mount({ ...SESSIONS_PANE, surface })
     expect((await ui.find({ type: 'Text', text: /ledger-export-3c/ }))?.text).toBe(BOARD.rows[0])
@@ -216,7 +228,7 @@ test('a board the library has nothing for clears the line, as enabled off does',
   on('process.run', library({ board: {} }))
   on('ui.open', async () => ({ value: { isPlaced: true } }))
   const shown = statusLines(on as On)
-  await $.command.run({ command: 'sessions', args: '' })
+  await $.command.run(SESSIONS_TYPED)
   expect(shown).toEqual([undefined])
 })
 
@@ -234,7 +246,7 @@ test('an agent\'s turn ending reads no board, and the session\'s own turn ending
   const clock = mock.clock(on as never)
   const asked: string[] = []
   on('process.run', async ($$: unknown, e: { argv: readonly string[] }) => {
-    asked.push(e.argv[e.argv.length - 1])
+    asked.push(e.argv[e.argv.length - 1] ?? '')
     return ran(0, JSON.stringify(BOARD))
   })
   on('turn.complete', async () => ({ text: 'done' }))
@@ -253,9 +265,9 @@ test('a board read that failed leaves the line as it was, rather than saying not
   on('process.run', async () => ran(exitCode, JSON.stringify(BOARD)))
   on('ui.open', async () => ({ value: { isPlaced: true } }))
   const shown = statusLines(on as On)
-  await $.command.run({ command: 'sessions', args: '' })
+  await $.command.run(SESSIONS_TYPED)
   exitCode = 1
-  await $.command.run({ command: 'sessions', args: '' })
+  await $.command.run(SESSIONS_TYPED)
   expect(shown).toEqual([BOARD.line])
   const ui = await $.ui.mount({ ...SESSIONS_PANE, surface: 'terminal' })
   expect((await ui.find({ type: 'Text', text: /ledger-export-3c/ }))?.text).toBe(BOARD.rows[0])
@@ -271,9 +283,9 @@ test('a board read that timed out leaves the line as it was', async ($, on) => {
   })
   on('ui.open', async () => ({ value: { isPlaced: true } }))
   const shown = statusLines(on as On)
-  await $.command.run({ command: 'sessions', args: '' })
+  await $.command.run(SESSIONS_TYPED)
   late = true
-  await $.command.run({ command: 'sessions', args: '' })
+  await $.command.run(SESSIONS_TYPED)
   expect(shown).toEqual([BOARD.line])
 })
 
@@ -302,7 +314,7 @@ test('a read of one of this plugin\'s skills is counted, and another plugin\'s i
   inASession(on as On)
   const asked: string[] = []
   on('process.run', async ($$: unknown, e: { argv: readonly string[] }) => {
-    asked.push(e.argv[e.argv.length - 1])
+    asked.push(e.argv[e.argv.length - 1] ?? '')
     return { value: { exitCode: 0, stdout: '{}', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('skill.prompt', async (_: unknown, e: { text: string }) => ({ text: e.text }))
