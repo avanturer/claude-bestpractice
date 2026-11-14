@@ -31,10 +31,12 @@ class TestTheCount(GateCase):
         skilluse.used(self.ctx(), "llm-first-code")
         self.assertIn("llm-first-code 2", skilluse.line(self.ctx()))
 
-    def test_another_plugins_skill_is_not_ours_to_count(self):
+    def test_another_plugins_skill_is_counted_as_its_own_not_as_ours(self):
+        """Every skill is counted since #364; this plugin's line still names only its own."""
         self.start()
-        skilluse.used(self.ctx(), "commit")
+        skilluse.used(self.ctx(), "commit", plugin="kit")
         self.assertNotIn("commit", skilluse.line(self.ctx()))
+        self.assertEqual((1, 0), skilluse.counts(self.ctx())["kit:commit"])
 
     def test_the_module_counts_through_the_bridge(self):
         self.start()

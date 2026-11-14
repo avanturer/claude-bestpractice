@@ -33,6 +33,12 @@ function inASession(on: On) {
   on('session.id', async () => ({ value: 'session-1' }))
 }
 
+// The count is asked unawaited, so an expansion never waits on a process: a test gives that
+// work the turns of the event loop it takes, and no more.
+async function settled(done: () => boolean) {
+  for (let turn = 0; turn < 1_000 && !done(); turn += 1) await Promise.resolve()
+}
+
 function tools(names: string[]) {
   return async () => ({ value: names.map((name) => ({ name, description: '', mcp: name.startsWith('mcp__') })) })
 }
@@ -310,18 +316,39 @@ test('an older board answering after a newer one is not drawn over it', async ($
   expect(shown).toEqual([NEWER.line])
 })
 
-test('a read of one of this plugin\'s skills is counted, and another plugin\'s is not', async ($, on) => {
+test('every skill\'s expansion is counted, with the plugin, source and file it came from', async ($, on) => {
   inASession(on as On)
-  const asked: string[] = []
-  on('process.run', async ($$: unknown, e: { argv: readonly string[] }) => {
-    asked.push(e.argv[e.argv.length - 1] ?? '')
+  const asked: { what: string, request: Record<string, unknown> }[] = []
+  on('process.run', async ($$: unknown, e: { argv: readonly string[], init?: { stdin?: string } }) => {
+    asked.push({ what: e.argv[e.argv.length - 1] ?? '', request: JSON.parse(e.init?.stdin ?? '{}') })
     return { value: { exitCode: 0, stdout: '{}', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('skill.prompt', async (_: unknown, e: { text: string }) => ({ text: e.text }))
   const skill = (pluginName: string, name: string) => $.skill.prompt({
     skill: name, text: 'the skill', frontmatter: {}, source: 'plugin', pluginName,
+    path: `/cache/${pluginName}/skills/${name}/SKILL.md`,
   } as never)
   await skill('bestpractice', 'llm-first-code')
   await skill('superpowers', 'brainstorming')
-  expect(asked.filter((what) => what === 'skill').length).toBe(1)
+  await settled(() => asked.length >= 2)
+  const counted = asked.filter((call) => call.what === 'skill').map((call) => call.request)
+  expect(counted.length).toBe(2)
+  expect(counted[1]).toMatchObject({ skill: 'brainstorming', plugin: 'superpowers', source: 'plugin',
+    path: '/cache/superpowers/skills/brainstorming/SKILL.md' })
+})
+
+test('a skill followed by reading its file is counted, and any other read is not', async ($, on) => {
+  inASession(on as On)
+  const asked: { what: string, request: Record<string, unknown> }[] = []
+  on('process.run', async ($$: unknown, e: { argv: readonly string[], init?: { stdin?: string } }) => {
+    asked.push({ what: e.argv[e.argv.length - 1] ?? '', request: JSON.parse(e.init?.stdin ?? '{}') })
+    return { value: { exitCode: 0, stdout: '{}', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('tool.call', { tool: 'Read' }, async () => ({ result: { type: 'text', file: { content: 'x' } } }))
+  for (const file_path of ['/work/repo/.claude/skills/scraper/SKILL.md', '/work/repo/.claude/commands/stack.md',
+    '/work/repo/README.md']) {
+    await $.tool.call({ tool: 'Read', file_path } as never)
+  }
+  expect(asked.filter((call) => call.what === 'skill-read').map((call) => call.request.path))
+    .toEqual(['/work/repo/.claude/skills/scraper/SKILL.md', '/work/repo/.claude/commands/stack.md'])
 })

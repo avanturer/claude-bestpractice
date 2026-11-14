@@ -32,6 +32,8 @@ const TIERS = ['haiku', 'sonnet', 'opus', 'fable']
 // end of every turn: a session that only waits still sees a sibling's pull request come in.
 const BOARD_PANE = 'sessions'
 const BOARD_EVERY_MS = 60_000
+// A skill's file or a command's: what a session reads to follow one without the Skill tool.
+const SKILL_FILE = /(?:^|[\\/])SKILL\.md$|[\\/]\.claude[\\/]commands[\\/].+\.md$/
 
 type BashRecord = {
   stdout?: string
@@ -255,12 +257,21 @@ export const register: Register = (on) => {
     return element(h(Box, { flexDirection: 'column' }, ...rows.map((row) => h(Text, null, row))))
   }).catch(async ($, e, next) => next(e))
 
-  // Each time one of this plugin's skills is read, counted where `claude-bp status` reports it:
-  // a skill nobody's request reaches is always-on context bought for nothing (decision 0080).
+  // Each time a skill is read, counted where `claude-bp status` reports it: a skill nobody's
+  // request reaches is always-on context bought for nothing (decision 0080), and every skill a
+  // session can load is counted, not only this plugin's (#364).
   on('skill.prompt', async ($, e, next) => {
     const expanded = await next(e)
-    if (e.pluginName === $.plugin.name) void ask($, 'skill', { skill: e.skill })
+    void ask($, 'skill', { skill: e.skill, plugin: e.pluginName ?? '', source: e.source, path: e.path ?? '' })
     return expanded
+  }).catch(async ($, e, next) => next(e))
+
+  // A skill followed by reading its file, which no `skill.prompt` sees: a rule that says
+  // "read .claude/skills/x/SKILL.md" sends sessions there, 17 times in a month for one.
+  on('tool.call', { tool: 'Read' }, async ($, e, next) => {
+    const ran = await next(e)
+    if (succeeded(ran) && SKILL_FILE.test(e.file_path)) void ask($, 'skill-read', { path: e.file_path })
+    return ran
   }).catch(async ($, e, next) => next(e))
 
   on('agent.spawn', async ($, e, next) => {
