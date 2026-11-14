@@ -616,7 +616,7 @@ def main() -> None:
     loose = migrate.line(ctx)
     body += f"\n{loose}" if loose else ""
     # Empty on every session that is running what is installed, which is all of them
-    # except the ones that just updated and did not restart.
+    # except the ones that just updated and have not reloaded or restarted.
     body += upgrade.stale_line()
 
     hookio.emit_context("SessionStart", body)

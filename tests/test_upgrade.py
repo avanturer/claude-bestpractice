@@ -23,6 +23,17 @@ from claude_bestpractice import PLUGIN, upgrade
 
 TOOL = REPO_ROOT / "tools" / "check_shipped.py"
 
+# What moves a running session onto the version on disk. `/reload-plugins` switches the hook
+# commands and the hooks module to the new version's directory and keeps the session; a
+# restart is the fallback. Monitors are the one component a reload does not switch.
+RELOAD, RESTART = "`/reload-plugins`", "restart Claude Code"
+
+
+def assert_reload_then_restart(case: unittest.TestCase, said: str) -> None:
+    case.assertIn(RELOAD, said)
+    case.assertIn(RESTART, said)
+    case.assertLess(said.index(RELOAD), said.index(RESTART))
+
 
 def git(args: list[str], cwd: Path) -> str:
     return subprocess.run(
@@ -152,7 +163,7 @@ class TestRunningIsNotInstalled(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = self._cache(tmp, "1.0.1", "1.0.2")
             self.assertEqual(upgrade.superseded_by(root), "1.0.2")
-            self.assertIn("Restart", upgrade.stale_line(root))
+            assert_reload_then_restart(self, upgrade.stale_line(root))
 
     def test_an_older_sibling_is_not_a_reason_to_say_anything(self):
         import tempfile
@@ -184,7 +195,7 @@ class TestRunningIsNotInstalled(unittest.TestCase):
             root = self._cache(tmp, "1.0.1")
             (root / upgrade.ORPHAN_MARKER).write_text("1785789442308", encoding="utf-8")
             self.assertTrue(upgrade.orphaned(root))
-            self.assertIn("Restart", upgrade.stale_line(root))
+            assert_reload_then_restart(self, upgrade.stale_line(root))
 
     def test_the_running_copy_is_found_by_walking_up_from_the_code(self):
         """The whole mechanism rests on this: the version is the directory name, and
@@ -315,7 +326,7 @@ class TestACopyOutsideTheCacheIsStillTold(unittest.TestCase):
         """`root=None` here is the checkout case: no version directory to compare against."""
         said = upgrade.stale_line(root=None, home=self.cache("99.0.0"))
         self.assertIn("99.0.0", said)
-        self.assertIn("Restart", said)
+        assert_reload_then_restart(self, said)
 
     def test_nothing_is_said_when_nothing_is_newer(self):
         self.assertEqual("", upgrade.stale_line(root=None, home=self.cache()))
@@ -362,7 +373,20 @@ class TestAnUpdateMidSessionReachesTheSession(RepoCase):
         self.prompt()
         said = " ".join(self.notes())
         self.assertIn("99.0.0", said)
-        self.assertIn("Restart", said)
+        assert_reload_then_restart(self, said)
+
+    def test_status_says_what_the_board_says(self):
+        """`claude-bp status` kept its own wording of this line and could name a remedy the
+        board had stopped naming. It prints the board's line, so the two cannot drift."""
+        self.unpack("99.0.0")
+        proc = subprocess.run(
+            [sys.executable, str(BIN / "claude-bp"), "status"],
+            capture_output=True, text=True, cwd=str(self.repo), timeout=120,
+            env={**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home)},
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn(upgrade.stale_line(home=self.home).strip(), proc.stdout)
+        assert_reload_then_restart(self, proc.stdout)
 
     def test_nothing_is_said_when_nothing_is_newer(self):
         self.prompt()

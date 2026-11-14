@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-2.16.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.16.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-3017%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -680,10 +680,12 @@ claude plugin marketplace update claude-bestpractice
 claude plugin update bestpractice@claude-bestpractice
 ```
 
-Then **restart Claude Code**. The update lands in a new directory and every session
-already running keeps executing the old copy until it is restarted — the CLI says
-`Restart to apply changes.` once and never mentions it again. A session that is running
-superseded code now says so on its own board, which is the only place you would find out.
+Then run **`/reload-plugins`** in each session that is already open, or restart Claude
+Code. The update lands in a new directory and every session already running keeps executing
+the old copy until it reloads — the CLI says `Restart to apply changes.` once and never
+mentions it again. The reload moves this plugin's gates and its hooks module to the new
+version. A session that is running superseded code now says so on its own board, which is
+the only place you would find out.
 
 The second command uses the **qualified** `name@marketplace` form. `install` accepted the
 short name and `update` did not — the short form failed with `Plugin "claude-bestpractice"
