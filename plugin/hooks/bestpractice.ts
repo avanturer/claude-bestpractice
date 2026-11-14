@@ -22,6 +22,9 @@ const NOT_FOUND = new Set([127, 9009])
 
 const PARALLEL_SEARCH = /^mcp__.*parallel.*__web_search$/i
 const EXA_SEARCH = /^mcp__.*exa.*__web_search(?:_advanced)?_exa$/i
+// What `$.tool.call` takes for a tool that is not built in. Both patterns above match only such a
+// name, so a name they match is one.
+type McpToolName = `mcp__${string}__${string}`
 // How long a search through Parallel lets the same loop ask Exa without being sent back.
 const PARALLEL_FIRST_MS = 15 * 60_000
 // How many of WebSearch's allowed domains become `site:` queries of their own.
@@ -92,6 +95,10 @@ function tierOf(model: string): number {
 
 function loopOf(e: { agentId?: string }): string {
   return e.agentId ?? ''
+}
+
+function mcpToolNamed(tools: readonly { name: string }[], pattern: RegExp): McpToolName | undefined {
+  return tools.map((tool) => tool.name).find((name): name is McpToolName => pattern.test(name))
 }
 
 function searchQueries(query: string, allowed: readonly string[] | undefined): string[] {
@@ -165,8 +172,8 @@ export const register: Register = (on) => {
     const settings = await ask($, 'settings', {})
     if (settings.route_search !== true) return next(e)
     const tools = await $.tool.list()
-    const parallel = tools.find((tool) => PARALLEL_SEARCH.test(tool.name))?.name
-    const exa = tools.find((tool) => EXA_SEARCH.test(tool.name))?.name
+    const parallel = mcpToolNamed(tools, PARALLEL_SEARCH)
+    const exa = mcpToolNamed(tools, EXA_SEARCH)
     const started = Date.now()
     if (parallel) {
       const found = await $.tool.call({
@@ -192,7 +199,7 @@ export const register: Register = (on) => {
 
   on('tool.call', { tool: EXA_SEARCH }, async ($, e, next) => {
     if (Date.now() - (searchedThroughParallel.get(loopOf(e)) ?? 0) < PARALLEL_FIRST_MS) return next(e)
-    const parallel = (await $.tool.list()).find((tool) => PARALLEL_SEARCH.test(tool.name))?.name
+    const parallel = mcpToolNamed(await $.tool.list(), PARALLEL_SEARCH)
     if (!parallel) return next(e)
     const settings = await ask($, 'settings', {})
     if (settings.route_search !== true) return next(e)
@@ -239,7 +246,7 @@ export const register: Register = (on) => {
   on('ui.render', { component: 'Pane', requestId: BOARD_PANE }, async ($, e) => {
     const { Box, Text } = $.ui.resolve(e)
     const rows = boardRows.length > 0 ? boardRows : ['No other session, pull request or red suite here.']
-    return h(Box, { flexDirection: 'column' }, ...rows.map((row) => h(Text, null, row)))
+    return Box({ flexDirection: 'column', children: rows.map((row) => Text({ children: [row] })) })
   }).catch(async ($, e, next) => next(e))
 
   // Each time one of this plugin's skills is read, counted where `claude-bp status` reports it:

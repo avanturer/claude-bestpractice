@@ -742,7 +742,8 @@ tool call, so a dependency tree is latency, an extra failure mode and a supply-c
 surface for the component whose whole job is to be trustworthy. Enforced in CI.
 
 Tested on Python 3.9, 3.11 and 3.13. `claude plugin validate --strict` passes against
-Claude Code 2.1.295, and `make check` asks the CLI again on every run (`tools/check_manifests.py`).
+Claude Code 2.1.325, which type-checks the hooks module too, and `make check` asks the CLI again
+on every run (`tools/check_manifests.py`).
 
 Everything works on any recent Claude Code; two features need a floor, and both fail
 quiet rather than loud, which is why they are written down:
