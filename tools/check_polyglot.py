@@ -31,6 +31,9 @@ from pathlib import Path
 # Sibling module; `tools/` is on sys.path because these run as scripts from there.
 import _scope
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "plugin" / "lib"))
+from claude_bestpractice import skills  # noqa: E402
+
 CHECKED_SUFFIXES = {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".go", ".rs", ".java", ".kt"}
 
 SKIP_PARTS = {
@@ -158,10 +161,22 @@ def all_files() -> list[Path]:
     return [p for p in ROOT.rglob("*") if p.is_file() and not _scope.is_inside(p, nested)]
 
 
+def copied(path: Path) -> bool:
+    """A file of a skill a pack copied from another repository. Its code is the upstream's:
+    rewritten to these rules it would drift from the commit the weekly upstream check compares
+    it with, and a fix it needs goes in its patch (decision 0101)."""
+    for folder in path.parents:
+        if folder == ROOT or folder == folder.parent:
+            return False
+        if (folder / "SKILL.md").is_file():
+            return skills.upstream(folder / "SKILL.md") is not None
+    return False
+
+
 def eligible(path: Path) -> bool:
     if path.suffix not in CHECKED_SUFFIXES or not path.is_file():
         return False
-    if SKIP_PARTS & set(path.parts):
+    if SKIP_PARTS & set(path.parts) or copied(path):
         return False
     if re.search(r"\.(?:min|bundle|generated|d)\.", path.name):
         return False

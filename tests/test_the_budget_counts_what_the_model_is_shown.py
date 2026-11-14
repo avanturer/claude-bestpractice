@@ -42,3 +42,28 @@ class TestWhatIsCounted(unittest.TestCase):
     def test_one_kept_off_the_list_costs_nothing(self):
         self.assertIn("~0/400 always-on tokens across 0 component(s)",
                       self.counted("disable-model-invocation: true\n"))
+
+
+class TestWhatCuratedBringsIsCappedTogether(unittest.TestCase):
+    """`curated` brings every pack to every session of every project (decision 0101): each pack
+    under its own cap can still add up past what a session should pay for advice."""
+
+    def test_packs_under_their_own_cap_over_the_total_are_refused(self):
+        description = " ".join(["word"] * 38)
+        printed = io.StringIO()
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / "plugin").mkdir()
+            for pack in ("a", "b", "c"):
+                for number in range(4):
+                    folder = root / "packs" / pack / "skills" / f"s{number}"
+                    folder.mkdir(parents=True)
+                    (folder / "SKILL.md").write_text(
+                        f"---\nname: s{number}\ndescription: {description}\n---\n\nbody\n")
+            with mock.patch.object(check_budget, "PLUGIN", root / "plugin"), \
+                    mock.patch.object(check_budget, "ROOT", root), \
+                    contextlib.redirect_stdout(printed):
+                code = check_budget.main()
+        self.assertEqual(1, code)
+        self.assertIn("packs together", printed.getvalue())
+        self.assertNotIn("pack a:", printed.getvalue())

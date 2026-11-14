@@ -1,0 +1,18 @@
+{
+  "name": "research",
+  "version": "1.0.0",
+  "description": "Curated research skills: numbers computed over matching windows, conclusions from customers held to their evidence, and a competitor's moves dated from public sources. A pack of claude-bestpractice; `curated` brings every pack.",
+  "author": {
+    "name": "avanturer"
+  },
+  "homepage": "https://github.com/avanturer/claude-bestpractice/tree/main/packs/research",
+  "license": "MIT",
+  "keywords": [
+    "analytics",
+    "customer-research",
+    "competitors",
+    "research",
+    "skills"
+  ],
+  "repository": "https://github.com/avanturer/claude-bestpractice"
+}

@@ -140,7 +140,7 @@ def vanished(ctx: GitContext, listed: list[skills.Listed]) -> list[tuple[str, st
         if name in loadable or f"{pack.partition('@')[0]}:{name}" in loadable:
             continue
         gone.append((name, f"moved to the `{pack.partition('@')[0]}` pack: `claude plugin install "
-                           f"{pack} --scope project`" if pack else
+                           f"{skills.CURATED}` brings every pack" if pack else
                            f"last loaded from {origins.get(name) or 'a file not recorded'}"))
     return gone
 

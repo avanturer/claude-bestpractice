@@ -1,7 +1,7 @@
 {
   "name": "design",
-  "version": "1.0.0",
-  "description": "Curated design skills: pages and interfaces that do not read as machine-generated. A pack of claude-bestpractice, enabled per project.",
+  "version": "1.0.1",
+  "description": "Curated design skills: pages and interfaces that do not read as machine-generated. A pack of claude-bestpractice; `curated` brings every pack.",
   "author": {
     "name": "avanturer"
   },

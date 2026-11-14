@@ -1,0 +1,17 @@
+{
+  "name": "mobile",
+  "version": "1.0.0",
+  "description": "Curated skills for Expo and React Native apps: upgrading the SDK and keeping an app fast. A pack of claude-bestpractice; `curated` brings every pack.",
+  "author": {
+    "name": "avanturer"
+  },
+  "homepage": "https://github.com/avanturer/claude-bestpractice/tree/main/packs/mobile",
+  "license": "MIT",
+  "keywords": [
+    "expo",
+    "react-native",
+    "mobile",
+    "skills"
+  ],
+  "repository": "https://github.com/avanturer/claude-bestpractice"
+}

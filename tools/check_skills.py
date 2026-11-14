@@ -31,8 +31,7 @@ def main() -> int:
     paths = sorted([*(ROOT / "plugin").rglob("SKILL.md"), *(ROOT / "packs").glob("*/skills/*/SKILL.md")])
     problems = [problem for path in paths for problem in skills.malformed(path, today)]
     ctx = resolve(ROOT)
-    shipped = [skills.Listed(path.parent.name, skills.PROJECT, "plugin", path) for path in paths]
-    problems += skillcheck.lines(ctx, skillcheck.check(ctx, shipped))
+    problems += skillcheck.lines(ctx, skillcheck.shipped(ctx, paths))
     late = skills.overdue([skill for skill in map(skills.read, paths) if skill], today)
     for skill in late:
         print(f"due: {skill.path.relative_to(ROOT)} was reviewed {skill.reviewed} and is owed "

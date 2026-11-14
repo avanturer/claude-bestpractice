@@ -1,0 +1,17 @@
+{
+  "name": "engineering",
+  "version": "1.0.0",
+  "description": "Curated engineering skills: debugging from evidence, and hardening code against attack. A pack of claude-bestpractice; `curated` brings every pack.",
+  "author": {
+    "name": "avanturer"
+  },
+  "homepage": "https://github.com/avanturer/claude-bestpractice/tree/main/packs/engineering",
+  "license": "MIT",
+  "keywords": [
+    "debugging",
+    "security",
+    "engineering",
+    "skills"
+  ],
+  "repository": "https://github.com/avanturer/claude-bestpractice"
+}

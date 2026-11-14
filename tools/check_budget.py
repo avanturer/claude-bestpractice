@@ -12,7 +12,8 @@ three of them cost ~90 tokens on every turn while this said the plugin was under
 
 Caps enforced here:
   - total always-on            <= 400 tokens
-  - each pack's always-on      <= 600 tokens (a pack is its own plugin, enabled per project)
+  - each pack's always-on      <= 600 tokens (a pack is its own plugin)
+  - all packs together         <= 1,200 tokens (`curated` brings every one to every session)
   - per-skill description      <= 40 words
   - per-skill body             <= 5,000 tokens (the post-compaction re-injection cap)
   - hook entries               <= 12
@@ -31,10 +32,14 @@ PLUGIN = ROOT / "plugin"
 TOKENS_PER_WORD = 3.06
 TOKENS_PER_COMPONENT = 15
 ALWAYS_ON_CAP = 400
-# A pack (`packs/<name>/`) is enabled on its own, per project, and its cost is itemised under
-# its own name in `/plugin` and `/usage`. Roughly eight skills: `paths:` does not lower it,
-# measured with `claude plugin details` on 2.1.325 (~63 tokens without, ~64 with).
+# A pack (`packs/<name>/`) is a plugin of its own, and its cost is itemised under its own name
+# in `/plugin` and `/usage`. Roughly eight skills: `paths:` does not lower it, measured with
+# `claude plugin details` on 2.1.325 (~63 tokens without, ~64 with).
 PACK_ALWAYS_ON_CAP = 600
+# `curated` depends on every pack and is installed at user scope (decision 0101), so the packs
+# together are paid in every session of every project, whatever it builds. A pack added past
+# this has to take a skill's place.
+CURATED_ALWAYS_ON_CAP = 1_200
 DESCRIPTION_WORD_CAP = 40
 SKILL_BODY_TOKEN_CAP = 5_000
 HOOK_ENTRY_CAP = 12
@@ -119,6 +124,9 @@ def main() -> int:
         if cost > PACK_ALWAYS_ON_CAP:
             problems.append(f"pack {name}: always-on is ~{cost:.0f} tokens, cap is "
                             f"{PACK_ALWAYS_ON_CAP}")
+    if sum(packs.values()) > CURATED_ALWAYS_ON_CAP:
+        problems.append(f"packs together: always-on is ~{sum(packs.values()):.0f} tokens, which "
+                        f"`curated` brings to every session; cap is {CURATED_ALWAYS_ON_CAP}")
 
     hooks_file = PLUGIN / "hooks" / "hooks.json"
     entries = 0
@@ -155,6 +163,7 @@ def main() -> int:
         f"budget: ~{always_on:.0f}/{ALWAYS_ON_CAP} always-on tokens across {components} "
         f"component(s), {entries}/{HOOK_ENTRY_CAP} hook entries"
         + "".join(f"; pack {name} ~{cost:.0f}/{PACK_ALWAYS_ON_CAP}" for name, cost in packs.items())
+        + f"; packs together ~{sum(packs.values()):.0f}/{CURATED_ALWAYS_ON_CAP}"
     )
     return 0
 

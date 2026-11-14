@@ -3,13 +3,14 @@
 
 A pack ships copies, never links: a copy is reviewed, held to this repository's checks and
 trimmed to its budget, and a link would load whatever the upstream pushed last, with the
-agent's permissions (decision 0100). The cost of a copy is that it ages. Each one says where
+agent's permissions (decision 0101). The cost of a copy is that it ages. Each one says where
 it came from and at which commit (`metadata.upstream`, `metadata.commit`), and this asks
 GitHub whether the upstream's folder has moved past that commit.
 
-Run weekly by `.github/workflows/upstream.yml`, which files one issue for what it finds. A
-change upstream is read and taken in by a pull request like any other change: never merged on
-its own, because a skill's text is instructions to an agent.
+Run weekly by `.github/workflows/upstream.yml`, which files one issue for what it finds, each
+line with the command that rebuilds the copy from its entry in `tools/vendored.json`. A change
+upstream is read and taken in by a pull request like any other change: never merged on its own,
+because a skill's text is instructions to an agent.
 
 Exit 0: nothing moved. 1: something moved, listed. 2: GitHub could not be asked.
 """
@@ -89,7 +90,8 @@ def main(get: Fetch = fetch) -> int:
             failed.append(f"- {rel}: {owner}/{repo} could not be asked ({exc})")
             continue
         if said:
-            changed.append(f"- {rel}: {said}")
+            changed.append(f"- {rel}: {said}. Refresh: `python3 tools/vendor_skill.py "
+                           f"{path.parent.name} --checkout <a clone of {owner}/{repo}>`")
     for line in changed + failed:
         print(line)
     print(f"upstream: {len(copies)} cop(ies), {len(changed)} changed upstream, "
