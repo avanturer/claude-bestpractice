@@ -6,20 +6,28 @@ Curated skills reach every project from one install. `curated@claude-bestpractic
 every pack: installed once at user scope, it brings each pack to every project on the machine,
 including ones started later. The same update adds a pack `curated` starts listing, and a pack
 retired from the marketplace is uninstalled at the next session start (decision 0101,
-superseding 0100). Three packs join `design`, all copied at a commit from their upstreams.
+superseding 0100). Four packs join `design`, all copied at a commit from their upstreams.
 
 - **`curated` is the one install.** `claude plugin install curated@claude-bestpractice`
-  installs `design`, `engineering`, `growth` and `mobile` at user scope, measured on Claude Code
+  installs `design`, `engineering`, `growth`, `mobile` and `research` at user scope, measured on Claude Code
   2.1.325 in a throwaway HOME. A project that wants none of a pack sets it to `false` in its own
-  `enabledPlugins`. Together the packs add about 420 tokens to each session (`claude plugin
+  `enabledPlugins`. Together the packs add about 780 tokens to each session (`claude plugin
   details`), and `make budget` caps all packs at 1,200 tokens.
 - **New packs.** `engineering`: `debugging-and-error-recovery` and `security-and-hardening`
-  (addyosmani/agent-skills, MIT). `growth`: `aso` (coreyhaines31/marketingskills, MIT).
+  (addyosmani/agent-skills, MIT). `growth`: `aso`, `video`, `marketing-loops` and
+  `influencer-marketing`. `research`: `analytics`, `customer-research` and
+  `reverse-engineer-marketing`. Those seven are from coreyhaines31/marketingskills, MIT.
   `mobile`: `expo-upgrade` (expo/skills, MIT) and `react-native-best-practices`
-  (callstackincubator/agent-skills, MIT). Where a step of the upstream's would be wrong here,
+  (callstackincubator/agent-skills, MIT). They were picked after reading about 280 skills
+  against a Russia-only consumer app. Appeeky's 64 rest on Apple Search Ads, Meta and a paid
+  API, LidFly's on a hosted service that holds the founder's tokens, and most of the rest on
+  US channels. Where a step of the upstream's would be wrong here,
   the copy opens with a short section saying so: the security skill leaves a history purge
   after a leaked secret to the founder, and the mobile skills send a change to native code to a
-  store build, never over the air.
+  store build, never over the air. `influencer-marketing` names the ERID and the ban on paid
+  ads on Meta's platforms in Russia before its FTC steps. `reverse-engineer-marketing`'s review
+  counter matched `[a-z]` only and found nothing in a Russian review; its copy is patched to
+  count words in any alphabet.
 - **A pack leaves by leaving the marketplace.** The marketplace sets
   `forceRemoveDeletedPlugins`, so a deleted entry is uninstalled from every install at the next
   session start. Measured: without the flag a delisted pack stays installed and fails to load;
@@ -28,14 +36,21 @@ superseding 0100). Three packs join `design`, all copied at a commit from their 
 - **`bestpractice` depends on no pack.** A dependency that cannot load keeps the plugin that
   depends on it disabled, so one pack turned off in a project would turn off every gate there.
   A test holds this.
-- **`tools/vendor_skill.py` makes a copy.** It works from a clone of the upstream. It rewrites
-  the frontmatter, keeping the functional keys and adding the provenance `make skills` requires.
-  It copies the licence text and brings in any file the skill links outside its folder, and it
-  refuses a licence that does not allow a changed copy. Images are left out, each replaced by
-  its caption: one upstream's thirteen screenshots were 6.2 MB against an 18 MB history, which
-  every clone of the marketplace would carry, and no session acts on a profiler screenshot. `make skills` now checks shipped skills
-  for links to their own files that are missing. It no longer looks in this repository for
-  paths and targets the skill names in other projects.
+- **`tools/vendor_skill.py NAME` makes the copy `tools/vendored.json` describes.** Every copy
+  has an entry: upstream, pack, licence, description, guard, the sections moved out of a
+  SKILL.md over the 5,000-token cap into `references/`, and a patch. A refresh is the same
+  command on a newer clone, and the five earlier copies rebuilt from their entries byte for
+  byte. The weekly upstream issue names the command, and a test holds every copy to its entry.
+  It works from a clone of the upstream. It rewrites the frontmatter, keeping the functional
+  keys and adding the provenance `make skills` requires. It copies the licence text and brings
+  in any file the skill links outside its folder, and it refuses a licence that does not allow a
+  changed copy. Images are left out, each replaced by its caption: one upstream's thirteen
+  screenshots were 6.2 MB against an 18 MB history, which every clone of the marketplace would
+  carry, and no session acts on a profiler screenshot. `make skills` now checks shipped skills
+  for links to their own files that are missing. It no longer looks in this repository for paths
+  and targets the skill names in other projects. `make polyglot` leaves a copy's code to its
+  upstream: rewritten to our rules it would drift from the commit the weekly job compares, so a
+  fix goes in the copy's patch.
 - **The `landing-not-slop` notice names `curated`**: `claude plugin install
   curated@claude-bestpractice` brings every pack. The `design` pack is 1.0.1, its description
   no longer saying it is enabled per project.

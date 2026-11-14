@@ -1,6 +1,6 @@
 ---
 title: Curated skills ship as packs, and every pack comes to every project through `curated`
-paths: packs, .claude-plugin/marketplace.json, tools/check_budget.py, tools/check_shipped.py, tools/check_skills.py, tools/check_upstream.py, tools/vendor_skill.py, .github/workflows/upstream.yml, plugin/lib/claude_bestpractice/skills.py, plugin/lib/claude_bestpractice/skillcheck.py
+paths: packs, .claude-plugin/marketplace.json, tools/check_budget.py, tools/check_shipped.py, tools/check_skills.py, tools/check_upstream.py, tools/vendor_skill.py, tools/vendored.json, .github/workflows/upstream.yml, plugin/lib/claude_bestpractice/skills.py, plugin/lib/claude_bestpractice/skillcheck.py
 date: 2026-11-14
 supersedes: "0100"
 ---
@@ -15,9 +15,9 @@ scope**, so each comes to every project; a project turns one off in its `enabled
 **`bestpractice` depends on no pack. A pack leaves only by leaving the marketplace**, which has
 `forceRemoveDeletedPlugins: true`.
 
-**A skill from another repository is copied with `tools/vendor_skill.py` at a commit, never
-linked:** upstream, commit, a licence that allows a changed copy and its text, and the files it
-links outside its folder. A weekly job files an issue when the upstream moves.
+**A skill from another repository is copied at a commit, never linked, from its entry in
+`tools/vendored.json`:** upstream, commit, a licence that allows a changed copy and its text,
+what was moved or patched. A weekly job files an issue when the upstream moves.
 
 **A skill is admitted for a gap no first-party skill and no gate covers, and retired on its
 read count, which is the founder's call.**
@@ -39,6 +39,6 @@ skill's always-on cost (~63 and ~64 tokens).
 - **`claude-seo` as a pack.** It carries a PostToolUse hook, and a pack carries none.
 
 ## Cost accepted
-Every session pays for every pack, ~420 tokens by `claude plugin details`. Retiring a pack takes
+Every session pays for every pack, ~780 tokens by `claude plugin details`. Retiring a pack takes
 it from every install, a hand-installed one too. A new version waits for auto-update or
 `claude plugin update`.

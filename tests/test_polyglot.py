@@ -37,6 +37,22 @@ class PolyglotCase(RepoCase):
         }
 
 
+class TestACopiedSkillsCodeIsItsUpstreams(PolyglotCase):
+    """A pack's copy keeps its upstream's code; a fix goes in its patch (decision 0101)."""
+
+    SKILL = ('---\nname: s\ndescription: t\nmetadata:\n  reviewed: "2026-11-14"\n{}---\n\nbody\n')
+
+    def test_a_copys_script_is_not_held_to_these_rules(self):
+        self.write("packs/p/skills/s/SKILL.md", self.SKILL.format(
+            '  upstream: "github.com/acme/skills/skills/s"\n  commit: "' + "a" * 40 + '"\n'))
+        self.assertEqual(set(), self.rules_for("packs/p/skills/s/scripts/x.mjs", "try {\n  go();\n} catch (e) {}\n"))
+
+    def test_a_script_of_our_own_skill_is(self):
+        self.write("packs/p/skills/s/SKILL.md", self.SKILL.format(""))
+        self.assertIn("swallowed-exception",
+                      self.rules_for("packs/p/skills/s/scripts/x.mjs", "try {\n  go();\n} catch (e) {}\n"))
+
+
 class TestErrorHandling(PolyglotCase):
     def test_an_empty_catch_is_caught_in_typescript(self):
         self.assertIn(

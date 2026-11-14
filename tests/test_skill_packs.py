@@ -189,7 +189,13 @@ class TestACopySaysWhereItCameFrom(unittest.TestCase):
 
 
 class TestACopyIsMadeByTheVendorTool(unittest.TestCase):
-    """`tools/vendor_skill.py` makes a copy `make skills` accepts as it stands."""
+    """`tools/vendor_skill.py NAME` makes the copy `tools/vendored.json` describes, one `make
+    skills` accepts as it stands."""
+
+    BODY = ("See [the checklist](../../references/checklist.md) and "
+            "![the flow](images/flow.png).\n\n## Steps\n\nDo it.\n\n"
+            "## Tools\n\n```md\n## Not a heading inside a fence\n```\n\nUse a profiler.\n\n"
+            "## Related Skills\n\nnone\n")
 
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp())
@@ -201,13 +207,14 @@ class TestACopyIsMadeByTheVendorTool(unittest.TestCase):
         (source / "references" / "images" / "flamegraph.png").write_bytes(b"\x89PNG")
         (source / "references" / "profile.md").write_text(
             "Record a trace.\n\n![A flame graph of one frame](images/flamegraph.png)\n")
+        (source / "scripts").mkdir()
+        (source / "scripts" / "count.mjs").write_text("const words = /[a-z]+/g;\n")
         (self.checkout / "references").mkdir()
         (self.checkout / "references" / "checklist.md").write_text("- [ ] one\n")
         (self.checkout / "LICENSE").write_text("MIT License\n")
         (source / "SKILL.md").write_text(
             "---\nname: harden\ndescription: an upstream description\nlicense: MIT\n"
-            "allowed-tools: Read, Grep\nmetadata:\n  author: someone\n---\n\n"
-            "See [the checklist](../../references/checklist.md).\n")
+            "allowed-tools: Read, Grep\nmetadata:\n  author: someone\n---\n\n" + self.BODY)
         run = lambda *args: subprocess.run(["git", *args], cwd=self.checkout, check=True,
                                            capture_output=True)
         run("init", "-q")
@@ -215,43 +222,107 @@ class TestACopyIsMadeByTheVendorTool(unittest.TestCase):
         run("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base")
         self.root = self.tmp / "repo"
         (self.root / "packs").mkdir(parents=True)
+        (self.root / "tools").mkdir()
         self.copy = self.root / "packs" / "engineering" / "skills" / "harden"
         self.vendor = tool("vendor_skill")
+        self.entry = {"repo": "acme/skills", "path": "skills/harden", "pack": "engineering",
+                      "license": "MIT", "recheck_days": 60, "description": "Harden code."}
 
-    def vendored(self, *extra: str) -> int:
-        argv = ["vendor_skill", "--checkout", str(self.checkout), "--repo", "acme/skills",
-                "--skill", "skills/harden", "--pack", "engineering",
-                "--description", "Harden code.", *extra]
+    def vendored(self, **extra) -> int:
+        manifest = self.root / "tools" / "vendored.json"
+        manifest.write_text(json.dumps({"harden": {**self.entry, **extra}}))
         with mock.patch.object(self.vendor, "ROOT", self.root), \
-                mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()):
-            return self.vendor.main()
+                mock.patch.object(self.vendor, "MANIFEST", manifest), \
+                contextlib.redirect_stdout(io.StringIO()):
+            return self.vendor.main(["harden", "--checkout", str(self.checkout)])
+
+    def text(self, name: str = "SKILL.md") -> str:
+        return (self.copy / name).read_text()
 
     def test_the_copy_passes_the_packs_checks(self):
-        self.assertEqual(0, self.vendored("--guard", "Not here."))
-        text = (self.copy / "SKILL.md").read_text()
+        self.assertEqual(0, self.vendored(guard="Not here."))
         self.assertEqual([], skills.malformed(self.copy / "SKILL.md", datetime.date.today()))
-        self.assertIn("allowed-tools: Read, Grep", text)
-        self.assertNotIn("author: someone", text)
-        self.assertIn("## Before following this here\n\nNot here.", text)
+        self.assertIn("allowed-tools: Read, Grep", self.text())
+        self.assertIn('recheck-after-days: "60"', self.text())
+        self.assertNotIn("author: someone", self.text())
+        self.assertIn("## Before following this here\n\nNot here.", self.text())
         self.assertTrue((self.copy / "LICENSE").is_file())
         self.assertFalse((self.copy / "agents").exists())
 
     def test_a_file_linked_outside_the_skills_folder_comes_with_it(self):
         self.vendored()
-        self.assertIn("](references/checklist.md)", (self.copy / "SKILL.md").read_text())
-        self.assertEqual("- [ ] one\n", (self.copy / "references" / "checklist.md").read_text())
+        self.assertIn("](references/checklist.md)", self.text())
+        self.assertEqual("- [ ] one\n", self.text("references/checklist.md"))
 
-    def test_an_image_is_left_out_and_its_caption_kept(self):
+    def test_an_image_is_left_out_and_its_caption_kept_in_every_file(self):
         self.vendored()
         self.assertFalse((self.copy / "references" / "images").exists())
+        self.assertIn("*Figure left out of this copy: the flow*", self.text())
         self.assertEqual("Record a trace.\n\n*Figure left out of this copy: A flame graph of one "
-                         "frame*\n", (self.copy / "references" / "profile.md").read_text())
+                         "frame*\n", self.text("references/profile.md"))
+
+    def test_a_section_moved_out_leaves_its_heading_and_the_file_it_went_to(self):
+        self.vendored(move_sections=["Tools"])
+        self.assertIn("## Tools\n\nRead `references/tools.md` for this part.\n\n## Related Skills",
+                      self.text())
+        self.assertEqual("# Tools\n\n```md\n## Not a heading inside a fence\n```\n\nUse a "
+                         "profiler.\n", self.text("references/tools.md"))
+        self.assertIn("## Steps\n\nDo it.", self.text())
+
+    def test_a_section_named_by_no_heading_or_by_several_is_refused(self):
+        """A `## ` line inside a fence is no heading."""
+        for wanted, count in (("Missing", 0), ("Not a heading", 0), ("", 3)):
+            with self.assertRaises(SystemExit) as raised:
+                self.vendored(move_sections=[wanted])
+            self.assertIn(f"{count} sections start", str(raised.exception.code))
+
+    def test_its_patch_is_applied_and_one_that_no_longer_fits_stops_the_run(self):
+        patch = self.root / "tools" / "harden.patch"
+        patch.write_text("--- a/scripts/count.mjs\n+++ b/scripts/count.mjs\n@@ -1 +1 @@\n"
+                         "-const words = /[a-z]+/g;\n+const words = /\\p{L}+/gu;\n")
+        self.vendored(patch="tools/harden.patch")
+        self.assertEqual("const words = /\\p{L}+/gu;\n", self.text("scripts/count.mjs"))
+        (self.checkout / "skills" / "harden" / "scripts" / "count.mjs").write_text("moved on\n")
+        with self.assertRaises(SystemExit) as raised:
+            self.vendored(patch="tools/harden.patch")
+        self.assertIn("no longer applies", str(raised.exception.code))
 
     def test_a_licence_that_does_not_allow_a_changed_copy_is_refused(self):
         with self.assertRaises(SystemExit) as raised:
-            self.vendored("--license", "CC-BY-NC-4.0")
+            self.vendored(license="CC-BY-NC-4.0")
         self.assertIn("does not allow a changed copy", str(raised.exception.code))
         self.assertFalse(self.copy.exists())
+
+
+class TestEveryCopyIsTheOneItsEntryDescribes(unittest.TestCase):
+    """A copy whose entry says something else would be undone by the next refresh."""
+
+    def setUp(self) -> None:
+        self.entries = json.loads((REPO_ROOT / "tools" / "vendored.json").read_text())
+        self.copies = {path.parent.name: path for path in PACKS.glob("*/skills/*/SKILL.md")
+                       if skills.upstream(path)}
+
+    def test_each_copy_has_an_entry_and_each_entry_a_copy(self):
+        self.assertEqual(sorted(self.copies), sorted(self.entries))
+
+    def test_each_entry_names_the_copys_pack_upstream_and_description(self):
+        for name, path in self.copies.items():
+            entry = self.entries[name]
+            owner, repo, folder, _ = skills.upstream(path)
+            self.assertEqual(entry["pack"], path.parts[-4], name)
+            self.assertEqual(entry["repo"], f"{owner}/{repo}", name)
+            self.assertEqual(entry["path"], folder, name)
+            self.assertEqual(entry["description"], skills.meta(path.read_text())["description"])
+
+    def test_each_patch_named_is_applied_in_the_shipped_copy(self):
+        for name, entry in self.entries.items():
+            if entry.get("patch"):
+                added = [line[1:] for line in (REPO_ROOT / entry["patch"]).read_text().splitlines()
+                         if line.startswith("+") and not line.startswith("+++")]
+                shipped = "".join(path.read_text() for path in self.copies[name].parent.rglob("*")
+                                  if path.is_file() and path.suffix in (".mjs", ".md", ".py"))
+                for line in added:
+                    self.assertIn(line, shipped, name)
 
 
 class TestAnUpstreamThatMovedIsNamed(unittest.TestCase):
@@ -285,6 +356,18 @@ class TestAnUpstreamThatMovedIsNamed(unittest.TestCase):
 
     def test_a_folder_gone_upstream_is_named(self):
         self.assertIn("is gone", self.moved(self.github([])))
+
+    def test_a_changed_copy_is_named_with_the_command_that_rebuilds_it(self):
+        printed = io.StringIO()
+        def get(url: str) -> object:
+            if "/compare/" in url:
+                return {"status": "ahead"}
+            return [{"sha": "c" * 40}] if "/commits?" in url else {"default_branch": "main"}
+        with contextlib.redirect_stdout(printed):
+            code = self.upstream.main(get)
+        self.assertEqual(1, code)
+        self.assertIn("Refresh: `python3 tools/vendor_skill.py video --checkout <a clone of "
+                      "coreyhaines31/marketingskills>`", printed.getvalue())
 
     def test_with_no_copy_in_any_pack_nothing_is_asked(self):
         asked = []

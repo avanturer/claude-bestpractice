@@ -621,11 +621,12 @@ claude plugin install curated@claude-bestpractice
 |---|---|
 | `design@claude-bestpractice` | `landing-not-slop`: marketing pages that do not read as generated |
 | `engineering@claude-bestpractice` | `debugging-and-error-recovery`, `security-and-hardening` (from addyosmani/agent-skills) |
-| `growth@claude-bestpractice` | `aso`: App Store and Google Play listings (from coreyhaines31/marketingskills) |
+| `growth@claude-bestpractice` | `aso`: App Store and Google Play listings; `video`: clips rendered from data; `marketing-loops`: recurring jobs an agent runs; `influencer-marketing`: paid creators (all from coreyhaines31/marketingskills) |
 | `mobile@claude-bestpractice` | `expo-upgrade` (from expo/skills), `react-native-best-practices` (from callstackincubator/agent-skills) |
+| `research@claude-bestpractice` | `analytics`: numbers over matching windows; `customer-research`: what reviews and interviews support; `reverse-engineer-marketing`: a competitor's moves, dated (all from coreyhaines31/marketingskills) |
 
 `curated` contains no skills of its own. It depends on every pack, so Claude Code installs each
-one beside it at user scope. Together they add about 420 tokens to each session (measured with
+one beside it at user scope. Together they add about 780 tokens to each session (measured with
 `claude plugin details` on 2.1.325). A project that wants none of a pack turns it off in its
 own settings:
 

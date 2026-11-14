@@ -1,33 +1,44 @@
 #!/usr/bin/env python3
-"""Copy a skill from another repository's checkout into a pack, as decision 0101 has it.
+"""Copy a skill from another repository's checkout into a pack, as `tools/vendored.json` says.
 
-    python3 tools/vendor_skill.py --checkout DIR --repo OWNER/NAME --skill PATH --pack PACK \
-        --description "…" [--guard "…"] [--recheck-days N] [--license SPDX]
+    python3 tools/vendor_skill.py NAME --checkout DIR
+
+Every copy a pack ships has an entry in `tools/vendored.json` under its name (decision 0101):
+`repo` (owner/name on github.com), `path` (the skill's folder there), `pack`, `license` (an
+SPDX id), `recheck_days`, `description`, and where needed `guard`, `move_sections` and `patch`.
+A copy is added by writing its entry and running this on a clone of the upstream, and refreshed,
+when the weekly upstream issue names it, by running this again on a newer clone. The entry is
+what makes a copy reproducible: what was cut, moved or patched is written there, so a refresh
+cannot quietly drop it.
 
 The skill lands in `packs/<pack>/skills/<name>/` with its frontmatter rewritten: the name, the
-description given (trimmed to this repository's 40 words), the upstream's own functional keys
+entry's description (this repository's 40 words at most), the upstream's own functional keys
 (`allowed-tools`, `argument-hint`, …), and the `metadata` `make skills` holds a copy to:
 `reviewed` (today), `recheck-after-days`, `upstream`, `commit` (the checkout's HEAD) and
-`license`. The upstream's licence text goes beside it as LICENSE. `--guard` puts a short
-section first in the body: what this repository's packs say before the upstream's text, where a
-step of it would be wrong in a project that ships over the air, say.
+`license`. The upstream's licence text goes beside it as LICENSE.
 
-A file the skill links outside its folder (`../../references/checklist.md`, a checklist kept at
-the upstream's root) is brought into its `references/`, and the link rewritten to it: a copy
-that left it behind sends a session to nothing, which `make skills` refuses.
+- `guard` puts a short section first in the body: where a step of the upstream's would be wrong
+  in a project this plugin serves, a store build in one that ships over the air, say.
+- `move_sections` names `## ` sections, each by the start of its heading, moved whole into
+  `references/<slug>.md`, the heading kept in place with a line naming the file. A SKILL.md
+  stays under 5,000 tokens, the most Claude Code puts back of a skill after compaction.
+- `patch` is a unified diff against the skill's folder, applied with `git apply`. A refresh it
+  no longer applies to fails, which is the moment to read what the upstream changed.
 
-What is left behind: folders for other agents (`agents/`, `evals/`), `POWER.md`, and images. A
-screenshot of a profiler is nothing a session acts on, and every clone of this marketplace
-would carry it forever: one upstream's thirteen were 6.2 MB beside an 18 MB history. Each image
-a copied Markdown file shows is replaced by its caption, marked as left out. The run
-refuses a licence outside `skills.REDISTRIBUTABLE` and a description over 40 words. It writes
-nothing outside `packs/`; read `git diff` before committing, as for any change.
+A file the skill links outside its folder (`../../references/checklist.md`, kept at the
+upstream's root) is brought into its `references/` and the link rewritten. Left behind: folders
+for other agents (`agents/`, `evals/`), `POWER.md`, and images, each image a copied Markdown
+file shows replaced by its caption: a profiler's screenshot is nothing a session acts on, and
+one upstream's thirteen were 6.2 MB beside an 18 MB history every clone of this marketplace
+carries. The run refuses a licence outside `skills.REDISTRIBUTABLE` and a description over 40
+words, and writes nothing outside `packs/`; read `git diff` before committing.
 """
 
 from __future__ import annotations
 
 import argparse
 import datetime
+import json
 import re
 import shutil
 import subprocess
@@ -39,6 +50,7 @@ sys.path.insert(0, str(ROOT / "plugin" / "lib"))
 
 from claude_bestpractice import skills  # noqa: E402
 
+MANIFEST = ROOT / "tools" / "vendored.json"
 LEFT_BEHIND = {"agents", "evals", "POWER.md"}
 IMAGES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 _IMAGE = re.compile(r"!\[([^\]]*)\]\([^)\s]+\.(?:png|jpe?g|gif|webp)\)", re.IGNORECASE)
@@ -89,65 +101,130 @@ def left_behind(_folder: str, names: list[str]) -> list[str]:
             if name in LEFT_BEHIND or Path(name).suffix.lower() in IMAGES]
 
 
+def captioned(text: str) -> str:
+    """`text` with each image it shows replaced by the image's caption."""
+    return _IMAGE.sub(lambda found: f"*Figure left out of this copy: {found.group(1)}*", text)
+
+
 def caption_images(target: Path) -> None:
     """Each image a copied Markdown file shows, replaced by its caption; folders the images
     alone filled, removed."""
     for page in target.rglob("*.md"):
         text = page.read_text(encoding="utf-8")
-        captioned = _IMAGE.sub(lambda found: f"*Figure left out of this copy: {found.group(1)}*",
-                               text)
-        if captioned != text:
-            page.write_text(captioned, encoding="utf-8")
+        if captioned(text) != text:
+            page.write_text(captioned(text), encoding="utf-8")
     for folder in sorted(target.rglob("*"), reverse=True):
         if folder.is_dir() and not any(folder.iterdir()):
             folder.rmdir()
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--checkout", type=Path, required=True)
-    parser.add_argument("--repo", required=True, help="owner/name on github.com")
-    parser.add_argument("--skill", required=True, help="the skill's folder inside the repository")
-    parser.add_argument("--pack", required=True)
-    parser.add_argument("--description", required=True)
-    parser.add_argument("--guard", default="")
-    parser.add_argument("--recheck-days", type=int, default=90)
-    parser.add_argument("--license", default="", help="SPDX id, when the frontmatter names none")
-    args = parser.parse_args()
+def section_starts(lines: list[str]) -> list[tuple[int, str]]:
+    """(index, heading) of each `## ` line outside a fenced block."""
+    starts: list[tuple[int, str]] = []
+    fence = ""
+    for index, line in enumerate(lines):
+        marker = line.lstrip()[:3]
+        if marker in ("```", "~~~"):
+            fence = "" if fence == marker else fence or marker
+        elif not fence and line.startswith("## "):
+            starts.append((index, line[3:].strip()))
+    return starts
 
-    source = args.checkout / args.skill
-    upstream_text = (source / "SKILL.md").read_text(encoding="utf-8")
-    lines, body = frontmatter_and_body(upstream_text)
-    fields = skills.meta(upstream_text)
-    licence = args.license or fields.get("license", "")
-    if licence not in skills.REDISTRIBUTABLE:
-        sys.exit(f"vendor: licence {licence or 'unnamed'} does not allow a changed copy")
-    words = len(args.description.split())
+
+def move_sections(body: str, headings: list[str], target: Path) -> str:
+    """`body` with each section whose heading starts with one of `headings` moved whole into
+    `references/<slug>.md`, its heading kept with a line naming the file."""
+    lines = body.splitlines(keepends=True)
+    starts = section_starts(lines)
+    spans = []
+    for wanted in headings:
+        found = [n for n, (_, heading) in enumerate(starts) if heading.startswith(wanted)]
+        if len(found) != 1:
+            sys.exit(f"vendor: {len(found)} sections start `## {wanted}`; name one")
+        n = found[0]
+        end = starts[n + 1][0] if n + 1 < len(starts) else len(lines)
+        spans.append((starts[n][0], end, starts[n][1]))
+    if spans:
+        (target / "references").mkdir(exist_ok=True)
+    for start, end, heading in sorted(spans, reverse=True):
+        slug = re.sub(r"[^a-z0-9]+", "-", heading.lower()).strip("-")[:60]
+        page = target / "references" / f"{slug}.md"
+        if page.exists():
+            sys.exit(f"vendor: references/{slug}.md is the upstream's own; move another section")
+        page.write_text(f"# {heading}\n\n{''.join(lines[start + 1:end]).strip()}\n",
+                        encoding="utf-8")
+        lines[start + 1:end] = [f"\nRead `references/{slug}.md` for this part.\n\n"]
+    return "".join(lines)
+
+
+def apply_patch(patch: Path, target: Path) -> None:
+    """The entry's diff applied to the copy; a refresh it no longer fits stops here."""
+    proc = subprocess.run(["git", "apply", f"--directory={target.relative_to(ROOT)}",
+                           str(patch)], cwd=ROOT, capture_output=True, text=True)
+    if proc.returncode:
+        sys.exit(f"vendor: {patch.name} no longer applies; read the upstream's change:\n"
+                 f"{proc.stderr.strip()}")
+
+
+def entry_for(name: str) -> dict:
+    """The manifest's entry for `name`, refused when it lacks a field or says too much."""
+    entries = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    entry = entries.get(name)
+    if not isinstance(entry, dict):
+        sys.exit(f"vendor: no entry `{name}` in {MANIFEST.name}; write one first")
+    missing = [key for key in ("repo", "path", "pack", "license", "recheck_days", "description")
+               if key not in entry]
+    if missing:
+        sys.exit(f"vendor: the entry `{name}` lacks {', '.join(missing)}")
+    if entry["license"] not in skills.REDISTRIBUTABLE:
+        sys.exit(f"vendor: licence {entry['license']} does not allow a changed copy")
+    words = len(entry["description"].split())
     if words > DESCRIPTION_WORDS:
         sys.exit(f"vendor: the description is {words} words, the cap is {DESCRIPTION_WORDS}")
-    licence_file = next(iter(sorted(args.checkout.glob("LICENSE*"))), None)
+    return entry
+
+
+def vendor(name: str, checkout: Path) -> Path:
+    """The copy of `name` written into its pack from `checkout`; its folder."""
+    entry = entry_for(name)
+    source = checkout / entry["path"]
+    lines, body = frontmatter_and_body((source / "SKILL.md").read_text(encoding="utf-8"))
+    licence_file = next(iter(sorted(checkout.glob("LICENSE*"))), None)
     if licence_file is None:
         sys.exit("vendor: the upstream has no LICENSE file to keep beside the copy")
-    commit = subprocess.run(["git", "-C", str(args.checkout), "rev-parse", "HEAD"],
+    commit = subprocess.run(["git", "-C", str(checkout), "rev-parse", "HEAD"],
                             capture_output=True, text=True, check=True).stdout.strip()
-
-    name = fields.get("name") or source.name
-    target = ROOT / "packs" / args.pack / "skills" / name
+    target = ROOT / "packs" / entry["pack"] / "skills" / name
     if target.exists():
         shutil.rmtree(target)
     shutil.copytree(source, target, ignore=left_behind)
-    caption_images(target)
     shutil.copyfile(licence_file, target / "LICENSE")
-    body = bring_outside_files(body, source, target)
-    guard = f"## Before following this here\n\n{args.guard.strip()}\n\n" if args.guard else ""
-    front = [f"name: {name}", f"description: {args.description}", *kept_lines(lines),
+    caption_images(target)
+    body = move_sections(bring_outside_files(captioned(body), source, target),
+                         entry.get("move_sections", []), target)
+    guard = entry.get("guard", "").strip()
+    front = [f"name: {name}", f"description: {entry['description']}", *kept_lines(lines),
              "metadata:", f'  reviewed: "{datetime.date.today().isoformat()}"',
-             f'  recheck-after-days: "{args.recheck_days}"',
-             f'  upstream: "github.com/{args.repo}/{args.skill.strip("/")}"',
-             f'  commit: "{commit}"', f'  license: "{licence}"']
-    (target / "SKILL.md").write_text("---\n" + "\n".join(front) + "\n---\n\n" + guard + body,
-                                     encoding="utf-8")
-    print(f"vendor: {args.repo}/{args.skill} at {commit[:12]} -> {target.relative_to(ROOT)}")
+             f'  recheck-after-days: "{entry["recheck_days"]}"',
+             f'  upstream: "github.com/{entry["repo"]}/{entry["path"].strip("/")}"',
+             f'  commit: "{commit}"', f'  license: "{entry["license"]}"']
+    (target / "SKILL.md").write_text(
+        "---\n" + "\n".join(front) + "\n---\n\n"
+        + (f"## Before following this here\n\n{guard}\n\n" if guard else "") + body,
+        encoding="utf-8")
+    if entry.get("patch"):
+        apply_patch(ROOT / entry["patch"], target)
+    return target
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument("name", help="the copy's entry in tools/vendored.json")
+    parser.add_argument("--checkout", type=Path, required=True,
+                        help="a clone of the entry's upstream repository")
+    args = parser.parse_args(argv)
+    target = vendor(args.name, args.checkout)
+    print(f"vendor: {args.name} -> {target.relative_to(ROOT)}")
     return 0
 
 

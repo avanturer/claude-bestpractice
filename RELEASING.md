@@ -128,12 +128,15 @@ Adding a skill to a pack:
 1. A gap no first-party skill and no gate here covers. Look before writing: the founder's
    `claude-bp status` names what their sessions already load.
 2. Our own: write it, with `metadata.reviewed` and, if it rests on outside facts,
-   `metadata.recheck-after-days`. Copied: clone the upstream and run `tools/vendor_skill.py`
-   with a description of 40 words at most, and `--guard` where a step of the upstream's is one
-   our gates refuse or a project's rules forbid. It copies at the checkout's commit, from a
-   licence in `skills.REDISTRIBUTABLE` only, with the licence text and the files the skill links
-   outside its folder, and leaves images out under their captions. Read `git diff` before
-   committing.
+   `metadata.recheck-after-days`. Copied: write its entry in `tools/vendored.json` (a
+   description of 40 words at most; `guard` where a step of the upstream's is one our gates
+   refuse or a project's rules forbid; `move_sections` for a SKILL.md over the 5,000-token cap;
+   `patch` for a fix to its code), clone the upstream, and run `python3 tools/vendor_skill.py
+   NAME --checkout <clone>`. It copies at the checkout's commit, from a licence in
+   `skills.REDISTRIBUTABLE` only, with the licence text and the files the skill links outside
+   its folder, and leaves images out under their captions. Read `git diff` before committing.
+   When the weekly upstream issue names a copy, the same command on a newer clone refreshes it,
+   moves and patch included; a patch that no longer applies stops it.
 3. `make skills budget manifests` green: dated, followable, every own link present, the pack
    under 600 always-on tokens and all packs under 1,200, accepted by the CLI under `--strict`.
 

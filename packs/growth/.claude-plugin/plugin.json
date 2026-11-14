@@ -1,7 +1,7 @@
 {
   "name": "growth",
   "version": "1.0.0",
-  "description": "Curated skills for getting an app found: App Store and Google Play listings. A pack of claude-bestpractice; `curated` brings every pack.",
+  "description": "Curated growth skills: store listings, video made from data, recurring marketing jobs an agent runs, and paid creators. A pack of claude-bestpractice; `curated` brings every pack.",
   "author": {
     "name": "avanturer"
   },
@@ -9,7 +9,8 @@
   "license": "MIT",
   "keywords": [
     "aso",
-    "app-store",
+    "video",
+    "creators",
     "growth",
     "skills"
   ],

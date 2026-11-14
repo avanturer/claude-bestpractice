@@ -1,0 +1,106 @@
+{
+  "analytics": {
+    "repo": "coreyhaines31/marketingskills",
+    "path": "skills/analytics",
+    "pack": "research",
+    "license": "MIT",
+    "recheck_days": 90,
+    "description": "Metrics computed right and what to track: events, tracking plans, UTMs, rates over matching windows. Use when a number looks off or tracking is being planned."
+  },
+  "aso": {
+    "repo": "coreyhaines31/marketingskills",
+    "path": "skills/aso",
+    "pack": "growth",
+    "license": "MIT",
+    "recheck_days": 90,
+    "description": "Audit and improve an App Store or Google Play listing: title, subtitle, keywords, screenshots and ratings. Use when choosing listing text or images, or when downloads are low.",
+    "guard": "The project's own rules on what store copy may say (no competitor named, no AI mentioned, where it has such rules) win over anything below."
+  },
+  "customer-research": {
+    "repo": "coreyhaines31/marketingskills",
+    "path": "skills/customer-research",
+    "pack": "research",
+    "license": "MIT",
+    "recheck_days": 90,
+    "description": "What reviews, interviews and surveys really support, and how confidently. Use when mining reviews or feedback, or building personas."
+  },
+  "debugging-and-error-recovery": {
+    "repo": "addyosmani/agent-skills",
+    "path": "skills/debugging-and-error-recovery",
+    "pack": "engineering",
+    "license": "MIT",
+    "recheck_days": 180,
+    "description": "Systematic root-cause debugging. Use when tests fail, a build breaks, something that worked has broken, or behaviour does not match what was expected."
+  },
+  "expo-upgrade": {
+    "repo": "expo/skills",
+    "path": "plugins/expo/skills/expo-upgrade",
+    "pack": "mobile",
+    "license": "MIT",
+    "recheck_days": 60,
+    "description": "Upgrade an Expo SDK version and fix the dependency issues it brings. Use when moving a project to a newer Expo SDK or when expo doctor reports mismatched packages.",
+    "guard": "An SDK upgrade changes native code, so it ships in a store build and never as an over-the-air update. Re-check the project's patches and its local native modules against the new SDK, and follow the project's own release rules over anything below."
+  },
+  "influencer-marketing": {
+    "repo": "coreyhaines31/marketingskills",
+    "path": "skills/influencer-marketing",
+    "pack": "growth",
+    "license": "MIT",
+    "recheck_days": 90,
+    "description": "Paid creator and influencer partnerships: vetting, pay, rights, briefs, disclosure and payoff. Use when planning, paying for or judging a creator deal.",
+    "guard": "In Russia a paid post needs an ERID from an ОРД, the «Реклама» label and the advertiser named, and paid advertising on Meta's platforms (Instagram, Facebook) is banned there since 1 September 2025. Check the market's own law before the payment and disclosure steps below: the FTC rules are the US's.",
+    "move_sections": [
+      "Ambassador Program Design",
+      "Run-of-Show Checklist",
+      "Tool Integrations"
+    ]
+  },
+  "marketing-loops": {
+    "repo": "coreyhaines31/marketingskills",
+    "path": "skills/marketing-loops",
+    "pack": "growth",
+    "license": "MIT",
+    "recheck_days": 90,
+    "description": "A recurring marketing job an agent runs on a schedule: what it checks, acts on, remembers and when it stops. Use when automating a weekly or daily marketing check."
+  },
+  "react-native-best-practices": {
+    "repo": "callstackincubator/agent-skills",
+    "path": "skills/react-native-best-practices",
+    "pack": "mobile",
+    "license": "MIT",
+    "recheck_days": 90,
+    "description": "React Native performance: FPS, startup time, bundle size, memory leaks, re-renders and animations. Use when a React Native screen is slow, janky or heavy, or when profiling one.",
+    "guard": "Measure before changing anything. A dependency suggested below (FlashList, the React Compiler, a native module) can change the native runtime: in a project that ships over-the-air updates it goes out only in a store build. The project's own release and design rules win over anything below."
+  },
+  "reverse-engineer-marketing": {
+    "repo": "coreyhaines31/marketingskills",
+    "path": "skills/reverse-engineer-marketing",
+    "pack": "research",
+    "license": "MIT",
+    "recheck_days": 90,
+    "description": "How a competitor grew, from public evidence: their moves dated against traffic, reviews and funnel, then plays to run. Use when studying a competitor's growth.",
+    "move_sections": [
+      "Stage 1:",
+      "Stage 2:",
+      "Watch Mode"
+    ],
+    "patch": "tools/vendor_patches/reverse-engineer-marketing.patch"
+  },
+  "security-and-hardening": {
+    "repo": "addyosmani/agent-skills",
+    "path": "skills/security-and-hardening",
+    "pack": "engineering",
+    "license": "MIT",
+    "recheck_days": 120,
+    "description": "Harden code against vulnerabilities. Use when handling user input, authentication, data storage or external integrations, or when auditing an input handler or a login flow.",
+    "guard": "Rotating a leaked secret and purging history are the founder's: say what leaked and where."
+  },
+  "video": {
+    "repo": "coreyhaines31/marketingskills",
+    "path": "skills/video",
+    "pack": "growth",
+    "license": "MIT",
+    "recheck_days": 90,
+    "description": "Make video repeatably: clips rendered from data with Remotion or Hyperframes, product demos, AI generation and editing. Use when producing videos or choosing how to make them."
+  }
+}
