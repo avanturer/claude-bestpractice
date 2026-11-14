@@ -18,6 +18,10 @@ So: if anything under `plugin/` differs from the default branch, the version mus
 too. This is the whole of it. It costs one line in a manifest per merge and it is the only
 thing standing between a fix and the person who needs it.
 
+A pack (`packs/<name>/`) is a plugin of its own in the same marketplace, copied the same way
+under its own version, so a change under it needs its own bump, in its `plugin.json` and its
+marketplace entry. A pack's change does not bump the plugin's version, nor the reverse.
+
 Deliberately narrow. `plugin/` is exactly the tree the marketplace copies into
 `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/` — confirmed by installing and
 listing it — so a change to the README, the tests or these tools reaches an `install.sh`
@@ -136,6 +140,40 @@ def refusal(files: list[str], base: str, version: str) -> str:
     )
 
 
+def pack_problems(base: str | None) -> list[str]:
+    """Each pack whose marketplace entry and `plugin.json` disagree on its version, or whose
+    files changed against `base` while its version did not."""
+    entries = {entry.get("name"): entry for entry in json.loads(
+        (ROOT / ".claude-plugin/marketplace.json").read_text(encoding="utf-8")).get("plugins", [])}
+    found: list[str] = []
+    for manifest in sorted(ROOT.glob("packs/*/.claude-plugin/plugin.json")):
+        pack = manifest.parent.parent
+        rel = f"{pack.relative_to(ROOT)}/"
+        version = json.loads(manifest.read_text(encoding="utf-8")).get("version")
+        listed = entries.get(pack.name, {}).get("version")
+        if listed != version:
+            found.append(f"shipped: {rel} says {version} and its marketplace entry {listed}. The "
+                         "CLI reads the entry when it updates, so a bump in one is no bump.")
+        if base is None:
+            continue
+        code, changed = _git("diff", "--name-only", base, "--", rel)
+        _, untracked = _git("ls-files", "--others", "--exclude-standard", "--", rel)
+        released = _pack_version_at(base, manifest)
+        if code == 0 and (changed or untracked) and released == version:
+            found.append(f"shipped: files under {rel} changed against {base}, and the pack is "
+                         f"still {version}: bump it in {manifest.relative_to(ROOT)} and its entry "
+                         "in .claude-plugin/marketplace.json, or no installed copy receives it.")
+    return found
+
+
+def _pack_version_at(ref: str, manifest: Path) -> str | None:
+    code, out = _git("show", f"{ref}:{manifest.relative_to(ROOT)}")
+    try:
+        return json.loads(out).get("version") if code == 0 else None
+    except ValueError:
+        return None
+
+
 def main() -> int:
     version = declared()
     if version is None:
@@ -150,6 +188,10 @@ def main() -> int:
         return 1
 
     base, why = base_ref()
+    packs = pack_problems(base)
+    if packs:
+        print("\n".join(packs), file=sys.stderr)
+        return 1
     if base is None:
         print(f"shipped: {why}, version bump NOT verified")
         return 0

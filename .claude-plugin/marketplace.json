@@ -16,6 +16,17 @@
       "homepage": "https://github.com/avanturer/claude-bestpractice",
       "license": "MIT",
       "keywords": ["memory", "hooks", "worktree", "verification", "parallel-sessions", "enforcement"]
+    },
+    {
+      "name": "design",
+      "source": "./packs/design",
+      "description": "Curated design skills: pages and interfaces that do not read as machine-generated. A pack of claude-bestpractice, enabled per project.",
+      "version": "1.0.0",
+      "category": "design",
+      "author": { "name": "avanturer" },
+      "homepage": "https://github.com/avanturer/claude-bestpractice/tree/main/packs/design",
+      "license": "MIT",
+      "keywords": ["design", "landing", "ui", "skills"]
     }
   ],
   "renames": {

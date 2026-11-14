@@ -78,7 +78,7 @@ refused to break either, explained which, and asked.
 
 That result is reported because it is what happened, and because it bounds the claim this
 project is allowed to make. **On a short session with a few clear rules, a good CLAUDE.md
-appears to be enough**, and the 332 tokens here buy little.
+appears to be enough**, and the 247 tokens here buy little.
 
 The experiment cannot show what this is for, and saying so is not a defence of the
 experiment. The failure mode targeted is decay — 0 % violation, 30 % after one compaction,

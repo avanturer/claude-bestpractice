@@ -28,6 +28,19 @@ SHIPPED = Path(__file__).resolve().parent.parent.parent / "skills"
 REVIEWED = "metadata.reviewed"
 RECHECK = "metadata.recheck-after-days"
 
+# A skill copied from another repository into a pack says where from, at which commit, and
+# under which licence; the licence's text sits beside it as `LICENSE`. A copy that drifts from
+# its upstream, or that the upstream's licence never allowed, is a skill nobody can vouch for.
+UPSTREAM = "metadata.upstream"
+COMMIT = "metadata.commit"
+LICENSE = "metadata.license"
+# Licences that let a copy ship changed, its text kept beside it. A skill under any other, a
+# source-available one among them, is linked to, never copied.
+REDISTRIBUTABLE = frozenset({"MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "0BSD",
+                             "CC0-1.0", "CC-BY-4.0", "Unlicense"})
+_UPSTREAM = re.compile(r"^github\.com/(?P<owner>[\w.-]+)/(?P<repo>[\w.-]+)/(?P<path>\S+?)/?$")
+_COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+
 _KEY = re.compile(r"^(?P<indent>\s*)(?P<key>[A-Za-z0-9_.-]+):\s*(?P<value>.*)$")
 _BLOCK_SCALARS = {"|", ">", "|-", ">-", "|+", ">+"}
 
@@ -131,7 +144,35 @@ def malformed(path: Path, today: datetime.date) -> list[str]:
         found.append(f"{path}: `{REVIEWED}` {reviewed} is in the future")
     if RECHECK in fields and _days(fields[RECHECK]) <= 0:
         found.append(f"{path}: `{RECHECK}` must be a whole number of days above 0")
+    return found + _provenance(path, fields)
+
+
+def _provenance(path: Path, fields: dict[str, str]) -> list[str]:
+    """What a skill copied from elsewhere does not say about where it came from."""
+    if UPSTREAM not in fields:
+        return []
+    found = [] if _UPSTREAM.match(fields[UPSTREAM]) else [
+        f"{path}: `{UPSTREAM}` is github.com/<owner>/<repo>/<the skill's folder>"]
+    if not _COMMIT_SHA.match(fields.get(COMMIT, "")):
+        found.append(f"{path}: `{COMMIT}` is the full 40-character commit it was copied at")
+    if fields.get(LICENSE) not in REDISTRIBUTABLE:
+        found.append(f"{path}: `{LICENSE}` {fields.get(LICENSE) or 'is missing'}: a copy ships "
+                     f"only under one of {', '.join(sorted(REDISTRIBUTABLE))}")
+    if not (path.parent / "LICENSE").is_file():
+        found.append(f"{path}: the upstream's licence text is not beside it as LICENSE")
     return found
+
+
+def upstream(path: Path) -> tuple[str, str, str, str] | None:
+    """(owner, repository, folder, commit) a copied skill came from; None for one of our own."""
+    try:
+        fields = meta(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return None
+    found = _UPSTREAM.match(fields.get(UPSTREAM, ""))
+    if not found or not _COMMIT_SHA.match(fields.get(COMMIT, "")):
+        return None
+    return found["owner"], found["repo"], found["path"], fields[COMMIT]
 
 
 def overdue(skills: list[Skill], today: datetime.date) -> list[Skill]:
@@ -161,6 +202,11 @@ def overdue_line(today: datetime.date | None = None) -> str:
 # managed policy installs.
 
 PROJECT, USER, SYNCED, PLUGIN = "project", "user", "synced", "plugin"
+
+# Skills this plugin shipped and moved into a pack, by their old bare name: the pack's id. A
+# repository that read one is told once where it went and the one command that brings it back;
+# a pack enabled there lists it as `<pack>:<name>`, and it is not gone.
+MOVED = {"landing-not-slop": "design@claude-bestpractice"}
 
 # How Claude Code names a skill synced from a claude.ai account: "Synced skills need the
 # namespace in rules: `Skill(anthropic-skills:pdf)`" (Claude Code's skills page).

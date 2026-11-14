@@ -1,6 +1,5 @@
 # Decisions
 
-- [0088] A closed card reopens as itself, and every state a card stands in has a way on — `decisions/0088-a-closed-card-reopens-as-itself.md`
 - [0089] A merge is judged on the commit it takes, and what the session clears is not put to the founder — `decisions/0089-a-merge-is-judged-on-the-commit-it-takes.md`
 - [0090] A session goes back into its tree without the founder being asked, wherever the tree was made — `decisions/0090-a-tree-is-entered-without-asking.md`
 - [0091] A resumed chat's tree is its own, and a removal ends no process a session started — `decisions/0091-a-resumed-chats-tree-is-its-own-and-its-commands-keep-it.md`
@@ -11,4 +10,5 @@
 - [0097] A connection lost in a test's body is no verdict either — `decisions/0097-a-connection-lost-in-a-tests-body-is-no-verdict-either.md`
 - [0098] A merge waits for the chat's agents, and a spawn that never ran is not counted — `decisions/0098-a-merge-waits-for-the-chats-agents-and-a-spawn-that-never-ran-is-not-counted.md`
 - [0099] Every skill a session can load is listed, counted, checked and missed when it goes — `decisions/0099-every-skill-a-session-can-load-is-listed-counted-and-missed.md`
-- ... 85 older, see `decisions/`
+- [0100] Curated skills ship as packs, plugins of their own in this marketplace, copied and dated — `decisions/0100-curated-skills-ship-as-packs.md`
+- ... 86 older, see `decisions/`

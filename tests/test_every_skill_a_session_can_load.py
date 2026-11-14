@@ -161,7 +161,7 @@ class TestASkillThatGoesIsMissed(SkillsCase):
     def test_one_no_source_lists_is_named_with_where_it_was(self):
         self.path.unlink()
         gone = skilluse.vanished(self.ctx(), skills.inventory(self.repo, self.home))
-        self.assertEqual([("scraper", str(self.path))], gone)
+        self.assertEqual([("scraper", f"last loaded from {self.path}")], gone)
 
     def test_the_board_says_it_once(self):
         self.path.unlink()
@@ -189,3 +189,26 @@ class TestASkillThatGoesIsMissed(SkillsCase):
         skilluse.notice(self.ctx(), self.home)
         store.purge_tier_b(self.ctx())
         self.assertEqual("", skilluse.notice(self.ctx(), self.home))
+
+
+class TestASkillThisPluginMovedIntoAPack(SkillsCase):
+    """`landing-not-slop` left the plugin for the `design` pack: a repository that read it is
+    told where it went and the one command that brings it back, once."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.start()
+        skilluse.used(self.ctx(), "landing-not-slop", plugin="bestpractice", source="plugin")
+
+    def test_it_is_named_with_the_command_that_brings_it_back(self):
+        said = skilluse.notice(self.ctx(), self.home)
+        self.assertIn("landing-not-slop (moved to the `design` pack: `claude plugin install "
+                      "design@claude-bestpractice --scope project`)", said)
+
+    def test_with_the_pack_enabled_here_nothing_is_gone(self):
+        pack = self.home / ".claude" / "plugins" / "cache" / "claude-bestpractice" / "design"
+        skill(pack / "1.0.0" / "skills", "landing-not-slop")
+        (self.repo / ".claude").mkdir(exist_ok=True)
+        (self.repo / ".claude" / "settings.json").write_text(json.dumps(
+            {"enabledPlugins": {"design@claude-bestpractice": True}}))
+        self.assertEqual([], skilluse.vanished(self.ctx(), skills.inventory(self.repo, self.home)))

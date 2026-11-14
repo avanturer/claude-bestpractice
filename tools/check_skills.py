@@ -28,7 +28,7 @@ from claude_bestpractice.gitctx import resolve  # noqa: E402
 
 def main() -> int:
     today = datetime.date.today()
-    paths = sorted((ROOT / "plugin").rglob("SKILL.md"))
+    paths = sorted([*(ROOT / "plugin").rglob("SKILL.md"), *(ROOT / "packs").glob("*/skills/*/SKILL.md")])
     problems = [problem for path in paths for problem in skills.malformed(path, today)]
     ctx = resolve(ROOT)
     shipped = [skills.Listed(path.parent.name, skills.PROJECT, "plugin", path) for path in paths]

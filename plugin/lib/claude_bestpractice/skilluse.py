@@ -48,7 +48,9 @@ def qualified(skill: str, plugin: str = "", source: str = "") -> str:
     as decision 0080 counted them (`llm-first-code`, `deploy`, `anthropic-skills:pdf`,
     `other-plugin:review`)."""
     bare = skill.rsplit(":", 1)[-1]
-    if (plugin == PLUGIN or skill.startswith(f"{PLUGIN}:")) and bare in ours():
+    # One moved into a pack keeps the bare name it was counted under while it was ours.
+    if (plugin == PLUGIN or skill.startswith(f"{PLUGIN}:")) and (bare in ours()
+                                                                  or bare in skills.MOVED):
         return bare
     if ":" in skill:
         return skill
@@ -126,13 +128,21 @@ def _by_file(reads: int) -> str:
 
 
 def vanished(ctx: GitContext, listed: list[skills.Listed]) -> list[tuple[str, str]]:
-    """Each skill read since the count began that no source lists any longer, with the file it
-    was last loaded from: (name, path)."""
+    """Each skill read since the count began that no source lists any longer, with where it
+    went: (name, `moved to … pack: <command>` or `last loaded from <file>`). One this plugin
+    moved into a pack that is enabled here is loadable under its new name, and is not gone."""
     loadable = {item.name for item in listed} | set(ours())
     table = _table(ctx)
     origins = table.get("from") if isinstance(table.get("from"), dict) else {}
-    return sorted((name, str(origins.get(name) or "")) for name in counts(ctx)
-                  if name not in loadable)
+    gone: list[tuple[str, str]] = []
+    for name in sorted(counts(ctx)):
+        pack = skills.MOVED.get(name, "")
+        if name in loadable or f"{pack.partition('@')[0]}:{name}" in loadable:
+            continue
+        gone.append((name, f"moved to the `{pack.partition('@')[0]}` pack: `claude plugin install "
+                           f"{pack} --scope project`" if pack else
+                           f"last loaded from {origins.get(name) or 'a file not recorded'}"))
+    return gone
 
 
 def _table(ctx: GitContext) -> dict:
@@ -160,8 +170,7 @@ def report(ctx: GitContext, home: Path | None = None) -> list[str]:
     claude.ai account this machine stopped syncing; and what is due for a fresh look."""
     listed = skills.inventory(ctx.worktree_root, home)
     lines = [_loadable_line(listed), _read_line(ctx), _unread_line(ctx, listed)]
-    lines += [f"gone: {name}, last loaded from {where or 'a file not recorded'}"
-              for name, where in vanished(ctx, listed)]
+    lines += [f"gone: {name}, {where}" for name, where in vanished(ctx, listed)]
     lines += [f"left behind: {', '.join(account.names)}, synced from a claude.ai account until "
               f"{_day(account.synced_at)}, load in no session now ({account.folder})"
               for account in skills.left_behind(home)]
@@ -209,7 +218,7 @@ def notice(ctx: GitContext, home: Path | None = None) -> str:
     Three synced skills, one the second most used in the repository, went with an account
     change and no session noticed for four weeks (#364).
     """
-    found = {f"gone:{name}": f"{name} (last loaded from {where or 'a file not recorded'})"
+    found = {f"gone:{name}": f"{name} ({where})"
              for name, where in vanished(ctx, skills.inventory(ctx.worktree_root, home))}
     found.update({f"behind:{name}": f"{name} (synced from a claude.ai account until "
                                     f"{_day(account.synced_at)})"

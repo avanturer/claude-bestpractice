@@ -16,6 +16,9 @@ from claude_bestpractice import skills
 
 TODAY = datetime.date(2026, 11, 14)
 
+# The packs this marketplace lists beside the plugin, in this checkout.
+PACKS = Path(__file__).resolve().parent.parent / "packs"
+
 
 def skill_file(folder: Path, name: str, frontmatter: str) -> Path:
     path = folder / name / "SKILL.md"
@@ -44,14 +47,17 @@ class TestTheFrontmatterIsRead(unittest.TestCase):
 
 class TestEveryShippedSkillIsDated(unittest.TestCase):
     def test_each_says_when_it_was_checked(self):
-        self.assertTrue(skills.ours())
-        for skill in skills.ours():
-            self.assertEqual([], skills.malformed(skill.path, datetime.date.today()), skill.name)
+        """The plugin's own and every pack's."""
+        shipped = [skill.path for skill in skills.ours()] + sorted(PACKS.glob("*/skills/*/SKILL.md"))
+        self.assertTrue(len(shipped) > len(skills.ours()), "no pack skill was found")
+        for path in shipped:
+            self.assertEqual([], skills.malformed(path, datetime.date.today()), path)
 
     def test_the_glass_row_follows_the_platform(self):
         """The row that contradicted Apple's guidance tells functional glass from glass on
         every surface, keeps a solid fallback, and is marked as a verdict about the year."""
-        text = (skills.SHIPPED / "landing-not-slop" / "SKILL.md").read_text(encoding="utf-8")
+        text = (PACKS / "design" / "skills" / "landing-not-slop" / "SKILL.md"
+                ).read_text(encoding="utf-8")
         self.assertNotIn("dates a page instantly", text)
         row = next(line for line in text.splitlines() if line.startswith("| Glass on every"))
         self.assertIn("†", row)

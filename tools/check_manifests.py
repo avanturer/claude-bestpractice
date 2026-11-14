@@ -29,7 +29,9 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # The marketplace and the plugin, each asked about on its own. They are judged differently:
 # on 2.1.289 the root run named the reserved name in the marketplace's entry, and only the
 # `plugin/` run named it in `plugin.json`.
-TARGETS = (".", "plugin")
+# The marketplace, the plugin, and every pack the marketplace lists beside it (`packs/<name>`).
+TARGETS = (".", "plugin", *sorted(str(manifest.parent.parent.relative_to(ROOT))
+                                  for manifest in ROOT.glob("packs/*/.claude-plugin/plugin.json")))
 
 # Validation reads local files. A CLI that takes longer than this is not answering.
 TIMEOUT = 120
@@ -97,7 +99,7 @@ def main() -> int:
         print(f"manifests: claude {version} rejects this plugin's manifests (above).",
               file=sys.stderr)
         return 1
-    print(f"manifests: claude {version} accepts both, under --strict")
+    print(f"manifests: claude {version} accepts all {len(TARGETS)}, under --strict")
     return 0
 
 
