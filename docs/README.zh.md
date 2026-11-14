@@ -4,12 +4,12 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-2.16.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.17.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-3017%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#运行要求)
-[![context](https://img.shields.io/badge/常驻上下文-332%20tokens-blue)](#运行要求)
+[![context](https://img.shields.io/badge/常驻上下文-247%20tokens-blue)](#运行要求)
 [![license](https://img.shields.io/badge/license-MIT-lightgrey)](../LICENSE)
 
 [English](../README.md) · [Русский](README.ru.md) · **中文**
@@ -428,7 +428,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 | `pr-opened` | PostToolUse `.*(create\|update\|merge)_pull_request`，以及运行 `gh pr` 的 `Bash` | 失败放行 | 登记刚打开的 pull request 并记下它的编号，让合并门区分自己的和别人的；通过工具关闭的会被结清；合并真正完成后才收尾 |
 | `permission-denied` | PermissionDenied | 失败放行 | 记录 auto mode 拒绝了什么，让重复出现的询问能追溯到规则；从不推翻拒绝 |
 
-十二个条目（`pre-tool` 与 `review-commit` 共用 PreToolUse 事件，`pr-opened` 占两个），自设上限是十二个。常驻上下文 **约 332 tokens**，上限 400 ——
+十二个条目（`pre-tool` 与 `review-commit` 共用 PreToolUse 事件，`pr-opened` 占两个），自设上限是十二个。常驻上下文 **约 247 tokens**，上限 400 ——
 大约是 200k 窗口的 0.1 %。
 
 ---
@@ -538,7 +538,7 @@ git 不可见、能扛过分支切换、并随克隆一起消亡的位置。它�
 Claude Code 的 `/plugin` 面板现在会显示每个插件每轮向上下文窗口添加多少内容，所以这是
 一个可以横向比较的数字，而不是一句需要你相信的说法。
 
-claude-bestpractice 的常驻上下文为 **约 332 tokens**，分布在四个组件上，自设上限为 400。
+claude-bestpractice 的常驻上下文为 **约 247 tokens**，分布在三个组件上，自设上限为 400。
 超出时 `make check` 直接让构建失败；而这条上限是靠精简描述守住的，不是靠抬高门槛——
 已经这样做过两次。
 

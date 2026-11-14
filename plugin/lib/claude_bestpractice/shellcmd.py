@@ -737,3 +737,36 @@ def _closing(text: str, at: int) -> int:
 
 def _words(wanted: list[str]) -> re.Pattern[str]:
     return re.compile(r"\b" + r"\s+".join(map(re.escape, wanted)) + r"\b")
+
+
+# Text a quote keeps from running on the line that holds it: a single-quoted span, and a
+# double-quoted one with no `$(` or backtick in it. An escape is matched first and kept, so
+# `\'` opens no span: `echo \'; gh pr merge 1; \'` runs the merge.
+_INERT = re.compile(
+    r"""(?P<escape>\\.)|'[^']*'|"(?:[^"\\$`]|\\.|\$(?!\())*\"""", re.S)
+
+# Programs that can run text handed to them as one string: the script runners `hidden` reads,
+# plus the ones it does not, whose string is code all the same (`xargs sh`, `find -exec`,
+# `python3 -c "os.system('…')"`). On a line naming one, a quoted span may be the command.
+_RUNS_A_STRING = re.compile(
+    r"(?<![\w.-])(?:" + "|".join(sorted(_SCRIPT_RUNNERS | {
+        "xargs", "parallel", "sudo", "doas", "env", "find", "tmux", "screen", "nohup",
+        "python", "python3", "node", "perl", "ruby", "php", "deno", "bun", "osascript",
+        "pwsh", "powershell", "awk", "gawk", "busybox"})) + r")(?![\w.-])")
+
+
+def outside_quotes(line: str) -> str:
+    """`line` with the text its quoting keeps from running blanked out, for a gate that falls
+    back to matching words because `commands` cannot read the line.
+
+    That fallback matched the whole line, so `grep 'gh pr merge' $(git ls-files)` and
+    `grep -n '…\\|gh pr merge\\|…' <(…)` were refused as merges: the substitution made the line
+    unreadable, and the pattern being searched for was read as the command (#367). Quoting is
+    what tells the two apart, as it is in `commands`.
+
+    Unchanged wherever a program on the line can run a string (`_RUNS_A_STRING`): there the
+    quoted span may be exactly the merge, and the old reading is the safe one.
+    """
+    if _RUNS_A_STRING.search(line):
+        return line
+    return _INERT.sub(lambda found: found.group(0) if found.group("escape") else " ", line)

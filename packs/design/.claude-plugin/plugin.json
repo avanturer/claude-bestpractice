@@ -1,0 +1,17 @@
+{
+  "name": "design",
+  "version": "1.0.0",
+  "description": "Curated design skills: pages and interfaces that do not read as machine-generated. A pack of claude-bestpractice, enabled per project.",
+  "author": {
+    "name": "avanturer"
+  },
+  "homepage": "https://github.com/avanturer/claude-bestpractice/tree/main/packs/design",
+  "license": "MIT",
+  "keywords": [
+    "design",
+    "landing",
+    "ui",
+    "skills"
+  ],
+  "repository": "https://github.com/avanturer/claude-bestpractice"
+}

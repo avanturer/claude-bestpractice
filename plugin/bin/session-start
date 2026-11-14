@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import board, ci, config, evidence, hookio, knowledge, limits, migrate, onboard, plan, policy, pullrequest, sessions, skilluse, stage, store, upgrade, worktree  # noqa: E402
+from claude_bestpractice import board, ci, config, evidence, hookio, knowledge, limits, migrate, onboard, plan, policy, pullrequest, sessions, skillcheck, skilluse, stage, store, upgrade, worktree  # noqa: E402
 from claude_bestpractice.gitctx import GitContext, resolve, stash_baseline  # noqa: E402
 
 
@@ -600,6 +600,12 @@ def main() -> None:
     # Silent until the layer actually grew, and silent again once it is trimmed back.
     body += knowledge.rules_growth(ctx)
     body += _hidden_line(ctx)
+    # Silent until a skill that was read goes, or an account's synced skills are left behind;
+    # said once each (#364).
+    with contextlib.suppress(Exception):
+        body += skilluse.notice(ctx)
+    with contextlib.suppress(Exception):
+        body += skillcheck.board_line(ctx)
     line = _worktree_line(ctx, cfg, event.session_id)
     body += line
     # Only alongside the rule itself, and only for a tree outside `.claude/worktrees/`: empty

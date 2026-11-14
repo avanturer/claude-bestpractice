@@ -1,0 +1,47 @@
+name: upstream
+
+# A skill a pack copied from another repository says where from and at which commit. Once a
+# week this asks GitHub whether each upstream moved past its commit, and files one issue for
+# what did. Nothing is merged on its own: a skill's text is instructions to an agent, and an
+# upstream change is read and taken in by a pull request like any other (decision 0100).
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Ask each copied skill's upstream what changed since it was copied
+        id: drift
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          python3 tools/check_upstream.py > drift.txt
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+          cat drift.txt
+
+      # One open issue at a time: the next week's run finds it and files nothing.
+      - name: File what moved, once
+        if: steps.drift.outputs.code == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="A skill a pack copied has changed upstream"
+          open=$(gh issue list --state open --search "in:title \"$title\"" --json number --jq 'length')
+          if [ "$open" = "0" ]; then
+            gh issue create --title "$title" --body-file drift.txt
+          fi
+
+      - name: Fail where GitHub could not be asked
+        if: steps.drift.outputs.code == '2'
+        run: exit 1

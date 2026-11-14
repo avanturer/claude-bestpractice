@@ -114,6 +114,28 @@ never reached, the other asserted tolerance that a lower layer was already provi
    that had it as `claude-bestpractice` before 2.0.0: the marketplace's `renames` map moves
    the key, and installs nothing (decision 0029).
 
+## A pack
+
+A pack (`packs/<name>/`) is a plugin of its own in this marketplace, with its own version
+(decision 0100). A change under it bumps that version in its `plugin.json` and its entry in
+`.claude-plugin/marketplace.json`, and nothing else: `make shipped` refuses either half alone.
+It reaches users with the next merge to the default branch, as the plugin does; no tag.
+
+Adding a skill to one:
+
+1. A gap no first-party skill and no gate here covers. Look before writing: the founder's
+   `claude-bp status` names what their sessions already load.
+2. Our own: write it, with `metadata.reviewed` and, if it rests on outside facts,
+   `metadata.recheck-after-days`. Copied: from a licence in `skills.REDISTRIBUTABLE` only, at a
+   commit, with `metadata.upstream`, `metadata.commit`, `metadata.license` and the licence text
+   beside it as `LICENSE`; trim the description to 40 words and drop what our gates refuse.
+3. `make skills budget manifests` green: dated, followable, the pack under 600 always-on
+   tokens, accepted by the CLI under `--strict`.
+
+Retiring one: delete it and bump the pack; Claude Code drops it from every install on update.
+A skill moved out of the plugin goes in `skills.MOVED`, so a repository that read it is told
+where it went. A whole pack retired stays in the marketplace's `renames` as `<name>: null`.
+
 ## When a release turns out to be bad
 
 A released version cannot be withdrawn. The tag is permanent and `claude plugin` will keep

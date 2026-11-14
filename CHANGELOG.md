@@ -1,5 +1,57 @@
 # Changelog
 
+## v2.17.0
+
+Every skill a session can load is the plugin's to keep followable, not only its own three
+(#364), and curated skills ship as packs beside the plugin, which Claude Code adds and removes
+on the founder's machines as it updates them (decision 0100). A grep for `gh pr merge` is no
+merge (#367), a session's defect report keeps what it said (#368), and the hooks module
+type-checks on Claude Code 2.1.325.
+
+- **`claude-bp status` lists every skill a session here can load**: the repository's, the
+  founder's, the claude.ai account synced last and each enabled plugin's, read off disk, with
+  how often each was read, by the Skill tool or a slash command and by reading its file.
+  Decision 0080 counted this plugin's three; two of a founder's domain skills were followed 17
+  and 2 times by reading `SKILL.md`, which nothing counted (decision 0099).
+- **A skill that goes is missed.** One read here that no source lists any longer, and the
+  skills of a claude.ai account this machine stopped syncing, are named once on the session
+  board. Three synced skills went with an account change and nobody noticed for four weeks.
+- **A skill that cannot be followed as written is named `file:line` and filed as a card.**
+  `claude-bp skills` reads the repository's and the founder's own skills and names a script or
+  path that is gone, a make target or npm script that is not there, `$CLAUDE_PROJECT_DIR`
+  unbraced in a step (Claude Code leaves it out of the Bash tool and replaces only the braced
+  form when it loads a skill), a merge the merge gate refuses, and a push to a trunk by name.
+  Session start files one card per such skill, again only when its findings change.
+- **Curated skills ship as packs.** `packs/<name>/` is a plugin of its own in this marketplace,
+  `<name>@claude-bestpractice`, enabled per project; a new version's copy replaces the last, so
+  a skill added appears and one removed goes. A pack holds skills only, each dated and checked,
+  under 600 always-on tokens. A skill copied from another repository names its upstream, the
+  commit and a licence that allows the copy, with the licence text beside it; a weekly job
+  files an issue when the upstream moves (decision 0100). Measured: `paths:` does not lower a
+  skill's always-on cost, so a pack, not a frontmatter field, is what keeps it off a project.
+- **`landing-not-slop` moved into the `design` pack.** The plugin's always-on context falls
+  from ~332 to ~247 tokens. A repository that read the skill is told once where it went:
+  `claude plugin install design@claude-bestpractice --scope project`.
+- **The glass row follows the platform (#365).** It said glassmorphism "dates a page
+  instantly"; since iOS 26 Apple puts Liquid Glass on navigation and controls and keeps it out
+  of the content layer. The row now tells glass that marks a layer from glass on every surface,
+  with a solid fallback for Reduce Transparency, and year-bound rows are marked to be checked
+  against current guidance. Every shipped skill carries `metadata.reviewed`, and one resting on
+  outside facts `metadata.recheck-after-days`: `make skills` fails a missing date and prints an
+  overdue one, `status` names it.
+- **A pattern searched for is no merge (#367).** On a line `shellcmd` cannot read, a `$(…)` or
+  a `<(…)` in it, the merge gate matched `gh pr merge` anywhere in the text, so a grep for it
+  was refused. Text a quote keeps from running is now left out of that match, except where a
+  program on the line runs a string (`sh -c`, `eval`, `xargs`, `python3 -c`, …).
+- **A session's defect report keeps what it said (#368).** It was cut at 300 characters, the
+  crash limit, and #367 and #368 reached GitHub mid-sentence; #368 lost which session was
+  refused and cannot be reproduced from it. A report now keeps 2,000 characters and the first
+  line of the refusal the session was last given. #368 stays open for a report that says it.
+- **The hooks module type-checks on Claude Code 2.1.325**, whose `claude plugin validate
+  --strict` (`make manifests`) rejected it: a tool name found by pattern is narrowed to an MCP
+  tool's, the pane's tree to an element, and the tests build whole `command.run` and
+  `agent.spawn` inputs. Nothing changed at run time.
+
 ## v2.16.0
 
 The plugin's own defect reports reach the issue tracker as they happen, and only about the code

@@ -9,7 +9,9 @@ included, leaves the call as it was, so a fault here costs a digest and never a 
   digest    a successful Bash result -> {"stdout": what the model reads instead} or {}
   roster    -> {"text": what each other session on the repository is doing} or {}
   board     -> {"line": the founder's status line, "rows": the pane's lines} or {}
-  skill     -> {} once one of this plugin's skills, `request["skill"]`, is counted as read
+  skill     -> {} once a skill's expansion is counted: `skill`, and the `plugin`, `source` and
+               `path` Claude Code gave it
+  skill-read -> {} once a read of a skill's or a command's file, `request["path"]`, is counted
   map       -> {"text": the files a subagent's task is about, ranked} or {}
   settings  -> {"enabled", "compress_output", "route_search": true or false,
                 "subagent_min_model": the least tier a subagent runs on, "" for none}
@@ -67,7 +69,11 @@ def _answer(asked: str, request: dict) -> dict:
     if asked == "board" and ctx is not None:
         return board.glance(ctx, harness)
     if asked == "skill" and ctx is not None:
-        skilluse.used(ctx, str(request.get("skill") or ""))
+        skilluse.used(ctx, str(request.get("skill") or ""), str(request.get("plugin") or ""),
+                      str(request.get("source") or ""), str(request.get("path") or ""))
+        return {}
+    if asked == "skill-read" and ctx is not None:
+        skilluse.read_directly(ctx, str(request.get("path") or ""))
         return {}
     if asked == "map" and ctx is not None:
         text = repomap.for_a_task(ctx, str(request.get("task") or ""))

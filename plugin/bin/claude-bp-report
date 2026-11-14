@@ -28,7 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import __version__, defects, hookio, store, upgrade  # noqa: E402
+from claude_bestpractice import __version__, defects, hookio, sessions, store, upgrade  # noqa: E402
 from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
 
 
@@ -155,6 +155,13 @@ def send_unsent(ctx) -> int:
     return 0 if sent else 1
 
 
+def last_refusal(ctx) -> str:
+    """The first line of the last refusal this session was given, "" outside a session or
+    where it has none: the report is then the gate's words beside the session's."""
+    me = sessions.get(ctx, hookio.current_session_id(str(ctx.worktree_root)))
+    return str((me.refusal or {}).get("said") or "") if me is not None else ""
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Defects this plugin hit in this repository.")
     # The version the founder is actually running, from the one place that holds it.
@@ -175,7 +182,7 @@ def main() -> int:
         print("defect reporting is off for this repository")
         return 0
     if args.command == "defect":
-        recorded, said = defects.observed(ctx, args.what, args.gate)
+        recorded, said = defects.observed(ctx, args.what, args.gate, last_refusal(ctx))
         print(said)
         return 0 if recorded else 1
     return cmd_send(ctx) if args.command == "send" else cmd_list(ctx)

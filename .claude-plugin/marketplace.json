@@ -10,12 +10,23 @@
       "name": "bestpractice",
       "source": "./plugin",
       "description": "Enforcement, memory and parallel-session coordination for solo founders running several Claude Code sessions on one repository.",
-      "version": "2.16.0",
+      "version": "2.17.0",
       "category": "development",
       "author": { "name": "avanturer" },
       "homepage": "https://github.com/avanturer/claude-bestpractice",
       "license": "MIT",
       "keywords": ["memory", "hooks", "worktree", "verification", "parallel-sessions", "enforcement"]
+    },
+    {
+      "name": "design",
+      "source": "./packs/design",
+      "description": "Curated design skills: pages and interfaces that do not read as machine-generated. A pack of claude-bestpractice, enabled per project.",
+      "version": "1.0.0",
+      "category": "design",
+      "author": { "name": "avanturer" },
+      "homepage": "https://github.com/avanturer/claude-bestpractice/tree/main/packs/design",
+      "license": "MIT",
+      "keywords": ["design", "landing", "ui", "skills"]
     }
   ],
   "renames": {

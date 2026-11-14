@@ -1,6 +1,9 @@
 ---
 name: llm-first-code
 description: Write comments, docstrings and types for a model reader, not a human one. Use when writing or reviewing any function, module or docstring.
+metadata:
+  reviewed: "2026-11-14"
+  recheck-after-days: "365"
 ---
 
 # LLM-first code

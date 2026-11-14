@@ -695,9 +695,16 @@ CARRIED = (
     # migrate.LEDGER — which repairs this clone has had. Purged, it re-armed every one of
     # them, the ones that rewrite files in the founder's tree among them.
     "migrations.json",
-    # skilluse.FILE — each time one of this plugin's skills was read, the number the founder
-    # keeps or drops a skill on (decision 0080). Purged, it began again at none.
+    # skilluse.FILE — each time a skill was read, the number the founder keeps or drops a
+    # skill on (decision 0080), and the file each was loaded from. Purged, it began again at
+    # none, and a skill gone since could no longer be missed.
     "skill-uses.json",
+    # skilluse.NOTICES — which skills the board already said can no longer load. Purged, every
+    # one of them was said again.
+    "skill-notices.json",
+    # skillcheck.FILED — the findings each skill's card was filed for. Purged, every one of
+    # those cards was filed a second time.
+    "skill-findings.json",
 )
 # `failing-suite.json` is deliberately absent: the red ledger is Tier A, committed, and
 # this function never reaches it.

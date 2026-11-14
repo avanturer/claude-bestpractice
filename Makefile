@@ -1,4 +1,4 @@
-.PHONY: check check-fast test test-fast needs-pytest doctor lint budget docs knowledge slop ratchet shipped manifests payloads clean help
+.PHONY: check check-fast test test-fast needs-pytest doctor lint budget skills docs knowledge slop ratchet shipped manifests payloads clean help
 
 PY := python3
 
@@ -16,11 +16,12 @@ help:
 	@echo "make manifests - ask the claude CLI on this machine to validate both manifests"
 	@echo "make knowledge - validate the decided layer and refresh its index"
 	@echo "make budget  - assert the always-on context budget is not exceeded"
+	@echo "make skills  - every shipped skill says when it was last checked"
 	@echo "make payloads - recapture the hook payloads from this Claude Code (a login, a few cents)"
 
 # One definition of done, identical in every session, with no --no-verify path.
 # Eight parallel sessions must not converge on eight notions of finished.
-check: lint docs slop polyglot knowledge shipped manifests test doctor budget
+check: lint docs slop polyglot knowledge skills shipped manifests test doctor budget
 	@echo ""
 	@echo "check: all green"
 
@@ -82,7 +83,7 @@ test-fast: needs-pytest
 
 # The edit loop's whole gate: every cheap check (2s together) plus the sharded suite.
 # `check` stays what decides — this is what you run twenty times before you get there.
-check-fast: lint docs slop polyglot knowledge shipped test-fast
+check-fast: lint docs slop polyglot knowledge skills shipped test-fast
 	@echo ""
 	@echo "check-fast: green — 'make check' is still what decides"
 
@@ -95,6 +96,11 @@ lint:
 
 budget:
 	@$(PY) tools/check_budget.py
+
+# A skill's dated verdicts age while its file stays the same (#365): each says when it was
+# last checked, and one past its recheck date is printed rather than failed.
+skills:
+	@$(PY) tools/check_skills.py
 
 # After a Claude Code upgrade. `tests/test_hook_payloads.py` then holds every field the gates
 # read against what this version sends. One headless session on a throwaway repository.

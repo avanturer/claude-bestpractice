@@ -385,7 +385,7 @@ class TestSkills(unittest.TestCase):
 
     def test_every_skill_declares_a_name_and_a_trigger(self):
         """A description that does not say WHEN to use it never gets invoked."""
-        found = list(self.SKILLS.glob("*/SKILL.md"))
+        found = [*self.SKILLS.glob("*/SKILL.md"), *(REPO_ROOT / "packs").glob("*/skills/*/SKILL.md")]
         self.assertGreaterEqual(len(found), 3)
         for path in found:
             with self.subTest(skill=path.parent.name):
@@ -406,7 +406,8 @@ class TestSkills(unittest.TestCase):
 
     def test_they_are_specific_enough_to_act_on(self):
         """"Make it modern" is not actionable and produces the same page every time."""
-        landing = (self.SKILLS / "landing-not-slop" / "SKILL.md").read_text(encoding="utf-8")
+        landing = (REPO_ROOT / "packs" / "design" / "skills" / "landing-not-slop" / "SKILL.md"
+                   ).read_text(encoding="utf-8")
         for concrete in ("gradient", "375px", "4.5:1", "prefers-reduced-motion"):
             self.assertIn(concrete, landing)
 
@@ -478,15 +479,19 @@ class TestThePluginHasANameTheCliAccepts(unittest.TestCase):
 
         plugin, market = self.manifests()
         self.assertEqual(PLUGIN, plugin["name"])
-        self.assertEqual([PLUGIN], [entry["name"] for entry in market["plugins"]])
+        self.assertEqual(PLUGIN, market["plugins"][0]["name"])
+        packs = sorted(path.parent.parent.name
+                       for path in (REPO_ROOT / "packs").glob("*/.claude-plugin/plugin.json"))
+        self.assertEqual(packs, sorted(entry["name"] for entry in market["plugins"][1:]),
+                         "every entry past the plugin is a pack under packs/, and every pack listed")
         self.assertEqual(MARKETPLACE, market["name"])
 
     def test_the_name_is_not_one_the_cli_reserves(self):
-        name = self.manifests()[0]["name"]
-        self.assertFalse(name.startswith(self.RESERVED_PREFIXES), name)
-        self.assertNotIn(name, self.RESERVED_NAMES)
-        words = set(re.split(r"[^a-z0-9]+", name.lower()))
-        self.assertFalse("official" in words and words & {"claude", "anthropic"}, name)
+        for name in [entry["name"] for entry in self.manifests()[1]["plugins"]]:
+            self.assertFalse(name.startswith(self.RESERVED_PREFIXES), name)
+            self.assertNotIn(name, self.RESERVED_NAMES)
+            words = set(re.split(r"[^a-z0-9]+", name.lower()))
+            self.assertFalse("official" in words and words & {"claude", "anthropic"}, name)
 
     def test_the_former_name_moves_to_the_current_one(self):
         """Without the map, an installed 1.x reports `not found in marketplace` and loads
@@ -539,19 +544,23 @@ class TestTheCliIsAskedAboutTheManifests(unittest.TestCase):
         return subprocess.run([sys.executable, str(self.TOOL)], capture_output=True, text=True,
                               timeout=120, env={**os.environ, "PATH": path})
 
-    def test_it_passes_when_the_cli_accepts_both(self):
+    def test_it_passes_when_the_cli_accepts_them_all(self):
         self.cli(json.dumps({"success": True, "manifest": {"errors": [], "warnings": []}}), 0)
         proc = self.check()
         self.assertEqual(0, proc.returncode, proc.stderr)
-        self.assertIn("accepts both", proc.stdout)
+        self.assertIn("accepts all", proc.stdout)
 
-    def test_both_manifests_are_asked_about_under_strict(self):
+    def test_every_manifest_is_asked_about_under_strict(self):
+        """The marketplace, the plugin, and each pack it lists: a pack the CLI refuses is a
+        pack nobody can install, as much as the plugin is."""
         self.cli(json.dumps({"success": True}), 0)
         self.check()
         asked = self.asked.read_text(encoding="utf-8").splitlines()
-        self.assertEqual(2, len(asked), asked)
+        packs = {str(manifest.parent.parent)
+                 for manifest in REPO_ROOT.glob("packs/*/.claude-plugin/plugin.json")}
+        self.assertTrue(packs, "no pack to ask about")
         self.assertTrue(all(line.startswith("plugin validate --strict --json ") for line in asked))
-        self.assertEqual({str(REPO_ROOT / "."), str(REPO_ROOT / "plugin")},
+        self.assertEqual({str(REPO_ROOT / "."), str(REPO_ROOT / "plugin"), *packs},
                          {line.rsplit(" ", 1)[-1] for line in asked})
 
     def test_it_fails_and_says_what_the_cli_said(self):

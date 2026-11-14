@@ -32,14 +32,14 @@ jobs:
         python-version: ["3.9", "3.11", "3.13"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The substrate is defined in terms of git's own behaviour — the common
           # directory, worktree registration, blob hashes. A shallow clone changes
           # those answers, so the tests would be exercising a different git.
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
 

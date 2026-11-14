@@ -4,12 +4,12 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-2.16.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.17.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-3017%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#requirements)
-[![context](https://img.shields.io/badge/always--on%20context-332%20tokens-blue)](#context-cost)
+[![context](https://img.shields.io/badge/always--on%20context-247%20tokens-blue)](#context-cost)
 [![license](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
 
 **English** · [Русский](docs/README.ru.md) · [中文](docs/README.zh.md)
@@ -607,11 +607,41 @@ configuration silently.
 
 ---
 
+## Skill packs
+
+Curated skills ship beside the plugin as **packs**: plugins of their own in this marketplace,
+each enabled per project, so a repository with no landing page pays nothing for design advice.
+
+| Pack | Skills |
+|---|---|
+| `design@claude-bestpractice` | `landing-not-slop` — marketing pages that do not read as generated |
+
+```sh
+claude plugin install design@claude-bestpractice --scope project
+```
+
+Claude Code updates a pack like any plugin: each version is a whole copy, so a skill a new
+version adds appears and one it drops goes, with nothing left in your skills folders. Updates
+arrive with `claude plugin update`, or by themselves once auto-update is on for this
+marketplace (`/plugin` → Marketplaces, or in settings):
+
+```json
+{"extraKnownMarketplaces": {"claude-bestpractice": {
+  "source": {"source": "github", "repo": "avanturer/claude-bestpractice"}, "autoUpdate": true}}}
+```
+
+A pack holds skills only, never hooks or servers. Every skill in one says when it was last
+checked, passes the same check `claude-bp skills` runs on yours, and a skill copied from
+another repository names its upstream, the commit it was copied at and a licence that allows
+the copy; a weekly job files an issue when that upstream moves. `landing-not-slop` was part of
+the plugin until 2.17.0: a repository that read it is told once where it went.
+
 ## Commands
 
 | | |
 |---|---|
-| `claude-bp status` | Sessions, plan, knowledge, memory health, how often each skill was read, conflicts, next action |
+| `claude-bp status` | Sessions, plan, knowledge, memory health, every skill a session can load and how often each was read, conflicts, next action |
+| `claude-bp skills` | Every skill a session here can load, and each line of yours that cannot be followed as written, as `file:line` |
 | `claude-bp init` | Derive the knowledge layer from your code |
 | `claude-bp adopt` | Take over events another tool is contesting |
 | `claude-bp sweep` | Remove the trees nobody is in whose work is already in the trunk |
@@ -652,7 +682,7 @@ In a session: `/bestpractice:status` · `/bestpractice:plan` · `/bestpractice:r
 | `permission-denied` | PermissionDenied | fails open | Records what auto mode refused, so a repeated prompt can be traced to its rule; never overturns one |
 
 Twelve entries — `pre-tool` and `review-commit` share the PreToolUse event, and `pr-opened`
-is two — against a self-imposed budget of twelve. Always-on context **~332 tokens** against a cap of 400 —
+is two — against a self-imposed budget of twelve. Always-on context **~247 tokens** against a cap of 400 —
 roughly 0.1 % of a 200k window.
 
 ---
@@ -778,7 +808,7 @@ and uninstall the plugin — nothing else on your machine is touched.
 Claude Code's `/plugin` panel shows what a plugin adds to your context window every
 turn, which makes this a number you can compare rather than a claim you have to take.
 
-claude-bestpractice holds **~332 tokens** of always-on context across four components, against a
+claude-bestpractice holds **~247 tokens** of always-on context across three components, against a
 self-imposed ceiling of 400. `make check` fails the build if it goes over, and the
 ceiling has been held by trimming descriptions rather than by raising it — twice.
 

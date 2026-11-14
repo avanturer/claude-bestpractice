@@ -12,6 +12,7 @@ three of them cost ~90 tokens on every turn while this said the plugin was under
 
 Caps enforced here:
   - total always-on            <= 400 tokens
+  - each pack's always-on      <= 600 tokens (a pack is its own plugin, enabled per project)
   - per-skill description      <= 40 words
   - per-skill body             <= 5,000 tokens (the post-compaction re-injection cap)
   - hook entries               <= 12
@@ -30,6 +31,10 @@ PLUGIN = ROOT / "plugin"
 TOKENS_PER_WORD = 3.06
 TOKENS_PER_COMPONENT = 15
 ALWAYS_ON_CAP = 400
+# A pack (`packs/<name>/`) is enabled on its own, per project, and its cost is itemised under
+# its own name in `/plugin` and `/usage`. Roughly eight skills: `paths:` does not lower it,
+# measured with `claude plugin details` on 2.1.325 (~63 tokens without, ~64 with).
+PACK_ALWAYS_ON_CAP = 600
 DESCRIPTION_WORD_CAP = 40
 SKILL_BODY_TOKEN_CAP = 5_000
 HOOK_ENTRY_CAP = 12
@@ -65,12 +70,13 @@ def strip_comments(raw: str) -> str:
     return re.sub(r'"\$comment[^"]*"\s*:\s*(\[[^\]]*\]|"[^"]*"),?', "", raw, flags=re.S)
 
 
-def main() -> int:
-    problems: list[str] = []
+def listed_cost(tree: pathlib.Path, problems: list[str]) -> tuple[float, int]:
+    """Always-on tokens of what `tree` lists to the model (skills, agents, commands), and how
+    many components; a description or a body over its cap is added to `problems`."""
     always_on = 0.0
     components = 0
 
-    for skill in sorted(PLUGIN.rglob("SKILL.md")):
+    for skill in sorted(tree.rglob("SKILL.md")):
         text = skill.read_text(encoding="utf-8")
         meta = frontmatter(text)
         rel = skill.relative_to(ROOT)
@@ -90,8 +96,8 @@ def main() -> int:
                 f"{rel}: body is ~{body_tokens:.0f} tokens, cap is {SKILL_BODY_TOKEN_CAP}"
             )
 
-    listed = [path for name in ("agents", "commands") if (PLUGIN / name).is_dir()
-              for path in sorted((PLUGIN / name).glob("*.md"))]
+    listed = [path for name in ("agents", "commands") if (tree / name).is_dir()
+              for path in sorted((tree / name).glob("*.md"))]
     for item in listed:
         meta = frontmatter(item.read_text(encoding="utf-8"))
         if hidden(meta):
@@ -101,6 +107,18 @@ def main() -> int:
             problems.append(f"{item.relative_to(ROOT)}: description is {words} words")
         always_on += words * TOKENS_PER_WORD + TOKENS_PER_COMPONENT
         components += 1
+    return always_on, components
+
+
+def main() -> int:
+    problems: list[str] = []
+    always_on, components = listed_cost(PLUGIN, problems)
+    packs = {pack.name: listed_cost(pack, problems)[0]
+             for pack in sorted((ROOT / "packs").glob("*")) if pack.is_dir()}
+    for name, cost in packs.items():
+        if cost > PACK_ALWAYS_ON_CAP:
+            problems.append(f"pack {name}: always-on is ~{cost:.0f} tokens, cap is "
+                            f"{PACK_ALWAYS_ON_CAP}")
 
     hooks_file = PLUGIN / "hooks" / "hooks.json"
     entries = 0
@@ -136,6 +154,7 @@ def main() -> int:
     print(
         f"budget: ~{always_on:.0f}/{ALWAYS_ON_CAP} always-on tokens across {components} "
         f"component(s), {entries}/{HOOK_ENTRY_CAP} hook entries"
+        + "".join(f"; pack {name} ~{cost:.0f}/{PACK_ALWAYS_ON_CAP}" for name, cost in packs.items())
     )
     return 0
 

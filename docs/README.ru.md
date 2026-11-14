@@ -4,12 +4,12 @@
 
 **Память, координация и принуждение для разработки продукта в нескольких параллельных сессиях Claude Code.**
 
-[![version](https://img.shields.io/badge/version-2.16.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.17.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-3017%20passing-2ea44f)](#проверено)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#проверено)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#требования)
 [![dependencies](https://img.shields.io/badge/dependencies-none-blue)](#требования)
-[![context](https://img.shields.io/badge/постоянный%20контекст-332%20токена-blue)](#требования)
+[![context](https://img.shields.io/badge/постоянный%20контекст-247%20токенов-blue)](#требования)
 [![license](https://img.shields.io/badge/license-MIT-lightgrey)](../LICENSE)
 
 [English](../README.md) · **Русский** · [中文](README.zh.md)
@@ -573,7 +573,7 @@ WebSearch, только когда не ответил ни один; Exa — д
 | `permission-denied` | PermissionDenied | fails open | Записывает, что отклонил auto mode, чтобы повторный запрос можно было связать с правилом; ничего не отменяет |
 
 Двенадцать записей — `pre-tool` и `review-commit` делят событие PreToolUse, а у `pr-opened`
-их две — против самоограничения в двенадцать. Постоянный контекст **~332 токена** против потолка в 400 —
+их две — против самоограничения в двенадцать. Постоянный контекст **~247 токенов** против потолка в 400 —
 примерно 0.1 % окна на 200k.
 
 ---
@@ -708,7 +708,7 @@ Python 3.9+ и git. **Никаких других зависимостей, по
 на каждом ходу, — то есть это число, которое можно сравнить, а не обещание, в которое
 надо поверить.
 
-claude-bestpractice держит **~332 токена** постоянного контекста в четырёх компонентах при
+claude-bestpractice держит **~247 токенов** постоянного контекста в трёх компонентах при
 самоназначенном потолке в 400. `make check` роняет сборку при превышении, и потолок
 держали урезанием описаний, а не поднятием планки — дважды.
 
