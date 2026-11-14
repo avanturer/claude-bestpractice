@@ -1,6 +1,9 @@
 ---
 name: landing-not-slop
 description: Marketing pages that do not read as machine-generated. Use when writing or reviewing a landing, hero, pricing table, feature grid or marketing copy.
+metadata:
+  reviewed: "2026-11-14"
+  recheck-after-days: "120"
 ---
 
 # Landings that do not read as generated
@@ -13,15 +16,20 @@ rather than a copy problem.
 The tells below are concrete because "make it look modern" is not actionable and
 produces the same page every time.
 
+Rows marked † are verdicts about the current year, last checked on the `reviewed` date
+above. Before applying one, look at the current platform guidelines (Apple's HIG, Material
+Design) and three live products in the space. A style the founder chose on purpose is a
+decision, and a row here does not overrule it.
+
 ## The visual tells, and what to do instead
 
 | Tell | Why it reads as generated | Instead |
 |---|---|---|
-| Purple-to-blue (or teal-to-indigo) gradient hero | The single most-copied default of the 2023-2025 era | One flat brand colour, or a photograph, or a product screenshot on a plain field |
+| Purple-to-blue (or teal-to-indigo) gradient hero † | The single most-copied default of the 2023-2025 era | One flat brand colour, or a photograph, or a product screenshot on a plain field |
 | Three feature cards, each an icon + 3-word title + 2 lines | The shape a model reaches for when it has nothing specific to say | However many features are real. Two is fine. Show the thing working |
 | Generic line-art icons (rocket, lightning, shield, gear) | Chosen for "tech feel", carry zero information | Product screenshots, a number, or nothing |
 | Everything centred, everything the same width | No hierarchy means nothing is important | Asymmetry. One thing on the page is biggest, and it is the one that matters |
-| Glassmorphism, heavy blur, floating 3D blobs | Peaked in 2022 and now dates a page instantly | Flat surfaces, real borders, one shadow depth |
+| Glass on every surface: content cards, page backgrounds, blur behind body text, floating 3D blobs † | Glass with no job is decoration, and blur behind text costs contrast. Glass itself is current: Apple's platforms since iOS 26 put Liquid Glass on navigation and controls, and the HIG advises against it in the content layer | Glass only where it marks a layer above content: navigation, a toolbar, an overlay, a hero over photo or video. Content stays on solid surfaces. A solid fallback for Reduce Transparency and for devices without live blur |
 | Every section fading in on scroll | Motion applied uniformly is decoration, not communication | Motion on one element that rewards attention, or none |
 | Emoji as section markers | 🚀 ✨ 💡 in headings is the strongest single tell | Words |
 | Dark hero, light body, dark footer | Alternation for its own sake | One background. Change it only where the meaning changes |
