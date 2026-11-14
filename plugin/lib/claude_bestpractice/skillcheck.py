@@ -76,6 +76,19 @@ def check(ctx: GitContext, listed: list[skills.Listed]) -> list[Finding]:
     return found
 
 
+def shipped(ctx: GitContext, paths: list[Path]) -> list[Finding]:
+    """Every finding in skills this plugin or one of its packs ships: a step the gates refuse,
+    a variable the Bash tool lacks, and a link to a file of the skill's own that is not in its
+    folder. A path, a script or a target a shipped skill names in a project is the project's to
+    have, and is not looked for in this repository (#364, decision 0101)."""
+    project = _Project(ctx.worktree_root, gitpolicy.default_branch(ctx))
+    found: list[Finding] = []
+    for path in paths:
+        item = skills.Listed(path.parent.name, skills.PROJECT, "shipped", path)
+        found += _check_file(item, project, own=path.parent)
+    return found
+
+
 class _Project:
     """What the repository offers a skill's steps: its files, Makefile targets, npm scripts."""
 
@@ -87,14 +100,19 @@ class _Project:
         self.scripts = _npm_scripts(root / "package.json")
 
 
-def _check_file(item: skills.Listed, project: _Project) -> list[Finding]:
+def _check_file(item: skills.Listed, project: _Project, own: Path | None = None) -> list[Finding]:
+    """The findings in one skill's file; `own` is a shipped skill's folder, whose links are
+    looked for there and whose project references are not looked for at all."""
     try:
         text = item.path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return []
     found: list[Finding] = []
     for number, line, shell in _lines(text):
-        said = _step(line, project) if shell else _prose(line, project)
+        if shell:
+            said = _step(line, project, references=own is None)
+        else:
+            said = _prose(line, project) if own is None else _own_links(line, own)
         found += [Finding(item.name, item.path, number, what) for what in said]
     return found
 
@@ -131,8 +149,9 @@ def _fenced(text: str) -> list[tuple[int, str, str | None]]:
     return out
 
 
-def _step(line: str, project: _Project) -> list[str]:
-    """What is wrong with one shell step."""
+def _step(line: str, project: _Project, references: bool = True) -> list[str]:
+    """What is wrong with one shell step; with `references` off, nothing it names in the
+    project is looked for."""
     command = re.sub(r"^\s*\$\s+", "", line).strip()
     if not command or command.startswith("#"):
         return []
@@ -142,7 +161,7 @@ def _step(line: str, project: _Project) -> list[str]:
     found += [f"`${{{name}}}` is replaced only in a plugin's own skills, and set for no command "
               "a session runs" for name in _PLUGIN_ONLY.findall(command)]
     found += _refused(command, project)
-    for argv in shellcmd.commands(command.replace(_PROJECT_ROOT, "")):
+    for argv in shellcmd.commands(command.replace(_PROJECT_ROOT, "")) if references else []:
         found += _references(argv, project)
     return found
 
@@ -203,6 +222,21 @@ def _prose(line: str, project: _Project) -> list[str]:
         if _PATH.match(candidate) and not (project.root / candidate).exists() \
                 and (project.root / candidate.split("/", 1)[0]).exists():
             found.append(f"names `{candidate}`, which is not in the repository")
+    return found
+
+
+# A link inside a skill to a file of its own: a relative path into its folder or out of it.
+_OWN_LINK = re.compile(r"^(?:\./|\.\./|references/|scripts/|assets/)\S+$")
+_MARKDOWN_LINK = re.compile(r"\]\(([^)\s#]+)(?:#[^)]*)?\)")
+
+
+def _own_links(line: str, folder: Path) -> list[str]:
+    """A shipped skill's link to one of its own files, in backticks or as a Markdown link,
+    that is not in its folder: a copy that left a file of its upstream behind."""
+    found: list[str] = []
+    for link in [*map(str.strip, _INLINE.findall(line)), *_MARKDOWN_LINK.findall(line)]:
+        if _OWN_LINK.match(link) and not (folder / link).exists():
+            found.append(f"links `{link}`, which is not in the skill's folder")
     return found
 
 

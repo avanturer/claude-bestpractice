@@ -3,7 +3,7 @@
 
 A pack ships copies, never links: a copy is reviewed, held to this repository's checks and
 trimmed to its budget, and a link would load whatever the upstream pushed last, with the
-agent's permissions (decision 0100). The cost of a copy is that it ages. Each one says where
+agent's permissions (decision 0101). The cost of a copy is that it ages. Each one says where
 it came from and at which commit (`metadata.upstream`, `metadata.commit`), and this asks
 GitHub whether the upstream's folder has moved past that commit.
 

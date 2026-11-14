@@ -10,5 +10,5 @@
 - [0097] A connection lost in a test's body is no verdict either — `decisions/0097-a-connection-lost-in-a-tests-body-is-no-verdict-either.md`
 - [0098] A merge waits for the chat's agents, and a spawn that never ran is not counted — `decisions/0098-a-merge-waits-for-the-chats-agents-and-a-spawn-that-never-ran-is-not-counted.md`
 - [0099] Every skill a session can load is listed, counted, checked and missed when it goes — `decisions/0099-every-skill-a-session-can-load-is-listed-counted-and-missed.md`
-- [0100] Curated skills ship as packs, plugins of their own in this marketplace, copied and dated — `decisions/0100-curated-skills-ship-as-packs.md`
+- [0101] Curated skills ship as packs, and every pack comes to every project through `curated` — `decisions/0101-every-pack-comes-everywhere-through-curated.md`
 - ... 86 older, see `decisions/`

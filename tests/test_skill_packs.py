@@ -1,16 +1,21 @@
-"""Curated skills ship as packs: plugins of their own in this marketplace (decision 0100).
+"""Curated skills ship as packs: plugins of their own in this marketplace (decision 0101).
 
-A pack is enabled per project, updated by Claude Code like any plugin (a new version's copy
-replaces the old, so a skill added appears and a skill removed goes), held to the plugin's own
-checks, and a skill copied from another repository says where from, at which commit and under
-which licence, and is compared with its upstream every week.
+A pack is updated by Claude Code like any plugin (a new version's copy replaces the old, so a
+skill added appears and a skill removed goes), held to the plugin's own checks, and a skill
+copied from another repository says where from, at which commit and under which licence, and is
+compared with its upstream every week. `curated` depends on every pack and is installed once at
+user scope, so each comes to every project (decision 0101).
 """
 
 from __future__ import annotations
 
+import contextlib
+import datetime
 import importlib.util
+import io
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -50,7 +55,7 @@ class TestEachPackIsAPluginOfTheMarketplace(unittest.TestCase):
             self.assertEqual(declared["version"], entry["version"], pack.name)
 
     def test_no_pack_carries_hooks_or_servers(self):
-        """A pack is advice, chosen by the model; enforcement is the plugin's (decision 0100)."""
+        """A pack is advice, chosen by the model; enforcement is the plugin's (decision 0101)."""
         for manifest in self.packs:
             pack = manifest.parent.parent
             for forbidden in ("hooks", ".mcp.json", ".lsp.json", "bin", "monitors"):
@@ -60,6 +65,45 @@ class TestEachPackIsAPluginOfTheMarketplace(unittest.TestCase):
         self.assertTrue((PACKS / "design" / "skills" / "landing-not-slop" / "SKILL.md").is_file())
         self.assertNotIn("landing-not-slop", [skill.name for skill in skills.ours()])
         self.assertEqual("design@claude-bestpractice", skills.MOVED["landing-not-slop"])
+
+
+class TestCuratedBringsEveryPackEverywhere(unittest.TestCase):
+    """Measured on 2.1.325 in a throwaway HOME: `claude plugin install curated@…` installs each
+    dependency at user scope and enables it in the user's settings; `claude plugin update` of a
+    version that lists one more installs it; one delisted from the marketplace is uninstalled at
+    the next session start with `forceRemoveDeletedPlugins`, and stays, failing to load, without
+    it; `renames: {<name>: null}` removes nothing."""
+
+    def setUp(self) -> None:
+        self.marketplace = json.loads((REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text())
+        self.curated = json.loads((PACKS / "curated" / ".claude-plugin" / "plugin.json").read_text())
+
+    def test_it_depends_on_every_other_pack_of_the_marketplace(self):
+        packs = sorted(entry["name"] for entry in self.marketplace["plugins"]
+                       if entry["source"].startswith("./packs/") and entry["name"] != "curated")
+        self.assertEqual(packs, sorted(self.curated["dependencies"]))
+
+    def test_each_by_bare_name_with_no_range(self):
+        """A bare name resolves in this marketplace; a range a relative-path pack's copy falls
+        outside of keeps `curated` disabled."""
+        for dependency in self.curated["dependencies"]:
+            self.assertIsInstance(dependency, str)
+            self.assertNotIn("@", dependency)
+
+    def test_it_ships_nothing_of_its_own(self):
+        self.assertEqual([".claude-plugin"], sorted(path.name for path in (PACKS / "curated").iterdir()))
+
+    def test_the_plugin_depends_on_no_pack(self):
+        """A dependency that cannot load keeps its dependent disabled: one pack turned off in a
+        project would turn off every gate there."""
+        manifest = json.loads((REPO_ROOT / "plugin" / ".claude-plugin" / "plugin.json").read_text())
+        entry = next(e for e in self.marketplace["plugins"] if e["name"] == "bestpractice")
+        self.assertNotIn("dependencies", manifest)
+        self.assertNotIn("dependencies", entry)
+
+    def test_a_pack_delisted_leaves_every_install(self):
+        self.assertIs(True, self.marketplace.get("forceRemoveDeletedPlugins"))
+        self.assertNotIn(None, self.marketplace.get("renames", {}).values())
 
 
 class TestAPacksChangeNeedsItsOwnBump(unittest.TestCase):
@@ -144,6 +188,72 @@ class TestACopySaysWhereItCameFrom(unittest.TestCase):
         self.assertIn("LICENSE", said)
 
 
+class TestACopyIsMadeByTheVendorTool(unittest.TestCase):
+    """`tools/vendor_skill.py` makes a copy `make skills` accepts as it stands."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.checkout = self.tmp / "upstream"
+        source = self.checkout / "skills" / "harden"
+        (source / "agents").mkdir(parents=True)
+        (source / "agents" / "openai.yaml").write_text("x\n")
+        (source / "references" / "images").mkdir(parents=True)
+        (source / "references" / "images" / "flamegraph.png").write_bytes(b"\x89PNG")
+        (source / "references" / "profile.md").write_text(
+            "Record a trace.\n\n![A flame graph of one frame](images/flamegraph.png)\n")
+        (self.checkout / "references").mkdir()
+        (self.checkout / "references" / "checklist.md").write_text("- [ ] one\n")
+        (self.checkout / "LICENSE").write_text("MIT License\n")
+        (source / "SKILL.md").write_text(
+            "---\nname: harden\ndescription: an upstream description\nlicense: MIT\n"
+            "allowed-tools: Read, Grep\nmetadata:\n  author: someone\n---\n\n"
+            "See [the checklist](../../references/checklist.md).\n")
+        run = lambda *args: subprocess.run(["git", *args], cwd=self.checkout, check=True,
+                                           capture_output=True)
+        run("init", "-q")
+        run("add", "-A")
+        run("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base")
+        self.root = self.tmp / "repo"
+        (self.root / "packs").mkdir(parents=True)
+        self.copy = self.root / "packs" / "engineering" / "skills" / "harden"
+        self.vendor = tool("vendor_skill")
+
+    def vendored(self, *extra: str) -> int:
+        argv = ["vendor_skill", "--checkout", str(self.checkout), "--repo", "acme/skills",
+                "--skill", "skills/harden", "--pack", "engineering",
+                "--description", "Harden code.", *extra]
+        with mock.patch.object(self.vendor, "ROOT", self.root), \
+                mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()):
+            return self.vendor.main()
+
+    def test_the_copy_passes_the_packs_checks(self):
+        self.assertEqual(0, self.vendored("--guard", "Not here."))
+        text = (self.copy / "SKILL.md").read_text()
+        self.assertEqual([], skills.malformed(self.copy / "SKILL.md", datetime.date.today()))
+        self.assertIn("allowed-tools: Read, Grep", text)
+        self.assertNotIn("author: someone", text)
+        self.assertIn("## Before following this here\n\nNot here.", text)
+        self.assertTrue((self.copy / "LICENSE").is_file())
+        self.assertFalse((self.copy / "agents").exists())
+
+    def test_a_file_linked_outside_the_skills_folder_comes_with_it(self):
+        self.vendored()
+        self.assertIn("](references/checklist.md)", (self.copy / "SKILL.md").read_text())
+        self.assertEqual("- [ ] one\n", (self.copy / "references" / "checklist.md").read_text())
+
+    def test_an_image_is_left_out_and_its_caption_kept(self):
+        self.vendored()
+        self.assertFalse((self.copy / "references" / "images").exists())
+        self.assertEqual("Record a trace.\n\n*Figure left out of this copy: A flame graph of one "
+                         "frame*\n", (self.copy / "references" / "profile.md").read_text())
+
+    def test_a_licence_that_does_not_allow_a_changed_copy_is_refused(self):
+        with self.assertRaises(SystemExit) as raised:
+            self.vendored("--license", "CC-BY-NC-4.0")
+        self.assertIn("does not allow a changed copy", str(raised.exception.code))
+        self.assertFalse(self.copy.exists())
+
+
 class TestAnUpstreamThatMovedIsNamed(unittest.TestCase):
     PINNED = "a" * 40
 
@@ -178,5 +288,15 @@ class TestAnUpstreamThatMovedIsNamed(unittest.TestCase):
 
     def test_with_no_copy_in_any_pack_nothing_is_asked(self):
         asked = []
-        self.assertEqual(0, self.upstream.main(lambda url: asked.append(url) or {}))
+        with mock.patch.object(self.upstream, "ROOT", Path(tempfile.mkdtemp())), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(0, self.upstream.main(lambda url: asked.append(url) or {}))
         self.assertEqual([], asked)
+
+    def test_every_copy_shipped_is_one_the_weekly_job_asks_about(self):
+        asked = []
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.upstream.main(lambda url: asked.append(url) or {})
+        copies = [path for path in PACKS.glob("*/skills/*/SKILL.md") if skills.upstream(path)]
+        self.assertTrue(copies)
+        self.assertEqual(len(copies), len(asked))

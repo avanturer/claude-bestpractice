@@ -1,0 +1,17 @@
+{
+  "name": "growth",
+  "version": "1.0.0",
+  "description": "Curated skills for getting an app found: App Store and Google Play listings. A pack of claude-bestpractice; `curated` brings every pack.",
+  "author": {
+    "name": "avanturer"
+  },
+  "homepage": "https://github.com/avanturer/claude-bestpractice/tree/main/packs/growth",
+  "license": "MIT",
+  "keywords": [
+    "aso",
+    "app-store",
+    "growth",
+    "skills"
+  ],
+  "repository": "https://github.com/avanturer/claude-bestpractice"
+}

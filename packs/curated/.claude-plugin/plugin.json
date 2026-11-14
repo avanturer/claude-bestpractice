@@ -1,0 +1,22 @@
+{
+  "name": "curated",
+  "version": "1.0.0",
+  "description": "Every skill pack of claude-bestpractice in one install: install it once at user scope and each pack comes to every project, and goes or grows as the list here does.",
+  "author": {
+    "name": "avanturer"
+  },
+  "homepage": "https://github.com/avanturer/claude-bestpractice/tree/main/packs/curated",
+  "license": "MIT",
+  "keywords": [
+    "skills",
+    "bundle",
+    "curated"
+  ],
+  "repository": "https://github.com/avanturer/claude-bestpractice",
+  "dependencies": [
+    "design",
+    "engineering",
+    "growth",
+    "mobile"
+  ]
+}

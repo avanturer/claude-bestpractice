@@ -208,6 +208,9 @@ PROJECT, USER, SYNCED, PLUGIN = "project", "user", "synced", "plugin"
 # a pack enabled there lists it as `<pack>:<name>`, and it is not gone.
 MOVED = {"landing-not-slop": "design@claude-bestpractice"}
 
+# The plugin that depends on every pack, installed once at user scope (decision 0101).
+CURATED = "curated@claude-bestpractice"
+
 # How Claude Code names a skill synced from a claude.ai account: "Synced skills need the
 # namespace in rules: `Skill(anthropic-skills:pdf)`" (Claude Code's skills page).
 SYNCED_NAMESPACE = "anthropic-skills"

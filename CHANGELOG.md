@@ -1,5 +1,45 @@
 # Changelog
 
+## v2.18.0
+
+Curated skills reach every project from one install. `curated@claude-bestpractice` depends on
+every pack: installed once at user scope, it brings each pack to every project on the machine,
+including ones started later. The same update adds a pack `curated` starts listing, and a pack
+retired from the marketplace is uninstalled at the next session start (decision 0101,
+superseding 0100). Three packs join `design`, all copied at a commit from their upstreams.
+
+- **`curated` is the one install.** `claude plugin install curated@claude-bestpractice`
+  installs `design`, `engineering`, `growth` and `mobile` at user scope, measured on Claude Code
+  2.1.325 in a throwaway HOME. A project that wants none of a pack sets it to `false` in its own
+  `enabledPlugins`. Together the packs add about 420 tokens to each session (`claude plugin
+  details`), and `make budget` caps all packs at 1,200 tokens.
+- **New packs.** `engineering`: `debugging-and-error-recovery` and `security-and-hardening`
+  (addyosmani/agent-skills, MIT). `growth`: `aso` (coreyhaines31/marketingskills, MIT).
+  `mobile`: `expo-upgrade` (expo/skills, MIT) and `react-native-best-practices`
+  (callstackincubator/agent-skills, MIT). Where a step of the upstream's would be wrong here,
+  the copy opens with a short section saying so: the security skill leaves a history purge
+  after a leaked secret to the founder, and the mobile skills send a change to native code to a
+  store build, never over the air.
+- **A pack leaves by leaving the marketplace.** The marketplace sets
+  `forceRemoveDeletedPlugins`, so a deleted entry is uninstalled from every install at the next
+  session start. Measured: without the flag a delisted pack stays installed and fails to load;
+  a pack dropped from `curated` but still listed stays until `claude plugin prune`; and
+  `renames: {<name>: null}`, the way 0100 gave for retiring a pack, removes nothing.
+- **`bestpractice` depends on no pack.** A dependency that cannot load keeps the plugin that
+  depends on it disabled, so one pack turned off in a project would turn off every gate there.
+  A test holds this.
+- **`tools/vendor_skill.py` makes a copy.** It works from a clone of the upstream. It rewrites
+  the frontmatter, keeping the functional keys and adding the provenance `make skills` requires.
+  It copies the licence text and brings in any file the skill links outside its folder, and it
+  refuses a licence that does not allow a changed copy. Images are left out, each replaced by
+  its caption: one upstream's thirteen screenshots were 6.2 MB against an 18 MB history, which
+  every clone of the marketplace would carry, and no session acts on a profiler screenshot. `make skills` now checks shipped skills
+  for links to their own files that are missing. It no longer looks in this repository for
+  paths and targets the skill names in other projects.
+- **The `landing-not-slop` notice names `curated`**: `claude plugin install
+  curated@claude-bestpractice` brings every pack. The `design` pack is 1.0.1, its description
+  no longer saying it is enabled per project.
+
 ## v2.17.0
 
 Every skill a session can load is the plugin's to keep followable, not only its own three

@@ -119,6 +119,44 @@ class TestASoundSkillPasses(SkillCheckCase):
         self.assertEqual([], self.findings())
 
 
+SHIPPED = """---
+name: harden
+description: t
+---
+
+Read `references/checklist.md` and [the guide](references/guide.md#top), then `docs/missing.md`.
+
+```bash
+make deploy-preview
+for pr in 1 2; do gh pr merge $pr --squash; done
+```
+"""
+
+
+class TestASkillThisRepositoryShips(SkillCheckCase):
+    """A skill of the plugin or of a pack is followed in other projects: what it names there is
+    theirs to have, a file of its own it links has to be in its folder, and its steps still meet
+    the gates (`make skills`)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.path = self.tmp / "packs" / "p" / "skills" / "harden" / "SKILL.md"
+        (self.path.parent / "references").mkdir(parents=True)
+        (self.path.parent / "references" / "checklist.md").write_text("one\n")
+        self.path.write_text(SHIPPED)
+        self.said = {finding.line: finding.said for finding in skillcheck.shipped(self.ctx(), [self.path])}
+
+    def test_a_file_of_its_own_it_links_and_lacks(self):
+        self.assertEqual("links `references/guide.md`, which is not in the skill's folder", self.said[6])
+
+    def test_nothing_it_names_in_a_project_is_looked_for_here(self):
+        self.assertNotIn(9, self.said)
+        self.assertNotIn("docs/missing.md", self.said[6])
+
+    def test_a_step_the_gates_refuse_is_still_named(self):
+        self.assertIn("the merge gate refuses this step", self.said[10])
+
+
 class TestFindingsBecomeCards(SkillCheckCase):
     def setUp(self) -> None:
         super().setUp()

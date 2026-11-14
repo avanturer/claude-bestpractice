@@ -203,7 +203,15 @@ class TestASkillThisPluginMovedIntoAPack(SkillsCase):
     def test_it_is_named_with_the_command_that_brings_it_back(self):
         said = skilluse.notice(self.ctx(), self.home)
         self.assertIn("landing-not-slop (moved to the `design` pack: `claude plugin install "
-                      "design@claude-bestpractice --scope project`)", said)
+                      "curated@claude-bestpractice` brings every pack)", said)
+
+    def test_with_the_pack_enabled_by_curated_at_user_scope_nothing_is_gone(self):
+        """The CLI writes a dependency into the user's `enabledPlugins` (2.1.325)."""
+        pack = self.home / ".claude" / "plugins" / "cache" / "claude-bestpractice" / "design"
+        skill(pack / "1.0.1" / "skills", "landing-not-slop")
+        (self.home / ".claude" / "settings.json").write_text(json.dumps({"enabledPlugins": {
+            "curated@claude-bestpractice": True, "design@claude-bestpractice": True}}))
+        self.assertEqual([], skilluse.vanished(self.ctx(), skills.inventory(self.repo, self.home)))
 
     def test_with_the_pack_enabled_here_nothing_is_gone(self):
         pack = self.home / ".claude" / "plugins" / "cache" / "claude-bestpractice" / "design"
