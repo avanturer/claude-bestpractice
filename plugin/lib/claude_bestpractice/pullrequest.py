@@ -1718,7 +1718,7 @@ def _merge_call(command: str):
     from . import shellcmd
 
     if not shellcmd.commands(command):
-        return _MERGES_SHELL.search(command)
+        return _MERGES_SHELL.search(shellcmd.outside_quotes(command))
     merging = (argv for argv in shellcmd.runs(command, "gh", "pr", "merge") if _merges(argv))
     return next(merging, None)
 
@@ -1809,7 +1809,8 @@ def _merge_hidden(command: str) -> bool:
     from . import shellcmd
 
     if not shellcmd.commands(command):
-        return bool(_MERGES_SHELL.search(command)) or _api_merge_written(command)
+        return (bool(_MERGES_SHELL.search(shellcmd.outside_quotes(command)))
+                or _api_merge_written(command))
     if shellcmd.hidden(command, "gh", "pr", "merge"):
         return True
     if shellcmd.hidden(command, "gh", "api"):

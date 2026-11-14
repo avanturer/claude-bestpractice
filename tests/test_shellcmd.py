@@ -24,6 +24,23 @@ from helpers import BIN, RepoCase
 from claude_bestpractice import ci, gitpolicy, pullrequest, shellcmd, vouch
 
 
+def gate_decision(repo: pathlib.Path, command: str) -> str:
+    """What `pre-tool` decides about this shell line in `repo`: "deny", "ask", or "allow"
+    where it says nothing."""
+    proc = subprocess.run(
+        [sys.executable, str(BIN / "pre-tool")],
+        input=json.dumps({
+            "cwd": str(repo), "session_id": "s1", "hook_event_name": "PreToolUse",
+            "tool_name": "Bash", "tool_input": {"command": command},
+        }),
+        capture_output=True, text=True, cwd=str(repo), timeout=120,
+    )
+    try:
+        return json.loads(proc.stdout)["hookSpecificOutput"].get("permissionDecision", "allow")
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return "allow"
+
+
 class TestReadingIsNotDoing(unittest.TestCase):
     def merges(self, line: str) -> bool:
         return pullrequest.merge_target("Bash", line, {}) is not None
@@ -76,18 +93,7 @@ class TestTheSameShapeOneGateOver(RepoCase):
         self.configure(stage_override="traction")
 
     def bash(self, command: str) -> str:
-        proc = subprocess.run(
-            [sys.executable, str(BIN / "pre-tool")],
-            input=json.dumps({
-                "cwd": str(self.repo), "session_id": "s1", "hook_event_name": "PreToolUse",
-                "tool_name": "Bash", "tool_input": {"command": command},
-            }),
-            capture_output=True, text=True, cwd=str(self.repo), timeout=120,
-        )
-        try:
-            return json.loads(proc.stdout)["hookSpecificOutput"].get("permissionDecision", "allow")
-        except (json.JSONDecodeError, KeyError, TypeError):
-            return "allow"
+        return gate_decision(self.repo, command)
 
     def test_writing_about_a_production_deploy_is_not_one(self):
         self.assertNotEqual("deny", self.bash("echo 'we deploy with --production'"))
@@ -135,6 +141,53 @@ class TestTheSameShapeOneGateOver(RepoCase):
         self.assertNotEqual("deny", self.bash("git grep -n -- --production"))
         self.assertNotEqual("deny", self.bash("vercel --prod"))
         self.assertEqual("deny", self.bash("vercel --prod"), "one word allowed two promotions")
+
+
+class TestAPatternOnALineThisCannotRead(RepoCase):
+    """#367: a read-only grep for `gh pr merge` was refused as a merge.
+
+    A `$(…)` or `<(…)` makes a line one `commands` declines, and the fallback matched the
+    merge anywhere in the text, the quoted pattern included. Quoting decides there too, except
+    where a program on the line can run a string, which keeps the old reading.
+    """
+
+    SEARCHES = (
+        "grep -n 'gh pr merge' <(cat notes.md)",
+        """grep -n "gh pr merge" $(git ls-files '*.md')""",
+        r"grep -n 'foo\|gh pr merge\|bar' $(git ls-files)",
+        "rg 'gh pr merge 12' <(git log -p)",
+    )
+    MERGES = (
+        "gh pr merge 5 --squash $(true)",
+        'echo "$(gh pr merge 5)" $(true)',
+        "x=$(gh pr merge 5)",
+        "bash -c 'gh pr merge 5' $(true)",
+        "eval 'gh pr merge 5' <(true)",
+        "git ls-files | xargs sh -c 'gh pr merge 5' $(true)",
+        """python3 -c "import os; os.system('gh pr merge 5')" $(true)""",
+        r"echo \'; gh pr merge 5; \' $(true)",
+    )
+
+    def test_these_lines_are_ones_the_parser_declines(self):
+        """Otherwise the cases below prove nothing about the fallback."""
+        for line in self.SEARCHES + self.MERGES:
+            self.assertEqual([], shellcmd.commands(line), line)
+
+    def test_a_searched_pattern_is_no_merge(self):
+        for line in self.SEARCHES:
+            self.assertIsNone(pullrequest.merge_target("Bash", line, {}), line)
+            self.assertEqual("", pullrequest.merge_line("Bash", line), line)
+
+    def test_a_merge_the_line_runs_is_still_read(self):
+        for line in self.MERGES:
+            self.assertTrue(pullrequest.merge_line("Bash", line), line)
+
+    def test_the_gate_lets_the_search_run(self):
+        for line in self.SEARCHES:
+            self.assertNotEqual("deny", gate_decision(self.repo, line), line)
+
+    def test_the_gate_still_refuses_the_hidden_merge(self):
+        self.assertEqual("deny", gate_decision(self.repo, "bash -c 'gh pr merge 5' $(true)"))
 
 
 class TestALineTheShellWillNotParse(unittest.TestCase):
