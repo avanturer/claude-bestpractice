@@ -50,6 +50,11 @@ MAX_DEFECTS = 50
 
 MAX_ERROR_CHARS = 300
 
+# What a session writes about a wrong refusal is the whole of the evidence: no frame, no
+# exception. Cut at the crash limit, #367 and #368 reached GitHub stopped mid-sentence, and
+# #368 without the part that said which session was refused and why it held no card.
+MAX_OBSERVATION_CHARS = 2000
+
 # A report shorter than this says nothing a fix could use. Deliberately low: the cost of
 # a thin report is one line the founder deletes, and the cost of a threshold that turns
 # reporting into work is a session that goes back to interrupting them instead.
@@ -88,8 +93,9 @@ def _shorten(path: str) -> str:
     return "<path>"
 
 
-def sanitize(text: str) -> str:
-    """What is safe to put in a public issue: no credentials, no directory layout.
+def sanitize(text: str, limit: int = MAX_ERROR_CHARS) -> str:
+    """What is safe to put in a public issue: no credentials, no directory layout, no more
+    than `limit` characters.
 
     Scrubbed with the same pass the pre-write gate uses, then stripped of absolute paths.
     The report is worth nothing if it cannot be shown to a stranger, and a report that
@@ -99,7 +105,7 @@ def sanitize(text: str) -> str:
     from . import redact
 
     cleaned = redact.scrub(redact.strip_control(text))
-    return _ABSOLUTE.sub(lambda m: _shorten(m.group(0)), cleaned)[:MAX_ERROR_CHARS]
+    return _ABSOLUTE.sub(lambda m: _shorten(m.group(0)), cleaned)[:limit]
 
 
 def signature(gate: str, what: str, where: str) -> str:
@@ -150,8 +156,9 @@ def record(ctx: GitContext, gate: str, exc: BaseException) -> None:
         return
 
 
-def observed(ctx: GitContext, what: str, gate: str = "") -> tuple[bool, str]:
-    """A gate that refused the wrong thing, filed by the session it refused.
+def observed(ctx: GitContext, what: str, gate: str = "", refused: str = "") -> tuple[bool, str]:
+    """A gate that refused the wrong thing, filed by the session it refused, with `refused`,
+    the first line of the refusal that session last got, where the caller knows it.
 
     The other half of `record`. A crash files itself; a gate that runs perfectly and
     refuses the wrong call cannot, because nothing failed — and that is the whole of this
@@ -173,12 +180,13 @@ def observed(ctx: GitContext, what: str, gate: str = "") -> tuple[bool, str]:
         chosen = mode(ctx)
         if chosen == OFF:
             return False, "defect capture is off (`report_defects`), so nothing was recorded"
-        text = sanitize(_one_line(what))
+        text = sanitize(_one_line(what), MAX_OBSERVATION_CHARS)
         if len(text) < MIN_OBSERVATION_CHARS:
             return False, ("say what was refused and why that is wrong — a report that names "
                            "neither cannot be acted on")
         named = _one_line(gate)[:40] or UNNAMED_GATE
-        _file(ctx, signature(named, text, OBSERVED), named, text, OBSERVED, kind=OBSERVED)
+        _file(ctx, signature(named, text, OBSERVED), named, text, OBSERVED, kind=OBSERVED,
+              refused=sanitize(_one_line(refused)))
         if chosen == AUTO:
             send_soon(ctx)
             return True, f"recorded against {named}, and being filed at {REPORT_REPO}"
@@ -263,8 +271,9 @@ def send_soon(ctx: GitContext) -> None:
 
 
 def _file(ctx: GitContext, key: str, gate: str, error: str, where: str,
-          kind: str = CRASH) -> None:
-    """Append one report, or count an identical one again.
+          kind: str = CRASH, refused: str = "") -> None:
+    """Append one report, or count an identical one again. `refused` is the gate's own line,
+    kept for a session-filed report.
 
     The counting is why both kinds share this: a report seen five times has to keep its
     first sighting and its sent state, and two copies of that arithmetic are two places
@@ -278,6 +287,7 @@ def _file(ctx: GitContext, key: str, gate: str, error: str, where: str,
         "gate": gate,
         "error": error,
         "where": where,
+        **({"refused": refused} if refused else {}),
         "version": _version(),
         "python": f"{sys.version_info.major}.{sys.version_info.minor}",
         "platform": platform.system().lower(),
@@ -352,10 +362,13 @@ def body(report: dict[str, Any]) -> str:
     repeats = f" (seen {seen}×)" if seen > 1 else ""
     watched = report.get("kind") == OBSERVED
     headline = "refused the wrong thing" if watched else "crashed"
+    refused = str(report.get("refused") or "")
     return "\n".join([
         f"`{report.get('gate')}` {headline}{repeats}.",
         "",
         "```",
+        # In the block, where a backtick in it cannot end the formatting and no `@` notifies.
+        *([f"refused: {refused}", ""] if watched and refused else []),
         report.get("error", ""),
         *([] if watched else [f"  at {report.get('where') or 'unknown'}"]),
         "```",
