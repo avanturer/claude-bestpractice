@@ -25,6 +25,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
+# An old copy's command runs the newest installed copy's instead, so a chat started
+# before an update is gated by the version on disk (decision 0102).
+from claude_bestpractice import upgrade as _upgrade  # noqa: E402
+
+_upgrade.handover(Path(__file__))
+
 from claude_bestpractice import __version__, attempts, board, config, delivery, discipline, drafts, evidence, founder, hookio, inbox, options, pullrequest, redact, sessions, stage, store, subagents, suites, witness, worktree  # noqa: E402
 from claude_bestpractice.gitctx import authored_floor, changed_files, resolve  # noqa: E402
 

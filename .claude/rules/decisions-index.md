@@ -1,6 +1,5 @@
 # Decisions
 
-- [0089] A merge is judged on the commit it takes, and what the session clears is not put to the founder — `decisions/0089-a-merge-is-judged-on-the-commit-it-takes.md`
 - [0090] A session goes back into its tree without the founder being asked, wherever the tree was made — `decisions/0090-a-tree-is-entered-without-asking.md`
 - [0091] A resumed chat's tree is its own, and a removal ends no process a session started — `decisions/0091-a-resumed-chats-tree-is-its-own-and-its-commands-keep-it.md`
 - [0092] The owner's defect reports are filed as they come, and only what this version was seen to do — `decisions/0092-the-owners-defect-reports-go-as-they-come.md`
@@ -11,4 +10,5 @@
 - [0098] A merge waits for the chat's agents, and a spawn that never ran is not counted — `decisions/0098-a-merge-waits-for-the-chats-agents-and-a-spawn-that-never-ran-is-not-counted.md`
 - [0099] Every skill a session can load is listed, counted, checked and missed when it goes — `decisions/0099-every-skill-a-session-can-load-is-listed-counted-and-missed.md`
 - [0101] Curated skills ship as packs, and every pack comes to every project through `curated` — `decisions/0101-every-pack-comes-everywhere-through-curated.md`
-- ... 86 older, see `decisions/`
+- [0102] A chat runs the newest installed copy's gates, and the plugin brings its own updates to disk — `decisions/0102-a-chat-runs-the-newest-copy-and-the-plugin-updates-itself.md`
+- ... 87 older, see `decisions/`

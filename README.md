@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-2.18.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.19.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-3017%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -610,8 +610,9 @@ configuration silently.
 ## Skill packs
 
 Curated skills ship beside the plugin as **packs**, plugins of their own in this marketplace.
-One install brings every pack to every project on the machine, including projects you start
-later:
+`curated@claude-bestpractice` brings every pack to every project on the machine, including
+projects you start later, and the plugin installs it itself at the first session start after
+2.19.0 (see [Upgrading](#upgrading)). By hand it is:
 
 ```sh
 claude plugin install curated@claude-bestpractice
@@ -638,13 +639,8 @@ Packs change through Claude Code's own updates, and nothing is written into your
 folders. A pack's new version replaces the old copy, so a skill it adds appears and a skill it
 drops is removed. When `curated` lists a new pack, the update installs it. When a pack is
 retired, it is removed from the marketplace, and the next session start uninstalls it
-(`forceRemoveDeletedPlugins`). Updates arrive with `claude plugin update`, or on their own once
-auto-update is on for this marketplace (`/plugin` → Marketplaces, or in settings):
-
-```json
-{"extraKnownMarketplaces": {"claude-bestpractice": {
-  "source": {"source": "github", "repo": "avanturer/claude-bestpractice"}, "autoUpdate": true}}}
-```
+(`forceRemoveDeletedPlugins`). The plugin installs `curated` and brings each update itself
+(see [Upgrading](#upgrading)), so nothing here needs a command.
 
 A pack holds skills only, never hooks or servers. Each skill in one records when it was last
 checked and passes the same check `claude-bp skills` runs on yours. A skill copied from another
@@ -723,15 +719,26 @@ violation, a failing suite, a green finish, and a second session reading the his
 
 ## Upgrading
 
+Nothing to run, from 2.19.0 on. At a session's start, at most once in six hours on the
+machine, the plugin asks the CLI in the background to refresh this marketplace, update every
+plugin installed from it (this one and the packs), and install `curated` once if it never was.
+Chats that are already open switch over on their own: each hook command of the old copy hands
+over to the newest installed copy, so every gate in every chat runs the version on disk. What
+Claude Code itself loaded for a chat, its list of skills and commands and the board pane,
+comes with the next chat, or with `/reload-plugins` if you type it. Claude Code takes that
+command from your keyboard only: asked by a plugin, it answers that it "isn't available over
+a remote connection", measured on 2.1.325. `claude-bp status` says when the last update ran
+and what each step answered.
+
+To keep the old behaviour, set `CLAUDE_BESTPRACTICE_NO_SELF_UPDATE=1` (no updates),
+`CLAUDE_BESTPRACTICE_NO_HANDOVER=1` (each copy runs its own code), or this marketplace's
+`autoUpdate` to `false`. Claude Code's own `DISABLE_AUTOUPDATER` and `DISABLE_UPDATES` stop it
+too. Updating by hand still works:
+
 ```sh
 claude plugin marketplace update claude-bestpractice
 claude plugin update bestpractice@claude-bestpractice
 ```
-
-Then **restart Claude Code**. The update lands in a new directory and every session
-already running keeps executing the old copy until it is restarted — the CLI says
-`Restart to apply changes.` once and never mentions it again. A session that is running
-superseded code now says so on its own board, which is the only place you would find out.
 
 The second command uses the **qualified** `name@marketplace` form. `install` accepted the
 short name and `update` did not — the short form failed with `Plugin "claude-bestpractice"

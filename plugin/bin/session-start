@@ -20,7 +20,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from claude_bestpractice import board, ci, config, evidence, hookio, knowledge, limits, migrate, onboard, plan, policy, pullrequest, sessions, skillcheck, skilluse, stage, store, upgrade, worktree  # noqa: E402
+# An old copy's command runs the newest installed copy's instead, so a chat started
+# before an update is gated by the version on disk (decision 0102).
+from claude_bestpractice import upgrade as _upgrade  # noqa: E402
+
+_upgrade.handover(Path(__file__))
+
+from claude_bestpractice import board, ci, config, evidence, hookio, knowledge, limits, migrate, onboard, plan, policy, pullrequest, selfupdate, sessions, skillcheck, skilluse, stage, store, upgrade, worktree  # noqa: E402
 from claude_bestpractice.gitctx import GitContext, resolve, stash_baseline  # noqa: E402
 
 
@@ -624,6 +630,13 @@ def main() -> None:
     # Empty on every session that is running what is installed, which is all of them
     # except the ones that just updated and did not restart.
     body += upgrade.stale_line()
+    # The plugin brings its own update to disk, in a process nobody waits on, at most every
+    # six hours, and says once what the last run brought (decision 0102). From every place
+    # a plugin installed for this project may have been installed from.
+    with contextlib.suppress(Exception):
+        body += selfupdate.line()
+        selfupdate.start([ctx.worktree_root, worktree.main_checkout(ctx),
+                          *[Path(p) for p in [os.environ.get("CLAUDE_PROJECT_DIR", "")] if p]])
 
     hookio.emit_context("SessionStart", body)
 

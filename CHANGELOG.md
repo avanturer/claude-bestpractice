@@ -1,5 +1,37 @@
 # Changelog
 
+## v2.19.0
+
+Nothing to run after an update, and no chat to restart for its gates (decision 0102). The
+plugin brings its own updates to disk and installs `curated` once. Every hook command of an old
+copy hands over to the newest installed copy, so a chat that was already open is gated by the
+version on disk.
+
+- **A chat runs the newest copy's gates.** `upgrade.handover` comes first in every script of
+  `bin/`: where a newer copy the CLI has not left behind sits beside this one, its namesake
+  runs instead, with the same stdin, arguments and exit status, `CLAUDE_PLUGIN_ROOT` naming it
+  and `CLAUDE_BESTPRACTICE_LOADED_FROM` naming the copy the chat loaded. It uses `execve` on
+  POSIX and a child process on Windows. Measured on a real install: after `claude plugin update`
+  2.19.0 → 2.19.1, the old copy's `claude-bp-plan --version` printed 2.19.1.
+  `CLAUDE_BESTPRACTICE_NO_HANDOVER=1` keeps each copy on its own code.
+- **Why not `/reload-plugins` for every chat, as asked.** Claude Code refuses it from a plugin.
+  `$.command.run({ command: "reload-plugins" })` answered "/reload-plugins isn't available over
+  a remote connection in this session", and `$.prompt.submit` of it was refused as running a
+  command as the user (2.1.325, a stream-json session like VS Code's). What Claude Code itself
+  loaded for a chat therefore waits for the next chat or a `/reload-plugins` the founder types:
+  its skills and commands list, `hooks.json` and the hooks module. The chat is told so once,
+  `claude-bp status` says it, and the old "restart Claude Code" advice is gone.
+- **The plugin updates itself.** At a session's start, at most once in six hours on the machine,
+  a detached process asks the CLI to refresh this marketplace, update every plugin installed
+  from it for the user or for this project, and install `curated` where it never was; a
+  `curated` removed after that is left removed. Measured against the real CLI: one run updated
+  2.19.1 → 2.19.2 and installed `curated` with its five packs, in 1.5 s. The next session start
+  says once what it brought. It does not run under Claude Code's `DISABLE_AUTOUPDATER`,
+  `DISABLE_UPDATES` or `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` (unless
+  `FORCE_AUTOUPDATE_PLUGINS`), with this marketplace's `autoUpdate` false, with
+  `CLAUDE_BESTPRACTICE_NO_SELF_UPDATE=1`, from a development checkout, or with no `claude` on
+  the PATH.
+
 ## v2.18.0
 
 Curated skills reach every project from one install. `curated@claude-bestpractice` depends on

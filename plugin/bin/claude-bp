@@ -19,8 +19,14 @@ from pathlib import Path
 BIN = Path(__file__).resolve().parent
 sys.path.insert(0, str(BIN.parent / "lib"))
 
+# An old copy's command runs the newest installed copy's instead, so a chat started
+# before an update is gated by the version on disk (decision 0102).
+from claude_bestpractice import upgrade as _upgrade  # noqa: E402
+
+_upgrade.handover(Path(__file__))
+
 from claude_bestpractice import __version__, board, ci, conflicts, defects, delivery, drafts, hookio, knowledge, onboard, pullrequest  # noqa: E402
-from claude_bestpractice import config, inbox, plan, policy, provenance, sessions, skillcheck, skills, skilluse, spend, stage, upgrade, vouch  # noqa: E402
+from claude_bestpractice import config, inbox, plan, policy, provenance, selfupdate, sessions, skillcheck, skills, skilluse, spend, stage, upgrade, vouch  # noqa: E402
 from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
 
 BOLD = "\033[1m" if sys.stdout.isatty() else ""
@@ -61,10 +67,18 @@ def cmd_status(ctx) -> int:
         print(f"  {bad}")
 
     newer = upgrade.superseded_by()
-    if newer:
-        print(f"  {newer} is installed but NOT running — restart Claude Code to pick it up")
+    loaded = upgrade.loaded_version()
+    if loaded:
+        print(f"  this chat was started on {loaded}; its gates and commands run {__version__}. "
+              "Its skills and board pane follow a new chat, or `/reload-plugins` typed by you")
+    elif newer:
+        print(f"  {newer} is installed but NOT running — a new chat, or `/reload-plugins` "
+              "typed by you, picks it up")
     elif upgrade.orphaned():
-        print("  this copy has been superseded — restart Claude Code to pick up the new one")
+        print("  this copy has been superseded — a new chat, or `/reload-plugins` typed by "
+              "you, picks up the new one")
+    # What the plugin's own update last did on this machine (decision 0102).
+    print(f"{DIM}{selfupdate.summary()}{OFF}")
 
     # Before everything the config decides. A file that does not parse was read as no config
     # at all — `enabled: false` included — and this is where the founder looks.
