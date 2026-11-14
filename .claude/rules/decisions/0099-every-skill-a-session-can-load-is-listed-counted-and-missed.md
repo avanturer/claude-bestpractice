@@ -1,6 +1,6 @@
 ---
-title: Every skill a session can load is listed, counted and missed when it goes, and ours say when they were checked
-paths: plugin/lib/claude_bestpractice/skills.py, plugin/lib/claude_bestpractice/skilluse.py, plugin/hooks/bestpractice.ts, plugin/bin/claude-bp-mod, plugin/bin/claude-bp, plugin/bin/session-start, tools/check_skills.py
+title: Every skill a session can load is listed, counted, checked and missed when it goes
+paths: plugin/lib/claude_bestpractice/skills.py, plugin/lib/claude_bestpractice/skilluse.py, plugin/lib/claude_bestpractice/skillcheck.py, plugin/hooks/bestpractice.ts, plugin/bin/claude-bp-mod, plugin/bin/claude-bp, plugin/bin/session-start, tools/check_skills.py
 date: 2026-11-14
 ---
 
@@ -12,6 +12,11 @@ skill's or a command's file. Decision 0080 counted this plugin's three and nothi
 
 **A skill counted here that no source lists any longer, and the skills of a claude.ai account
 this machine stopped syncing, are said once on the session-start board.**
+
+**A step or a reference in the repository's or the founder's own skills that cannot be
+followed is named `file:line` by `claude-bp skills`, and filed as one card per skill**: a script
+or path that is gone, a make target or npm script that is not there, `$CLAUDE_PROJECT_DIR`
+unbraced in a step, a merge the merge gate refuses, a push to a trunk by name.
 
 **A skill this plugin ships carries `metadata.reviewed`, and one resting on outside facts
 `metadata.recheck-after-days`.** `make skills` fails a missing or impossible date and only
@@ -30,6 +35,7 @@ of its platforms (#365).
 - **Adding `Read` to the `pre-tool` matcher.** A Python process on every read; the module's hook
   starts one only for a skill's file.
 - **Failing `make check` on an overdue date.** A calendar would hold a hotfix release.
+- **Checking a skill against the repository's rules.** A judgement: a second model.
 
 ## Cost accepted
 A skill an MCP server serves, a `--plugin-dir` plugin's and one from a marketplace added by

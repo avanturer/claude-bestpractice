@@ -20,7 +20,7 @@ BIN = Path(__file__).resolve().parent
 sys.path.insert(0, str(BIN.parent / "lib"))
 
 from claude_bestpractice import __version__, board, ci, conflicts, defects, delivery, drafts, hookio, knowledge, onboard, pullrequest  # noqa: E402
-from claude_bestpractice import config, inbox, plan, policy, provenance, sessions, skilluse, spend, stage, upgrade, vouch  # noqa: E402
+from claude_bestpractice import config, inbox, plan, policy, provenance, sessions, skillcheck, skills, skilluse, spend, stage, upgrade, vouch  # noqa: E402
 from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
 
 BOLD = "\033[1m" if sys.stdout.isatty() else ""
@@ -160,6 +160,11 @@ def cmd_status(ctx) -> int:
     heading("SKILLS")
     for said in skilluse.report(ctx):
         print(f"  {said}")
+    findings = skillcheck.check(ctx, skills.inventory(ctx.worktree_root))
+    if findings:
+        broken = len({finding.skill for finding in findings})
+        print(f"  {len(findings)} thing(s) in {broken} skill(s) cannot be followed as written: "
+              "`claude-bp skills`")
     # What the cross-session channel has actually carried on this clone. Printed only
     # when it has carried something, and printed at all because the question "is this
     # worth its undocumented socket frame" deserves a number rather than an opinion.
@@ -203,6 +208,19 @@ def cmd_status(ctx) -> int:
         print("  Nothing blocking. `claude-bp-doctor` proves the gates still fire.")
     print()
     return 0
+
+
+def cmd_skills(ctx) -> int:
+    """Every skill a session here can load, and each line in the repository's and the
+    founder's own skills that cannot be followed as written, as `file:line` (#364)."""
+    heading("SKILLS")
+    for said in skilluse.report(ctx):
+        print(f"  {said}")
+    findings = skillcheck.check(ctx, skills.inventory(ctx.worktree_root))
+    heading("CANNOT BE FOLLOWED AS WRITTEN")
+    for said in skillcheck.lines(ctx, findings) or ["nothing: every step and reference resolves"]:
+        print(f"  {said}")
+    return 1 if findings else 0
 
 
 def cmd_init(ctx, force: bool) -> int:
@@ -678,6 +696,8 @@ def main() -> int:
     reply.add_argument("text", help="the answer, in your own words")
     sub.add_parser(
         "database", help="create this worktree's own database if the server has not got it")
+    sub.add_parser(
+        "skills", help="every skill a session here can load, and what in them cannot be followed")
     spent = sub.add_parser(
         "spend", help="where this repository's sessions spent their tokens, from their transcripts")
     spent.add_argument("--days", type=float, default=14,
@@ -716,6 +736,8 @@ def main() -> int:
         return cmd_answer(ctx, args.id, args.text)
     if args.command == "database":
         return cmd_database(ctx)
+    if args.command == "skills":
+        return cmd_skills(ctx)
     if args.command == "set":
         return cmd_set(ctx, args.key, args.value)
     if args.command == "policy":

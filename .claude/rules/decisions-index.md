@@ -10,5 +10,5 @@
 - [0095] A pull request is filed under its head on GitHub, and a branch gone from the clone settles nothing — `decisions/0095-a-pull-request-is-filed-under-its-github-head.md`
 - [0097] A connection lost in a test's body is no verdict either — `decisions/0097-a-connection-lost-in-a-tests-body-is-no-verdict-either.md`
 - [0098] A merge waits for the chat's agents, and a spawn that never ran is not counted — `decisions/0098-a-merge-waits-for-the-chats-agents-and-a-spawn-that-never-ran-is-not-counted.md`
-- [0099] Every skill a session can load is listed, counted and missed when it goes, and ours say when they were checked — `decisions/0099-every-skill-a-session-can-load-is-listed-counted-and-missed.md`
+- [0099] Every skill a session can load is listed, counted, checked and missed when it goes — `decisions/0099-every-skill-a-session-can-load-is-listed-counted-and-missed.md`
 - ... 85 older, see `decisions/`

@@ -702,6 +702,9 @@ CARRIED = (
     # skilluse.NOTICES — which skills the board already said can no longer load. Purged, every
     # one of them was said again.
     "skill-notices.json",
+    # skillcheck.FILED — the findings each skill's card was filed for. Purged, every one of
+    # those cards was filed a second time.
+    "skill-findings.json",
 )
 # `failing-suite.json` is deliberately absent: the red ledger is Tier A, committed, and
 # this function never reaches it.
