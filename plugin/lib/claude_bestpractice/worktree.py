@@ -2447,15 +2447,11 @@ def provision(ctx: GitContext, task: str = "", session_id: str = "") -> Path | N
 
     slug = session_slug(task, session_id)
     branch = f"{branch_type(task)}/{slug}"
-    target = target_for(ctx, slug)
-    absolute = str(target)
-    # Before the tree exists, so it is never visible as untracked work even for the moment
-    # between `git worktree add` and the next status.
-    hide(ctx)
-
-    if not target.is_dir() and not add_tree(ctx, absolute, branch):
+    target, refused = make_tree(ctx, slug, branch, wait=GATE_WAIT_SECONDS)
+    if refused or target is None:
         return None
 
+    absolute = str(target)
     body = record(ctx, slug, absolute, branch, trust(absolute), session_id)
     furnish(ctx, target, str(body.get("database") or ""), later=True)
     return target
@@ -2731,8 +2727,51 @@ def _base_ref_setting(ctx: GitContext) -> str:
     return ""
 
 
-def add_tree(ctx: GitContext, absolute: str, branch: str) -> bool:
-    """`git worktree add`, with the one recoverable failure handled. False if git refused.
+# One tree made at a time in a clone (decision 0104). Each `git worktree add` lists the
+# clone's trees as it starts, and git reads every listed tree's `commondir` through a `die`
+# on an empty file (`get_common_dir_noenv`), while the `add` that makes a tree creates that
+# file and fills it in two steps (`write_file`, no rename). Four isolation agents of one
+# message read one another's half-made trees — `fatal: failed to read
+# .git/worktrees/agent-1/commondir: Success`, exit 128 — in 3 of 60 bursts on a loaded
+# container, on git 2.43; git 2.56's source reads and writes it the same way. `git worktree
+# list` dies on the same file, so the path is chosen under the lock too: `main_checkout`
+# reads an empty listing as "the asking tree is the main one", and a tree asked for from
+# inside another would be made inside it.
+ADD_LOCK = "worktree-add.lock"
+
+# How long a tree waits for the ones asked for before it in this clone. The WorktreeCreate
+# hook has sixty seconds (`hooks.json`) and can say why it failed only while it still runs.
+# The tool gate's `provision` has fifteen for everything, and a tool gate out of time lets
+# the refused write through, so it gives up sooner and names the command instead.
+HOOK_WAIT_SECONDS = 45.0
+GATE_WAIT_SECONDS = 5.0
+
+
+def make_tree(ctx: GitContext, slug: str, branch: str, requested: str = "",
+              wait: float = GATE_WAIT_SECONDS) -> tuple[Path | None, str]:
+    """Choose a new tree's path and make it there, one at a time in a clone.
+
+    (the path, "") once a tree stands there, a directory already at the path included, so a
+    session refused twice is sent to the same place. Otherwise what stopped it, git's own
+    words where git refused, and the path when it was chosen.
+    """
+    try:
+        with store.file_lock(store.tier_b(ctx, ADD_LOCK), timeout=wait):
+            target = Path(requested) if requested else target_for(ctx, slug)
+            # Before the tree exists, so it is never visible as untracked work even for the
+            # moment between `git worktree add` and the next status.
+            hide(ctx)
+            if target.is_dir():
+                return target, ""
+            return target, add_tree(ctx, str(target), branch)
+    except store.LockTimeout:
+        return None, (f"the trees asked for before it in this clone were still being made "
+                      f"after {wait:g}s; ask for it again once they are")
+
+
+def add_tree(ctx: GitContext, absolute: str, branch: str) -> str:
+    """`git worktree add`, with the one recoverable failure handled. What git said refusing
+    it, or "" once the tree is there. Called under `make_tree`'s lock, never beside it.
 
     Shared with the `WorktreeCreate` hook rather than written twice: that hook echoed a
     path it had never created — only the path's PARENT was made — so the harness refused
@@ -2743,21 +2782,29 @@ def add_tree(ctx: GitContext, absolute: str, branch: str) -> bool:
     """
     base = _base_of(ctx)
     cut = ["--no-track", "-b", branch, absolute, base] if base else ["-b", branch, absolute]
+    made = _worktree_add(ctx, cut)
+    if not made:
+        return ""
+    # A branch of that name already exists is the common one, and it is recoverable:
+    # attach a worktree to the branch instead of creating it again.
+    attached = _worktree_add(ctx, [absolute, branch])
+    if not attached:
+        return ""
+    return "; ".join(dict.fromkeys((made, attached)))
+
+
+def _worktree_add(ctx: GitContext, args: list[str]) -> str:
+    """One `git worktree add`: "" when it made the tree, else git's last word on why not."""
     proc = subprocess.run(
-        ["git", "worktree", "add", *cut],
+        ["git", "worktree", "add", *args],
         cwd=str(ctx.worktree_root), capture_output=True,
         encoding="utf-8", errors="surrogateescape", timeout=120,
     )
     if proc.returncode == 0:
-        return True
-    # A branch of that name already exists is the common one, and it is recoverable:
-    # attach a worktree to the branch instead of creating it again.
-    attach = subprocess.run(
-        ["git", "worktree", "add", absolute, branch],
-        cwd=str(ctx.worktree_root), capture_output=True,
-        encoding="utf-8", errors="surrogateescape", timeout=120,
-    )
-    return attach.returncode == 0
+        return ""
+    said = proc.stderr.strip().splitlines()
+    fatal = [line for line in said if line.startswith(("fatal:", "error:"))]
+    return (fatal or said or [f"git worktree add exited {proc.returncode}"])[-1]
 
 
 def permission_advice(ctx: GitContext | None = None, session_id: str = "") -> str:

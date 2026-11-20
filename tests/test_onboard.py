@@ -356,6 +356,92 @@ class TestWorktreeCreate(RepoCase):
         config = json.loads((self.tmp / ".claude.json").read_text())
         self.assertEqual({f"/trees/t{i}" for i in range(6)}, set(config["projects"]))
 
+    def test_trees_asked_for_at_once_are_made_one_after_another(self):
+        """Every `git worktree add` lists the clone's trees as it starts, and dies on the
+        `commondir` of one a sibling is making at that instant: `failed to read
+        .git/worktrees/agent-1/commondir: Success`. Four agents of one message are four adds in
+        turn. A stand-in `git` notes each add's start and end, slowed so overlaps cannot hide."""
+        import shutil
+
+        from helpers import hooks_at_once
+
+        real, log, shim = shutil.which("git"), self.tmp / "adds.log", self.tmp / "shim"
+        shim.mkdir()
+        (shim / "git").write_text(
+            "#!/bin/sh\n"
+            'if [ "$1" = worktree ] && [ "$2" = add ]; then\n'
+            f'  echo "in $$" >> "{log}"\n'
+            "  sleep 0.3\n"
+            f'  "{real}" "$@"; code=$?\n'
+            f'  echo "out $$" >> "{log}"\n'
+            '  exit "$code"\n'
+            "fi\n"
+            f'exec "{real}" "$@"\n')
+        (shim / "git").chmod(0o755)
+
+        made = hooks_at_once("worktree-create", [
+            {"session_id": "s1", "hook_event_name": "WorktreeCreate", "name": f"agent-{i}"}
+            for i in range(4)
+        ], self.repo, env={"HOME": str(self.tmp), "PATH": f"{shim}:/usr/bin:/bin:/usr/local/bin"})
+
+        self.assertEqual(4, len({path.strip() for path in made if path.strip()}), made)
+        self.assertEqual(["in", "out"] * 4,
+                         [line.split()[0] for line in log.read_text().splitlines()])
+
+    def test_a_tree_git_will_not_make_is_refused_in_gits_words(self):
+        """A sibling's add caught halfway, its `commondir` made and not yet written, and git
+        refuses this one for it. The hook exited 0 with nothing on stdout, and Claude Code
+        failed the agent with no reason given."""
+        halfway = self.repo / ".git" / "worktrees" / "sibling"
+        halfway.mkdir(parents=True)
+        (halfway / "gitdir").write_text(f"{self.tmp / 'sibling' / '.git'}\n")
+        (halfway / "commondir").write_text("")
+
+        proc = self.hook(name="agent-x")
+        self.assertEqual((2, ""), (proc.returncode, proc.stdout), proc.stderr)
+        self.assertIn("no worktree was made for `worktree-agent-x`", proc.stderr)
+        self.assertIn("sibling/commondir", proc.stderr)
+
+    def test_asked_outside_a_repository_it_says_no_tree_was_made(self):
+        """`guard` answers an event outside a repository with `{"continue": true}`, and Claude
+        Code reads a WorktreeCreate hook's stdout as the tree's path."""
+        nowhere = self.tmp / "not-a-repository"
+        nowhere.mkdir()
+        proc = self.run_hook(
+            "worktree-create", {"session_id": "s1", "hook_event_name": "WorktreeCreate",
+                                "name": "agent-x"},
+            env={"HOME": str(self.tmp), "PATH": "/usr/bin:/bin:/usr/local/bin"}, cwd=nowhere)
+        self.assertEqual((2, ""), (proc.returncode, proc.stdout), proc.stderr)
+        self.assertIn("no worktree was made", proc.stderr)
+
+    def test_a_tree_whose_turn_does_not_come_in_time_says_so(self):
+        """The hook would rather say why than be stopped by the harness mid-wait, and the tool
+        gate, with fifteen seconds for everything, falls back to naming the command."""
+        from unittest import mock
+
+        from claude_bestpractice import gitpolicy, store, worktree
+
+        ctx = self.ctx()
+        with store.file_lock(store.tier_b(ctx, worktree.ADD_LOCK)), \
+                mock.patch.object(worktree, "GATE_WAIT_SECONDS", 0.2):
+            target, refused = worktree.make_tree(ctx, "late", "worktree-late", wait=0.2)
+            refusal = gitpolicy.worktree_refusal(ctx, "the next thing", "s1")
+
+        self.assertEqual(None, target)
+        self.assertIn("still being made after 0.2s; ask for it again", refused)
+        self.assertIn("git worktree add -b", refusal)
+        self.assertFalse((self.repo / ".claude" / "worktrees").exists())
+
+    def test_the_waits_end_before_their_hooks_are_stopped(self):
+        from claude_bestpractice import worktree
+
+        hooks = json.loads((BIN.parent / "hooks" / "hooks.json").read_text())["hooks"]
+        given = {entry["command"].rsplit("/", 1)[-1].strip('"'): entry["timeout"]
+                 for event in ("WorktreeCreate", "PreToolUse")
+                 for group in hooks[event] for entry in group["hooks"]}
+        self.assertLess(worktree.HOOK_WAIT_SECONDS, given["worktree-create"])
+        self.assertLess(worktree.GATE_WAIT_SECONDS, given["pre-tool"] / 2)
+
     def test_derives_a_deterministic_port_and_database(self):
         """Worktrees isolate files but share the daemon, ports and caches."""
         self.hook(branch="feature-z")

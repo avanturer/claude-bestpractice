@@ -4,7 +4,7 @@
 
 **Память, координация и принуждение для разработки продукта в нескольких параллельных сессиях Claude Code.**
 
-[![version](https://img.shields.io/badge/version-2.19.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.19.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-3017%20passing-2ea44f)](#проверено)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#проверено)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#требования)
@@ -565,7 +565,7 @@ WebSearch, только когда не ответил ни один; Exa — д
 | `prompt-capture` | UserPromptSubmit | fails open | Записывает задачу дословно. **Ничего не вкидывает** |
 | `pre-tool` | PreToolUse | **fails closed**, даже если не смог запуститься (`onFailure`) | Потолок вызовов, разрыв цикла, скан секретов до записи, лизы, гейт миграций и деплоя, тир и число субагентов, ни одного слова фаундера в запланированном промпте или сообщении |
 | `review-commit` | `if: Bash(git commit:*)` | async rewake | Ревьюит дифф этого хода; будит только когда есть что сказать |
-| `worktree-create` | WorktreeCreate | fails open | Именует, засевает доверие, выводит приватный порт и БД |
+| `worktree-create` | WorktreeCreate | **fails closed**: путь или exit 2 с причиной | Именует, создаёт деревья клона по одному, засевает доверие, выводит приватный порт и БД |
 | `subagent-brief` | SubagentStart | fails open | Non-goals, сущности и карта под запрос — агентам, которые не наследуют правил |
 | `checkpoint` | PreCompact | fails open | Экстрактивный чекпойнт, ноль вызовов модели, секреты вычищены; говорит сводке, что сохранить. **Компактизацию не отменяет** — отказ на этом событии читает фаундер, а не модель (решение 0021) |
 | `evidence-gate` | Stop | **fails closed** | Дрейф скоупа, тестовое доказательство, чистый повторный прогон, ход, заканчивающийся неотвеченным отказом; собирает черновики решений; один раз просит записать то, что знает только это окно; убирает законченное дерево; ждёт, пока работают агенты самой сессии |

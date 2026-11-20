@@ -1,5 +1,26 @@
 # Changelog
 
+## v2.19.1
+
+Agents started together no longer lose their trees to one another (decision 0104).
+
+- **A clone's trees are made one at a time.** Each `git worktree add` reads every listed tree's
+  `commondir` as it starts, and dies on an empty one: `fatal: failed to read
+  .git/worktrees/agent-1/commondir: Success`. The add that makes a tree creates that file before
+  writing it, and git 2.56's source still does both. Four `worktree-create` hooks at once, beside
+  `make test-fast` on four cores: 3 of 60 bursts lost a tree that way, 0 of 60 with the lock.
+  The path is chosen, the exclude written and git run under `worktree.ADD_LOCK` in the git common
+  dir, by the hook and by `provision`; `git worktree list` dies on the same file, and an empty
+  listing made the asking tree the main checkout. The hook waits up to 45 of its 60 seconds, and
+  the tool gate 5 of its 15 before it names the command as before.
+- **`worktree-create` answers with a path or exits 2 saying why.** It exited 0 with nothing on
+  stdout where git refused, and printed `guard`'s `{"continue": true}` outside a repository or on
+  a crash. Claude Code reads that stdout as the tree and fails creation without one, with no
+  reason given, and makes no default tree instead. Now git's words, the wait that ran out, or the
+  crash reach the session that asked for the agent.
+- **Nothing to repair.** A dying add leaves only the branch it made, at the commit the tree was to
+  be cut from; the merged-branch sweep takes it at the next tree put away where that is the trunk.
+
 ## v2.19.0
 
 Nothing to run after an update, and no chat to restart for its gates (decision 0102). The

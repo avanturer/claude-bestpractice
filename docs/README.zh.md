@@ -4,7 +4,7 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-2.19.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.19.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-3017%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
@@ -421,7 +421,7 @@ claude-bp-ci off        # 移除 pre-push 钩子
 | `prompt-capture` | UserPromptSubmit | 失败放行 | 逐字记录任务。**不注入任何东西** |
 | `pre-tool` | PreToolUse | **失败拦截**，无法启动时也拦截（`onFailure`） | 调用上限、循环打断、写入前密钥扫描、租约、迁移与部署管控、子智能体的档位与数量、排定的提示或消息中不得有创始人的词 |
 | `review-commit` | `if: Bash(git commit:*)` | 异步唤醒 | 审查本轮的 diff；只在确实有话要说时才叫醒你 |
-| `worktree-create` | WorktreeCreate | 失败放行 | 命名、播种信任、推导私有端口与数据库 |
+| `worktree-create` | WorktreeCreate | **失败拦截**：给出路径，或以 exit 2 说明原因 | 命名、同一克隆内逐个创建、播种信任、推导私有端口与数据库 |
 | `subagent-brief` | SubagentStart | 失败放行 | 把非目标、实体和按查询偏置的代码图交给不继承任何规则的子智能体 |
 | `checkpoint` | PreCompact | 失败放行 | 抽取式检查点，零模型调用，密钥已清洗；告诉摘要要保留什么。**从不拒绝压缩** —— 该事件上的拒绝只有创始人看得到，模型看不到（决策 0021） |
 | `evidence-gate` | Stop | **失败拦截** | 范围漂移、测试证据、干净重跑、以未处理的拦截收场的一轮；顺带收割决策草稿；就只有这个上下文窗口知道的东西索要一次记录；收走已完成的 worktree；会话自己的代理还在工作时等待 |
