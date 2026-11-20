@@ -1,4 +1,4 @@
-.PHONY: check check-fast test test-fast needs-pytest doctor lint budget skills docs knowledge slop ratchet shipped manifests payloads clean help
+.PHONY: check check-fast test test-fast needs-pytest doctor lint budget skills docs knowledge slop ratchet shipped manifests payloads payloads-code-mode clean help
 
 PY := python3
 
@@ -18,6 +18,7 @@ help:
 	@echo "make budget  - assert the always-on context budget is not exceeded"
 	@echo "make skills  - every shipped skill says when it was last checked"
 	@echo "make payloads - recapture the hook payloads from this Claude Code (a login, a few cents)"
+	@echo "make payloads-code-mode - the same for a Code Mode script's calls, in this terminal"
 
 # One definition of done, identical in every session, with no --no-verify path.
 # Eight parallel sessions must not converge on eight notions of finished.
@@ -106,6 +107,11 @@ skills:
 # read against what this version sends. One headless session on a throwaway repository.
 payloads:
 	@$(PY) tools/capture_payloads.py
+
+# Whether PostToolUse and a mod's `tool.call` reach a Code Mode script's calls (decision 0103).
+# Interactive: Code Mode starts in no `-p`, no cloud session and no IDE panel, only a terminal.
+payloads-code-mode:
+	@$(PY) tools/capture_payloads.py --code-mode
 
 clean:
 	@find . -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
