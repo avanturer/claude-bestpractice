@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -38,6 +39,10 @@ CODE_MODE_PROMPT = ("In one Code Mode script, run the shell command `echo probe`
                     "printed. Do nothing else, then reply with the word finished.")
 # What the probe mod's line says, in place of a hook event's name.
 MODULE_EVENT = "mod:tool.call"
+# Code Mode came in 2.1.323, and starts beside a mod that hooks tool calls, as the probe's does,
+# from 2.1.327. Older, a session opens and no script runs, which the verdict cannot tell apart
+# from a refusal.
+CODE_MODE_SINCE = (2, 1, 327)
 
 # What the probe writes for each event: the field names at the top, and for a tool call the
 # names inside its input and its response, the call's id, and the names of the tools a script
@@ -178,27 +183,57 @@ def code_mode_verdict(shapes: list) -> dict:
 
 
 def _version() -> str:
-    version = subprocess.run(["claude", "--version"], capture_output=True, text=True).stdout
+    try:
+        version = subprocess.run(["claude", "--version"], capture_output=True, text=True).stdout
+    except OSError:
+        return ""
     return version.split()[0] if version else ""
 
 
+def code_mode_refusal(version: str) -> str:
+    """Why the Claude Code that printed `version` cannot run the probe, or "" when it can."""
+    match = re.match(r"(\d+)\.(\d+)\.(\d+)", version.strip())
+    if not match:
+        return f"No Claude Code version could be read from {version!r}: is `claude` on the PATH?"
+    if tuple(int(part) for part in match.groups()) < CODE_MODE_SINCE:
+        since = ".".join(str(part) for part in CODE_MODE_SINCE)
+        return (f"Claude Code {match.group(0)} starts no Code Mode beside a mod that hooks tool "
+                f"calls; {since} or later does. Run `claude update`, then this again.")
+    return ""
+
+
+def code_mode_command(plugin: Path) -> list:
+    """The interactive session's command line: the prompt first, since `--allowedTools` takes
+    every word after it, and on 2.1.329 took the prompt as one more tool (the founder's run)."""
+    return ["claude", CODE_MODE_PROMPT, "--plugin-dir", str(plugin), "--model", "sonnet",
+            "--allowedTools", "Bash(echo probe)"]
+
+
 def _code_mode(where: Path, repo: Path) -> int:
+    version = _version()
+    refusal = code_mode_refusal(version)
+    if refusal:
+        print(refusal)
+        return 1
     log = where / "payloads.jsonl"
     plugin = _probe_plugin(where, CODE_MODE_EVENTS, module_log=log)
-    print("A Claude Code session starts here in Code Mode, with a probe plugin and nothing else.\n"
-          "Confirm turning Code Mode on if it asks. When Claude has answered 'finished', type /exit.\n"
+    print("A Claude Code session starts here in Code Mode, with a probe plugin beside your own.\n"
+          "Answer Yes when it asks whether you trust the folder: this tool made it, and it holds a\n"
+          "README and nothing else. Confirm turning Code Mode on if it asks.\n"
+          "When Claude has answered 'finished', type /exit.\n"
           f"If the prompt below did not arrive, paste it:\n  {CODE_MODE_PROMPT}\n", flush=True)
     env = {**os.environ, "PAYLOAD_LOG": str(log), "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE": "1"}
-    subprocess.run(["claude", "--plugin-dir", str(plugin), "--model", "sonnet",
-                    "--allowedTools", "Bash(echo probe)", CODE_MODE_PROMPT], cwd=str(repo), env=env)
+    subprocess.run(code_mode_command(plugin), cwd=str(repo), env=env)
     verdict = code_mode_verdict(_shapes(log))
-    captured = {"claude_code": _version(), "verdict": verdict, "events": _merged(log)}
+    captured = {"claude_code": version, "verdict": verdict, "events": _merged(log)}
     CODE_MODE_FIXTURE.parent.mkdir(parents=True, exist_ok=True)
     CODE_MODE_FIXTURE.write_text(json.dumps(captured, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(f"{CODE_MODE_FIXTURE.relative_to(ROOT)}: Claude Code {captured['claude_code']}")
+    print(f"{CODE_MODE_FIXTURE.relative_to(ROOT)}: Claude Code {version}")
     print(json.dumps(verdict, sort_keys=True))
     if not verdict["code_mode"]:
-        print("No script ran: Code Mode did not start, or Claude made no Code Mode call.")
+        print("No script ran: the folder was not trusted, Code Mode did not start (it needs the "
+              "native build, a subscription or Console login, and a model it takes), or Claude "
+              "made no Code Mode call.")
         return 1
     return 0
 

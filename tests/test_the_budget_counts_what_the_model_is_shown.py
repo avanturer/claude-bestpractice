@@ -48,6 +48,29 @@ class TestWhatCuratedBringsIsCappedTogether(unittest.TestCase):
     """`curated` brings every pack to every session of every project (decision 0101): each pack
     under its own cap can still add up past what a session should pay for advice."""
 
+    def knowledge(self, head: str) -> tuple[int, str]:
+        printed = io.StringIO()
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / "plugin").mkdir()
+            rules = root / ".claude" / "rules"
+            rules.mkdir(parents=True)
+            (rules / "notes.md").write_text(head + "x" * (check_budget.KNOWLEDGE_BYTE_CAP + 1))
+            with mock.patch.object(check_budget, "PLUGIN", root / "plugin"), \
+                    mock.patch.object(check_budget, "ROOT", root), \
+                    contextlib.redirect_stdout(printed):
+                code = check_budget.main()
+        return code, printed.getvalue()
+
+    def test_a_rule_loaded_every_turn_counts_against_the_layer(self):
+        code, printed = self.knowledge("# notes\n")
+        self.assertEqual(1, code)
+        self.assertIn("knowledge layer is", printed)
+
+    def test_a_rule_that_names_its_paths_loads_beside_them_and_is_not_counted(self):
+        code, printed = self.knowledge("---\npaths: plugin/hooks/hooks.json\n---\n")
+        self.assertEqual(0, code, printed)
+
     def test_packs_under_their_own_cap_over_the_total_are_refused(self):
         description = " ".join(["word"] * 38)
         printed = io.StringIO()
