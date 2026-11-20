@@ -128,6 +128,11 @@ class TestAClaudeCodeTooOldIsRefusedBeforeASession(unittest.TestCase):
     def test_no_version_at_all_is_a_refusal(self):
         self.assertIn("PATH", capture.code_mode_refusal(""))
 
+    def test_the_prompt_comes_before_the_flag_that_takes_every_word_after_it(self):
+        command = capture.code_mode_command(Path("/probe"))
+        self.assertEqual(capture.CODE_MODE_PROMPT, command[1])
+        self.assertLess(command.index(capture.CODE_MODE_PROMPT), command.index("--allowedTools"))
+
     def test_a_refused_run_opens_no_session_and_writes_no_fixture(self):
         out = io.StringIO()
         with tempfile.TemporaryDirectory() as raw, \

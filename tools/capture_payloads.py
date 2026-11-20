@@ -202,6 +202,13 @@ def code_mode_refusal(version: str) -> str:
     return ""
 
 
+def code_mode_command(plugin: Path) -> list:
+    """The interactive session's command line: the prompt first, since `--allowedTools` takes
+    every word after it, and on 2.1.329 took the prompt as one more tool (the founder's run)."""
+    return ["claude", CODE_MODE_PROMPT, "--plugin-dir", str(plugin), "--model", "sonnet",
+            "--allowedTools", "Bash(echo probe)"]
+
+
 def _code_mode(where: Path, repo: Path) -> int:
     version = _version()
     refusal = code_mode_refusal(version)
@@ -210,14 +217,13 @@ def _code_mode(where: Path, repo: Path) -> int:
         return 1
     log = where / "payloads.jsonl"
     plugin = _probe_plugin(where, CODE_MODE_EVENTS, module_log=log)
-    print("A Claude Code session starts here in Code Mode, with a probe plugin and nothing else.\n"
+    print("A Claude Code session starts here in Code Mode, with a probe plugin beside your own.\n"
           "Answer Yes when it asks whether you trust the folder: this tool made it, and it holds a\n"
           "README and nothing else. Confirm turning Code Mode on if it asks.\n"
           "When Claude has answered 'finished', type /exit.\n"
           f"If the prompt below did not arrive, paste it:\n  {CODE_MODE_PROMPT}\n", flush=True)
     env = {**os.environ, "PAYLOAD_LOG": str(log), "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE": "1"}
-    subprocess.run(["claude", "--plugin-dir", str(plugin), "--model", "sonnet",
-                    "--allowedTools", "Bash(echo probe)", CODE_MODE_PROMPT], cwd=str(repo), env=env)
+    subprocess.run(code_mode_command(plugin), cwd=str(repo), env=env)
     verdict = code_mode_verdict(_shapes(log))
     captured = {"claude_code": version, "verdict": verdict, "events": _merged(log)}
     CODE_MODE_FIXTURE.parent.mkdir(parents=True, exist_ok=True)
