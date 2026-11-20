@@ -35,6 +35,6 @@ session, behind no gateway, under no `-p`, SDK, Desktop or VS Code, so nothing h
 - **Writing the switch from `setup` or `install.sh`.** An experimental mode, in the founder's file.
 
 ## Cost accepted
-Inside a script, until a terminal session measures it: a pull request opened may reach the board
-without its number, a merge or close settles at `reconcile`, an agent stopped is on no paused card,
-a dialog answered grants no word, a long output is not digested and a search is not routed.
+Inside a script, until `make payloads-code-mode` measures it: a pull request opened may reach the
+board without its number, a merge or close settles at `reconcile`, an agent stopped is on no paused
+card, a dialog answered grants no word, output goes undigested and search unrouted.
