@@ -34,9 +34,26 @@ A sibling's tree being made no longer reads as a clone without trees (decision 0
 - **Proof.** `tests/test_a_tree_halfway_made.py` freezes the instant as git leaves it
   (`helpers.a_tree_halfway_made`). 23 mutations, one per fix and one per catch the raise needed,
   each turn their test red.
-- **No repair.** A write, a dropped database and a second tree are done. A card written into a
-  linked tree, or numbered twice, carries a number a session may have been told (decision
-  0027), and stays as it is.
+- **Repair.** A write, a dropped database and a second tree are done. A card written into a
+  linked tree is carried home by repair 0051, below; one numbered twice keeps the number a
+  session may have been told (decision 0027), and its tree.
+
+A card only a linked tree holds now reaches the main checkout before the tree goes (decision
+0106).
+
+- **What went with a tree.** `lost_with` never kept a tree for this plugin's own files, the
+  ledger folder is ignored in every tree, and `git worktree remove` takes an ignored file
+  without a word. Repair 0012 carried such cards in one tree per clone, since a repair's record
+  is the clone's, though it said each tree would carry its own.
+- **Carried now.** `plan.carry_home` moves a card git does not track there and whose number no
+  card in the main checkout holds, under the claim lock: in `_release` before every removal
+  the plugin makes, in `pre-tool` before a `git worktree remove` a session types, and once for
+  every linked tree (repair 0051). The same card is told by `created_at`, or by title on a
+  card older than that field.
+- **Never taken.** A card whose number a different card holds is not moved. `lost_with` names
+  it, so no removal the plugin decides takes its tree, `_release` keeps it, and a typed
+  removal is refused naming `cat <card>`.
+- **Proof.** `tests/test_a_card_only_a_tree_holds.py`. 11 mutations, each turn their test red.
 
 ## v2.19.2
 

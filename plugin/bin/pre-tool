@@ -33,7 +33,7 @@ import json  # noqa: E402
 import re  # noqa: E402
 import shlex  # noqa: E402
 
-from claude_bestpractice import ci, config, evidence, founder, gitpolicy, hookio, inbox, pullrequest, redact, search, servers, sessions, shellcmd, stage, store, subagents, vouch, worktree  # noqa: E402
+from claude_bestpractice import ci, config, evidence, founder, gitpolicy, hookio, inbox, plan, pullrequest, redact, search, servers, sessions, shellcmd, stage, store, subagents, vouch, worktree  # noqa: E402
 from claude_bestpractice.gitctx import GitError, resolve  # noqa: E402
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
@@ -649,6 +649,24 @@ def _within_dir(target, root) -> bool:
         return target.resolve() == root.resolve() or root.resolve() in target.resolve().parents
     except (OSError, ValueError):
         return False
+
+
+# How long a removal waits for the ledger's claim lock to carry a tree's cards home, of the
+# fifteen seconds this gate has. A claim holds it for a few writes.
+CARRY_WAIT_SECONDS = 3.0
+
+
+def _cards_only_there(tree, left: list) -> str:
+    """Why a removal is refused while `tree` holds cards the main checkout could not take."""
+    names = ", ".join(card.name for card in left[:3]) + (f" (+{len(left) - 3})" if len(left) > 3 else "")
+    return (
+        f"claude-bestpractice: {tree} holds {len(left)} card(s) the main checkout has no copy "
+        f"of, which `git worktree remove` would delete with the tree's ignored files: {names}. "
+        "They could not be carried there: another card holds the number, or the ledger was "
+        "busy.\n  For a busy ledger, make the same call again. Otherwise file what the card "
+        "says again with `claude-bp-plan add`, delete this copy, and the tree can go:\n"
+        f"  cat {shlex.quote(str(left[0]))}"
+    )
 
 
 def _listed_tree(ctx, target) -> bool:
@@ -2365,6 +2383,12 @@ def main() -> None:
             if working:
                 deny(ctx, rec, worktree.still_working(path.resolve(), working,
                                                       str(event.raw.get("session_id") or "")))
+        # A card only that tree holds goes with its ignored ledger folder, whoever removes it:
+        # carried to the main checkout first, and the removal refused over one that is not.
+        for path in removals:
+            _moved, left = plan.carry_home(ctx, path, wait=CARRY_WAIT_SECONDS)
+            if left:
+                deny(ctx, rec, _cards_only_there(path, left))
         own = next((path.resolve() for path in removals
                     if worktree.removable_by(ctx, rec.session_id, path)), None)
         if own is not None and not _removal_alone(str(ti.get("command", ""))):

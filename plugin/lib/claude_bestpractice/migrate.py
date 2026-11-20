@@ -586,9 +586,9 @@ def _carry_this_worktrees_tasks_home(ctx: GitContext) -> str:
     sitting in a tree that is going to be removed.
 
     THIS worktree's only, never a sibling's. A session owns the tree it stands in and
-    nothing else, and each tree runs this on its own next session start — so the whole
-    clone is carried over without one session reaching into another's files while a claim
-    is being written there.
+    nothing else. That was to have each tree carry its own at its next session start, and
+    did not: the record of a repair is the clone's, so this ran in the first tree to start
+    and no other. Repair 0051 carries the rest, under the claim lock (decision 0106).
 
     A name already present in the main checkout is left alone rather than overwritten:
     the reader ranks copies by how far the lifecycle has carried them, and clobbering a
@@ -1194,6 +1194,27 @@ def _carry_attempts_of(tree: Path, home: Path) -> int:
 
 
 _LEDGER_PATH = ".claude/claude-bestpractice/plan"
+
+
+def _carry_cards_only_a_tree_holds(ctx: GitContext) -> str:
+    """Cards only a linked tree holds, carried to the main checkout (decision 0106).
+
+    Each went with its tree: the ledger folder is ignored, and an ignored file of this plugin's
+    never keeps a tree. Repair 0012 carried them from one tree per clone. Every tree now; a card
+    whose number a different card holds in the main checkout stays, and keeps its tree.
+    """
+    from . import plan, worktree
+
+    main = worktree.main_checkout(ctx)
+    moved, left = 0, 0
+    for tree in _trees_of(ctx):
+        if tree != main:
+            carried, kept = plan.carry_home(ctx, tree)
+            moved, left = moved + carried, left + len(kept)
+    said = [f"{moved} card(s) only a linked tree held, moved to the main checkout"] if moved else []
+    if left:
+        said.append(f"{left} left in their trees: a different card holds the number")
+    return "; ".join(said)
 
 
 def _trees_of(ctx: GitContext) -> list[Path]:
@@ -2011,6 +2032,7 @@ _REPAIRS = {
     "0049-a-branch-gone-closes-no-pull-request": (1, _mark_pull_requests_closed_by_a_branch_gone),
     "0050-hand-a-resumed-chat-the-records-it-wrote":
         (1, _hand_a_resumed_chat_the_records_it_wrote),
+    "0051-carry-cards-only-a-tree-holds": (1, _carry_cards_only_a_tree_holds),
 }
 
 

@@ -993,10 +993,27 @@ def sweep_named(ctx: GitContext) -> tuple[list[str], list[str], list[tuple[str, 
     return removed, kept, left
 
 
-def _stays_put(main: Path, tree: Path, notes: list[str] | None) -> bool:
-    """Is `tree` one `_release` leaves where it is before asking git: the main checkout, or a
-    tree a session's process still runs in?"""
-    return tree == main.resolve() or _a_session_still_works_in(tree, notes)
+def _stays_put(ctx: GitContext, main: Path, tree: Path, notes: list[str] | None) -> bool:
+    """Is `tree` one `_release` leaves where it is before asking git: the main checkout, a
+    tree a session's process still runs in, or one still holding a card only it has once every
+    such card that can be has been carried to the main checkout?"""
+    return tree == main.resolve() or _a_session_still_works_in(tree, notes) \
+        or not _its_cards_carried(ctx, tree, notes)
+
+
+def _its_cards_carried(ctx: GitContext, tree: Path, notes: list[str] | None) -> bool:
+    """Carry the cards only `tree` holds to the main checkout, said in `notes`; whether none is
+    left there. Its ledger folder is ignored, and git takes it without a word: a card only this
+    tree held went with it (decision 0106). One that cannot be carried keeps the tree."""
+    from . import plan
+
+    moved, left = plan.carry_home(ctx, tree)
+    said = (f"kept: it holds {len(left)} card(s) the main checkout has no copy of and could not "
+            f"take ({', '.join(card.name for card in left[:3])})" if left else
+            f"{moved} card(s) only it held, moved to the main checkout" if moved else "")
+    if said and notes is not None:
+        notes.append(said)
+    return not left
 
 
 def _a_session_still_works_in(tree: Path, notes: list[str] | None) -> bool:
@@ -1379,7 +1396,8 @@ def _release(ctx: GitContext, tree: tuple, record_path: Path, notes: list[str] |
              force: bool = False, kept: list[str] | None = None) -> bool:
     """Hand a tree back to git, and its branch, its database and its siblings with it.
 
-    False if git refused the removal, or a process a session started still runs in the tree.
+    False if git refused the removal, a process a session started still runs in the tree, or
+    it holds a card only it has that the main checkout could not take (`_its_cards_carried`).
     `notes` collects what went besides the tree, for the
     one line the founder reads — the removal used to end at the directory, and everything
     it had created around that directory stayed (#224). `kept` collects the tree's branch
@@ -1395,7 +1413,7 @@ def _release(ctx: GitContext, tree: tuple, record_path: Path, notes: list[str] |
     path, branch = tree
     where = main_checkout(ctx)
     standing = Path(path).resolve()
-    if _stays_put(where, standing, notes):
+    if _stays_put(ctx, where, standing, notes):
         return False
     ours = _database_of_ours(ctx, Path(path))
     # `--force` is never this plugin's idea: it is passed only where the session typed it
@@ -1679,17 +1697,25 @@ def lost_with(ctx: GitContext, tree: Path) -> list[str] | None:
 
     So is a tracked file changed under `--skip-worktree` or `--assume-unchanged`
     (`_changed_unseen`): git was told not to look at it, and the removal takes it the same way.
+
+    And a card only this tree holds that the main checkout cannot take, its number another
+    card's there (`plan.strays`). One it can take is not lost: every removal this plugin makes
+    carries it there first (decision 0106).
     """
     listed = _ignored_listing(tree)
     unseen = _changed_unseen(tree)
     if listed is None or unseen is None:
         return None
+    from . import plan
+
     main = main_checkout(ctx)
     seeded = _seeded_envs(ctx, main, tree)
     return [rel for rel in listed
             if not _regrows_in(tree, rel) and not rel.startswith(f"{store.TIER_A_DIRNAME}/")
             and not _held_in(main, tree, rel) and not _seeded_here(tree, rel, seeded)
-            ] + [f"{rel} (changed, and marked for git not to show)" for rel in unseen]
+            ] + [f"{rel} (changed, and marked for git not to show)" for rel in unseen] + [
+        f"{card.relative_to(tree).as_posix()} (a card no other tree has, its number another's)"
+        for card in plan.strays(ctx, tree)[1]]
 
 
 def _changed_unseen(tree: Path) -> list[str] | None:

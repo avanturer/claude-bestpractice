@@ -178,7 +178,7 @@ _EVERY_TREE = (
     ("0025", migrate._carry_checkpoints_out_of_trees),
     ("0046", migrate._carry_attempts_out_of_trees),
     ("0048", migrate._refresh_what_pull_requests_are_blocked_by),
-    ("0019 0021 0030 0033 0038", migrate._trees_of),
+    ("0019 0021 0030 0033 0038 0051", migrate._trees_of),
 )
 
 
