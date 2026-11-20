@@ -171,7 +171,19 @@ def repair(ctx: GitContext) -> list[str]:
 
 
 def _repair_pending(ctx: GitContext) -> list[str]:
-    """Every repair this clone has not had at its current revision. Callers hold the lock."""
+    """Every repair this clone has not had at its current revision. Callers hold the lock.
+
+    None while git cannot list the clone's trees: many repairs walk every tree, some through
+    readers that then fall back to the trees known without git, and one that saw only those
+    was recorded done for good (decision 0105). They wait for the next start.
+    """
+    from . import gitpolicy
+    from .gitctx import GitError
+
+    try:
+        gitpolicy.working_trees(ctx)
+    except GitError:
+        return []
     changed: list[str] = []
     for name, (revision, step) in _REPAIRS.items():
         if _ran_at(ctx, name) >= revision:
@@ -329,10 +341,9 @@ def _trees_that_still_prompt(ctx: GitContext, home: Path) -> list[Path]:
     """
     from .gitctx import worktree_paths
 
-    try:
-        registered = worktree_paths(ctx)
-    except Exception:  # noqa: BLE001 - a repair must never be what breaks a session start
-        return []
+    # Not caught. A repair that raises is left for the next start (`_repair_pending`), and one
+    # that found no trees because git could not list them was recorded done (decision 0105).
+    registered = worktree_paths(ctx)
     keep = _trees_to_leave_alone(ctx)
     if keep is None:
         return []
@@ -1003,12 +1014,13 @@ def _refresh_what_pull_requests_are_blocked_by(ctx: GitContext) -> str:
     handed off with a file outside it, or a run the founder's message stopped, read as blocked
     to its merge, and still does once this version merges it (#309). Judged again in each tree
     whose branch has one, where the merge would be judged; a branch no tree has stays as it is.
+    Every tree git lists, or none and the repair left for the next start where it cannot.
     """
-    from . import plan, pullrequest
+    from . import gitpolicy, pullrequest
     from .gitctx import resolve
 
     refreshed = 0
-    for root in plan.sibling_worktrees(ctx) or [ctx.worktree_root]:
+    for root in gitpolicy.working_trees(ctx):
         try:
             tree = resolve(root)
         except Exception:  # noqa: BLE001 - a tree that cannot be read keeps what it had
@@ -1185,14 +1197,12 @@ _LEDGER_PATH = ".claude/claude-bestpractice/plan"
 
 
 def _trees_of(ctx: GitContext) -> list[Path]:
-    """Every working tree of this clone, or just this one when git cannot say."""
+    """Every working tree of this clone on disk. Raises `GitError` when git cannot list them:
+    this tree alone, which it answered with, recorded a repair of every tree done after one
+    (decision 0105). `_repair_pending` leaves a repair that raised for the next start."""
     from . import gitpolicy
 
-    try:
-        found = [t for t in gitpolicy.working_trees(ctx) if t.is_dir()]
-    except Exception:  # noqa: BLE001 - a repair must not fail on an unlistable clone
-        found = []
-    return found or [ctx.worktree_root]
+    return [t for t in gitpolicy.working_trees(ctx) if t.is_dir()] or [ctx.worktree_root]
 
 
 def _git_out(tree: Path, args: list[str]) -> str:

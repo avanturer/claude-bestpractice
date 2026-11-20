@@ -160,6 +160,30 @@ def push_from(clone: Path, branch: str, rel: str, text: str, base: str = "") -> 
     git(["push", "-q", "origin", branch], clone)
 
 
+def gate_module(name: str):
+    """A script of `plugin/bin` loaded as a module, for a test that calls one of its functions."""
+    import importlib.machinery
+    import importlib.util
+
+    loader = importlib.machinery.SourceFileLoader(name.replace("-", "_"), str(BIN / name))
+    module = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(module)
+    return module
+
+
+def a_tree_halfway_made(repo: Path, name: str = "sibling") -> Path:
+    """A sibling's `git worktree add` frozen where git has made `commondir` and not yet written
+    it, as git leaves it then: locked "initializing", `gitdir` written. Until the directory
+    returned goes, `git worktree list`, `git branch` and `git worktree add` in `repo` die with
+    128 on `failed to read .git/worktrees/<name>/commondir` (decision 0104)."""
+    halfway = repo / ".git" / "worktrees" / name
+    halfway.mkdir(parents=True)
+    (halfway / "locked").write_text("initializing\n")
+    (halfway / "gitdir").write_text(f"{repo.parent / name / '.git'}\n")
+    (halfway / "commondir").write_text("")
+    return halfway
+
+
 class RepoCase(unittest.TestCase):
     """Base class providing a throwaway repository per test."""
 

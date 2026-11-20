@@ -331,20 +331,23 @@ def _rank(state: str, label: str) -> tuple[int, int]:
 
 
 def sibling_worktrees(ctx: GitContext) -> list[Path]:
-    proc = subprocess.run(
-        ["git", "worktree", "list", "--porcelain"],
-        cwd=str(ctx.worktree_root),
-        capture_output=True,
-        encoding="utf-8", errors="surrogateescape",
-        timeout=30,
-    )
-    if proc.returncode != 0:
-        return []
-    return [
-        Path(line[len("worktree ") :])
-        for line in proc.stdout.splitlines()
-        if line.startswith("worktree ")
-    ]
+    """Every tree a card can be in: each one git lists, main checkout first.
+
+    Where git cannot list them, the two known without it: the main checkout, where the
+    ledger lives (decision 0018), and this tree. This answered with none, every caller then
+    read this tree alone, and from a linked tree `next_id` handed out a number a card in
+    the main checkout already had (decision 0105). A number kept per branch, a decision's or
+    an attempt's, cannot be allocated from these two: those ask `gitpolicy.working_trees`.
+    """
+    from . import worktree
+    from .gitctx import GitError, worktree_paths
+
+    try:
+        return worktree_paths(ctx)
+    except GitError:
+        here = ctx.worktree_root.resolve()
+        main = worktree.main_checkout(ctx)
+        return [main] if main == here else [main, here]
 
 
 def next_id(ctx: GitContext) -> str:

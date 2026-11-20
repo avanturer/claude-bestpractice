@@ -100,8 +100,17 @@ def worktree_refusal(ctx: GitContext, task: str = "", session_id: str = "") -> s
     answers with "too many arguments" — a refusal whose one way out does not run.
     """
     from . import worktree
+    from .gitctx import GitError
 
-    ready = worktree.provision(ctx, task, session_id)
+    try:
+        ready = worktree.provision(ctx, task, session_id)
+    except GitError as unlisted:
+        # Neither a tree nor the command that makes one: either would be this session's second.
+        return (
+            "claude-bestpractice: this is the main checkout, not a worktree, and git could not "
+            "list this clone's trees to find the one this session works in, so none was made: "
+            f"{_git_said(unlisted)}\n" + _UNLISTED_EXIT
+        )
     if ready is None:
         # Falling back to naming the command is where this started, and it is still better
         # than a fail-closed gate crashing over a convenience.
@@ -224,8 +233,15 @@ def strands_the_shell(command: str, cwd: Path, ctx: GitContext) -> Path | None:
 
 def _in_a_nested_tree(ctx: GitContext, here: Path, guarded: Path) -> bool:
     """Is `here` inside a working tree of this repository other than the main checkout, one
-    nested in the main checkout's directory?"""
-    for tree in working_trees(ctx):
+    nested in the main checkout's directory? No where git cannot list the trees: the step is
+    then refused as one into the main checkout, which strands no shell."""
+    from .gitctx import GitError
+
+    try:
+        trees = working_trees(ctx)
+    except GitError:
+        return False
+    for tree in trees:
         try:
             root = tree.resolve()
         except OSError:
@@ -236,20 +252,12 @@ def _in_a_nested_tree(ctx: GitContext, here: Path, guarded: Path) -> bool:
 
 
 def working_trees(ctx: GitContext) -> list[Path]:
-    """Every working tree sharing this repository's object store, main checkout first."""
-    proc = subprocess.run(
-        ["git", "worktree", "list", "--porcelain"],
-        cwd=str(ctx.worktree_root), capture_output=True,
-        encoding="utf-8", errors="surrogateescape", timeout=30,
-    )
-    out: list[Path] = []
-    for line in proc.stdout.splitlines():
-        if line.startswith("worktree "):
-            try:
-                out.append(Path(line.split(" ", 1)[1]).resolve())
-            except OSError:
-                continue
-    return out
+    """Every working tree sharing this repository's object store, main checkout first.
+    Raises `GitError` when git could not list them, never answering that with no trees
+    (`gitctx.worktree_paths`, the one reading of the listing)."""
+    from .gitctx import worktree_paths
+
+    return worktree_paths(ctx)
 
 
 def foreign_tree(ctx: GitContext, target: Path, session_id: str = "") -> Path | None:
@@ -289,6 +297,11 @@ def foreign_tree(ctx: GitContext, target: Path, session_id: str = "") -> Path | 
     first, every path in a sibling's provisioned tree was the main checkout's ignored file:
     a reset, a clean, a write and a forced removal of a tree a live session worked in all
     went through.
+
+    Raises `GitError` when git cannot list the trees, which a sibling's `git worktree add`
+    makes it do for an instant: an empty listing answered None for every path, and a write
+    or a `reset --hard` into a live sibling's tree went through (decision 0105). The callers
+    refuse with `unlisted_refusal`.
     """
     if _ours(ctx, target):
         return None
@@ -484,6 +497,30 @@ def _within(target: Path, root: Path) -> bool:
     except (ValueError, OSError):
         return False
     return True
+
+
+# What a refusal over a listing git could not give ends with. An add caught halfway passes in an
+# instant; an entry a killed add left half written does not, and the listing then names it.
+_UNLISTED_EXIT = (
+    "  While a sibling's `git worktree add` is making a tree, that lasts as long as the add: "
+    "make the same call again. If git says the same then, the entry it names is broken, and "
+    "this says so until it is repaired:\n"
+    "  git worktree list"
+)
+
+
+def _git_said(error: Exception) -> str:
+    """git's own words out of a `GitError`, without the command it was raised over."""
+    return (str(error).partition(" failed: ")[2].strip() or str(error) or "git gave no reason")[:300]
+
+
+def unlisted_refusal(target: Path, error: Exception) -> str:
+    """Why a call that acts on `target`, outside this session's tree, is refused while git
+    cannot list the clone's trees: whose tree it lands in cannot be told."""
+    return (
+        f"claude-bestpractice: {target} is outside this session's working tree, and git could "
+        f"not list this clone's trees to say whose it is: {_git_said(error)}\n" + _UNLISTED_EXIT
+    )
 
 
 def foreign_refusal(target: Path, owner: Path, ctx: GitContext, session_id: str = "") -> str:

@@ -374,15 +374,21 @@ def shared_database(ctx: GitContext) -> tuple[Path, str] | None:
     every live session was properly isolated, and the run in that tree was still being
     perturbed by neighbours the registry could not see.
 
-    So the question is asked of the TREES, which is where the answer is written down.
+    So the question is asked of the TREES, which is where the answer is written down. None
+    where git cannot list them: the board names no neighbour for that start.
     """
     from . import gitpolicy
+    from .gitctx import GitError
 
     here = database_of(ctx.worktree_root)
     if not here:
         return None
     mine = ctx.worktree_root.resolve()
-    for tree in gitpolicy.working_trees(ctx):
+    try:
+        trees = gitpolicy.working_trees(ctx)
+    except GitError:
+        return None
+    for tree in trees:
         if tree != mine and database_of(tree) == here:
             return tree, split_dsn(here)[1] or here
     return None
@@ -677,11 +683,16 @@ def main_checkout(ctx: GitContext) -> Path:
     Anchored so trees do not nest inside trees: a session refused inside
     `.claude/worktrees/a` would otherwise be sent to `.claude/worktrees/a/.claude/
     worktrees/b`, and removing `a` would then take somebody else's tree with it.
-    """
-    from . import gitpolicy
 
-    trees = gitpolicy.working_trees(ctx)
-    return trees[0] if trees else ctx.worktree_root
+    Worked out as git works out the first entry of `git worktree list` (`get_main_worktree`,
+    the same in git 2.56): the common dir's real path, less a trailing `/.git`. Not read off
+    that listing, which dies while a sibling's add has `commondir` half written: this then
+    answered with the asking tree itself, so a card from a linked tree was written into that
+    tree, and its `.env` seeded from it (decision 0105). A bare clone or a separate git dir
+    answers with the git dir, as git's listing does, and `home_of` steps out of it.
+    """
+    common = ctx.common_dir.resolve()
+    return common.parent if common.name == ".git" else common
 
 
 def home_of(ctx: GitContext) -> Path:
@@ -1215,14 +1226,18 @@ def drop_database(url: str, database: str) -> str:
 
 
 def _points_at(ctx: GitContext, url: str, exclude: Path) -> bool:
-    """Does any other working tree of this clone name this database?"""
+    """Does any other working tree of this clone name this database? Yes where git cannot list
+    the trees: read as none, a removal dropped its tree's database while another tree still
+    named it (decision 0105)."""
     from . import gitpolicy
+    from .gitctx import GitError
 
     try:
         skip = exclude.resolve()
-    except OSError:
+        trees = gitpolicy.working_trees(ctx)
+    except (OSError, GitError):
         return True
-    for tree in gitpolicy.working_trees(ctx):
+    for tree in trees:
         if tree == skip:
             continue
         if database_of(tree) == url:
@@ -2185,6 +2200,10 @@ def own_tree(ctx: GitContext, session_id: str) -> Path | None:
     Claude Code's `--worktree`, came back in the main checkout after its machine restarted:
     the board named no tree, the refused write was sent to a new one cut beside its own, and
     the work the chat had left uncommitted was in the tree nobody sent it back to.
+
+    Raises `GitError` where that takes the listing and git cannot give it: "none" is what
+    makes `provision` cut a second tree, the same defect from a listing caught halfway
+    (decision 0105).
     """
     made = mine(ctx, session_id)
     if made is not None or not session_id:
@@ -2240,11 +2259,11 @@ def _last_seen(ctx: GitContext) -> dict[str, float]:
 
 
 def trees_by_branch(ctx: GitContext) -> dict[str, Path]:
-    """Each branch checked out in a tree of this clone, and where, as git lists them."""
-    out = subprocess.run(
-        ["git", "worktree", "list", "--porcelain"], cwd=str(ctx.worktree_root),
-        capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=30,
-    ).stdout
+    """Each branch checked out in a tree of this clone, and where, as git lists them. Raises
+    `GitError` when git cannot list them, which is not a clone with none checked out."""
+    from .gitctx import _run
+
+    out = _run(["worktree", "list", "--porcelain"], ctx.worktree_root)
     found: dict[str, Path] = {}
     path = ""
     for line in out.splitlines():
@@ -2336,10 +2355,9 @@ def _follow_the_move(ctx: GitContext, was: Path, now: Path) -> None:
 
 def _why_it_cannot_go_home(ctx: GitContext, tree: Path, target: Path, session_id: str) -> str:
     """Why `tree` is not moved to `target`, or "" when nothing keeps it where it is."""
-    from .gitctx import worktree_paths
-
-    if tree not in worktree_paths(ctx) or tree == main_checkout(ctx).resolve():
-        return f"{tree} is no working tree of this repository's to move"
+    unlisted = _not_a_linked_tree(ctx, tree)
+    if unlisted:
+        return unlisted
     who = _another_chat_in(ctx, tree, session_id)
     if who:
         return f"{who} works in it"
@@ -2350,6 +2368,20 @@ def _why_it_cannot_go_home(ctx: GitContext, tree: Path, target: Path, session_id
                                                    for b in _provisioned(ctx)}:
         return "what runs in it cannot be read on this machine"
     return f"{target} is taken" if target.exists() else ""
+
+
+def _not_a_linked_tree(ctx: GitContext, tree: Path) -> str:
+    """Why `tree` is no linked tree of this clone's for `git worktree move` to take, or "".
+    Unknown where git cannot list the trees, and nothing is moved on that."""
+    from .gitctx import GitError, worktree_paths
+
+    try:
+        listed = tree in worktree_paths(ctx)
+    except GitError:
+        return "git could not list this clone's trees to say it is one of them"
+    if not listed or tree == main_checkout(ctx).resolve():
+        return f"{tree} is no working tree of this repository's to move"
+    return ""
 
 
 def _provisioned(ctx: GitContext) -> list[dict]:
@@ -2419,9 +2451,15 @@ def working_context(ctx: GitContext, session_id: str) -> GitContext:
     try:
         if tree.resolve() == ctx.worktree_root.resolve():
             return ctx
-        if tree.resolve() not in {p.resolve() for p in worktree_paths(ctx)}:
-            return ctx
-        return resolve(tree)
+        there = resolve(tree)
+        try:
+            registered = tree.resolve() in {p.resolve() for p in worktree_paths(ctx)}
+        except GitError:
+            # Registered is what git does in the tree itself when the listing is caught
+            # halfway: judged in the main checkout, a finish over work in this tree was
+            # judged where nothing had changed (decision 0105).
+            registered = there.common_dir.resolve() == ctx.common_dir.resolve()
+        return there if registered else ctx
     except (GitError, OSError):
         return ctx
 
@@ -2435,6 +2473,9 @@ def provision(ctx: GitContext, task: str = "", session_id: str = "") -> Path | N
     None is not a failure to handle loudly: the caller falls back to naming the command,
     which is where this started. Better to say something true than to crash a fail-closed
     gate over a convenience.
+
+    Raises `GitError` when git cannot list the trees to find the session's own (`own_tree`):
+    a tree cut then would be its second, and the command named instead would make one too.
     """
     # One tree per SESSION, whatever the task statement says now. The name is derived from
     # the task, and the task statement is re-captured on every substantive message — so a
@@ -2816,9 +2857,14 @@ def permission_advice(ctx: GitContext | None = None, session_id: str = "") -> st
     skips it." So the line now says what does: the gate moves the tree home on the way in
     (`bring_home`), and the session asks nobody.
     """
+    from .gitctx import GitError
+
     if ctx is None:
         return ""
-    standing = own_tree(ctx, session_id)
+    try:
+        standing = own_tree(ctx, session_id)
+    except GitError:
+        return ""
     if standing is None or _within(standing, home_of(ctx)):
         return ""
     return (

@@ -1,6 +1,5 @@
 # Decisions
 
-- [0092] The owner's defect reports are filed as they come, and only what this version was seen to do — `decisions/0092-the-owners-defect-reports-go-as-they-come.md`
 - [0093] A chat is one session wherever its own process acts — `decisions/0093-a-chat-is-one-session-where-its-process-acts.md`
 - [0094] The founder's answer in a dialog is their word, and only their answer — `decisions/0094-the-founders-answer-in-a-dialog-is-their-word.md`
 - [0095] A pull request is filed under its head on GitHub, and a branch gone from the clone settles nothing — `decisions/0095-a-pull-request-is-filed-under-its-github-head.md`
@@ -11,4 +10,5 @@
 - [0102] A chat runs the newest installed copy's gates, and the plugin brings its own updates to disk — `decisions/0102-a-chat-runs-the-newest-copy-and-the-plugin-updates-itself.md`
 - [0103] Code Mode is the founder's switch, and a script is judged call by call at PreToolUse — `decisions/0103-code-mode-is-the-founders-switch-and-a-script-is-judged-call-by-call.md`
 - [0104] A clone's trees are made one at a time, and worktree-create answers with a path or a reason — `decisions/0104-trees-are-made-one-at-a-time-and-a-tree-not-made-is-said.md`
-- ... 89 older, see `decisions/`
+- [0105] A tree list git cannot give is no list, and each reader says what not knowing means — `decisions/0105-a-tree-list-git-cannot-give-is-no-list.md`
+- ... 90 older, see `decisions/`

@@ -27,7 +27,7 @@ from claude_bestpractice import upgrade as _upgrade  # noqa: E402
 _upgrade.handover(Path(__file__))
 
 from claude_bestpractice import board, ci, config, evidence, hookio, knowledge, limits, migrate, onboard, plan, policy, pullrequest, selfupdate, sessions, skillcheck, skilluse, stage, store, upgrade, worktree  # noqa: E402
-from claude_bestpractice.gitctx import GitContext, resolve, stash_baseline  # noqa: E402
+from claude_bestpractice.gitctx import GitContext, GitError, resolve, stash_baseline  # noqa: E402
 
 
 def send_captured_defects(ctx) -> None:
@@ -470,7 +470,10 @@ def _worktree_line(ctx: GitContext, cfg, session_id: str = "") -> str:
     """
     if not cfg.require_worktree or ctx.is_worktree:
         return ""
-    standing = worktree.own_tree(ctx, session_id)
+    try:
+        standing = worktree.own_tree(ctx, session_id)
+    except GitError:
+        standing = None
     where = f" `{standing}`" if standing else ""
     return (
         f"\nworktree: work happens in your own worktree{where}, never in this main checkout. "

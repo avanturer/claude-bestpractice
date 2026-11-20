@@ -32,7 +32,7 @@ from claude_bestpractice import upgrade as _upgrade  # noqa: E402
 _upgrade.handover(Path(__file__))
 
 from claude_bestpractice import __version__, attempts, board, config, delivery, discipline, drafts, evidence, founder, hookio, inbox, options, pullrequest, redact, sessions, stage, store, subagents, suites, witness, worktree  # noqa: E402
-from claude_bestpractice.gitctx import authored_floor, changed_files, resolve  # noqa: E402
+from claude_bestpractice.gitctx import GitError, authored_floor, changed_files, resolve  # noqa: E402
 
 BLOCK_COUNTER = "_consecutive_blocks"
 FAILURE_MARKER = "unverified.jsonl"
@@ -348,18 +348,21 @@ def _give_up(ctx, rec: sessions.SessionRecord, reason: str, changed: list) -> No
     if filed and filed[-1].get("head") == ctx.head and filed[-1].get("reason") == reason[:2000]:
         return
     if changed:
-        attempts.record(
-            ctx,
-            title=_the_work(ctx, rec, branch),
-            why=f"Finished without proof. {_cut(reason, 600)}",
-            paths=changed,
-            outcome=attempts.FAILED,
-            # The branch named above, for the same reason: a dead end filed against the
-            # branch the session started on is surfaced to sessions that cannot act on it
-            # and hidden from the one that can.
-            branch=branch,
-            session_id=rec.session_id,
-        )
+        # Not numbered where git cannot list the trees, and the finish is filed below all the
+        # same: the attempt is a note for later sessions, the mark is what a merge reads.
+        with contextlib.suppress(GitError):
+            attempts.record(
+                ctx,
+                title=_the_work(ctx, rec, branch),
+                why=f"Finished without proof. {_cut(reason, 600)}",
+                paths=changed,
+                outcome=attempts.FAILED,
+                # The branch named above, for the same reason: a dead end filed against the
+                # branch the session started on is surfaced to sessions that cannot act on it
+                # and hidden from the one that can.
+                branch=branch,
+                session_id=rec.session_id,
+            )
 
     store.append_jsonl(
         store.tier_b(ctx, FAILURE_MARKER),

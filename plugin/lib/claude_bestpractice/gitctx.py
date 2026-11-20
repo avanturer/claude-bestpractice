@@ -10,6 +10,7 @@ coordination possible at all, so `common_dir` is the anchor for every shared pat
 
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 import tempfile
@@ -594,15 +595,24 @@ def is_ancestor(ctx: GitContext, maybe_ancestor: str, descendant: str = "HEAD") 
 
 
 def worktree_paths(ctx: GitContext) -> list[Path]:
-    """Every registered worktree of this clone.
+    """Every registered worktree of this clone, main checkout first. Raises `GitError` when
+    git could not list them.
 
     Used to validate a session record: a live pid is not enough, the worktree must
     still be registered. A session whose worktree was removed is dead even if some
     unrelated process inherited its pid.
+
+    A failure is never "no trees": a listing that succeeds always names the main checkout.
+    `git worktree list` dies with 128 for as long as a sibling's `git worktree add` has made
+    `.git/worktrees/<id>/commondir` and not yet written it (decision 0104), and read as an
+    empty list that sent a write into a live sibling's tree, dropped a database another tree
+    still named and gave a card a number already taken (decision 0105). Each caller decides
+    what not knowing means for it.
     """
-    out = _run(["worktree", "list", "--porcelain"], ctx.worktree_root, check=False)
-    return [
-        Path(line[len("worktree ") :]).resolve()
-        for line in out.splitlines()
-        if line.startswith("worktree ")
-    ]
+    out = _run(["worktree", "list", "--porcelain"], ctx.worktree_root)
+    trees: list[Path] = []
+    for line in out.splitlines():
+        if line.startswith("worktree "):
+            with contextlib.suppress(OSError, RuntimeError):
+                trees.append(Path(line[len("worktree "):]).resolve())
+    return trees

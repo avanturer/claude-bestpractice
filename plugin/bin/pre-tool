@@ -34,7 +34,7 @@ import re  # noqa: E402
 import shlex  # noqa: E402
 
 from claude_bestpractice import ci, config, evidence, founder, gitpolicy, hookio, inbox, pullrequest, redact, search, servers, sessions, shellcmd, stage, store, subagents, vouch, worktree  # noqa: E402
-from claude_bestpractice.gitctx import resolve  # noqa: E402
+from claude_bestpractice.gitctx import GitError, resolve  # noqa: E402
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 SIGNATURE_HISTORY = 64
@@ -651,6 +651,15 @@ def _within_dir(target, root) -> bool:
         return False
 
 
+def _listed_tree(ctx, target) -> bool:
+    """Is `target` a working tree git lists for this clone? No where git cannot list them: the
+    entry is then not approved here, and Claude Code asks as it would without this plugin."""
+    try:
+        return target.resolve() in set(gitpolicy.working_trees(ctx))
+    except (GitError, OSError):
+        return False
+
+
 def _sibling_of_repo(ctx, target) -> bool:
     """A tree this plugin would provision: `<repo>-<slug>`, alongside the repository.
 
@@ -785,7 +794,13 @@ def _in_other_trees(ctx, root: Path, paths: list[Path]) -> list[tuple[Path, str]
     """
     if not paths:
         return []
-    trees = sorted((tree for tree in gitpolicy.working_trees(ctx) if tree != root),
+    # Where git cannot list the trees none is named, and a card is not asked of this call: a
+    # write into another tree is refused for that already (`foreign_tree`), where it is guarded.
+    try:
+        listed = gitpolicy.working_trees(ctx)
+    except GitError:
+        listed = []
+    trees = sorted((tree for tree in listed if tree != root),
                    key=lambda tree: len(tree.parts), reverse=True)
     out: list[tuple[Path, str]] = []
     for path in paths:
@@ -2176,7 +2191,7 @@ def main() -> None:
                      "its branch and uncommitted work with it, where it is entered without "
                      f"asking anyone:\n  EnterWorktree with path {home}")
         if target is None or gitpolicy.owned_by_session(ctx, target) or \
-                target.resolve() in set(gitpolicy.working_trees(ctx)) or \
+                _listed_tree(ctx, target) or \
                 _within_dir(target, made_here) or _sibling_of_repo(ctx, target):
             hookio.allow_tool(
                 "claude-bestpractice: this gate requires a worktree, so entering one needs no "
@@ -2310,7 +2325,10 @@ def main() -> None:
     writing = event.tool_name in WRITE_TOOLS or (event.tool_name == "Bash" and absolute)
     if writing and cfg.require_worktree:
         for path in absolute:
-            owner = gitpolicy.foreign_tree(ctx, path, event.session_id)
+            try:
+                owner = gitpolicy.foreign_tree(ctx, path, event.session_id)
+            except GitError as unlisted:
+                deny(ctx, rec, gitpolicy.unlisted_refusal(path, unlisted))
             # Ours if this plugin made it for this session. Without this the gate was a
             # closed loop: it refused the main checkout, handed over a worktree in the
             # same breath, and then refused every write into that worktree as "another
@@ -2428,7 +2446,10 @@ def main() -> None:
         command = str(ti.get("command", ""))
         unforced = unforced_removals(command, session_cwd)
         for path, fast_forward in git_tree_targets(command, session_cwd):
-            owner = gitpolicy.foreign_tree(ctx, path, rec.session_id)
+            try:
+                owner = gitpolicy.foreign_tree(ctx, path, rec.session_id)
+            except GitError as unlisted:
+                deny(ctx, rec, gitpolicy.unlisted_refusal(path, unlisted))
             # A fast-forward of the main checkout moves it to the trunk and nowhere else:
             # it makes no commit, and git refuses it rather than overwrite anything
             # uncommitted. Nobody stands in that tree to lose work, and a main checkout left
