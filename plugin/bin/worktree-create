@@ -19,9 +19,11 @@ Three things happen here that nothing else can do:
    daemon, ports and caches. Two sessions running the same dev server on the same port
    is a confusing failure that looks like a code bug.
 
-Fails OPEN on anything unexpected: refusing to create a worktree because a nicety broke
-would block the founder's whole workflow, and the gates that matter run inside the
-worktree anyway.
+Answers with a path or exits 2 with the reason, and nothing else (decision 0104). Claude
+Code reads the last line of stdout as the tree and fails creation without one, and runs no
+tree of its own instead: "If the hook fails or produces no path, worktree creation fails
+with an error." The empty answer this hook gave when git refused, and the `{"continue":
+true}` that `guard` prints for a crash, were each that failure with no reason in it.
 """
 
 from __future__ import annotations
@@ -43,7 +45,10 @@ from claude_bestpractice.gitctx import resolve  # noqa: E402
 
 def main() -> None:
     event = hookio.read_event()
-    ctx = hookio.repo(event.cwd or os.getcwd())
+    try:
+        ctx = hookio.repo(event.cwd or os.getcwd())
+    except hookio.NotApplicable as exc:
+        hookio.block(f"claude-bestpractice: no worktree was made: {exc}")
 
     requested = str(event.raw.get("path") or event.raw.get("worktreePath") or "")
     asked = str(event.raw.get("branch") or event.raw.get("ref") or "").strip()
@@ -62,20 +67,18 @@ def main() -> None:
                        f"agent/{worktree.session_slug('', event.session_id)}")
     slug = named or worktree.slugify(branch)
 
-    target = Path(requested) if requested else worktree.target_for(ctx, slug)
-    # Before the tree exists, so it is never visible as untracked work even for the moment
-    # between `git worktree add` and the next status.
-    worktree.hide(ctx)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    absolute = str(target)
-
     # CREATED, not just named. The harness rejects a path that is not a directory —
     # "the hook must create the directory before echoing its path" — and this used to make
-    # only the parent, so `isolation: "worktree"` could not start an agent at all. Failing
-    # open here means letting the harness make its own default tree, which is the
-    # behaviour without this plugin rather than a broken one.
-    if not target.is_dir() and not worktree.add_tree(ctx, absolute, branch):
-        raise SystemExit(0)
+    # only the parent, so `isolation: "worktree"` could not start an agent at all. A tree
+    # git would not make is said, with git's words: this exited 0 with nothing on stdout,
+    # and the agent failed with no reason given (decision 0104).
+    target, refused = worktree.make_tree(ctx, slug, branch, requested,
+                                         wait=worktree.HOOK_WAIT_SECONDS)
+    if refused or target is None:
+        where = f" at {target}" if target else ""
+        hookio.block(f"claude-bestpractice: no worktree was made for `{branch}`{where}: "
+                     f"{refused}")
+    absolute = str(target)
 
     # Same provisioning the gate uses when it refuses a write in the main checkout, so the
     # two paths cannot drift into disagreeing about naming, trust or ports.
@@ -102,4 +105,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    hookio.guard(main, fail_closed=False)
+    hookio.guard(main, fail_closed=True)

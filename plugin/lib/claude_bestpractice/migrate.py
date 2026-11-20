@@ -171,7 +171,19 @@ def repair(ctx: GitContext) -> list[str]:
 
 
 def _repair_pending(ctx: GitContext) -> list[str]:
-    """Every repair this clone has not had at its current revision. Callers hold the lock."""
+    """Every repair this clone has not had at its current revision. Callers hold the lock.
+
+    None while git cannot list the clone's trees: many repairs walk every tree, some through
+    readers that then fall back to the trees known without git, and one that saw only those
+    was recorded done for good (decision 0105). They wait for the next start.
+    """
+    from . import gitpolicy
+    from .gitctx import GitError
+
+    try:
+        gitpolicy.working_trees(ctx)
+    except GitError:
+        return []
     changed: list[str] = []
     for name, (revision, step) in _REPAIRS.items():
         if _ran_at(ctx, name) >= revision:
@@ -329,10 +341,9 @@ def _trees_that_still_prompt(ctx: GitContext, home: Path) -> list[Path]:
     """
     from .gitctx import worktree_paths
 
-    try:
-        registered = worktree_paths(ctx)
-    except Exception:  # noqa: BLE001 - a repair must never be what breaks a session start
-        return []
+    # Not caught. A repair that raises is left for the next start (`_repair_pending`), and one
+    # that found no trees because git could not list them was recorded done (decision 0105).
+    registered = worktree_paths(ctx)
     keep = _trees_to_leave_alone(ctx)
     if keep is None:
         return []
@@ -575,9 +586,9 @@ def _carry_this_worktrees_tasks_home(ctx: GitContext) -> str:
     sitting in a tree that is going to be removed.
 
     THIS worktree's only, never a sibling's. A session owns the tree it stands in and
-    nothing else, and each tree runs this on its own next session start — so the whole
-    clone is carried over without one session reaching into another's files while a claim
-    is being written there.
+    nothing else. That was to have each tree carry its own at its next session start, and
+    did not: the record of a repair is the clone's, so this ran in the first tree to start
+    and no other. Repair 0051 carries the rest, under the claim lock (decision 0106).
 
     A name already present in the main checkout is left alone rather than overwritten:
     the reader ranks copies by how far the lifecycle has carried them, and clobbering a
@@ -1003,12 +1014,13 @@ def _refresh_what_pull_requests_are_blocked_by(ctx: GitContext) -> str:
     handed off with a file outside it, or a run the founder's message stopped, read as blocked
     to its merge, and still does once this version merges it (#309). Judged again in each tree
     whose branch has one, where the merge would be judged; a branch no tree has stays as it is.
+    Every tree git lists, or none and the repair left for the next start where it cannot.
     """
-    from . import plan, pullrequest
+    from . import gitpolicy, pullrequest
     from .gitctx import resolve
 
     refreshed = 0
-    for root in plan.sibling_worktrees(ctx) or [ctx.worktree_root]:
+    for root in gitpolicy.working_trees(ctx):
         try:
             tree = resolve(root)
         except Exception:  # noqa: BLE001 - a tree that cannot be read keeps what it had
@@ -1184,15 +1196,34 @@ def _carry_attempts_of(tree: Path, home: Path) -> int:
 _LEDGER_PATH = ".claude/claude-bestpractice/plan"
 
 
+def _carry_cards_only_a_tree_holds(ctx: GitContext) -> str:
+    """Cards only a linked tree holds, carried to the main checkout (decision 0106).
+
+    Each went with its tree: the ledger folder is ignored, and an ignored file of this plugin's
+    never keeps a tree. Repair 0012 carried them from one tree per clone. Every tree now; a card
+    whose number a different card holds in the main checkout stays, and keeps its tree.
+    """
+    from . import plan, worktree
+
+    main = worktree.main_checkout(ctx)
+    moved, left = 0, 0
+    for tree in _trees_of(ctx):
+        if tree != main:
+            carried, kept = plan.carry_home(ctx, tree)
+            moved, left = moved + carried, left + len(kept)
+    said = [f"{moved} card(s) only a linked tree held, moved to the main checkout"] if moved else []
+    if left:
+        said.append(f"{left} left in their trees: a different card holds the number")
+    return "; ".join(said)
+
+
 def _trees_of(ctx: GitContext) -> list[Path]:
-    """Every working tree of this clone, or just this one when git cannot say."""
+    """Every working tree of this clone on disk. Raises `GitError` when git cannot list them:
+    this tree alone, which it answered with, recorded a repair of every tree done after one
+    (decision 0105). `_repair_pending` leaves a repair that raised for the next start."""
     from . import gitpolicy
 
-    try:
-        found = [t for t in gitpolicy.working_trees(ctx) if t.is_dir()]
-    except Exception:  # noqa: BLE001 - a repair must not fail on an unlistable clone
-        found = []
-    return found or [ctx.worktree_root]
+    return [t for t in gitpolicy.working_trees(ctx) if t.is_dir()] or [ctx.worktree_root]
 
 
 def _git_out(tree: Path, args: list[str]) -> str:
@@ -2001,6 +2032,7 @@ _REPAIRS = {
     "0049-a-branch-gone-closes-no-pull-request": (1, _mark_pull_requests_closed_by_a_branch_gone),
     "0050-hand-a-resumed-chat-the-records-it-wrote":
         (1, _hand_a_resumed_chat_the_records_it_wrote),
+    "0051-carry-cards-only-a-tree-holds": (1, _carry_cards_only_a_tree_holds),
 }
 
 

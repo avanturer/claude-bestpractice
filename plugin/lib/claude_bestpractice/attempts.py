@@ -185,11 +185,14 @@ def next_id(ctx: GitContext) -> str:
     `0001`: the files merged cleanly under different slugs, `drop 0001` then retired
     whichever came first, and the two shared one provenance stamp. `plan.next_id` allocates
     this way for the same reason, and `record` holds a clone-wide lock around the call.
+
+    Raises `GitError` when git cannot list the trees, rather than count this tree's alone,
+    which is the collision above (decision 0105).
     """
-    from . import plan
+    from . import gitpolicy
 
     names = _on_the_trunk(ctx)
-    for root in plan.sibling_worktrees(ctx) or [ctx.worktree_root]:
+    for root in gitpolicy.working_trees(ctx):
         names += [path.name for path in
                   (root / store.TIER_A_DIRNAME / ATTEMPTS_DIR).glob("[0-9][0-9][0-9][0-9]-*.md")]
     highest = max((int(name[:4]) for name in names if name[:4].isdigit()), default=0)
@@ -231,7 +234,8 @@ def record(
     branch: str = "",
     session_id: str = "",
 ) -> Attempt | None:
-    """File a failed approach. Returns None when an equivalent one is already on record.
+    """File a failed approach. Returns None when an equivalent one is already on record, and
+    raises `GitError` when git cannot list the trees to number it (`next_id`).
 
     Deduplicated on (title, overlapping paths) rather than on exact text, because the
     same dead end gets described slightly differently every time it is hit, and a

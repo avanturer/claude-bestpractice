@@ -25,7 +25,7 @@ from claude_bestpractice import upgrade as _upgrade  # noqa: E402
 _upgrade.handover(Path(__file__))
 
 from claude_bestpractice import __version__, attempts, hookio  # noqa: E402
-from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
+from claude_bestpractice.gitctx import GitError, resolve_for_cli  # noqa: E402
 
 
 def main() -> int:
@@ -64,9 +64,14 @@ def main() -> int:
         return 0
 
     if args.command == "add":
-        attempt = attempts.record(
-            ctx, args.title, args.why, args.paths, outcome=args.outcome, branch=ctx.branch
-        )
+        try:
+            attempt = attempts.record(
+                ctx, args.title, args.why, args.paths, outcome=args.outcome, branch=ctx.branch
+            )
+        except GitError as unlisted:
+            print(f"not recorded: git could not list this clone's trees to number it ({unlisted}). "
+                  "Run the same command again once `git worktree list` answers.", file=sys.stderr)
+            return 1
         if attempt is None:
             print("already on record — an equivalent attempt exists for these files")
             return 0

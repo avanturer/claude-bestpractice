@@ -1,5 +1,81 @@
 # Changelog
 
+## v2.19.3
+
+A sibling's tree being made no longer reads as a clone without trees (decision 0105).
+
+- **What dies, measured.** While a `git worktree add` has made `.git/worktrees/<id>/commondir`
+  and not yet written it, git 2.43 exits 128 for `worktree list`, `branch` in its default
+  format, `branch -d`/`-D`, `worktree remove`, `checkout` and `for-each-ref %(worktreepath)`.
+  `branch --format=%(refname:short)`, `status`, `rev-parse`, `merge --ff-only` and
+  `worktree prune` survive. The plugin read the dead listing as no trees, outside `ADD_LOCK`.
+- **What that did, and does now.** `gitctx.worktree_paths` raises `GitError` instead, and
+  `gitpolicy.working_trees` and `plan.sibling_worktrees` read it.
+  - A write or `git -C <tree> reset --hard` into a live sibling's tree went through, since no
+    tree owned the path. Now refused with git's words and `git worktree list`.
+  - `main_checkout` answered with the asking tree, so a card from a linked tree was written
+    there. Now taken from the common dir, as git's `get_main_worktree` does: the same as git's
+    listing for a plain clone, a linked tree, a subdirectory, bare, separate git dir, symlink.
+  - `plan.next_id` counted one tree and gave out a number a card had. The ledger now reads the
+    main checkout and this tree. Decision and attempt numbers, kept per branch, are not given:
+    `claude-bp-decide accept` and `claude-bp-attempt add` exit 1, and the Stop gate files the
+    UNVERIFIED finish without its attempt.
+  - A removal could drop a database another tree named. Now kept.
+  - The Stop gate judged a session standing in the main checkout there, where nothing had
+    changed. Its tree is followed where the tree's own git answers as this clone's.
+  - A chat's tree made by hand was not found, and `provision` cut a second or named the command
+    that would. Now neither, and the refusal says why.
+  - Repairs that read every tree were recorded done having seen one. None runs while the
+    listing fails, and each step that reads every tree raises.
+- **Left as they were.** `sessions` read an empty listing as a failed probe already, and reaps
+  nothing on it; the board and the sweep name nothing that turn; `reap_merged_branches` asks
+  `git branch -D` of a branch a tree may hold, which git refuses, and dies on in that instant;
+  `default_branch` reads `branch --format`; `worktree_paths_in_use` has no caller.
+- **Proof.** `tests/test_a_tree_halfway_made.py` freezes the instant as git leaves it
+  (`helpers.a_tree_halfway_made`). 23 mutations, one per fix and one per catch the raise needed,
+  each turn their test red.
+- **Repair.** A write, a dropped database and a second tree are done. A card written into a
+  linked tree is carried home by repair 0051, below; one numbered twice keeps the number a
+  session may have been told (decision 0027), and its tree.
+
+A card only a linked tree holds now reaches the main checkout before the tree goes (decision
+0106).
+
+- **What went with a tree.** `lost_with` never kept a tree for this plugin's own files, the
+  ledger folder is ignored in every tree, and `git worktree remove` takes an ignored file
+  without a word. Repair 0012 carried such cards in one tree per clone, since a repair's record
+  is the clone's, though it said each tree would carry its own.
+- **Carried now.** `plan.carry_home` moves a card git does not track there and whose number no
+  card in the main checkout holds, under the claim lock: in `_release` before every removal
+  the plugin makes, in `pre-tool` before a `git worktree remove` a session types, and once for
+  every linked tree (repair 0051). The same card is told by `created_at`, or by title on a
+  card older than that field.
+- **Never taken.** A card whose number a different card holds is not moved. `lost_with` names
+  it, so no removal the plugin decides takes its tree, `_release` keeps it, and a typed
+  removal is refused naming `cat <card>`.
+- **Proof.** `tests/test_a_card_only_a_tree_holds.py`. 11 mutations, each turn their test red.
+
+## v2.19.2
+
+Agents started together no longer lose their trees to one another (decision 0104).
+
+- **A clone's trees are made one at a time.** Each `git worktree add` reads every listed tree's
+  `commondir` as it starts, and dies on an empty one: `fatal: failed to read
+  .git/worktrees/agent-1/commondir: Success`. The add that makes a tree creates that file before
+  writing it, and git 2.56's source still does both. Four `worktree-create` hooks at once, beside
+  `make test-fast` on four cores: 3 of 60 bursts lost a tree that way, 0 of 60 with the lock.
+  The path is chosen, the exclude written and git run under `worktree.ADD_LOCK` in the git common
+  dir, by the hook and by `provision`; `git worktree list` dies on the same file, and an empty
+  listing made the asking tree the main checkout. The hook waits up to 45 of its 60 seconds, and
+  the tool gate 5 of its 15 before it names the command as before.
+- **`worktree-create` answers with a path or exits 2 saying why.** It exited 0 with nothing on
+  stdout where git refused, and printed `guard`'s `{"continue": true}` outside a repository or on
+  a crash. Claude Code reads that stdout as the tree and fails creation without one, with no
+  reason given, and makes no default tree instead. Now git's words, the wait that ran out, or the
+  crash reach the session that asked for the agent.
+- **Nothing to repair.** A dying add leaves only the branch it made, at the commit the tree was to
+  be cut from; the merged-branch sweep takes it at the next tree put away where that is the trunk.
+
 ## v2.19.1
 
 Session starts no longer show the notes in `hooks.json`. On the founder's machine, Claude Code 2.1.329

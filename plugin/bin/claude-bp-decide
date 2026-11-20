@@ -28,7 +28,7 @@ from claude_bestpractice import upgrade as _upgrade  # noqa: E402
 _upgrade.handover(Path(__file__))
 
 from claude_bestpractice import __version__, drafts, hookio, knowledge  # noqa: E402
-from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
+from claude_bestpractice.gitctx import GitError, resolve_for_cli  # noqa: E402
 
 
 def slug(text: str) -> str:
@@ -108,7 +108,12 @@ def cmd_accept(ctx, wanted: str, supersedes: str = "") -> int:
     draft = dict(found)
     if supersedes:
         draft["supersedes"] = supersedes
-    number = drafts.next_number(ctx)
+    try:
+        number = drafts.next_number(ctx)
+    except GitError as unlisted:
+        print(f"not accepted: git could not list this clone's trees to number it ({unlisted}). "
+              "Run the same command again once `git worktree list` answers.", file=sys.stderr)
+        return 1
     name = f"{number:04d}-{slug(draft.get('quote', ''))}.md"
     path = ctx.worktree_root / knowledge.DECISIONS_DIR / name
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -374,15 +374,21 @@ def shared_database(ctx: GitContext) -> tuple[Path, str] | None:
     every live session was properly isolated, and the run in that tree was still being
     perturbed by neighbours the registry could not see.
 
-    So the question is asked of the TREES, which is where the answer is written down.
+    So the question is asked of the TREES, which is where the answer is written down. None
+    where git cannot list them: the board names no neighbour for that start.
     """
     from . import gitpolicy
+    from .gitctx import GitError
 
     here = database_of(ctx.worktree_root)
     if not here:
         return None
     mine = ctx.worktree_root.resolve()
-    for tree in gitpolicy.working_trees(ctx):
+    try:
+        trees = gitpolicy.working_trees(ctx)
+    except GitError:
+        return None
+    for tree in trees:
         if tree != mine and database_of(tree) == here:
             return tree, split_dsn(here)[1] or here
     return None
@@ -677,11 +683,16 @@ def main_checkout(ctx: GitContext) -> Path:
     Anchored so trees do not nest inside trees: a session refused inside
     `.claude/worktrees/a` would otherwise be sent to `.claude/worktrees/a/.claude/
     worktrees/b`, and removing `a` would then take somebody else's tree with it.
-    """
-    from . import gitpolicy
 
-    trees = gitpolicy.working_trees(ctx)
-    return trees[0] if trees else ctx.worktree_root
+    Worked out as git works out the first entry of `git worktree list` (`get_main_worktree`,
+    the same in git 2.56): the common dir's real path, less a trailing `/.git`. Not read off
+    that listing, which dies while a sibling's add has `commondir` half written: this then
+    answered with the asking tree itself, so a card from a linked tree was written into that
+    tree, and its `.env` seeded from it (decision 0105). A bare clone or a separate git dir
+    answers with the git dir, as git's listing does, and `home_of` steps out of it.
+    """
+    common = ctx.common_dir.resolve()
+    return common.parent if common.name == ".git" else common
 
 
 def home_of(ctx: GitContext) -> Path:
@@ -982,10 +993,27 @@ def sweep_named(ctx: GitContext) -> tuple[list[str], list[str], list[tuple[str, 
     return removed, kept, left
 
 
-def _stays_put(main: Path, tree: Path, notes: list[str] | None) -> bool:
-    """Is `tree` one `_release` leaves where it is before asking git: the main checkout, or a
-    tree a session's process still runs in?"""
-    return tree == main.resolve() or _a_session_still_works_in(tree, notes)
+def _stays_put(ctx: GitContext, main: Path, tree: Path, notes: list[str] | None) -> bool:
+    """Is `tree` one `_release` leaves where it is before asking git: the main checkout, a
+    tree a session's process still runs in, or one still holding a card only it has once every
+    such card that can be has been carried to the main checkout?"""
+    return tree == main.resolve() or _a_session_still_works_in(tree, notes) \
+        or not _its_cards_carried(ctx, tree, notes)
+
+
+def _its_cards_carried(ctx: GitContext, tree: Path, notes: list[str] | None) -> bool:
+    """Carry the cards only `tree` holds to the main checkout, said in `notes`; whether none is
+    left there. Its ledger folder is ignored, and git takes it without a word: a card only this
+    tree held went with it (decision 0106). One that cannot be carried keeps the tree."""
+    from . import plan
+
+    moved, left = plan.carry_home(ctx, tree)
+    said = (f"kept: it holds {len(left)} card(s) the main checkout has no copy of and could not "
+            f"take ({', '.join(card.name for card in left[:3])})" if left else
+            f"{moved} card(s) only it held, moved to the main checkout" if moved else "")
+    if said and notes is not None:
+        notes.append(said)
+    return not left
 
 
 def _a_session_still_works_in(tree: Path, notes: list[str] | None) -> bool:
@@ -1215,14 +1243,18 @@ def drop_database(url: str, database: str) -> str:
 
 
 def _points_at(ctx: GitContext, url: str, exclude: Path) -> bool:
-    """Does any other working tree of this clone name this database?"""
+    """Does any other working tree of this clone name this database? Yes where git cannot list
+    the trees: read as none, a removal dropped its tree's database while another tree still
+    named it (decision 0105)."""
     from . import gitpolicy
+    from .gitctx import GitError
 
     try:
         skip = exclude.resolve()
-    except OSError:
+        trees = gitpolicy.working_trees(ctx)
+    except (OSError, GitError):
         return True
-    for tree in gitpolicy.working_trees(ctx):
+    for tree in trees:
         if tree == skip:
             continue
         if database_of(tree) == url:
@@ -1364,7 +1396,8 @@ def _release(ctx: GitContext, tree: tuple, record_path: Path, notes: list[str] |
              force: bool = False, kept: list[str] | None = None) -> bool:
     """Hand a tree back to git, and its branch, its database and its siblings with it.
 
-    False if git refused the removal, or a process a session started still runs in the tree.
+    False if git refused the removal, a process a session started still runs in the tree, or
+    it holds a card only it has that the main checkout could not take (`_its_cards_carried`).
     `notes` collects what went besides the tree, for the
     one line the founder reads — the removal used to end at the directory, and everything
     it had created around that directory stayed (#224). `kept` collects the tree's branch
@@ -1380,7 +1413,7 @@ def _release(ctx: GitContext, tree: tuple, record_path: Path, notes: list[str] |
     path, branch = tree
     where = main_checkout(ctx)
     standing = Path(path).resolve()
-    if _stays_put(where, standing, notes):
+    if _stays_put(ctx, where, standing, notes):
         return False
     ours = _database_of_ours(ctx, Path(path))
     # `--force` is never this plugin's idea: it is passed only where the session typed it
@@ -1664,17 +1697,25 @@ def lost_with(ctx: GitContext, tree: Path) -> list[str] | None:
 
     So is a tracked file changed under `--skip-worktree` or `--assume-unchanged`
     (`_changed_unseen`): git was told not to look at it, and the removal takes it the same way.
+
+    And a card only this tree holds that the main checkout cannot take, its number another
+    card's there (`plan.strays`). One it can take is not lost: every removal this plugin makes
+    carries it there first (decision 0106).
     """
     listed = _ignored_listing(tree)
     unseen = _changed_unseen(tree)
     if listed is None or unseen is None:
         return None
+    from . import plan
+
     main = main_checkout(ctx)
     seeded = _seeded_envs(ctx, main, tree)
     return [rel for rel in listed
             if not _regrows_in(tree, rel) and not rel.startswith(f"{store.TIER_A_DIRNAME}/")
             and not _held_in(main, tree, rel) and not _seeded_here(tree, rel, seeded)
-            ] + [f"{rel} (changed, and marked for git not to show)" for rel in unseen]
+            ] + [f"{rel} (changed, and marked for git not to show)" for rel in unseen] + [
+        f"{card.relative_to(tree).as_posix()} (a card no other tree has, its number another's)"
+        for card in plan.strays(ctx, tree)[1]]
 
 
 def _changed_unseen(tree: Path) -> list[str] | None:
@@ -2185,6 +2226,10 @@ def own_tree(ctx: GitContext, session_id: str) -> Path | None:
     Claude Code's `--worktree`, came back in the main checkout after its machine restarted:
     the board named no tree, the refused write was sent to a new one cut beside its own, and
     the work the chat had left uncommitted was in the tree nobody sent it back to.
+
+    Raises `GitError` where that takes the listing and git cannot give it: "none" is what
+    makes `provision` cut a second tree, the same defect from a listing caught halfway
+    (decision 0105).
     """
     made = mine(ctx, session_id)
     if made is not None or not session_id:
@@ -2240,11 +2285,11 @@ def _last_seen(ctx: GitContext) -> dict[str, float]:
 
 
 def trees_by_branch(ctx: GitContext) -> dict[str, Path]:
-    """Each branch checked out in a tree of this clone, and where, as git lists them."""
-    out = subprocess.run(
-        ["git", "worktree", "list", "--porcelain"], cwd=str(ctx.worktree_root),
-        capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=30,
-    ).stdout
+    """Each branch checked out in a tree of this clone, and where, as git lists them. Raises
+    `GitError` when git cannot list them, which is not a clone with none checked out."""
+    from .gitctx import _run
+
+    out = _run(["worktree", "list", "--porcelain"], ctx.worktree_root)
     found: dict[str, Path] = {}
     path = ""
     for line in out.splitlines():
@@ -2336,10 +2381,9 @@ def _follow_the_move(ctx: GitContext, was: Path, now: Path) -> None:
 
 def _why_it_cannot_go_home(ctx: GitContext, tree: Path, target: Path, session_id: str) -> str:
     """Why `tree` is not moved to `target`, or "" when nothing keeps it where it is."""
-    from .gitctx import worktree_paths
-
-    if tree not in worktree_paths(ctx) or tree == main_checkout(ctx).resolve():
-        return f"{tree} is no working tree of this repository's to move"
+    unlisted = _not_a_linked_tree(ctx, tree)
+    if unlisted:
+        return unlisted
     who = _another_chat_in(ctx, tree, session_id)
     if who:
         return f"{who} works in it"
@@ -2350,6 +2394,20 @@ def _why_it_cannot_go_home(ctx: GitContext, tree: Path, target: Path, session_id
                                                    for b in _provisioned(ctx)}:
         return "what runs in it cannot be read on this machine"
     return f"{target} is taken" if target.exists() else ""
+
+
+def _not_a_linked_tree(ctx: GitContext, tree: Path) -> str:
+    """Why `tree` is no linked tree of this clone's for `git worktree move` to take, or "".
+    Unknown where git cannot list the trees, and nothing is moved on that."""
+    from .gitctx import GitError, worktree_paths
+
+    try:
+        listed = tree in worktree_paths(ctx)
+    except GitError:
+        return "git could not list this clone's trees to say it is one of them"
+    if not listed or tree == main_checkout(ctx).resolve():
+        return f"{tree} is no working tree of this repository's to move"
+    return ""
 
 
 def _provisioned(ctx: GitContext) -> list[dict]:
@@ -2419,9 +2477,15 @@ def working_context(ctx: GitContext, session_id: str) -> GitContext:
     try:
         if tree.resolve() == ctx.worktree_root.resolve():
             return ctx
-        if tree.resolve() not in {p.resolve() for p in worktree_paths(ctx)}:
-            return ctx
-        return resolve(tree)
+        there = resolve(tree)
+        try:
+            registered = tree.resolve() in {p.resolve() for p in worktree_paths(ctx)}
+        except GitError:
+            # Registered is what git does in the tree itself when the listing is caught
+            # halfway: judged in the main checkout, a finish over work in this tree was
+            # judged where nothing had changed (decision 0105).
+            registered = there.common_dir.resolve() == ctx.common_dir.resolve()
+        return there if registered else ctx
     except (GitError, OSError):
         return ctx
 
@@ -2435,6 +2499,9 @@ def provision(ctx: GitContext, task: str = "", session_id: str = "") -> Path | N
     None is not a failure to handle loudly: the caller falls back to naming the command,
     which is where this started. Better to say something true than to crash a fail-closed
     gate over a convenience.
+
+    Raises `GitError` when git cannot list the trees to find the session's own (`own_tree`):
+    a tree cut then would be its second, and the command named instead would make one too.
     """
     # One tree per SESSION, whatever the task statement says now. The name is derived from
     # the task, and the task statement is re-captured on every substantive message — so a
@@ -2447,15 +2514,11 @@ def provision(ctx: GitContext, task: str = "", session_id: str = "") -> Path | N
 
     slug = session_slug(task, session_id)
     branch = f"{branch_type(task)}/{slug}"
-    target = target_for(ctx, slug)
-    absolute = str(target)
-    # Before the tree exists, so it is never visible as untracked work even for the moment
-    # between `git worktree add` and the next status.
-    hide(ctx)
-
-    if not target.is_dir() and not add_tree(ctx, absolute, branch):
+    target, refused = make_tree(ctx, slug, branch, wait=GATE_WAIT_SECONDS)
+    if refused or target is None:
         return None
 
+    absolute = str(target)
     body = record(ctx, slug, absolute, branch, trust(absolute), session_id)
     furnish(ctx, target, str(body.get("database") or ""), later=True)
     return target
@@ -2731,8 +2794,51 @@ def _base_ref_setting(ctx: GitContext) -> str:
     return ""
 
 
-def add_tree(ctx: GitContext, absolute: str, branch: str) -> bool:
-    """`git worktree add`, with the one recoverable failure handled. False if git refused.
+# One tree made at a time in a clone (decision 0104). Each `git worktree add` lists the
+# clone's trees as it starts, and git reads every listed tree's `commondir` through a `die`
+# on an empty file (`get_common_dir_noenv`), while the `add` that makes a tree creates that
+# file and fills it in two steps (`write_file`, no rename). Four isolation agents of one
+# message read one another's half-made trees — `fatal: failed to read
+# .git/worktrees/agent-1/commondir: Success`, exit 128 — in 3 of 60 bursts on a loaded
+# container, on git 2.43; git 2.56's source reads and writes it the same way. `git worktree
+# list` dies on the same file, so the path is chosen under the lock too: `main_checkout`
+# reads an empty listing as "the asking tree is the main one", and a tree asked for from
+# inside another would be made inside it.
+ADD_LOCK = "worktree-add.lock"
+
+# How long a tree waits for the ones asked for before it in this clone. The WorktreeCreate
+# hook has sixty seconds (`hooks.json`) and can say why it failed only while it still runs.
+# The tool gate's `provision` has fifteen for everything, and a tool gate out of time lets
+# the refused write through, so it gives up sooner and names the command instead.
+HOOK_WAIT_SECONDS = 45.0
+GATE_WAIT_SECONDS = 5.0
+
+
+def make_tree(ctx: GitContext, slug: str, branch: str, requested: str = "",
+              wait: float = GATE_WAIT_SECONDS) -> tuple[Path | None, str]:
+    """Choose a new tree's path and make it there, one at a time in a clone.
+
+    (the path, "") once a tree stands there, a directory already at the path included, so a
+    session refused twice is sent to the same place. Otherwise what stopped it, git's own
+    words where git refused, and the path when it was chosen.
+    """
+    try:
+        with store.file_lock(store.tier_b(ctx, ADD_LOCK), timeout=wait):
+            target = Path(requested) if requested else target_for(ctx, slug)
+            # Before the tree exists, so it is never visible as untracked work even for the
+            # moment between `git worktree add` and the next status.
+            hide(ctx)
+            if target.is_dir():
+                return target, ""
+            return target, add_tree(ctx, str(target), branch)
+    except store.LockTimeout:
+        return None, (f"the trees asked for before it in this clone were still being made "
+                      f"after {wait:g}s; ask for it again once they are")
+
+
+def add_tree(ctx: GitContext, absolute: str, branch: str) -> str:
+    """`git worktree add`, with the one recoverable failure handled. What git said refusing
+    it, or "" once the tree is there. Called under `make_tree`'s lock, never beside it.
 
     Shared with the `WorktreeCreate` hook rather than written twice: that hook echoed a
     path it had never created — only the path's PARENT was made — so the harness refused
@@ -2743,21 +2849,29 @@ def add_tree(ctx: GitContext, absolute: str, branch: str) -> bool:
     """
     base = _base_of(ctx)
     cut = ["--no-track", "-b", branch, absolute, base] if base else ["-b", branch, absolute]
+    made = _worktree_add(ctx, cut)
+    if not made:
+        return ""
+    # A branch of that name already exists is the common one, and it is recoverable:
+    # attach a worktree to the branch instead of creating it again.
+    attached = _worktree_add(ctx, [absolute, branch])
+    if not attached:
+        return ""
+    return "; ".join(dict.fromkeys((made, attached)))
+
+
+def _worktree_add(ctx: GitContext, args: list[str]) -> str:
+    """One `git worktree add`: "" when it made the tree, else git's last word on why not."""
     proc = subprocess.run(
-        ["git", "worktree", "add", *cut],
+        ["git", "worktree", "add", *args],
         cwd=str(ctx.worktree_root), capture_output=True,
         encoding="utf-8", errors="surrogateescape", timeout=120,
     )
     if proc.returncode == 0:
-        return True
-    # A branch of that name already exists is the common one, and it is recoverable:
-    # attach a worktree to the branch instead of creating it again.
-    attach = subprocess.run(
-        ["git", "worktree", "add", absolute, branch],
-        cwd=str(ctx.worktree_root), capture_output=True,
-        encoding="utf-8", errors="surrogateescape", timeout=120,
-    )
-    return attach.returncode == 0
+        return ""
+    said = proc.stderr.strip().splitlines()
+    fatal = [line for line in said if line.startswith(("fatal:", "error:"))]
+    return (fatal or said or [f"git worktree add exited {proc.returncode}"])[-1]
 
 
 def permission_advice(ctx: GitContext | None = None, session_id: str = "") -> str:
@@ -2769,9 +2883,14 @@ def permission_advice(ctx: GitContext | None = None, session_id: str = "") -> st
     skips it." So the line now says what does: the gate moves the tree home on the way in
     (`bring_home`), and the session asks nobody.
     """
+    from .gitctx import GitError
+
     if ctx is None:
         return ""
-    standing = own_tree(ctx, session_id)
+    try:
+        standing = own_tree(ctx, session_id)
+    except GitError:
+        return ""
     if standing is None or _within(standing, home_of(ctx)):
         return ""
     return (

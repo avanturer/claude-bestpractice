@@ -454,12 +454,15 @@ def next_number(ctx: GitContext) -> int:
     Decisions are committed per branch, so two worktrees each accepting a draft both wrote
     `0001-…md`: after the merge two records answered to one number, and one `supersedes:
     0001` would retire both. The same union `plan.next_id` allocates from.
+
+    Raises `GitError` when git cannot list the trees: this tree's records alone are the
+    collision above, and they were what an empty listing left it to count (decision 0105).
     """
-    from . import knowledge, plan
+    from . import gitpolicy, knowledge
 
     numbers = [
         int(path.name[:4])
-        for root in plan.sibling_worktrees(ctx) or [ctx.worktree_root]
+        for root in gitpolicy.working_trees(ctx)
         for path in (root / knowledge.DECISIONS_DIR).glob("[0-9][0-9][0-9][0-9]-*.md")
     ]
     return (max(numbers) + 1) if numbers else 1

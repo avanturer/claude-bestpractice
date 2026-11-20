@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-2.19.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.19.3-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-3017%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -688,7 +688,7 @@ In a session: `/bestpractice:status` · `/bestpractice:plan` · `/bestpractice:r
 | `prompt-capture` | UserPromptSubmit | fails open | Records the verbatim task. **Injects nothing** |
 | `pre-tool` | PreToolUse | **fails closed**, even when it cannot start (`onFailure`) | Call ceiling, loop break, secret pre-write scan, leases, migration and deploy gating, subagent tier and fan-out, no founder's word in a scheduled prompt or message |
 | `review-commit` | `if: Bash(git commit:*)` | async rewake | Reviews this turn's diff; wakes you only when there is something to say |
-| `worktree-create` | WorktreeCreate | fails open | Names it, seeds trust, derives a private port and database |
+| `worktree-create` | WorktreeCreate | **fails closed**: a path, or exit 2 and why | Names it, makes it one at a time in a clone, seeds trust, derives a private port and database |
 | `subagent-brief` | SubagentStart | fails open | Non-goals, entities and a query-biased map to agents that inherit no rules |
 | `checkpoint` | PreCompact | fails open | Extractive checkpoint, zero model calls, secrets scrubbed; tells the summary what to keep. **Never refuses a compaction** — a refusal there reaches the founder, never the model (decision 0021) |
 | `evidence-gate` | Stop | **fails closed** | Scope drift, test evidence, clean re-run, a turn ending on an unanswered block; harvests decision drafts; asks once for what only this window knows; puts a finished worktree away; waits while the session's own agents work |

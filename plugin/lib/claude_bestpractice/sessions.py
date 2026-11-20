@@ -40,7 +40,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from . import hookio, store
-from .gitctx import GitContext, worktree_paths
+from .gitctx import GitContext, GitError, worktree_paths
 
 # Older than this and the board stops calling the session active. It is a DISPLAY
 # threshold: a quiet session is still enforcing, and reaping on it is what broke the
@@ -367,11 +367,20 @@ def is_live(ctx: GitContext, rec: SessionRecord, known_worktrees: set[str] | Non
     if (time.time() - rec.heartbeat_at) > HEARTBEAT_DEAD_SECONDS and not _pid_proves_life(rec):
         return False
     if known_worktrees is None:
-        known_worktrees = {p.as_posix() for p in worktree_paths(ctx)}
+        known_worktrees = _registered(ctx)
     # An empty set means `git worktree list` failed; do not reap on a failed probe.
     if known_worktrees and rec.worktree not in known_worktrees:
         return False
     return not _resumed_past(rec, load_all(ctx) if records is None else records)
+
+
+def _registered(ctx: GitContext) -> set[str]:
+    """The trees git lists for this clone, or none where it cannot list them, which `is_live`
+    reads as a probe that failed: a sibling's add caught halfway kills no session's record."""
+    try:
+        return {p.as_posix() for p in worktree_paths(ctx)}
+    except GitError:
+        return set()
 
 
 def _resumed_past(rec: SessionRecord, records: list[SessionRecord]) -> bool:
@@ -929,7 +938,7 @@ def reap(ctx: GitContext, exclude: str | None = None,
     `live` is what `running` returned, when the caller asked: a record whose CLI has moved
     to another conversation is dead too (`superseded`).
     """
-    known = {p.as_posix() for p in worktree_paths(ctx)}
+    known = _registered(ctx)
     dead: list[SessionRecord] = []
     records = load_all(ctx)
     for rec in records:
@@ -1008,7 +1017,7 @@ def reaped_memory(ctx: GitContext, session_id: str) -> dict:
 
 def live_sessions(ctx: GitContext, exclude: str | None = None,
                   live: dict[str, dict] | None = None) -> list[SessionRecord]:
-    known = {p.as_posix() for p in worktree_paths(ctx)}
+    known = _registered(ctx)
     records = load_all(ctx)
     return [
         r

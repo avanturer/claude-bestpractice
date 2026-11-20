@@ -331,20 +331,110 @@ def _rank(state: str, label: str) -> tuple[int, int]:
 
 
 def sibling_worktrees(ctx: GitContext) -> list[Path]:
-    proc = subprocess.run(
-        ["git", "worktree", "list", "--porcelain"],
-        cwd=str(ctx.worktree_root),
-        capture_output=True,
-        encoding="utf-8", errors="surrogateescape",
-        timeout=30,
-    )
-    if proc.returncode != 0:
-        return []
-    return [
-        Path(line[len("worktree ") :])
-        for line in proc.stdout.splitlines()
-        if line.startswith("worktree ")
-    ]
+    """Every tree a card can be in: each one git lists, main checkout first.
+
+    Where git cannot list them, the two known without it: the main checkout, where the
+    ledger lives (decision 0018), and this tree. This answered with none, every caller then
+    read this tree alone, and from a linked tree `next_id` handed out a number a card in
+    the main checkout already had (decision 0105). A number kept per branch, a decision's or
+    an attempt's, cannot be allocated from these two: those ask `gitpolicy.working_trees`.
+    """
+    from . import worktree
+    from .gitctx import GitError, worktree_paths
+
+    try:
+        return worktree_paths(ctx)
+    except GitError:
+        here = ctx.worktree_root.resolve()
+        main = worktree.main_checkout(ctx)
+        return [main] if main == here else [main, here]
+
+
+# Every directory a card file stands in. `withdrawn/` too: its number is never handed out
+# again (decision 0027), so it is held as any other card's is.
+_EVERY_STATE = (*STATES, WITHDRAWN)
+
+
+def strays(ctx: GitContext, tree: Path) -> tuple[list[tuple[Path, Path]], list[Path]]:
+    """The cards only `tree` holds, which `git worktree remove` takes with its ignored files:
+    (each to carry to the main checkout, as where it is and where it goes; each that cannot be,
+    because a different card there holds its number).
+
+    Only there: no card in the main checkout has its number. One that has it as the same card,
+    by `created_at` or, on a card older than that field, by title, is a copy every transition
+    keeps in step. One that has it as another card is a number given twice (decision 0105):
+    carried, two cards would answer to one id. Never a file git tracks there: the branch keeps
+    it, and moved it is a staged deletion that keeps the tree from being removed (#208).
+    """
+    from . import worktree
+
+    home = worktree.main_checkout(ctx)
+    found = _cards_under(tree, _EVERY_STATE)
+    tracked = _tracked_under(tree) if found else set()
+    held_home = _cards_under(home, _EVERY_STATE) if found else []
+    carry: list[tuple[Path, Path]] = []
+    kept: list[Path] = []
+    for state, path in found if tracked is not None else []:
+        if path.relative_to(tree).as_posix() in tracked:
+            continue
+        theirs = [held for _state, held in held_home if held.name[:4] == path.name[:4]]
+        if not theirs:
+            carry.append((path, home / store.TIER_A_DIRNAME / PLAN_DIR / state / path.name))
+        elif _identity(path) not in {_identity(held) for held in theirs}:
+            kept.append(path)
+    return carry, kept
+
+
+def _identity(path: Path) -> str:
+    """What makes two files of one number the same card: when it was made, or its title on a
+    card written before cards said when."""
+    try:
+        meta, _body = _frontmatter(path.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return ""
+    return meta.get("created_at") or f"title:{meta.get('title', '')}"
+
+
+def _tracked_under(tree: Path) -> set[str] | None:
+    """The ledger files git tracks in `tree`, relative to it; None where git cannot say."""
+    try:
+        listed = subprocess.run(
+            ["git", "ls-files", "-z", "--", f"{store.TIER_A_DIRNAME}/{PLAN_DIR}"],
+            cwd=str(tree), capture_output=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if listed.returncode != 0:
+        return None
+    return {name.decode("utf-8", "surrogateescape") for name in listed.stdout.split(b"\0") if name}
+
+
+def carry_home(ctx: GitContext, tree: Path,
+               wait: float = store.LOCK_ACQUIRE_TIMEOUT) -> tuple[int, list[Path]]:
+    """Move each card only `tree` holds into the main checkout, before the tree goes. (how many
+    moved, the ones still only there: a different card holds their number, or they would not
+    move). Whoever removes it: this plugin (`worktree._release`) or git, for a removal the
+    session typed (`pre-tool`). Decision 0106.
+
+    Under the claim lock, so no claim is written to a card while it moves; `wait` is how long
+    to wait for it, and a lock not had moves nothing. The readers find a card in any tree, and
+    a transition follows it wherever it is, so nothing that held it in `tree` loses it.
+    """
+    try:
+        with store.file_lock(store.tier_b(ctx, CLAIM_LOCK), timeout=wait):
+            carry, left = strays(ctx, tree)
+            moved = 0
+            for path, target in carry:
+                try:
+                    store.ensure_dir(target.parent)
+                    path.replace(target)
+                    moved += 1
+                except OSError:
+                    left.append(path)
+    except store.LockTimeout:
+        carry, left = strays(ctx, tree)
+        return 0, left + [path for path, _target in carry]
+    return moved, left
 
 
 def next_id(ctx: GitContext) -> str:
