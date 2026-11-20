@@ -1,5 +1,23 @@
 # Changelog
 
+## v2.19.1
+
+Session starts no longer show the notes in `hooks.json`. On the founder's machine, Claude Code 2.1.329
+printed `bestpractice: hooks.json: unknown keys "$comment", … ignored` for the five `$comment`
+keys the file carried. `claude plugin validate --strict` passes the same file, so `make manifests`
+never saw them. Nothing to run after the update.
+
+- **`hooks.json` holds only what Claude Code reads.** Its notes now live in `.claude/rules/hooks-json.md`,
+  word for word, scoped to that file so a session working on it is handed them. A test refuses
+  a `$` key there. `make budget` now counts only the rules loaded every turn. A rule whose `paths`
+  name its files is handed over only beside them, as `make knowledge` already counted it.
+- **Code Mode is the founder's switch (decision 0103).** Nothing in the plugin changes for
+  `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1`: `pre-tool` judges each call a script makes at
+  PreToolUse, under that call's own tool name. `make payloads-code-mode` measures in a terminal whether PostToolUse and a
+  mod's `tool.call` reach those calls too. It refuses a Claude Code older than 2.1.327, puts its
+  prompt before `--allowedTools` (which had taken the prompt as a tool name), and says to trust
+  its throwaway folder.
+
 ## v2.19.0
 
 Nothing to run after an update, and no chat to restart for its gates (decision 0102). The

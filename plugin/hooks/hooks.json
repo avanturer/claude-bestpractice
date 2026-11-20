@@ -1,25 +1,4 @@
 {
-  "$comment": [
-    "Twelve entries across ten events. Budget is 12 for the whole plugin; a thirteenth requires deleting one.",
-    "",
-    "PROTOCOL, because these are the cheap ways to ship a gate that enforces nothing:",
-    "  - Exit 2 blocks. Exit 1 is a NON-blocking error and the tool RUNS.",
-    "  - So does a gate that cannot start, dies before `hookio.guard` holds it, or times out:",
-    "    the tool RUNS, unless the entry says `\"onFailure\": \"block\"` (Claude Code 2.1.295 and",
-    "    later). `pre-tool` says it; a background hook cannot (decision 0069).",
-    "  - The event arrives on STDIN as JSON. TOOL_NAME / TOOL_INPUT env vars do not exist.",
-    "  - type 'http' fails OPEN on non-2xx, timeout and connection error. Never use it for a gate.",
-    "  - Quote ${CLAUDE_PLUGIN_ROOT}. The command goes to sh, and an install path holding a space",
-    "    split it in two: every gate exited 127, which blocks nothing and says nothing.",
-    "",
-    "Verify with `plugin/bin/claude-bp-doctor`, which proves each gate by attempting a",
-    "known-bad action rather than reading this file back.",
-    "",
-    "`modules` is the hooks module, which runs inside Claude Code and is no hook entry: it",
-    "changes what the model reads of a long result, where WebSearch goes and what a listing of",
-    "agents says (decisions 0048, 0049, 0050). Where mods are off it is not loaded, and every",
-    "entry below works as before."
-  ],
   "modules": ["./bestpractice.ts"],
   "hooks": {
     "Setup": [
@@ -49,17 +28,6 @@
     ],
     "SessionStart": [
       {
-        "$comment": [
-          "`fork` is a source like any other, and leaving it out of this matcher is not a",
-          "conservative default — it is this gate not running at all on a forked session.",
-          "`--fork-session` resumes a session under a NEW id in the SAME worktree, so the",
-          "fork gets no board, no registration, no reap and no pre-push arming, which is",
-          "the entire coordination layer, on exactly the workflow this product is for.",
-          "",
-          "Enforcement is unaffected either way: `evidence-gate` adopts a missing record",
-          "at `branch_point`, never at HEAD, so an unregistered session is over-reported",
-          "rather than let through. What a fork loses is awareness, not the gate."
-        ],
         "matcher": "startup|resume|clear|compact|fork",
         "hooks": [
           {
@@ -106,28 +74,6 @@
     ],
     "PostToolUse": [
       {
-        "$comment": [
-          "The only event that carries a pull request's NUMBER. PreToolUse records the",
-          "obligation and never sees the response, so every record used to say 0 and the",
-          "merge gate could not tell its own pull request from somebody else's (#135).",
-          "",
-          "`update_pull_request` because closing one without merging is `state: closed` on",
-          "it, and nothing else sees that call: `gh pr close` is read by pre-tool instead.",
-          "",
-          "`merge_pull_request` because only this event says the merge RAN. pre-tool judges",
-          "it and holds it; spent and settled there, a merge that then failed had taken the",
-          "founder's word and closed its cards (#232, #243, #268).",
-          "",
-          "`enable_pr_auto_merge` for the same reason: it is `gh pr merge --auto` as a tool.",
-          "",
-          "`TaskStop` because only its result says which agent it stopped and what the",
-          "agent was sent to do, which the card a session pauses keeps (decision 0082).",
-          "",
-          "`AskUserQuestion` because the founder's answer in its dialog starts no turn, so",
-          "`prompt-capture` never hears it: a `+merge` they picked there is their word (#326,",
-          "decision 0094). Here, not in an entry of its own: the budget is twelve. `pre-tool`",
-          "refuses a call that carries an answer already, and notes each one asked without."
-        ],
         "matcher": "^(TaskStop|AskUserQuestion)$|.*((create|update|merge)_pull_request|enable_pr_auto_merge)",
         "hooks": [
           {
@@ -138,21 +84,6 @@
         ]
       },
       {
-        "$comment": [
-          "`gh pr create` prints the number, and only this event sees it. Left out while",
-          "catching it meant a process on every shell call, because an unlearned number",
-          "only meant 'do not judge'. A `+merge` that names the chat's open pull requests",
-          "made it a refusal instead: `gh pr merge 48` could not be matched to the pull",
-          "request the word covered, and was refused four times over (#241).",
-          "",
-          "`gh pr merge` for the same reason the tool's merge is above: only this event",
-          "says it ran.",
-          "",
-          "`if` (Claude Code 2.1.85, compound commands from 2.1.89) spawns the process only",
-          "for a shell line that runs `gh pr`; `if` holds one rule, so not one per verb.",
-          "Where it is not honoured the hook runs on every shell call, and it exits before",
-          "touching git."
-        ],
         "matcher": "Bash",
         "hooks": [
           {
@@ -189,16 +120,6 @@
     ],
     "Stop": [
       {
-        "$comment": [
-          "After the turn, so the founder can write while the suite runs: a client that takes",
-          "no message while a hook holds the turn kept them out of the session for all of it,",
-          "and the run their message would have stopped (#277) never heard one. A refusal or",
-          "a question wakes the session (exit 2); a message from the founder, or the session",
-          "at work again, stops the run. An hour, because nobody waits on it now.",
-          "",
-          "A `claude -p` whose process ends with its turn stops this hook with it: its finish",
-          "is judged where it lands instead, since a merge needs a green run (decision 0046)."
-        ],
         "hooks": [
           {
             "type": "command",
