@@ -17,7 +17,8 @@ Caps enforced here:
   - per-skill description      <= 40 words
   - per-skill body             <= 5,000 tokens (the post-compaction re-injection cap)
   - hook entries               <= 12
-  - always-on knowledge layer  <= 10,400 bytes across at most 4 files
+  - always-on knowledge layer  <= 10,400 bytes across at most 4 files; a rule whose `paths`
+    names its files loads only beside them, and is not counted (`knowledge.path_scoped`)
 """
 
 from __future__ import annotations
@@ -25,9 +26,14 @@ from __future__ import annotations
 import json
 import pathlib
 import re
+import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PLUGIN = ROOT / "plugin"
+
+sys.path.insert(0, str(PLUGIN / "lib"))
+
+from claude_bestpractice.knowledge import path_scoped  # noqa: E402
 
 TOKENS_PER_WORD = 3.06
 TOKENS_PER_COMPONENT = 15
@@ -143,7 +149,9 @@ def main() -> int:
 
     knowledge_dir = ROOT / ".claude" / "rules"
     if knowledge_dir.is_dir():
-        files = sorted(knowledge_dir.glob("*.md"))
+        # The same test `make knowledge` applies: a decision or rule that names its paths is
+        # handed to a session only when it works on them, as decisions are.
+        files = sorted(path for path in knowledge_dir.glob("*.md") if not path_scoped(path))
         total = sum(f.stat().st_size for f in files)
         if len(files) > KNOWLEDGE_FILE_CAP:
             problems.append(f"knowledge layer has {len(files)} files, cap is {KNOWLEDGE_FILE_CAP}")
