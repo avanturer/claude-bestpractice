@@ -2890,6 +2890,10 @@ def last_run(ctx: GitContext, branch: str = "") -> dict | None:
 # How the sentence a stopped run leaves on a merge's list begins, which the merge refusal knows
 # it by: a run is the session's to have made, never a question for the founder.
 STOPPED_RUN = "the Stop gate's run of the suite"
+# And the one for a branch no run was ever seen on, which is the session's to have made too:
+# put to the founder as theirs to decide, it cost a round trip over nothing they could decide,
+# and named no command that clears it (#381).
+NEVER_RUN = "no test run has ever been observed"
 
 
 def unproven(ctx: GitContext, branch: str = "", merged_tree: str = "") -> str:
@@ -2912,7 +2916,10 @@ def unproven(ctx: GitContext, branch: str = "", merged_tree: str = "") -> str:
                 "again at the session's next finish, and on `git push` where the pre-push hook "
                 "is installed (`claude-bp-ci status`)")
     if not seen:
-        return f"no test run has ever been observed{where}"
+        return (f"{NEVER_RUN}{where}: the Stop gate runs the suite at the session's next "
+                "finish, and so does `git push` where the pre-push hook is installed "
+                "(`claude-bp-ci local` installs it). A run in the session's own shell, or in a "
+                "Code Mode script, is not one this plugin watched")
     ran = " ".join(seen.get("command") or ["?"])
     return (f"the last run observed{where} FAILED ({_lasted(seen.get('at'))}) — `{ran}`; "
             "nothing has passed since")

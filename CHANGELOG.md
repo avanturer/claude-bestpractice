@@ -3,7 +3,7 @@
 ## v2.20.0
 
 Every issue open on 2.19.3 is answered (#364–#368, #373, #378, #379), with what each one
-neighbours.
+neighbours, and the two that landing this release found (#381, #382).
 
 - **Web researchers are counted apart (#378, decision 0107).** Six `general-purpose` agents on six
   web subjects were refused three of six as agents "searching the same tree". The session's shell
@@ -74,6 +74,16 @@ neighbours.
   copy in the CLI's cache for a checkout install. `claude-bp-report send` no longer says to restart
   (decision 0102). The README names Claude Code 2.1.330 for `validate --strict`. The PR's other
   half shipped in 2.17.0 and its wording is superseded by 0102.
+- **A merge waiting only on a run is the session's, and the passing run says to merge (#381,
+  #382, decision 0111).** On this very release the founder's `+merge` was refused with "no test
+  run has ever been observed on this branch". The refusal said "tell the founder and stop" and
+  named nothing that makes such a run. The Stop gate's run after the turn was then stopped by
+  the founder's next message, and a green one would have woken nobody. Now that item is the
+  session's to clear, like a stopped run (`the_sessions_to_clear`), and names what clears it:
+  the next finish, or `git push` with `claude-bp-ci local`. A finish whose hand-off would list
+  only such items runs its suite instead of handing off. A passing run then blocks once with
+  `gh pr merge <n>`, where the founder's word covers the pull request and nothing else stands in
+  its way (`pullrequest.merge_waiting_on_the_run`).
 - **Repairs.** 0052 (a `.git` that is no repository) and 0053 (skill cards filed in error).
   Session records gain two fields that an older copy reads past.
 

@@ -1314,7 +1314,43 @@ def the_sessions_to_clear(problems: list[str]) -> bool:
 
     return bool(problems) and all(
         delivery.UNCOMMITTED in problem or problem.startswith(evidence.STOPPED_RUN)
-        for problem in problems)
+        or problem.startswith(evidence.NEVER_RUN) for problem in problems)
+
+
+# When a finish last said to merge a pull request whose merge was refused for want of a run.
+WOKEN = "woken_for_merge_at"
+
+
+def _waiting_on_a_run(ctx: GitContext, branch: str) -> dict[str, Any] | None:
+    """The open record of `branch` refused at a merge, or handed off at a finish, since a finish
+    last said to merge it; None for none."""
+    record = _record_of(ctx, branch)
+    if not record or record.get("state") != OPEN or record.get("draft"):
+        return None
+    refused = max(float(record.get(REFUSED) or 0), float(record.get("handed_off_at") or 0))
+    return record if refused and float(record.get(WOKEN) or 0) < refused else None
+
+
+def merge_waiting_on_the_run(ctx: GitContext, branch: str) -> str:
+    """What a finish whose suite just passed says, once, about the pull request of `branch` whose
+    merge was refused, or which was handed off, before it: "" where none waits, the founder's
+    word does not cover it, or anything still stands in its way.
+
+    The run a refused merge waits for is the Stop gate's, after the turn, and a green one woke
+    nobody: the founder's `+merge` stood, and the merge waited for them to write again, which
+    stops the next run if it comes while one runs (#382).
+    """
+    record = _waiting_on_a_run(ctx, branch)
+    number = _as_number((record or {}).get("number"))
+    if record is None or not acceptance(ctx, record, number) or blockers(
+            ctx, str(record.get("base") or "main"), branch):
+        return ""
+    _write(ctx, {**record, WOKEN: time.time()})
+    named = f"#{number}" if number else f"the pull request of {branch}"
+    return (f"claude-bestpractice: the suite passed on {branch}, and nothing stands in the way of "
+            f"merging {named} any longer. It waited on that run, and the "
+            "founder's `+merge` that covers it stands. Merge it now, as a command of its own:\n"
+            f"  gh pr merge {number or ''}".rstrip() + "\nThis is said once.")
 
 
 def merge_refusal(record: dict[str, Any], problems: list[str]) -> str:
@@ -1415,6 +1451,18 @@ def stop_demand(record: dict[str, Any], problems: list[str], accepted: bool = Tr
             "founder in one line and leave it open; this will not be raised again."
         )
     listed = "\n".join(f"  - {p}" for p in problems[:6])
+    if the_sessions_to_clear(problems):
+        # Theirs to clear, not the founder's: sent to the founder, the session asked them about
+        # a run, and their answer stopped the run it waited for (#381, #309).
+        return (
+            f"claude-bestpractice: pull request {named} is open and cannot be merged yet — "
+            f"the final check found {len(problems)} thing(s):\n{listed}\n"
+            "None of them is the founder's to decide: each says what clears it. Clear them, "
+            "and end the turn without putting this to the founder; where their `+merge` "
+            "covers it, the finish after a passing run says to merge.\n"
+            "This will not be raised again; it is now on the board until the pull request is "
+            "merged or closed."
+        )
     return (
         f"claude-bestpractice: pull request {named} is open and cannot be merged — the final "
         f"check found {len(problems)} thing(s):\n{listed}\n"
