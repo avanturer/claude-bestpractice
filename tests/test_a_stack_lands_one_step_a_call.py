@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -77,6 +78,15 @@ class StackCase(RepoCase):
                               capture_output=True, text=True, cwd=str(self.repo), env=self.env,
                               timeout=120)
 
+    def run_as_printed(self, command: str) -> int:
+        """Run a printed step as a session would, each `&&` part in turn, with no shell."""
+        for part in command.split(" && "):
+            proc = subprocess.run(shlex.split(part), cwd=str(self.repo), capture_output=True,
+                                  timeout=120)
+            if proc.returncode:
+                return proc.returncode
+        return 0
+
     def next_command(self) -> str:
         proc = self.step()
         lines = [line for line in proc.stdout.splitlines() if line.strip().startswith("next:")]
@@ -108,14 +118,12 @@ class TestTheStackIsLandedInOrder(StackCase):
 
         rebase = self.next_command()
         self.assertIn(f"rebase --onto origin/main {self.a} feat/b", rebase)
-        self.assertEqual(0, subprocess.run(rebase, shell=True, cwd=str(self.repo),
-                                           capture_output=True).returncode)
+        self.assertEqual(0, self.run_as_printed(rebase))
         push = self.next_command()
         self.assertIn(f"push --force-with-lease=feat/b:{self.b} origin feat/b", push)
         # Where the checks run on the rebased commit is said with the push (no hook here).
         self.assertIn("No pre-push hook runs the project's checks here", self.step().stdout)
-        self.assertEqual(0, subprocess.run(push, shell=True, cwd=str(self.repo),
-                                           capture_output=True).returncode)
+        self.assertEqual(0, self.run_as_printed(push))
         rebased = git(["rev-parse", "feat/b"], self.repo)
         self.edit(lambda s: s["pulls"][1].update(headRefOid=rebased))
 
