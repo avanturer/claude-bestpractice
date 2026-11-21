@@ -2090,10 +2090,9 @@ class TestTheMergeIsJudgedOnThePullRequest(PRCase):
         head = self.ctx().branch
         git(["checkout", "-q", "main"], self.repo)
 
-        self.assertIn(
-            f"no test run has ever been observed on {head}",
-            pullrequest.blockers(self.ctx(), "main", head),
-        )
+        self.assertTrue(any(
+            problem.startswith(f"no test run has ever been observed on {head}")
+            for problem in pullrequest.blockers(self.ctx(), "main", head)))
 
 
 class TestAFalseFindingCanBeRuledOut(PRCase):

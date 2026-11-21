@@ -2535,10 +2535,12 @@ class TestTheGateDoesNotAskWhatItForbade(GateCase):
         self.committed_work_with_no_evidence()
         self.open_a_pr()
 
-        self.assertEqual(2, self.stop().returncode, "the pull request was not raised")
+        # A pull request blocked only by a run nobody has made is not handed to the founder: the
+        # finish goes on to ask for the evidence itself (#381).
         refused = self.stop()
         self.assertEqual(2, refused.returncode)
         self.assertIn(f"[1/{evidence_ceiling()}]", refused.stderr)
+        self.assertNotIn("Report exactly this to the founder", refused.stderr)
 
         standing = self.stop()
         self.assertEqual(0, standing.returncode, "the same question was asked a third time")
