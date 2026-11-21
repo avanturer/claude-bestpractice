@@ -772,7 +772,19 @@ def outside_quotes(line: str) -> str:
     """
     if runs_a_string(line):
         return line
-    return _INERT.sub(lambda found: found.group(0) if found.group("escape") else " ", line)
+    return _INERT.sub(_as_bash_reads_it, line)
+
+
+def _as_bash_reads_it(found: re.Match[str]) -> str:
+    """One quoted span or escape of a line no program runs strings on, as the words bash hands
+    on: a span holding no whitespace is part of the word it stands in (`gh 'pr' merge` is
+    `gh pr merge`, `g\\h` is `gh`), and one that holds some is one argument, a pattern
+    being searched for, blanked. Blanked whole, `gh 'pr' merge 7 $(true)` merged unread (#384)."""
+    text = found.group(0)
+    if found.group("escape"):
+        return "_" if text[1:].isspace() else text[1:]
+    inner = text[1:-1]
+    return inner if inner and not any(char.isspace() for char in inner) else " " * len(text)
 
 
 # `awk` in the one shape whose program is plainly its first quoted word: options only `-F` with
@@ -783,6 +795,8 @@ _AWK_PROGRAM = re.compile(
 # What makes an awk program run a command: `system(…)`, or a pipe to or from one.
 _AWK_RUNS = re.compile(r"system\s*\(|\|")
 _FIND_RUNS = re.compile(r"(?<![\w-])-(?:exec|execdir|ok|okdir)(?![\w-])")
+# `.` where a command starts, which is `source`: `. <(echo …)` runs what it is handed (#384).
+_DOT_SOURCES = re.compile(r"(?:^|[;&|(\n])\s*\.\s")
 
 
 def runs_a_string(line: str) -> bool:
@@ -791,6 +805,8 @@ def runs_a_string(line: str) -> bool:
     (`_AWK_PROGRAM`) with no `system` or pipe in its program, and `find` with no `-exec` or
     `-ok` on the line, read with quotes and backslashes taken out. `env` is never spared: what it
     starts may be any interpreter, one this list does not name among them (review of 2.20.0)."""
+    if _DOT_SOURCES.search(line):
+        return True
     for found in _RUNS_A_STRING.finditer(line):
         name = found.group()
         if name in ("awk", "gawk") and _awk_runs_none(line, found.start()):

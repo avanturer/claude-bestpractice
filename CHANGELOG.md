@@ -1,5 +1,21 @@
 # Changelog
 
+## v2.20.1
+
+- **A push runs the fast gate (#383).** The pre-push hook ran `make check` wherever the Makefile
+  has a `check:` target. In this repository that is the serial suite: 18.8 minutes for the push
+  of 2.20.0, which the release workflow then ran again. It now runs `make check-fast` where the
+  Makefile names one, the same checks with the suite across processes, about 5 minutes here.
+  The serial run stays the release workflow's, once, as RELEASING.md has it. A hook installed
+  before this is rebaked at the next session start (`ci.refresh`). Measured: 16 shards took 300
+  s against 287 s at 8, because the heaviest module bounds the wall clock, so the shard count
+  stays.
+- **The merge fallback reads words as bash joins them (#384).** On a line `shellcmd` cannot
+  read, `gh 'pr' merge 7 $(true)`, `g\h pr merge 7` and `. <(echo 'gh pr merge 7')` merged
+  unread; 2.19.3 missed them too. A quoted span with no whitespace in it is now part of its word,
+  an escape is the character it escapes, and `.` where a command starts is `source`. A span
+  holding whitespace is still one argument, a pattern being searched for (#367).
+
 ## v2.20.0
 
 Every issue open on 2.19.3 is answered (#364–#368, #373, #378, #379), with what each one
