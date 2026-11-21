@@ -102,8 +102,9 @@ def superseded_by(root: Path | None = None) -> str | None:
     """A newer version sitting beside this one, meaning this session is running stale code.
 
     The founder has already done everything asked of them at this point: they ran the
-    update and it worked. What is left is a restart, and this is the only thing that can
-    tell them so.
+    update and it worked. The gates hand over to it (`handover`); what Claude Code loaded
+    for the chat waits for a new chat or a `/reload-plugins` they type (decision 0102), and
+    this is the only thing that can tell them so.
     """
     root = root or install_root()
     if root is None or not _VERSION_DIR.match(root.name):

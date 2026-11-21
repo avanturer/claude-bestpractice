@@ -480,14 +480,32 @@ def placed(event: HookEvent, written: Callable[[str], Iterable[Path]] = lambda _
 
 def _tree_holding(place: str) -> str:
     """The working tree `place` belongs to, whether it exists yet or not: the nearest directory
-    at or above it that holds a `.git`, and never one inside `.git`. "" for none."""
+    at or above it that holds a `.git` git would read, and never one inside `.git`. "" for none.
+
+    Read as git reads one: a directory with `HEAD` in it, or a file naming the git directory
+    (`gitdir: …`) as a linked tree's does. A `.git` an older version of this plugin made in a
+    home directory by writing its state there (#187) holds neither, and taken for a tree it
+    placed every call from a folder under that home in the folder itself, where no repository
+    is: the call went unjudged, and the transcript and `CLAUDE_PROJECT_DIR` were never asked.
+    """
     if not place:
         return ""
     path = Path(place)
     for parent in (path, *path.parents):
-        if parent.name != ".git" and (parent / ".git").exists():
+        if parent.name != ".git" and is_a_git_dir(parent / ".git"):
             return str(parent)
     return ""
+
+
+def is_a_git_dir(dot_git: Path) -> bool:
+    """Whether git would read `dot_git` (a `.git` directory or file) as a repository's."""
+    try:
+        if dot_git.is_dir():
+            return (dot_git / "HEAD").is_file()
+        with open(dot_git, "rb") as handle:
+            return handle.read(8) == b"gitdir: "
+    except OSError:
+        return False
 
 
 # How much of a transcript's end is read for the last tree a session worked in.
@@ -535,13 +553,18 @@ def _one_of_our_gates() -> bool:
 def _capture(exc: BaseException) -> None:
     """Record a crashed gate, if this repository has capture switched on."""
     try:
-        from . import config, defects
-        from .gitctx import resolve
+        from . import defects
+        from .gitctx import GitError, resolve
 
         if not _one_of_our_gates():
             return
-        ctx = resolve(os.getcwd())
-        if config.load(ctx).report_defects != defects.OFF:
+        # Outside every repository too, into the machine's store (#379): a command run from a
+        # folder that is no repository is one this plugin tells sessions to run there.
+        try:
+            ctx = resolve(os.getcwd())
+        except GitError:
+            ctx = None
+        if defects.mode(ctx) != defects.OFF:
             defects.record(ctx, Path(sys.argv[0]).name or "gate", exc)
     except Exception:  # noqa: BLE001 - reporting must never be the reason a gate dies
         return

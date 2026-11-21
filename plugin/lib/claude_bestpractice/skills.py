@@ -17,7 +17,7 @@ import datetime
 import os
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from . import store
@@ -181,9 +181,19 @@ def overdue(skills: list[Skill], today: datetime.date) -> list[Skill]:
     return sorted(late, key=lambda skill: skill.due() or today)
 
 
-def overdue_line(today: datetime.date | None = None) -> str:
-    """`skills due for a fresh look: <name> (reviewed …, due …), …`, or "" when none are."""
-    late = overdue(ours(), today or datetime.date.today())
+def overdue_line(today: datetime.date | None = None, listed: list["Listed"] | None = None) -> str:
+    """`skills due for a fresh look: <name> (reviewed …, due …), …`, or "" when none are.
+
+    This plugin's own, and every skill in `listed` that dates itself: a pack's, the founder's,
+    any plugin's. Read from `ours()` alone, none of the ten pack skills with a recheck date could
+    ever be named, `landing-not-slop` among them (#364, #365).
+    """
+    dated = {skill.path.resolve(): skill for skill in ours()}
+    for item in listed or []:
+        found = read(item.path) if item.path.name == "SKILL.md" else None
+        if found is not None and found.due() is not None:
+            dated.setdefault(item.path.resolve(), replace(found, name=item.name))
+    late = overdue(list(dated.values()), today or datetime.date.today())
     if not late:
         return ""
     listed = ", ".join(f"{skill.name} (reviewed {skill.reviewed}, due {skill.due()})"

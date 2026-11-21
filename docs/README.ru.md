@@ -4,7 +4,7 @@
 
 **Память, координация и принуждение для разработки продукта в нескольких параллельных сессиях Claude Code.**
 
-[![version](https://img.shields.io/badge/version-2.19.3-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.20.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-3017%20passing-2ea44f)](#проверено)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#проверено)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#требования)
@@ -667,7 +667,7 @@ Python 3.9+ и git. **Никаких других зависимостей, по
 доверия. Проверяется в CI.
 
 Протестировано на Python 3.9, 3.11 и 3.13. `claude plugin validate --strict` проходит
-на Claude Code 2.1.295, и `make check` спрашивает CLI заново при каждом запуске
+на Claude Code 2.1.330, и `make check` спрашивает CLI заново при каждом запуске
 (`tools/check_manifests.py`).
 
 Всё работает на любой свежей Claude Code; двум возможностям нужен минимум версии, и обе

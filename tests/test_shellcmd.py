@@ -167,6 +167,39 @@ class TestAPatternOnALineThisCannotRead(RepoCase):
         """python3 -c "import os; os.system('gh pr merge 5')" $(true)""",
         r"echo \'; gh pr merge 5; \' $(true)",
     )
+    # A program that can run a string elsewhere on the line, in a command the pattern is not
+    # an argument of: the whole line was kept, and these were still refused (#367).
+    SEARCHES_BESIDE_A_RUNNER = (
+        "grep -rn 'gh pr merge' $(git ls-files '*.md') | awk -F: '{print $1}'",
+        "grep -rn 'gh pr merge' $(git ls-files '*.md') | awk '{print}'",
+        "rg 'gh pr merge' $(git ls-files) | env LC_ALL=C sort",
+        "rg 'gh pr merge' $(git ls-files); find . -name '*.sh' -print",
+    )
+    # And what such a command still reads as a merge: a string it runs, or the input of a pipe
+    # into one.
+    MERGES_THROUGH_A_RUNNER = (
+        "echo 'gh pr merge 5' | sh $(true)",
+        "echo 'gh pr merge 5' | env bash $(true)",
+        "echo 'gh pr merge 5' | env -i PATH=/bin sh $(true)",
+        "echo 'gh pr merge 5' | awk '{system($0)}' $(true)",
+        "echo 'gh pr merge 5' | awk '{print | \"sh\"}' $(true)",
+        "printf 'gh pr merge 5' | xargs -I{} sh -c {} $(true)",
+        'bash -c "$(echo \'gh pr merge 5\')" <(true)',
+        "for i in $(seq 2); do sh -c 'gh pr merge 1'; done",
+        "diff <(grep x a) <(sh -c 'gh pr merge 1')",
+        "( sh -c 'gh pr merge 1' ) $(true)",
+    )
+
+    def test_a_search_beside_a_program_that_runs_strings_is_no_merge(self):
+        for line in self.SEARCHES_BESIDE_A_RUNNER:
+            self.assertEqual([], shellcmd.commands(line), line)
+            self.assertEqual("", pullrequest.merge_line("Bash", line), line)
+            self.assertIsNone(pullrequest.merge_target("Bash", line, {}), line)
+
+    def test_a_string_run_by_its_own_command_or_down_its_pipe_is_still_a_merge(self):
+        for line in self.MERGES_THROUGH_A_RUNNER:
+            self.assertEqual([], shellcmd.commands(line), line)
+            self.assertTrue(pullrequest.merge_line("Bash", line), line)
 
     def test_these_lines_are_ones_the_parser_declines(self):
         """Otherwise the cases below prove nothing about the fallback."""

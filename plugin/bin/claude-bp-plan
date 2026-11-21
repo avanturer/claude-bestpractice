@@ -100,7 +100,9 @@ def cmd_claim(ctx, task_id: str, session_id: str) -> int:
     waiting = plan.blockers(ctx, wanted) if wanted else []
     task, error = plan.claim(ctx, task_id, session_id, ctx.branch)
     if error:
-        print(error, file=sys.stderr)
+        # Last, so a line cut to its end still says it: `claim 1374 | tail -1` showed the
+        # refusal's advice alone, and the session went on as if it held the card (#368).
+        print(f"{error}\nnot claimed: {task_id}", file=sys.stderr)
         return 1
     print(f"claimed {task.id}  {task.title}")
     # The agents its pause stopped, which a message resumes with their own context (decision 0082).

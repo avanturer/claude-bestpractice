@@ -4,7 +4,7 @@
 
 **为同时运行多个 Claude Code 会话的产品开发提供记忆、协同与强制约束。**
 
-[![version](https://img.shields.io/badge/version-2.19.3-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.20.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-3017%20passing-2ea44f)](#已验证)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#已验证)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#运行要求)
@@ -505,7 +505,7 @@ Python 3.9+ 和 git。**没有任何其他依赖，这是硬约束**——这些
 全部职责恰恰就是可信。此约束在 CI 中强制执行。
 
 已在 Python 3.9、3.11 和 3.13 上测试。`claude plugin validate --strict` 在
-Claude Code 2.1.295 上通过，并且 `make check` 每次运行都会重新询问 CLI（`tools/check_manifests.py`）。
+Claude Code 2.1.330 上通过，并且 `make check` 每次运行都会重新询问 CLI（`tools/check_manifests.py`）。
 
 在任何较新的 Claude Code 上都能工作；有两项功能需要版本下限，而且两者都是**静默**失效的，
 所以在此写明：

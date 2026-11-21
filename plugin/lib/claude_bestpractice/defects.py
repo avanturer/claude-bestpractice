@@ -42,6 +42,10 @@ from . import store
 from .gitctx import GitContext
 
 DEFECTS_FILE = "defects.jsonl"
+
+# Where `claude-bp-report send` holds its lock: on the machine, not in a clone, because the
+# machine's own store (below) is sent from every clone and from outside them all.
+SEND_LOCK = "defects-send.lock"
 REPORT_REPO = "avanturer/claude-bestpractice"
 
 # Enough to see a pattern, few enough that a gate stuck in a crash loop cannot fill a
@@ -140,7 +144,33 @@ def _origin(exc: BaseException) -> str:
     return found
 
 
-def record(ctx: GitContext, gate: str, exc: BaseException) -> None:
+# A report is kept in the clone it was made in, and one made outside every repository in the
+# plugin's own directory on this machine (`selfupdate.data_dir`), which outlives its versions.
+# A session standing in a folder that is no repository was told by a refusal to run
+# `claude-bp-report defect`, and the command answered "not inside a git repository" (#379).
+# `ctx` None below is that place: outside every repository.
+
+
+def machine_store(home: Path | None = None) -> Path:
+    """The store of the reports made outside every repository on this machine."""
+    from . import selfupdate
+
+    return selfupdate.data_dir(home) / DEFECTS_FILE
+
+
+def _store(ctx: GitContext | None) -> Path:
+    """Where a report made at `ctx` is written."""
+    return store.tier_b(ctx, DEFECTS_FILE) if ctx is not None else machine_store()
+
+
+def send_lock(home: Path | None = None) -> Path:
+    """The one lock every sender on this machine takes, from a clone or from outside them."""
+    from . import selfupdate
+
+    return store.ensure_dir(selfupdate.data_dir(home)) / SEND_LOCK
+
+
+def record(ctx: GitContext | None, gate: str, exc: BaseException) -> None:
     """File a crash, or count it again if this one has been seen before.
 
     Never raises. This runs inside the handler that is already dealing with a failure, and
@@ -156,7 +186,8 @@ def record(ctx: GitContext, gate: str, exc: BaseException) -> None:
         return
 
 
-def observed(ctx: GitContext, what: str, gate: str = "", refused: str = "") -> tuple[bool, str]:
+def observed(ctx: GitContext | None, what: str, gate: str = "",
+             refused: str = "") -> tuple[bool, str]:
     """A gate that refused the wrong thing, filed by the session it refused, with `refused`,
     the first line of the refusal that session last got, where the caller knows it.
 
@@ -195,15 +226,15 @@ def observed(ctx: GitContext, what: str, gate: str = "", refused: str = "") -> t
         return False, "the report could not be written"
 
 
-def mode(ctx: GitContext) -> str:
+def mode(ctx: GitContext | None) -> str:
     """`local`, `auto` or `off`: the founder's `report_defects` where they wrote one.
 
     Unwritten, it is `auto` where this machine's `gh` files as the owner of the repository
-    the reports go to, and `local` everywhere else.
+    the reports go to, and `local` everywhere else. Outside every repository nobody wrote one.
     """
     from . import config
 
-    if config.is_set(ctx, "report_defects"):
+    if ctx is not None and config.is_set(ctx, "report_defects"):
         return config.load(ctx).report_defects
     owner = REPORT_REPO.split("/", 1)[0].lower()
     return AUTO if gh_account().lower() == owner else LOCAL
@@ -251,7 +282,7 @@ def _active_user(hosts_yml: str, host: str) -> str:
     return ""
 
 
-def send_soon(ctx: GitContext) -> None:
+def send_soon(ctx: GitContext | None) -> None:
     """Start `claude-bp-report send` and walk away, when there is something to file.
 
     Detached and never waited on: a hook must not pay for the network or fail because of
@@ -262,7 +293,8 @@ def send_soon(ctx: GitContext) -> None:
     sender = Path(__file__).resolve().parents[2] / "bin" / "claude-bp-report"
     try:
         subprocess.Popen(
-            [sys.executable, str(sender), "send"], cwd=str(ctx.worktree_root),
+            [sys.executable, str(sender), "send"],
+            cwd=str(ctx.worktree_root if ctx is not None else Path.home()),
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
@@ -270,7 +302,7 @@ def send_soon(ctx: GitContext) -> None:
         return
 
 
-def _file(ctx: GitContext, key: str, gate: str, error: str, where: str,
+def _file(ctx: GitContext | None, key: str, gate: str, error: str, where: str,
           kind: str = CRASH, refused: str = "") -> None:
     """Append one report, or count an identical one again. `refused` is the gate's own line,
     kept for a session-filed report.
@@ -279,9 +311,10 @@ def _file(ctx: GitContext, key: str, gate: str, error: str, where: str,
     first sighting and its sent state, and two copies of that arithmetic are two places
     for the count to be wrong.
     """
-    prior = next((r for r in load(ctx) if r.get("signature") == key), None)
+    path = _store(ctx)
+    prior = next((r for r in _latest(path) if r.get("signature") == key), None)
     now = time.time()
-    store.append_jsonl(store.tier_b(ctx, DEFECTS_FILE), {
+    store.append_jsonl(path, {
         "signature": key,
         "kind": kind,
         "gate": gate,
@@ -309,17 +342,30 @@ def _version() -> str:
     return __version__
 
 
-def load(ctx: GitContext) -> list[dict[str, Any]]:
-    """The latest record per signature, newest first. Append-only, so a later row wins."""
+# The key a loaded report carries naming the store it was read from, so `mark_sent` writes the
+# sent row beside it. Never written to a store.
+KEPT_IN = "_kept_in"
+
+
+def _latest(path: Path) -> list[dict[str, Any]]:
+    """The latest record per signature in one store. Append-only, so a later row wins."""
     latest: dict[str, dict[str, Any]] = {}
-    for row in store.read_jsonl(store.tier_b(ctx, DEFECTS_FILE)):
+    for row in store.read_jsonl(path):
         if isinstance(row, dict) and row.get("signature"):
-            latest[str(row["signature"])] = row
-    rows = sorted(latest.values(), key=lambda r: float(r.get("last_at") or 0), reverse=True)
+            latest[str(row["signature"])] = {**row, KEPT_IN: str(path)}
+    return list(latest.values())
+
+
+def load(ctx: GitContext | None) -> list[dict[str, Any]]:
+    """The latest record per signature, newest first: this clone's, and the ones made outside
+    every repository on this machine, which are shown and sent from wherever the founder is."""
+    paths = [_store(ctx)] + ([machine_store()] if ctx is not None else [])
+    rows = [row for path in paths for row in _latest(path)]
+    rows.sort(key=lambda r: float(r.get("last_at") or 0), reverse=True)
     return rows[:MAX_DEFECTS]
 
 
-def unsent(ctx: GitContext) -> list[dict[str, Any]]:
+def unsent(ctx: GitContext | None) -> list[dict[str, Any]]:
     """What `send` files: not filed yet, and last seen on the version that runs now.
 
     A report says what one version did. Held unsent across upgrades, it says nothing about
@@ -330,7 +376,7 @@ def unsent(ctx: GitContext) -> list[dict[str, Any]]:
     return [r for r in load(ctx) if not r.get("sent_at") and _seen_on_this_version(r)]
 
 
-def held_back(ctx: GitContext) -> list[dict[str, Any]]:
+def held_back(ctx: GitContext | None) -> list[dict[str, Any]]:
     """Not filed, and not seen since an upgrade: kept for `claude-bp-report`, never sent."""
     return [r for r in load(ctx) if not r.get("sent_at") and not _seen_on_this_version(r)]
 
@@ -339,10 +385,11 @@ def _seen_on_this_version(report: dict[str, Any]) -> bool:
     return str(report.get("version") or "") == _version()
 
 
-def mark_sent(ctx: GitContext, report: dict[str, Any], url: str = "") -> None:
-    store.append_jsonl(
-        store.tier_b(ctx, DEFECTS_FILE), {**report, "sent_at": time.time(), "url": url}
-    )
+def mark_sent(ctx: GitContext | None, report: dict[str, Any], url: str = "") -> None:
+    """Write `report` as sent, in the store it was read from."""
+    kept = {k: v for k, v in report.items() if k != KEPT_IN}
+    path = Path(report[KEPT_IN]) if report.get(KEPT_IN) else _store(ctx)
+    store.append_jsonl(path, {**kept, "sent_at": time.time(), "url": url})
 
 
 def title(report: dict[str, Any]) -> str:
@@ -383,7 +430,7 @@ def body(report: dict[str, Any]) -> str:
     ])
 
 
-def line(ctx: GitContext) -> str:
+def line(ctx: GitContext | None) -> str:
     """One line, and only when there is something. Never injected — a surface, not context."""
     waiting = unsent(ctx)
     if not waiting:

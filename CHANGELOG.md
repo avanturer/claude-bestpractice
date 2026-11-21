@@ -1,5 +1,71 @@
 # Changelog
 
+## v2.20.0
+
+Every issue open on 2.19.3 is answered (#364–#368, #373, #378, #379), with what each one
+neighbours.
+
+- **Web researchers are counted apart (#378, decision 0107).** Six `general-purpose` agents on six
+  web subjects were refused three of six as agents "searching the same tree". The session's shell
+  had wandered into a clone (`cd` persists), and the spawn was judged by that clone's ceiling. An
+  agent whose definition lists only web tools (WebSearch, WebFetch, the search servers' tools) now
+  counts against `research_fanout`, 8 by default, on fields of its own that the founder's next
+  message resets. The plugin ships one, `bestpractice:web-researcher`, with Parallel, Exa,
+  WebSearch and WebFetch, pinned to sonnet, and the tree ceiling's refusal names it. Built-in
+  agents count as before.
+- **`claude-bp-report` works outside every repository (#379, decision 0108).** Reports made there,
+  by a session or a crashed gate, go to the plugin's data directory. `list`, `send` and every
+  clone's board read them, and a sent row is written beside its report. Neighbour: the founder's
+  machine had a `~/.git` holding nothing but this plugin's state from before #187 was fixed, plus
+  Claude Code's runtime excludes. Every folder under the home read as a tree, so calls from there
+  were placed in the folder itself and judged nothing, and Claude Code took the home for a
+  repository. `hookio._tree_holding` now takes only a `.git` git would read (`is_a_git_dir`).
+  Repair 0052 removes the state, and the `.git` with it where nothing else of anyone's is left.
+- **A refusal names the card that covers the path (#368).** Directory entries in FILES were
+  matched correctly. What broke was the remedy. The lead's card naming
+  `mobile/src/components/product` waited in `next`, because its claim had been refused and
+  `| tail -1` hid that. The write refusal then sent the agent to plan the card a founder's reply
+  had just opened. Now `plan.covering` names `claim <id>` of a `next` or `paused` card that names
+  the path and that `claim` would take. A planned founder's card is told `update --paths` with its
+  own paths kept, where it would have been shrunk to one file and renamed. A refused claim ends
+  with `not claimed: <id>`. An agent's brief names no card as its own when the session holds
+  several.
+- **A stack lands one step a call (#366, decision 0109).** `claude-bp-ship --stack` prints the one
+  next command and runs none. The order: the next pull request moved onto the trunk, then the
+  lowest merged from its tree with `--delete-branch`, then each one above rebased `--onto` the
+  trunk past the landed commit (kept in Tier B) and pushed with a lease on GitHub's commit, then
+  the landed tree removed without `--force`. The merge gate refuses `gh pr merge -d`, or a push
+  that deletes a branch, while a pull request recorded here is opened into that branch. The
+  refusal names `gh pr edit <n> --base <trunk>`, and `pr-opened` records a retarget once it
+  succeeds. A typed `git worktree remove` of a tree not the session's is refused while it holds
+  ignored files nothing else has, as the plugin's own removals already were (decision 0039).
+- **`claude-bp skills` stops naming what is there (#364, decision 0110).** 11 of the 17 findings
+  on this machine were false. Scripts in a skill's own `scripts/` were looked for in the
+  repository alone, and `../` paths passed a guard that `..` always passes. Most of the rest
+  were steps of copied upstream skills, which carry their own licence and are now theirs to fix.
+  Those findings had filed nine cards in each of two repositories. A card whose skill now has no
+  finding is withdrawn at session start, and repair 0053 withdraws the ones filed before this. A
+  read of a skill nothing lists is no longer counted: `packs/growth/skills/aso/SKILL.md` read
+  here was called a skill that had gone. Every listed skill that dates itself is named once
+  overdue, the packs' among them; before, only `plugin/skills` was read. `claude-bp skills` lists
+  each skill with its source and reads. Not done, by decision 0099: checking a skill against the
+  repository's rules.
+- **`landing-not-slop` (#365), design 1.0.2.** Bento grids and dark mode are named a default if
+  unchosen, and the em-dash and Inter rows are marked †.
+- **`expo-upgrade` refreshed from upstream (#373), mobile 1.0.1.** Its feedback section now asks
+  the user before sending anything to Expo.
+- **A grep beside a program that runs strings is no merge (#367).** On a line with `$(…)`, any
+  `awk` or `env` on the line kept every quoted span, so `grep 'gh pr merge' $(…) | awk …` was
+  refused. Spans are now kept per top-level command, and upstream of a pipe into one that runs a
+  string. `echo '…' | sh`, `awk '{system($0)}'`, `xargs sh -c` and `bash -c "$(…)"` still read
+  as merges.
+- **From PR #369.** `claude-bp status` prints the board's own stale-copy line, so it names a newer
+  copy in the CLI's cache for a checkout install. `claude-bp-report send` no longer says to restart
+  (decision 0102). The README names Claude Code 2.1.330 for `validate --strict`. The PR's other
+  half shipped in 2.17.0 and its wording is superseded by 0102.
+- **Repairs.** 0052 (a `.git` that is no repository) and 0053 (skill cards filed in error).
+  Session records gain two fields that an older copy reads past.
+
 ## v2.19.3
 
 A sibling's tree being made no longer reads as a clone without trees (decision 0105).

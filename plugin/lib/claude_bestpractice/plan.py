@@ -585,6 +585,19 @@ def _untouched(task: Task) -> bool:
                 or task.body.strip() not in ("", NO_DETAIL))
 
 
+def withdraw_filed(ctx: GitContext, source: str, answered) -> list[Task]:
+    """Take back the unclaimed cards in `next` that `source` filed and `answered(card)` says
+    nothing is owed any longer: off the board, in `withdrawn/` in every tree, still on disk.
+    Under the claim lock, so a card claimed meanwhile is not taken from its session."""
+    taken: list[Task] = []
+    with store.file_lock(store.tier_b(ctx, CLAIM_LOCK)):
+        for task in load_all(ctx, NEXT):
+            if (task.source == source and not task.owner and answered(task)
+                    and _move_every(ctx, task.id, WITHDRAWN) is not None):
+                taken.append(task)
+    return taken
+
+
 def withdraw_unplanned(ctx: GitContext, opener: str) -> list[Task]:
     """Take back the cards a founder's message opened for this session that no work followed.
 
@@ -1847,6 +1860,24 @@ def to_take_back(ctx: GitContext, session_id: str, path: str = "") -> Task | Non
             continue
         if _claimable(ctx, card.id, session_id)[0] is not None:
             return card
+    return None
+
+
+def covering(ctx: GitContext, session_id: str, paths: list[str]) -> Task | None:
+    """A card waiting in `next` or `paused` that names one of `paths` (a directory naming all
+    beneath it) and that `claim` would hand this session. None where there is none.
+
+    A card a write refused for "nothing on the board" already covered: an agent's write under
+    `mobile/src/components/product` was refused, and the refusal sent it to update the card a
+    founder's reply had just opened, while the lead's card naming that directory waited in
+    `next`, its claim lost behind `| tail -1` (#368).
+    """
+    if not paths:
+        return None
+    for state in (NEXT, PAUSED):
+        for card in load_all(ctx, state):
+            if carried_by(card, paths) and _claimable(ctx, card.id, session_id)[0] is not None:
+                return card
     return None
 
 

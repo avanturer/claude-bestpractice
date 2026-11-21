@@ -1941,6 +1941,146 @@ def _named_head(tool_name: str, command: str, tool_input: dict[str, Any]) -> str
     return _create_option(command, "--head", "-H")
 
 
+# ---------------------------------------------------------------------------------------------
+# A stack: pull requests opened into another's branch (#366, #293, #329).
+#
+# GitHub closes a pull request whose base branch is deleted, and never reopens it. A stack is
+# landed by moving the next pull request onto the trunk BEFORE the one below it merges with its
+# branch deleted; `claude-bp-ship --stack` prints that order one step a call, and the merge gate
+# refuses a deletion that would close one.
+
+# `gh pr edit`'s flags that take the next word as their value.
+_EDIT_VALUE_FLAGS = frozenset({
+    "--add-assignee", "--add-label", "--add-project", "--add-reviewer", "--base", "-B",
+    "--body", "-b", "--body-file", "-F", "--milestone", "-m", "--remove-assignee",
+    "--remove-label", "--remove-project", "--remove-reviewer", "--title", "-t", "--repo", "-R"})
+
+
+def retargeted(tool_name: str, command: str, tool_input: dict[str, Any]) -> tuple[int, str] | None:
+    """(number, base) a call moves a pull request onto: `gh pr edit <n> --base <b>`, or the GitHub
+    tool's update naming `base`. 0 for the current branch's; None for a call that moves none."""
+    if _CLOSES_TOOL.search(tool_name):
+        return _retargeted_by_the_tool(tool_input)
+    from . import shellcmd
+
+    for argv in shellcmd.runs(command, "gh", "pr", "edit"):
+        number, base = _edit_words(shellcmd.without_redirections(argv[3:]))
+        if base:
+            return number, base
+    return None
+
+
+def _retargeted_by_the_tool(tool_input: dict[str, Any]) -> tuple[int, str] | None:
+    base = str(tool_input.get("base") or "")
+    try:
+        number = int(tool_input.get("pullNumber") or 0)
+    except (TypeError, ValueError):
+        number = 0
+    return (number, base) if base and number else None
+
+
+def _edit_words(argv: list[str]) -> tuple[int, str]:
+    """The pull request a `gh pr edit` names (0 for none) and the base it moves it onto."""
+    base, number = "", 0
+    words = iter(argv)
+    for word in words:
+        if word in ("--base", "-B"):
+            base = next(words, "") or ""
+        elif word.startswith("--base="):
+            base = word.split("=", 1)[1]
+        elif word in _EDIT_VALUE_FLAGS:
+            next(words, None)
+        elif not word.startswith("-") and not number:
+            number = int(word) if word.isdigit() else number_in(word)
+    return number, base
+
+
+def retarget(ctx: GitContext, number: int, base: str, branch: str = "") -> bool:
+    """Write that the pull request numbered `number` (the one of `branch` for 0) is now opened
+    into `base`. Whether a record changed: none here records it, or it said so already."""
+    found = _record_numbered(ctx, number) if number else (_record_of(ctx, branch) if branch else None)
+    if not found or found.get("into") == base:
+        return False
+    _write(ctx, {**found, "into": base})
+    return True
+
+
+def stacked_on(ctx: GitContext, branch: str) -> list[dict[str, Any]]:
+    """The open pull requests recorded here as opened into `branch`, lowest number first."""
+    if not branch:
+        return []
+    above = [row for row in _records(ctx).values()
+             if row.get("state") == OPEN and row.get("into") == branch
+             and branch not in (row.get("branch"), row.get(LOCAL))]
+    return sorted(above, key=lambda row: int(row.get("number") or 0))
+
+
+def strands_a_stack(ctx: GitContext, tool_name: str, command: str, number: int | None,
+                    branch: str, trunk: str) -> str:
+    """Why this line would close a pull request of a stack, or "": a merge that deletes its branch
+    (`--delete-branch`, `-d`), or a push that deletes one (`--delete`, `:<branch>`), while a
+    pull request recorded here is opened into that branch. `branch` is the one checked out where
+    the line runs, for a merge that names no number."""
+    if tool_name != "Bash":
+        return ""
+    from . import shellcmd
+
+    deleted = _deleted_by_the_merge(ctx, command, number, branch, trunk)
+    for argv in shellcmd.runs(command, "git", "push"):
+        deleted += [(name, trunk) for name in _pushed_deletions(argv)]
+    for head, onto in deleted:
+        # The trunk itself is the push gate's: a refusal here would name moving onto it.
+        above = stacked_on(ctx, head) if head not in (onto, trunk) else []
+        if above:
+            return _stranded_refusal(head, onto, above)
+    return ""
+
+
+def _deleted_by_the_merge(ctx: GitContext, command: str, number: int | None, branch: str,
+                          trunk: str) -> list[tuple[str, str]]:
+    """(branch, the base it was opened into) a `gh pr merge --delete-branch` deletes, or none."""
+    call = _merge_call(command)
+    if not isinstance(call, list) or not {"--delete-branch", "-d"} & set(_merge_arguments(call)[0]):
+        return []
+    record = _record_numbered(ctx, number) if number else (_record_of(ctx, branch) or {})
+    head = str(record.get("branch") or ("" if number else branch))
+    onto = str(record.get("into") or record.get("base") or trunk)
+    return [(head, onto)] if head else []
+
+
+def _record_numbered(ctx: GitContext, number: int) -> dict[str, Any]:
+    """The record of the pull request numbered `number`, or an empty one."""
+    return next((row for row in _records(ctx).values() if row.get("number") == number), {})
+
+
+def _stranded_refusal(head: str, onto: str, above: list[dict[str, Any]]) -> str:
+    one = len(above) == 1
+    named = ", ".join(f"#{row.get('number')}" if row.get("number") else f"`{row['branch']}`"
+                      for row in above)
+    moves = "\n".join(f"  gh pr edit {row.get('number') or '<number of ' + row['branch'] + '>'} "
+                      f"--base {onto}" for row in above)
+    return (f"claude-bestpractice: this line deletes `{head}`, and {named} here "
+            f"{'is' if one else 'are'} opened into it. GitHub closes a pull request whose base "
+            "branch is deleted and never reopens it, so the stack above would be lost (#293, "
+            f"#329). Move {'it' if one else 'them'} onto `{onto}` first, then run this line "
+            f"again:\n{moves}\n"
+            "  `claude-bp-ship --stack` lands a whole stack in this order, one step a call.")
+
+
+def _pushed_deletions(argv: list[str]) -> list[str]:
+    """The remote branches a `git push` deletes: every name after `--delete` or `-d`, past
+    the remote, and every `:<branch>` refspec."""
+    from . import gitpolicy
+
+    words = [word for word in gitpolicy.split_git(argv)[2] if word]
+    deleting = any(word in ("--delete", "-d") for word in words)
+    names = [word for word in words if not word.startswith("-")]
+    if deleting:
+        return [name.removeprefix("refs/heads/") for name in names[1:]]
+    return [word[1:].removeprefix("refs/heads/") for word in names[1:]
+            if word.startswith(":") and len(word) > 1]
+
+
 def base_of(tool_name: str, command: str, tool_input: dict[str, Any]) -> str:
     """The branch the pull request is opened INTO, as the call names it; "" where it names none,
     which is the repository's default branch.

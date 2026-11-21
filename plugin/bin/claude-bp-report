@@ -35,10 +35,7 @@ from claude_bestpractice import upgrade as _upgrade  # noqa: E402
 _upgrade.handover(Path(__file__))
 
 from claude_bestpractice import __version__, defects, hookio, sessions, store, upgrade  # noqa: E402
-from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
-
-
-SEND_LOCK = "defects-send.lock"
+from claude_bestpractice.gitctx import GitError, resolve  # noqa: E402
 
 
 def newer_version() -> str:
@@ -114,7 +111,7 @@ def cmd_send(ctx) -> int:
     files only what the first had not seen.
     """
     try:
-        with store.file_lock(store.tier_b(ctx, SEND_LOCK), timeout=300, stale_after=900):
+        with store.file_lock(defects.send_lock(), timeout=300, stale_after=900):
             return send_unsent(ctx)
     except store.LockTimeout:
         print("another send has been running for five minutes; nothing sent",
@@ -137,8 +134,9 @@ def send_unsent(ctx) -> int:
     newer = newer_version()
     if newer:
         print(f"nothing sent: this is {__version__}, and {newer} is out, which may have "
-              f"fixed what these report. Update with `{upgrade.update_command()}` and "
-              "restart Claude Code; a defect still there is captured again.", file=sys.stderr)
+              f"fixed what these report. Update with `{upgrade.update_command()}`: every "
+              "command of the running copy hands over to the new one (decision 0102), and a "
+              "defect still there is captured again.", file=sys.stderr)
         return 1
 
     sent = 0
@@ -164,12 +162,14 @@ def send_unsent(ctx) -> int:
 def last_refusal(ctx) -> str:
     """The first line of the last refusal this session was given, "" outside a session or
     where it has none: the report is then the gate's words beside the session's."""
+    if ctx is None:
+        return ""
     me = sessions.get(ctx, hookio.current_session_id(str(ctx.worktree_root)))
     return str((me.refusal or {}).get("said") or "") if me is not None else ""
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Defects this plugin hit in this repository.")
+    parser = argparse.ArgumentParser(description="Defects this plugin hit here.")
     # The version the founder is actually running, from the one place that holds it.
     # `claude-bp-plan --version` printed nothing and exited 2, so a bug report
     # against this plugin could not state which version it was against (#210).
@@ -183,7 +183,13 @@ def main() -> int:
                        help="which gate said it, if the refusal named one")
     args = parser.parse_args()
 
-    ctx = resolve_for_cli()
+    # Outside every repository too: a refusal names this command wherever the session stands,
+    # and a folder that is no repository is an ordinary place to stand (#379). The reports made
+    # there are kept on the machine (`defects.machine_store`).
+    try:
+        ctx = resolve()
+    except GitError:
+        ctx = None
     if defects.mode(ctx) == defects.OFF:
         print("defect reporting is off for this repository")
         return 0

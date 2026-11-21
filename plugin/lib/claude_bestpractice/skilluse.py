@@ -74,17 +74,25 @@ def read_directly(ctx: GitContext, path: str) -> None:
 
 def _named_by(ctx: GitContext, path: Path) -> str:
     """The skill a file is: the listed one at that path, else this plugin's by its folder, else
-    the folder's name for a `SKILL.md` and the stem for a command."""
+    a listed skill of the folder's name for a `SKILL.md` and of the stem for a command (another
+    tree's copy of the repository's own). "" for a file of no skill a session here can load.
+
+    Counted by its bare folder name, a read of `packs/growth/skills/aso/SKILL.md` in this
+    repository counted `aso`, which nothing lists (only `growth:aso`), and the next session
+    start said `aso` was gone (#364).
+    """
     try:
         resolved = path.resolve()
     except OSError:
         resolved = path
-    for listed in skills.inventory(ctx.worktree_root):
-        if listed.path == path or listed.path.resolve() == resolved:
-            return listed.name
+    listed = skills.inventory(ctx.worktree_root)
+    for item in listed:
+        if item.path == path or item.path.resolve() == resolved:
+            return item.name
     if resolved.parent.parent == skills.SHIPPED.resolve():
         return resolved.parent.name
-    return path.parent.name if path.name == "SKILL.md" else path.stem
+    bare = path.parent.name if path.name == "SKILL.md" else path.stem
+    return bare if bare in {item.name for item in listed} else ""
 
 
 def _count(ctx: GitContext, kind: str, name: str, path: str) -> None:
@@ -174,7 +182,20 @@ def report(ctx: GitContext, home: Path | None = None) -> list[str]:
     lines += [f"left behind: {', '.join(account.names)}, synced from a claude.ai account until "
               f"{_day(account.synced_at)}, load in no session now ({account.folder})"
               for account in skills.left_behind(home)]
-    return [line for line in [*lines, skills.overdue_line()] if line]
+    return [line for line in [*lines, skills.overdue_line(listed=listed)] if line]
+
+
+def inventory_lines(ctx: GitContext, home: Path | None = None) -> list[str]:
+    """Each skill a session here can load, with where it comes from and how it was read since
+    the count began: by the Skill tool or a slash command, and by reading its file (#364)."""
+    seen = counts(ctx)
+    width = max((len(item.name) for item in skills.inventory(ctx.worktree_root, home)), default=0)
+    out = []
+    for item in skills.inventory(ctx.worktree_root, home):
+        used, read = seen.get(item.name, (0, 0))
+        out.append(f"{item.name:<{width}}  {item.kind:<7} {item.origin}  "
+                   f"used {used}, read by file {read}")
+    return out
 
 
 def _loadable_line(listed: list[skills.Listed]) -> str:

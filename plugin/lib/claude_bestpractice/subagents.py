@@ -19,7 +19,11 @@ own model whatever the call says (`FORK`).
 THE COUNT IS BOUNDED. Parallel agents are the cheapest-looking way to go faster and the
 most expensive way to be wrong: each one pays for its own context, and four searching
 the same repository produce four copies of the same answer. `subagent_fanout` is the
-founder's number, and past it the spawn is refused with what it costs.
+founder's number, and past it the spawn is refused with what it costs. An agent whose own
+definition gives it no tool that reads the tree, only the web's (`reads_no_tree`), searches
+no repository and copies no answer: it is counted apart, against `research_fanout`. Six
+web researchers of one turn, each on its own subject, were refused three of six as agents
+"searching the same tree" (#378).
 
 What is deliberately NOT asked: a written justification. No gate can tell a true reason
 from a plausible one, and demanding a sentence would buy a sentence. The tier guide goes
@@ -34,7 +38,7 @@ import re
 import time
 from pathlib import Path
 
-from . import founder, redact, store
+from . import founder, redact, search, store
 from .gitctx import GitContext
 
 # Both spellings the harness has used for the spawn. The tool is `Agent` in current
@@ -93,19 +97,56 @@ def pinned_tier(ctx: GitContext, subagent_type: str, home: Path | None = None) -
     oversight in this rule, it is the case it exists for: those three are what a session
     reaches for without thinking.
     """
-    name = (subagent_type or "").strip().split(":")[-1]
-    if not name or "/" in name or "\\" in name or name.startswith("."):
-        return ""
-    for directory in _agent_dirs(ctx, home):
-        found = directory / f"{name}.md"
-        try:
-            text = found.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        match = _FRONTMATTER_MODEL.search(text.split("---", 2)[1] if "---" in text else text)
+    for text in _definitions(ctx, subagent_type, home):
+        match = _FRONTMATTER_MODEL.search(_frontmatter(text))
         if match:
             return match.group("model").strip().strip("\"'").lower()
     return ""
+
+
+def _definitions(ctx: GitContext, subagent_type: str, home: Path | None = None) -> list[str]:
+    """The text of each file that can define `subagent_type`, nearest first."""
+    name = (subagent_type or "").strip().split(":")[-1]
+    if not name or "/" in name or "\\" in name or name.startswith("."):
+        return []
+    found = []
+    for directory in _agent_dirs(ctx, home):
+        try:
+            found.append((directory / f"{name}.md").read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+    return found
+
+
+def _frontmatter(text: str) -> str:
+    return text.split("---", 2)[1] if text.startswith("---") and text.count("---") >= 2 else text
+
+
+# The tools an agent reads the world with and not this tree: the harness's web search and page
+# fetch, and the search servers' tools `search.judged` names (Parallel's, Exa's, a connector's).
+WEB_ONLY = frozenset({"WebSearch", "WebFetch"})
+_TOOLS_LINE = re.compile(r"^tools\s*:(?P<inline>[^\n]*)\n?(?P<listed>(?:[ \t]+-[^\n]*\n?)*)", re.M)
+
+
+def tools_of(ctx: GitContext, subagent_type: str, home: Path | None = None) -> list[str] | None:
+    """The tools the nearest definition of `subagent_type` gives it, or None where none says:
+    a built-in agent, or a definition with no `tools:`, which Claude Code reads as every tool."""
+    for text in _definitions(ctx, subagent_type, home)[:1]:
+        match = _TOOLS_LINE.search(_frontmatter(text))
+        if not match:
+            return None
+        raw = match["inline"].strip().strip("[]") + "," + ",".join(
+            line.strip().lstrip("-") for line in match["listed"].splitlines())
+        return [name.strip().strip("\"'") for name in raw.split(",") if name.strip().strip("\"'")]
+    return None
+
+
+def reads_no_tree(ctx: GitContext, subagent_type: str, home: Path | None = None) -> bool:
+    """Whether an agent of `subagent_type` can read nothing of the repository: its definition
+    names its tools, and each is a web search or page fetch. Such an agent pays for no context
+    of the tree and cannot bring back a copy of another's answer about it (#378)."""
+    tools = tools_of(ctx, subagent_type, home)
+    return bool(tools) and all(tool in WEB_ONLY or search.judged(tool) for tool in tools)
 
 
 def _agent_dirs(ctx: GitContext, home: Path | None = None) -> list[Path]:
@@ -245,8 +286,18 @@ def at_work(transcript_path: str, since: float = 0.0, but: str = "") -> list[str
             if how == AT_WORK and not (but and agent == but)]
 
 
-def fanout_refusal(spawned: int, ceiling: int) -> str:
-    """Why the next parallel agent is refused, in what it costs rather than in a rule."""
+# The agent this plugin ships for research on the web, which reads nothing of the tree.
+WEB_RESEARCHER = "bestpractice:web-researcher"
+
+
+def fanout_refusal(spawned: int, ceiling: int, research: int = 0) -> str:
+    """Why the next parallel agent is refused, in what it costs rather than in a rule.
+    `research` is `research_fanout`, the ceiling a web-only agent is counted against apart."""
+    apart = (
+        f"  An agent that only searches the web is counted apart, up to `research_fanout` "
+        f"({research}): `subagent_type: \"{WEB_RESEARCHER}\"`, or any agent whose definition "
+        "lists no tool but WebSearch, WebFetch and the search servers' search and fetch.\n"
+        if research > 0 else "")
     return (
         f"claude-bestpractice: this turn has already started {spawned} subagent(s), and "
         f"the ceiling is {ceiling}.\n"
@@ -254,8 +305,22 @@ def fanout_refusal(spawned: int, ceiling: int) -> str:
         "line of the answer, so a fan-out is the most expensive way there is to go "
         "slightly faster — and agents searching the same tree return the same answer "
         f"{spawned} times.\n"
+        f"{apart}"
         "  Use what the ones already running come back with, or do this part yourself. "
         "If the work genuinely needs more, the founder raises `subagent_fanout`; it is "
+        "their number, not this session's."
+    )
+
+
+def research_refusal(spawned: int, ceiling: int) -> str:
+    """Why the next agent that only searches the web is refused."""
+    return (
+        f"claude-bestpractice: this turn has already started {spawned} agent(s) that only "
+        f"search the web, and the ceiling for them is {ceiling} (`research_fanout`).\n"
+        "  They read nothing of this repository, so they are counted apart from the agents "
+        "that search it; each still pays for its own context and its own searches.\n"
+        "  Give one agent two of the subjects, or wait for those running to come back. If the "
+        "work genuinely needs more at once, the founder raises `research_fanout`; it is "
         "their number, not this session's."
     )
 

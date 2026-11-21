@@ -145,6 +145,12 @@ class Config:
     # parallel: each agent pays for its own context of the repository before it reads a
     # line of the answer, and the founder pays for all of them. Zero switches it off.
     subagent_fanout: int = 3
+    # How many agents that only search the web one turn may start, counted apart from the
+    # ones above: such an agent reads none of the repository, so the copies of one answer
+    # `subagent_fanout` exists to stop are not what it brings back (#378). Eight, because a
+    # question worth researching on the web splits into more subjects than a repository
+    # search does, and each agent still pays for its own context. Zero switches it off.
+    research_fanout: int = 8
     require_worktree: bool = True
     # A tree whose work is in the trunk and whose cards are all closed removes itself, on
     # the turn that finishes it. On, because the founder asked for it in those terms — "так
@@ -240,6 +246,7 @@ class Config:
             "max_tool_calls": self.max_tool_calls,
             "max_repeat_signature": self.max_repeat_signature,
             "subagent_fanout": self.subagent_fanout,
+            "research_fanout": self.research_fanout,
             "require_worktree": self.require_worktree,
             "remove_finished_trees": self.remove_finished_trees,
             "branch_without_pr_hours": self.branch_without_pr_hours,
@@ -384,6 +391,7 @@ _EXPECTED: dict[str, type] = {
     "autonomy": str,
     "protect_trunk": bool,
     "subagent_fanout": int,
+    "research_fanout": int,
     "manage_pull_requests": bool,
     "report_defects": str,
     "stage_override": str,

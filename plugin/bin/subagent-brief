@@ -50,9 +50,15 @@ def the_card_it_works_under(ctx, session_id: str) -> str:
     from claude_bestpractice import plan, redact, sessions
 
     rec = sessions.get(ctx, session_id)
+    held = plan.held_by(ctx, rec.session_id if rec else session_id)
+    # The cards claimed on the branch the agent stands on first. Of several, the session that
+    # started it knows which one it was sent for and this hook does not: the first was named as
+    # the agent's own, and a report said it was "attributed to an unrelated card" (#368).
+    held.sort(key=lambda card: card.branch != ctx.branch)
     lines = []
-    for card in plan.held_by(ctx, rec.session_id if rec else session_id)[:CARDS_TOLD]:
-        said = f"This agent works under card {card.id}, \"{card.title}\""
+    for card in held[:CARDS_TOLD]:
+        said = (f"This agent works under card {card.id}, \"{card.title}\"" if len(held) == 1
+                else f"The session that started this agent holds card {card.id}, \"{card.title}\"")
         if card.done_when:
             said += f", done when {card.done_when}"
         if card.paths:
