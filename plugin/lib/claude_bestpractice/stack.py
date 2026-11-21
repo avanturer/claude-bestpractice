@@ -240,7 +240,7 @@ def _before_the_merge(ctx: GitContext, landing: _Landing, pull: Pull, plan: dict
         if above.base == branch:
             return Step(f"#{above.number} is opened into `{branch}`, which merging #{number} "
                         "deletes; GitHub would close it and never reopen it. Move it onto "
-                        f"`{into}` first.", f"gh pr edit {above.number} --base {into}")
+                        f"`{into}` first.", f"gh pr edit {above.number} --base {_b(into)}")
     if pull.draft:
         return Step(f"#{number} is a draft, which nothing merges: `gh pr ready {number}` once "
                     "its work is finished.", blocked=True)
@@ -268,13 +268,19 @@ def _rebase_owed(ctx: GitContext, landing: _Landing) -> Step | None:
             made = main / ".claude" / "worktrees" / pull.head.replace("/", "-")
             return Step(f"#{pull.number} still carries #{landing.number}'s commits, and "
                         f"`{pull.head}` is checked out in no tree here.",
-                        f"git -C {_q(main)} worktree add {_q(made)} {pull.head}")
+                        f"git -C {_q(main)} worktree add {_q(made)} {_b(pull.head)}")
         return _rebase_step(ctx, landing, pull, tree)
     return None
 
 
 def _q(path: Path) -> str:
     return shlex.quote(str(path))
+
+
+def _b(name: str) -> str:
+    """A branch name as a printed command passes it: GitHub hands back any name git accepts,
+    `feat-b$(touch x)` among them, and printed bare it would run."""
+    return shlex.quote(name)
 
 
 def _rebase_step(ctx: GitContext, landing: _Landing, pull: Pull, tree: Path) -> Step:
@@ -288,14 +294,14 @@ def _rebase_step(ctx: GitContext, landing: _Landing, pull: Pull, tree: Path) -> 
         return Step(f"GitHub has commits on `{pull.head}` this clone does not; bring them in "
                     "before rebasing. A refused fast-forward means the two diverged, which is "
                     "the session's to reconcile.",
-                    f"git -C {_q(tree)} fetch origin {pull.head} && git -C {_q(tree)} merge "
-                    f"--ff-only origin/{pull.head}")
+                    f"git -C {_q(tree)} fetch origin {_b(pull.head)} && git -C {_q(tree)} merge "
+                    f"--ff-only {_b('origin/' + pull.head)}")
     leases = {**landing.plan.get("leases", {}), str(pull.number): pull.oid}
     _keep(ctx, landing.number, {**landing.plan, "leases": leases})
     return Step(f"#{landing.number} landed; #{pull.number} still carries its commits under the "
                 f"squash. Rebase it onto `{landing.into}`, past them.",
-                f"git -C {_q(tree)} fetch origin {landing.into} && git -C {_q(tree)} rebase "
-                f"--onto origin/{landing.into} {landing.oid} {pull.head}")
+                f"git -C {_q(tree)} fetch origin {_b(landing.into)} && git -C {_q(tree)} rebase "
+                f"--onto {_b('origin/' + landing.into)} {landing.oid} {_b(pull.head)}")
 
 
 def _push_owed(ctx: GitContext, landing: _Landing) -> Step | None:
@@ -322,8 +328,8 @@ def _push_step(ctx: GitContext, landing: _Landing, pull: Pull, tree: Path) -> St
                     f"{pull.oid[:12]}): someone pushed to it. Bring that in and rebase again; a "
                     "push now would take it.", blocked=True)
     return Step(f"#{pull.number} is rebased here and GitHub still has the old commits." +
-                _checks_note(ctx), f"git -C {_q(tree)} push --force-with-lease="
-                f"{pull.head}:{lease} origin {pull.head}")
+                _checks_note(ctx), f"git -C {_q(tree)} push "
+                f"{_b('--force-with-lease=' + pull.head + ':' + lease)} origin {_b(pull.head)}")
 
 
 def _tree_owed(ctx: GitContext, landing: _Landing) -> Step | None:

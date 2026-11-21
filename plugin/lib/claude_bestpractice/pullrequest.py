@@ -2101,12 +2101,33 @@ def _deletes_the_branch(flag: str) -> bool:
     return False
 
 
+# `git push` options that take the next word as their value.
+_PUSH_VALUE_OPTIONS = frozenset({"-o", "--push-option", "--repo", "--receive-pack", "--exec"})
+
+
+def _push_word(word: str) -> str:
+    """What one word of a `git push` is: an option taking the next word (`value`), one that
+    deletes (`delete`: `--delete`, `-d`, a short group with `d` before any `o`), a `name`
+    (the remote, a refspec), or any other option ("")."""
+    letters = word[1:] if word[:1] == "-" and word[1:2] != "-" else ""
+    if word in _PUSH_VALUE_OPTIONS or (letters.endswith("o") and "d" not in letters):
+        return "value"
+    if word == "--delete" or "d" in letters.partition("o")[0]:
+        return "delete"
+    return "" if word.startswith("-") else "name"
+
+
 def _pushed_deletions(args: list[str]) -> list[str]:
     """The remote branches a `git push` deletes, from its own arguments: every name after
-    `--delete` or `-d`, past the remote, and every `:<branch>` refspec."""
-    words = [word for word in args if word]
-    deleting = any(word in ("--delete", "-d") for word in words)
-    names = [word for word in words if not word.startswith("-")]
+    `--delete`, `-d` or a short group holding `d` (`-fd`), past the remote, and every
+    `:<branch>` refspec. An option's value is no name."""
+    words, deleting, names = iter(a for a in args if a), False, []
+    for word in words:
+        kind = _push_word(word)
+        if kind == "value":
+            next(words, None)
+        deleting = deleting or kind == "delete"
+        names += [word] if kind == "name" else []
     if deleting:
         return [name.removeprefix("refs/heads/") for name in names[1:]]
     return [word[1:].removeprefix("refs/heads/") for word in names[1:]

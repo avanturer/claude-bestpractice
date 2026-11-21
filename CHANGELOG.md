@@ -62,11 +62,14 @@ neighbours.
 - **A grep beside a program that runs strings is no merge (#367).** On a line with `$(…)`, any
   `awk`, `env` or `find` on the line kept every quoted span, so `grep 'gh pr merge' $(…) | awk
   -F: '{print $1}'` was refused. The line is still read whole, and any runner on it keeps every
-  span (`shellcmd.runs_a_string`). Three programs are spared: `env` that starts a named
-  program which runs nothing and has no `-S`; `awk` whose single-quoted program has no
-  `system(` or pipe and which has no `-f`; and `find` with no `-exec` or `-ok`. A first cut
-  read the line command by command, and `echo '…' | while read c; do sh -c "$c"; done` merged
-  unread. The independent review caught it before release, and 18 such lines are now tests.
+  span (`shellcmd.runs_a_string`). Only two are spared: `awk` in its plain shape (`-F` with an
+  unquoted separator, then a single-quoted program with no `system(` or pipe), and `find` with
+  no `-exec` or `-ok`. `env` is never spared, since what it starts may be any interpreter.
+  `mawk`, `nawk`, `source` and `python3.10`-style names now count as runners; on 2.19.3 a merge
+  behind them went unread. Two earlier cuts, one reading the line command by command and one
+  sparing `env`, each let real merges through. Two independent reviews ran them under bash and
+  caught both before release. 31 such lines are now tests, and every line 2.19.3 read as a
+  merge still is one.
 - **From PR #369.** `claude-bp status` prints the board's own stale-copy line, so it names a newer
   copy in the CLI's cache for a checkout install. `claude-bp-report send` no longer says to restart
   (decision 0102). The README names Claude Code 2.1.330 for `validate --strict`. The PR's other

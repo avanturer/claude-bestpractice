@@ -172,7 +172,6 @@ class TestAPatternOnALineThisCannotRead(RepoCase):
     SEARCHES_BESIDE_A_RUNNER = (
         "grep -rn 'gh pr merge' $(git ls-files '*.md') | awk -F: '{print $1}'",
         "grep -rn 'gh pr merge' $(git ls-files '*.md') | awk '{print}'",
-        "rg 'gh pr merge' $(git ls-files) | env LC_ALL=C sort",
         "rg 'gh pr merge' $(git ls-files); find . -name '*.sh' -print",
     )
     # And what such a command still reads as a merge: a string it runs, or the input of a pipe
@@ -207,6 +206,19 @@ class TestAPatternOnALineThisCannotRead(RepoCase):
         "echo 'gh pr merge 1' | awk '{ while ((\"sh\" | getline line) > 0) print }' $(true)",
         "env -S\"gh pr merge 1\" $(true)",
         "echo 'gh pr merge 1' | awk -f run.awk '{print}' $(true)",
+        # Spared by the second cut, which the review of it ran under bash: each merged.
+        "awk -F ':' 'BEGIN{system(\"gh pr merge 7\")}' /dev/null $(true)",
+        "gawk -F ':' 'BEGIN{system(\"gh pr merge 7\")}' /dev/null $(true)",
+        "awk -v 'x=1' 'BEGIN{system(\"gh pr merge 7\")}' /dev/null $(true)",
+        "env X=1 python3.10 -c \"import os; os.system('gh pr merge 7')\" $(true)",
+        "env X=1 mawk 'BEGIN{system(\"gh pr merge 7\")}' /dev/null $(true)",
+        "env -u FOO nawk 'BEGIN{system(\"gh pr merge 7\")}' /dev/null $(true)",
+        "env X=1 sed '1e gh pr merge 7' /etc/hostname $(true)",
+        "env X=1 git -c alias.m='!gh pr merge 7' m $(true)",
+        # Let through on 2.19.3 as well, and runners all the same.
+        "mawk 'BEGIN{system(\"gh pr merge 7\")}' /dev/null $(true)",
+        "python3.10 -c \"import os; os.system('gh pr merge 7')\" $(true)",
+        "source <(echo 'gh pr merge 7')",
         "find . -name x -exec sh -c 'gh pr merge 1' \\; $(true)",
     )
 
@@ -214,9 +226,12 @@ class TestAPatternOnALineThisCannotRead(RepoCase):
         for line, runs in (
             ("find . -name x -print", False), ("find . -exec x {} \\;", True),
             ("find . -execdir x \\;", True), ("find . -ok x \\;", True),
-            ("env LC_ALL=C sort", False), ("env -S 'a b'", True), ("env -iS a", True),
-            ("env --split-string=x", True), ("env A=1 sh", True), ("env \"$X\"", True),
-            ("awk -F: '{print $1}'", False), ("awk -f p.awk '{print}'", True),
+            ("find . -ex\\ec x \\;", True), ("find . '-exec' x \\;", True),
+            ("env LC_ALL=C sort", True), ("env -S 'a b'", True), ("env A=1 sh", True),
+            ("awk -F: '{print $1}'", False), ("awk -F , '{print $1}'", False),
+            ("awk -F ':' '{print}'", True), ("awk -v x=1 '{print}'", True),
+            ("awk -f p.awk '{print}'", True), ("mawk '{print}'", True), ("nawk '{print}'", True),
+            ("python3.10 x", True), ("source x", True),
             ("awk '{system($0)}'", True), ("awk '{print | \"sort\"}'", True), ("gawk '{print}'", False),
             ("'sh' x", True), ("xargs echo", True),
         ):

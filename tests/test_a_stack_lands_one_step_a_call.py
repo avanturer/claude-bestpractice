@@ -186,6 +186,33 @@ class TestThePushHoldsWhatTheRebaseSaw(StackCase):
         self.assertIn("not by a step of this command", proc.stdout)
 
 
+class TestABranchNameIsQuoted(StackCase):
+    """GitHub hands back any name git accepts, `feat-b$(touch x)` among them (review of 2.20.0)."""
+
+    NAME = "feat-b$(touch${IFS}pwn)"
+
+    def landing(self, lease: str = ""):
+        from claude_bestpractice import stack
+
+        plan = {"leases": {"2": lease}} if lease else {}
+        return stack._Landing(1, "feat/a", "main", self.a, [], plan)
+
+    def test_the_fast_forward_and_the_rebase_name_it_quoted(self):
+        from claude_bestpractice import stack
+
+        pull = stack.Pull(2, self.NAME, "main", "f" * 40)
+        said = stack._rebase_step(self.ctx(), self.landing(), pull, self.tree_b).run
+        self.assertIn(f"fetch origin '{self.NAME}'", said)
+        self.assertIn(f"--ff-only 'origin/{self.NAME}'", said)
+
+    def test_the_push_names_it_quoted(self):
+        from claude_bestpractice import stack
+
+        pull = stack.Pull(2, self.NAME, "main", "f" * 40)
+        said = stack._push_step(self.ctx(), self.landing("f" * 40), pull, self.tree_b).run
+        self.assertIn(f"'--force-with-lease={self.NAME}:{'f' * 40}' origin '{self.NAME}'", said)
+
+
 class TestAPathWithASpaceIsQuoted(StackCase):
     def test_the_tree_is_named_so_the_command_runs(self):
         spaced = self.tmp / "with space" / "tree-a"
@@ -264,6 +291,12 @@ class TestADeletionThatClosesAStacksPullRequestIsRefused(GateCase):
         for line in (f"git -C {self.repo} push origin --delete feat/a",
                      "git -c push.default=simple push origin :feat/a"):
             self.assertIn("gh pr edit 2 --base main", self.hook_reason(self.bash(line)), line)
+
+    def test_a_push_short_group_holding_d_deletes_the_branch(self):
+        self.assertIn("gh pr edit 2 --base main",
+                      self.hook_reason(self.bash("git push -fd origin feat/a")))
+        self.assertEqual(["feat-a"], pullrequest._pushed_deletions(["-o", "x", "-d", "origin", "feat-a"]))
+        self.assertEqual([], pullrequest._pushed_deletions(["-od", "origin", "feat-a"]))
 
     def test_a_short_flag_group_holding_d_deletes_the_branch(self):
         for line in ("gh pr merge 1 -sd", "gh pr merge 1 -ds"):
