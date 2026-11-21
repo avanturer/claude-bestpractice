@@ -133,6 +133,10 @@ class SessionRecord:
     # started nothing, and refused the next three that would have (#316). A spawn whose event
     # named no id stays counted, as every spawn was before.
     spawn_calls: list[str] = field(default_factory=list)
+    # The same two for the agents that only search the web (`subagents.reads_no_tree`), which
+    # are counted against `research_fanout` apart from the ones above (#378).
+    research_spawns_this_turn: int = 0
+    research_spawn_calls: list[str] = field(default_factory=list)
     # The name Claude Code gives this session, which `SendMessage` takes as its address —
     # `fuddy-8b`, where everything here said `80672d34` and the only way to tell which chat
     # to write to was reading `~/.claude/sessions/` by hand (#253). As `running` last
@@ -885,23 +889,28 @@ def count(ctx: GitContext, session_id: str, counter: str, ceiling: int = 0,
 
 
 def spawn(ctx: GitContext, session_id: str, call: str, ceiling: int,
-          never_started: set[str] | frozenset[str] = frozenset()) -> int:
+          never_started: set[str] | frozenset[str] = frozenset(), research: bool = False) -> int:
     """Count one subagent spawn of this turn, and return how many had started before it.
 
     `count` for `spawns_this_turn`, in the same one locked step and for the reason it gives,
     with the turn's spawns that `never_started` names given back first: their call came back
     an error, so no agent ran (#316). `call` is kept beside the count to be given back too.
+    `research` counts an agent that only searches the web, on its own two fields (#378).
     """
     before: list[int] = []
+    counter, calls = (("research_spawns_this_turn", "research_spawn_calls") if research
+                      else ("spawns_this_turn", "spawn_calls"))
 
     def add_one(rec: SessionRecord) -> None:
-        kept = [made for made in rec.spawn_calls if made not in never_started]
-        started = max(int(rec.spawns_this_turn or 0) - (len(rec.spawn_calls) - len(kept)), 0)
+        made_before = list(getattr(rec, calls) or [])
+        kept = [made for made in made_before if made not in never_started]
+        started = max(int(getattr(rec, counter) or 0) - (len(made_before) - len(kept)), 0)
         before.append(started)
         if ceiling <= 0 or started < ceiling:
             started += 1
             kept += [call] if call else []
-        rec.spawns_this_turn, rec.spawn_calls = started, kept
+        setattr(rec, counter, started)
+        setattr(rec, calls, kept)
 
     _rewrite(ctx, session_id, add_one)
     return before[0] if before else 0

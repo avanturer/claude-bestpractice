@@ -752,7 +752,8 @@ _RUNS_A_STRING = re.compile(
     r"(?<![\w.-])(?:" + "|".join(sorted(_SCRIPT_RUNNERS | {
         "xargs", "parallel", "sudo", "doas", "env", "find", "tmux", "screen", "nohup",
         "python", "python3", "node", "perl", "ruby", "php", "deno", "bun", "osascript",
-        "pwsh", "powershell", "awk", "gawk", "busybox"})) + r")(?![\w.-])")
+        "pwsh", "powershell", "awk", "gawk", "mawk", "nawk", "busybox", "source"}))
+    + r"|python\d(?:\.\d+)?)(?![\w.-])")
 
 
 def outside_quotes(line: str) -> str:
@@ -764,9 +765,42 @@ def outside_quotes(line: str) -> str:
     unreadable, and the pattern being searched for was read as the command (#367). Quoting is
     what tells the two apart, as it is in `commands`.
 
-    Unchanged wherever a program on the line can run a string (`_RUNS_A_STRING`): there the
-    quoted span may be exactly the merge, and the old reading is the safe one.
+    Unchanged wherever a program on the line can run a string (`runs_a_string`): there the
+    quoted span may be exactly the merge, and the old reading is the safe one. The line is read
+    whole, never command by command: read per command, `echo '…' | while read c; do sh -c
+    "$c"; done` and `x=$(…); sh -c "$x"` merged unread, the runner standing in another command.
     """
-    if _RUNS_A_STRING.search(line):
+    if runs_a_string(line):
         return line
     return _INERT.sub(lambda found: found.group(0) if found.group("escape") else " ", line)
+
+
+# `awk` in the one shape whose program is plainly its first quoted word: options only `-F` with
+# an unquoted separator, then the program single-quoted. Any other option (`-v`, `-f`, a quoted
+# `-F ':'`) or an unquoted program reads as one that may run a string.
+_AWK_PROGRAM = re.compile(
+    r"(?<![\w.-])g?awk(?:\s+-F[^\s'\"\\]+|\s+-F\s+[^\s'\"\\-][^\s'\"\\]*)*\s+'(?P<program>[^']*)'")
+# What makes an awk program run a command: `system(…)`, or a pipe to or from one.
+_AWK_RUNS = re.compile(r"system\s*\(|\|")
+_FIND_RUNS = re.compile(r"(?<![\w-])-(?:exec|execdir|ok|okdir)(?![\w-])")
+
+
+def runs_a_string(line: str) -> bool:
+    """Does a program on this line run a string it is handed (`_RUNS_A_STRING`), its name
+    quoted or not? Two are spared where they plainly run none: `awk` in its plain shape
+    (`_AWK_PROGRAM`) with no `system` or pipe in its program, and `find` with no `-exec` or
+    `-ok` on the line, read with quotes and backslashes taken out. `env` is never spared: what it
+    starts may be any interpreter, one this list does not name among them (review of 2.20.0)."""
+    for found in _RUNS_A_STRING.finditer(line):
+        name = found.group()
+        if name in ("awk", "gawk") and _awk_runs_none(line, found.start()):
+            continue
+        if name == "find" and not _FIND_RUNS.search(re.sub(r"[\\'\"]", "", line)):
+            continue
+        return True
+    return False
+
+
+def _awk_runs_none(line: str, at: int) -> bool:
+    written = _AWK_PROGRAM.match(line, at)
+    return written is not None and not _AWK_RUNS.search(written["program"])

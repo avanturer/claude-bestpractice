@@ -3,6 +3,7 @@
 
     claude-bp-ship            what changed, in product terms
     claude-bp-ship --pr       open a pull request with that as the body
+    claude-bp-ship --stack    the one next step to land a stack of pull requests
 
 The stated operating mode is that the founder looks at outcomes and never at diffs.
 Every other surface in this plugin faces the agent; this one faces the other way.
@@ -24,7 +25,7 @@ from claude_bestpractice import upgrade as _upgrade  # noqa: E402
 
 _upgrade.handover(Path(__file__))
 
-from claude_bestpractice import __version__, delivery, gitpolicy, hookio, pullrequest  # noqa: E402
+from claude_bestpractice import __version__, delivery, gitpolicy, hookio, pullrequest, stack  # noqa: E402
 from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
 
 
@@ -64,6 +65,16 @@ def open_pr(ctx, base: str) -> int:
     return proc.returncode
 
 
+def land_stack(ctx, base: str) -> int:
+    """Print the one command that comes next in landing this stack, and run none (#366)."""
+    step = stack.next_step(ctx, base)
+    print(step.said)
+    if step.run:
+        print(f"  next: {step.run}")
+        print("  Run it as a command of its own, then `claude-bp-ship --stack` again.")
+    return 1 if step.blocked else 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="What this branch delivered.")
     # The version the founder is actually running, from the one place that holds it.
@@ -71,6 +82,8 @@ def main() -> int:
     # against this plugin could not state which version it was against (#210).
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument("--pr", action="store_true", help="open a pull request")
+    parser.add_argument("--stack", action="store_true",
+                        help="the next step to land a stack of pull requests, one at a time")
     args = parser.parse_args()
 
     ctx = resolve_for_cli()
@@ -83,6 +96,8 @@ def main() -> int:
 
     if args.pr:
         return open_pr(ctx, base)
+    if args.stack:
+        return land_stack(ctx, base)
 
     print(delivery.shipped(ctx, base))
     return 0

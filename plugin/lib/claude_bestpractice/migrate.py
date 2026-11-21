@@ -1977,6 +1977,73 @@ def _begin_the_log_of_the_founders_words(ctx: GitContext) -> str:
     return ""
 
 
+def _only_runtime_left(dot_git: Path) -> bool:
+    """Is what is left in `dot_git` nothing but an `info/exclude` of Claude Code's runtime
+    patterns, which it wrote only because it found the `.git`?"""
+    info, exclude = dot_git / "info", dot_git / "info" / "exclude"
+    if {p.name for p in dot_git.iterdir()} - {"info"}:
+        return False
+    if info.exists() and {p.name for p in info.iterdir()} - {"exclude"}:
+        return False
+    lines = exclude.read_text(encoding="utf-8", errors="replace").splitlines() \
+        if exclude.exists() else []
+    return all(_RUNTIME_EXCLUDE.match(line.strip()) for line in lines)
+
+
+# What Claude Code writes into a `.git/info/exclude` it finds, and nothing else: its runtime
+# files, under a comment naming it.
+_RUNTIME_EXCLUDE = re.compile(r"^(?:#.*|\*\*/\.claude/\S*|\.claude/\S*)?$")
+
+
+def _drop_our_state_from_a_git_dir_that_is_no_repository(ctx: GitContext) -> str:
+    """This plugin's state in a `.git` above this clone that git does not read, taken away.
+
+    Before #187 was fixed the common dir was worked out from the wrong directory, and state was
+    written into `<home>/.git/claude-bestpractice`, making a `.git` where there had been none.
+    From then on every folder under that home read as being in a repository: the gates placed a
+    call from there in the folder itself and judged nothing, and Claude Code took the home for a
+    repository and wrote its own `info/exclude` into it. Ours is removed; the `.git` with it
+    only where what is left is that file, holding nothing but Claude Code's runtime patterns.
+    """
+    import shutil
+
+    from .hookio import is_a_git_dir
+
+    said = []
+    for above in ctx.worktree_root.resolve().parents:
+        dot_git = above / ".git"
+        ours = dot_git / store.TIER_B_DIRNAME
+        if not dot_git.is_dir() or is_a_git_dir(dot_git) or not ours.is_dir():
+            continue
+        shutil.rmtree(ours, ignore_errors=True)
+        if _only_runtime_left(dot_git):
+            (dot_git / "info" / "exclude").unlink(missing_ok=True)
+            for empty in (dot_git / "info", dot_git):
+                if empty.exists():
+                    empty.rmdir()
+            said.append(f"{dot_git}, which git does not read as a repository, removed")
+        else:
+            said.append(f"this plugin's state taken out of {dot_git}, which git does not read "
+                        "as a repository; the rest of it is not ours and was left")
+    return "; ".join(said)
+
+
+def _withdraw_skill_cards_filed_in_error(ctx: GitContext) -> str:
+    """The cards `skillcheck` filed that the checker now finds nothing for, taken back (#364).
+
+    It looked for a skill's scripts in the repository alone, never in the skill's folder, and
+    read `./` and `../` paths as present directories: nine cards in one repository, over the
+    founder's copies of Anthropic's and an SEO toolkit's skills, five false and the rest the
+    upstream's to fix. A skill still broken keeps its card.
+    """
+    from . import skillcheck, skills
+
+    taken = skillcheck.withdraw_answered(
+        ctx, skillcheck.check(ctx, skills.inventory(ctx.worktree_root)))
+    return (f"{len(taken)} card(s) about skills taken back: nothing in those skills is broken "
+            "as the checker now reads them" if taken else "")
+
+
 _REPAIRS = {
     "0001-task-paths": (1, _backfill_task_paths),
     "0002-quarantine-unreadable": (1, _quarantine_unreadable_state),
@@ -2033,6 +2100,9 @@ _REPAIRS = {
     "0050-hand-a-resumed-chat-the-records-it-wrote":
         (1, _hand_a_resumed_chat_the_records_it_wrote),
     "0051-carry-cards-only-a-tree-holds": (1, _carry_cards_only_a_tree_holds),
+    "0052-drop-our-state-from-a-git-dir-that-is-no-repository":
+        (1, _drop_our_state_from_a_git_dir_that_is_no_repository),
+    "0053-withdraw-skill-cards-filed-in-error": (1, _withdraw_skill_cards_filed_in_error),
 }
 
 

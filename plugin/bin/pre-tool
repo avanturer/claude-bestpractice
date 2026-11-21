@@ -694,6 +694,21 @@ def _sibling_of_repo(ctx, target) -> bool:
     return resolved.parent == root.parent and resolved.name.startswith(f"{root.name}-")
 
 
+def _lost_with_it(tree: Path, lost: list[str] | None) -> str:
+    """Why a typed removal of `tree` is refused: it holds ignored files nothing else has, or git
+    will not list them (`lost` None)."""
+    where = shlex.quote(str(tree))
+    if lost is None:
+        return (f"claude-bestpractice: git would not list what is ignored in {tree}, so whether "
+                "removing it takes files nothing else holds is not known, and the tree is kept. "
+                f"What git says:\n  git -C {where} status --ignored --short")
+    shown = ", ".join(lost[:6]) + (f" and {len(lost) - 6} more" if len(lost) > 6 else "")
+    return (f"claude-bestpractice: removing {tree} would take files nothing else holds, which "
+            f"`git worktree remove` deletes without a word, `--force` or not: {shown}. Move "
+            "what is worth keeping out of the tree, then remove it; what is left is listed by\n"
+            f"  git -C {where} status --ignored --short")
+
+
 def _holds_a_card(ctx, session_id: str, touched: list[str] | None = None) -> bool:
     """Is a task on the board claimed by this session, for `touched` when paths are known?
 
@@ -707,6 +722,9 @@ def _holds_a_card(ctx, session_id: str, touched: list[str] | None = None) -> boo
     """
     from claude_bestpractice import plan
 
+    # Any card in `doing` covers any path: what a write beyond its files is, is the Stop
+    # gate's drift check to say. So a write passing is no proof the card names it, which is
+    # what #368's reporter read it as.
     if plan.held_by(ctx, session_id):
         return True
     # A card this session CLOSED counts. Closing is what the ledger asks for, and a gate
@@ -741,8 +759,25 @@ def _card_commands(ctx, event, paths: str, path: str = "") -> str:
     held = plan.taking_it_back(ctx, event.session_id, [path] if path else [])
     if held:
         return held
+    # A card waiting on the board that already names the path is the one to start, before
+    # any card a founder's message opened: sent to that one, an agent filed its write under
+    # the founder's next instruction while the card naming its directory waited (#368).
+    waiting = plan.covering(ctx, event.session_id, [path] if path else [])
+    if waiting is not None:
+        return (f"  {waiting.id} on the board already names {path} "
+                f"(\"{waiting.title[:80]}\", in {waiting.state}). Start it:\n"
+                f"  claude-bp-plan claim {waiting.id}")
     done_when = '--done-when "<what has to become true>"'
     opened = plan.opened_for(ctx, str(event.raw.get("session_id") or ""))
+    if opened is not None and not plan._untouched(opened):
+        # Planned already: `update --paths` replaces the list and `--title` the name, so
+        # the line named the new file alone and would have shrunk the card to it (#368).
+        named = ",".join(dict.fromkeys([*opened.paths, *(p for p in paths.split(",") if p)]))
+        return (f"  Your founder's instruction is on the board as {opened.id}, already planned, "
+                "and it does not name this. Add it and claim the card:\n"
+                f"  claude-bp-plan update {opened.id} --paths {named}"
+                f"{'' if opened.done_when.strip() else ' ' + done_when}\n"
+                f"  then: claude-bp-plan claim {opened.id}")
     if opened is not None:
         return (f"  Your founder's instruction is already on it as {opened.id} — name it, plan "
                 "it and claim it:\n"
@@ -1937,13 +1972,21 @@ def main() -> None:
         # three spawns of an agent type nobody had defined refused the next three that would
         # have run (#316). Read off the transcript only where the ceiling would refuse this
         # one, which is the one place the answer can change anything.
-        gone = (subagents.never_started(event.transcript_path, rec.spawn_calls)
-                if cfg.subagent_fanout > 0 and rec.spawns_this_turn >= cfg.subagent_fanout
-                else set())
+        #
+        # An agent that can read nothing of the tree, only the web, is counted apart, against
+        # `research_fanout`: six researchers on six subjects were refused three of six as
+        # agents "searching the same tree" (#378).
+        research = subagents.reads_no_tree(ctx, kind)
+        ceiling = cfg.research_fanout if research else cfg.subagent_fanout
+        counted, calls = ((rec.research_spawns_this_turn, rec.research_spawn_calls) if research
+                          else (rec.spawns_this_turn, rec.spawn_calls))
+        gone = (subagents.never_started(event.transcript_path, calls)
+                if ceiling > 0 and counted >= ceiling else set())
         spawned = sessions.spawn(ctx, event.session_id, str(event.raw.get("tool_use_id") or ""),
-                                 cfg.subagent_fanout, gone)
-        if cfg.subagent_fanout > 0 and spawned >= cfg.subagent_fanout:
-            deny(ctx, rec, subagents.fanout_refusal(spawned, cfg.subagent_fanout))
+                                 ceiling, gone, research=research)
+        if ceiling > 0 and spawned >= ceiling:
+            deny(ctx, rec, subagents.research_refusal(spawned, ceiling) if research
+                 else subagents.fanout_refusal(spawned, ceiling, cfg.research_fanout))
 
     # CONSECUTIVE repeats, never a lifetime total. The lifetime count made the fourth
     # `npm test` of a session a permanent refusal — and `npm test` is the command the
@@ -1990,6 +2033,14 @@ def main() -> None:
         unjudged = pullrequest.merge_line(event.tool_name, command)
         if unjudged:
             deny(ctx, rec, unjudged)
+        # A merge or a push that deletes the branch a stack's next pull request is opened into:
+        # GitHub closes that pull request and never reopens it (#366, #293, #329). The session's
+        # to fix, by moving it onto the trunk first, and asked before the founder's word is.
+        stranded = pullrequest.strands_a_stack(
+            ctx, event.tool_name, command, pullrequest.merge_target(event.tool_name, command, ti),
+            ctx.branch, gitpolicy.default_branch(ctx) or "main")
+        if stranded:
+            deny(ctx, rec, stranded)
         # Looked at by number, it is in front of the founder, and their next `+merge` is an
         # answer about it as well (#276). Another repository's numbers are not this one's.
         pullrequest.shown(ctx, event.session_id, pullrequest.numbers_shown(
@@ -2389,6 +2440,16 @@ def main() -> None:
             _moved, left = plan.carry_home(ctx, path, wait=CARRY_WAIT_SECONDS)
             if left:
                 deny(ctx, rec, _cards_only_there(path, left))
+        # And what `git worktree remove` takes without a word: an ignored file nothing else
+        # has (decision 0039). Asked of a removal the session types as the sweep asks it of its
+        # own, so a stack's landed tree goes the way the plugin's own trees go (#366). The
+        # session's own tree is asked by `release_now` below.
+        for path in removals:
+            if path.is_dir() and not worktree.removable_by(ctx, rec.session_id, path):
+                # None is git refusing to list them, which every other reader takes as "keep".
+                lost = worktree.lost_with(ctx, path)
+                if lost != []:
+                    deny(ctx, rec, _lost_with_it(path, lost))
         own = next((path.resolve() for path in removals
                     if worktree.removable_by(ctx, rec.session_id, path)), None)
         if own is not None and not _removal_alone(str(ti.get("command", ""))):

@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-2.19.3-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.20.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-3017%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -594,7 +594,10 @@ session on the repository is named with its card, branch and tree, so a message 
 one whose work it is. A subagent spawned on a tier below `subagent_min_model` (`sonnet`) runs on it.
 A fork is never asked for a tier: Claude Code runs it on the session's own model whatever the
 call names. A subagent's brief names the card the session that started it works under —
-its id, its condition and its files, beyond which a write counts as drift.
+its id, its condition and its files, beyond which a write counts as drift. A turn starts at
+most `subagent_fanout` (3) agents that search the repository; an agent whose definition gives it
+only web tools, such as the plugin's own `bestpractice:web-researcher`, reads no tree and is
+counted apart, up to `research_fanout` (8).
 
 Each is a switch you say: `compress_output off`, `route_search off`, `subagent_min_model off`.
 
@@ -674,8 +677,8 @@ depends on no pack, so a pack that fails to load never disables a gate.
 | `claude-bp-ci` | Where the checks run: local pre-push by default, hosted CI opt-in |
 | `claude-bp-attempt` | The dead-end ledger: what was tried, and why it failed |
 | `claude-bp-options` | Record a decision as a scored comparison of alternatives |
-| `claude-bp-ship` | What this branch delivered, for someone who never reads code (`--pr` opens one) |
-| `claude-bp-report` | Defects this plugin hit here; `defect "…"` records a gate that refused the wrong thing |
+| `claude-bp-ship` | What this branch delivered, for someone who never reads code (`--pr` opens one; `--stack` names the one next step in landing a stack of pull requests) |
+| `claude-bp-report` | Defects this plugin hit here, or outside every repository; `defect "…"` records a gate that refused the wrong thing |
 
 In a session: `/bestpractice:status` · `/bestpractice:plan` · `/bestpractice:review`
 
@@ -795,7 +798,7 @@ tool call, so a dependency tree is latency, an extra failure mode and a supply-c
 surface for the component whose whole job is to be trustworthy. Enforced in CI.
 
 Tested on Python 3.9, 3.11 and 3.13. `claude plugin validate --strict` passes against
-Claude Code 2.1.295, and `make check` asks the CLI again on every run (`tools/check_manifests.py`).
+Claude Code 2.1.330, and `make check` asks the CLI again on every run (`tools/check_manifests.py`).
 
 Everything works on any recent Claude Code; two features need a floor, and both fail
 quiet rather than loud, which is why they are written down:

@@ -108,7 +108,9 @@ def main() -> None:
     # A shell line is here for the number `gh pr create` printed and for the merge that ran,
     # and for nothing else: pre-tool reads `gh pr close` and `gh pr ready`. Its `if` spares
     # most other lines the process, and where that is not honoured this spares them the rest.
-    if event.tool_name == "Bash" and not (merges or pullrequest.opens_a_pull_request("Bash", command)):
+    moved = pullrequest.retargeted(event.tool_name, command, event.tool_input)
+    if event.tool_name == "Bash" and not (merges or moved
+                                          or pullrequest.opens_a_pull_request("Bash", command)):
         hookio.emit_silent()
     # Placed as pre-tool placed it, or a merge it let through from outside the repository is
     # judged there and settled nowhere.
@@ -135,6 +137,11 @@ def main() -> None:
                                         event.cwd or os.getcwd())
         if readied:
             pullrequest.redraft(ctx, *readied)
+        # Moved onto another base, after it succeeded: the merge gate reads `into` to tell a
+        # deletion that would close a stack's pull request from one that closes nothing (#366).
+        if moved and pullrequest.about_this_repository(ctx, event.tool_name, event.tool_input,
+                                                       command):
+            pullrequest.retarget(ctx, moved[0], moved[1], moved[2] or ctx.branch)
         hookio.emit_silent()
 
     number = pullrequest.number_in(event.raw.get("tool_response"))

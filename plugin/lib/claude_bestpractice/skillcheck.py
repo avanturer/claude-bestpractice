@@ -8,7 +8,9 @@ Nothing had said so, because a skill is read by a model that does its best with 
 
 Only what can be decided without running anything and without judgement is checked, in the
 repository's own skills and the founder's (`skills.PROJECT`, `skills.USER`); a synced or a
-plugin's skill is someone else's to fix:
+plugin's skill is someone else's to fix, and so is one in the founder's folder that carries its
+own licence, a copy of an upstream's (`someone_elses`). A path is looked for in the repository
+and in the skill's own folder, where its scripts and references are:
 
 - a script a shell step runs or sources, and a path written alone in backticks, exist;
 - `make <target>` names a target of the repository's Makefile, `npm run <script>` (pnpm, bun)
@@ -71,9 +73,20 @@ def check(ctx: GitContext, listed: list[skills.Listed]) -> list[Finding]:
     project = _Project(root, gitpolicy.default_branch(ctx))
     found: list[Finding] = []
     for item in listed:
-        if item.kind in (skills.PROJECT, skills.USER):
-            found += _check_file(item, project)
+        if item.kind in (skills.PROJECT, skills.USER) and not someone_elses(item):
+            found += _check_file(item, project, folder=item.path.parent)
     return found
+
+
+_LICENCES = ("LICENSE", "LICENSE.txt", "LICENSE.md", "LICENCE", "COPYING")
+
+
+def someone_elses(item: skills.Listed) -> bool:
+    """Is this skill in the founder's folder a copy of someone else's: a `SKILL.md` with its own
+    licence beside it? Its text is its upstream's, and a step of it that cannot run here is
+    theirs to fix. Nine cards a repository were filed over such copies, five of them false (#364)."""
+    return (item.kind == skills.USER and item.path.name == "SKILL.md"
+            and any((item.path.parent / name).is_file() for name in _LICENCES))
 
 
 def shipped(ctx: GitContext, paths: list[Path]) -> list[Finding]:
@@ -100,9 +113,12 @@ class _Project:
         self.scripts = _npm_scripts(root / "package.json")
 
 
-def _check_file(item: skills.Listed, project: _Project, own: Path | None = None) -> list[Finding]:
+def _check_file(item: skills.Listed, project: _Project, own: Path | None = None,
+                folder: Path | None = None) -> list[Finding]:
     """The findings in one skill's file; `own` is a shipped skill's folder, whose links are
-    looked for there and whose project references are not looked for at all."""
+    looked for there and whose project references are not looked for at all. `folder` is the
+    skill's own, where a script or a path it names may be instead of the repository: the seven
+    `scripts/*.py` of one were named missing for being looked for in the repository alone."""
     try:
         text = item.path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -110,9 +126,9 @@ def _check_file(item: skills.Listed, project: _Project, own: Path | None = None)
     found: list[Finding] = []
     for number, line, shell in _lines(text):
         if shell:
-            said = _step(line, project, references=own is None)
+            said = _step(line, project, references=own is None, folder=folder)
         else:
-            said = _prose(line, project) if own is None else _own_links(line, own)
+            said = _prose(line, project, folder) if own is None else _own_links(line, own)
         found += [Finding(item.name, item.path, number, what) for what in said]
     return found
 
@@ -149,7 +165,8 @@ def _fenced(text: str) -> list[tuple[int, str, str | None]]:
     return out
 
 
-def _step(line: str, project: _Project, references: bool = True) -> list[str]:
+def _step(line: str, project: _Project, references: bool = True,
+          folder: Path | None = None) -> list[str]:
     """What is wrong with one shell step; with `references` off, nothing it names in the
     project is looked for."""
     command = re.sub(r"^\s*\$\s+", "", line).strip()
@@ -162,7 +179,7 @@ def _step(line: str, project: _Project, references: bool = True) -> list[str]:
               "a session runs" for name in _PLUGIN_ONLY.findall(command)]
     found += _refused(command, project)
     for argv in shellcmd.commands(command.replace(_PROJECT_ROOT, "")) if references else []:
-        found += _references(argv, project)
+        found += _references(argv, project, folder)
     return found
 
 
@@ -182,11 +199,11 @@ def _refused(command: str, project: _Project) -> list[str]:
     return found
 
 
-def _references(argv: list[str], project: _Project) -> list[str]:
+def _references(argv: list[str], project: _Project, folder: Path | None = None) -> list[str]:
     """A script, a make target or an npm script a command names that the repository lacks."""
     program = argv[0].rsplit("/", 1)[-1]
     if program in _INTERPRETERS:
-        return _script_missing(argv[1:], project)
+        return _script_missing(argv[1:], project, folder)
     if program == "make":
         return _targets_missing(argv[1:], project)
     if program in _PACKAGE_RUNNERS and len(argv) > 2 and argv[1] == "run":
@@ -194,11 +211,20 @@ def _references(argv: list[str], project: _Project) -> list[str]:
     return []
 
 
-def _script_missing(words: list[str], project: _Project) -> list[str]:
+def _script_missing(words: list[str], project: _Project, folder: Path | None = None) -> list[str]:
     script = next((word for word in words if not word.startswith("-")), "")
-    if _PATH.match(script) and "$" not in script and not (project.root / script).exists():
-        return [f"runs `{script}`, which is not in the repository"]
+    if _PATH.match(script) and "$" not in script and not _found(script, project, folder):
+        return [f"runs `{script}`, which is not in the repository{_beside(folder)}"]
     return []
+
+
+def _found(path: str, project: _Project, folder: Path | None) -> bool:
+    """Is `path` in the repository, or in the skill's own folder?"""
+    return (project.root / path).exists() or (folder is not None and (folder / path).exists())
+
+
+def _beside(folder: Path | None) -> str:
+    return " or the skill's folder" if folder is not None else ""
 
 
 def _targets_missing(words: list[str], project: _Project) -> list[str]:
@@ -214,15 +240,31 @@ def _npm_script_missing(program: str, script: str, project: _Project) -> list[st
     return [f"`{program} run {script}`: package.json has no script `{script}`"]
 
 
-def _prose(line: str, project: _Project) -> list[str]:
-    """A path a sentence names alone in backticks, as a file to read or run, that is gone."""
+def _prose(line: str, project: _Project, folder: Path | None = None) -> list[str]:
+    """A path a sentence names alone in backticks, as a file to read or run, that is gone: not
+    in the repository, nor in the skill's folder, where the directory it starts in is."""
     found: list[str] = []
     for span in _INLINE.findall(line):
         candidate = span.strip()
-        if _PATH.match(candidate) and not (project.root / candidate).exists() \
-                and (project.root / candidate.split("/", 1)[0]).exists():
-            found.append(f"names `{candidate}`, which is not in the repository")
+        if _PATH.match(candidate) and _gone(candidate, project, folder):
+            found.append(f"names `{candidate}`, which is not in the repository{_beside(folder)}")
     return found
+
+
+def _gone(candidate: str, project: _Project, folder: Path | None) -> bool:
+    """Is a path a sentence names missing where the directory it starts in is there? One that
+    starts `./` or `../` is the skill's folder's; `.` and `..` exist everywhere, so they
+    are never the directory it starts in: four paths of a skill were named missing for that."""
+    if _found(candidate, project, folder):
+        return False
+    parts = Path(candidate).parts
+    lead = [part for part in parts if part in (".", "..")]
+    rest = [part for part in parts if part not in (".", "..")]
+    if not rest:
+        return False
+    if lead:
+        return folder is not None and folder.joinpath(*lead, rest[0]).exists()
+    return any((base / rest[0]).exists() for base in (project.root, folder) if base is not None)
 
 
 # A link inside a skill to a file of its own: a relative path into its folder or out of it.
@@ -308,12 +350,41 @@ def file_cards(ctx: GitContext, findings: list[Finding]) -> list[str]:
                 body="\n".join(f"- {line}" for line in lines(ctx, found)),
                 paths=sorted({_card_path(ctx, f.path) for f in found}),
                 done_when="`claude-bp skills` names nothing in this skill",
-                source="skillcheck",
+                source=SOURCE,
             )
             record[skill] = key
             filed.append(task.id)
         box[0] = record
     return filed
+
+
+# What a card `file_cards` filed is titled, with the skill's name in it.
+_CARD_TITLE = re.compile(r"^Skill `(?P<skill>.+)` cannot be followed as written$")
+
+
+def withdraw_answered(ctx: GitContext, findings: list[Finding]) -> list[str]:
+    """Take back each unclaimed card `file_cards` filed for a skill that has no finding now: it
+    was fixed, it went, or the finding was this checker's mistake (#364). Its record goes too, so
+    a finding that comes back files a card again. The ids of the cards taken back."""
+    from . import plan
+
+    broken = {finding.skill for finding in findings}
+
+    def answered(card) -> bool:
+        named = _CARD_TITLE.match(card.title)
+        return named is not None and named["skill"] not in broken
+
+    taken = plan.withdraw_filed(ctx, SOURCE, answered)
+    if taken:
+        with store.guarded_json(store.tier_b(ctx, FILED), default={}) as box:
+            record = box[0] if isinstance(box[0], dict) else {}
+            for card in taken:
+                record.pop(_CARD_TITLE.match(card.title)["skill"], None)
+            box[0] = record
+    return [card.id for card in taken]
+
+
+SOURCE = "skillcheck"
 
 
 def _card_path(ctx: GitContext, path: Path) -> str:
@@ -326,7 +397,9 @@ def _card_path(ctx: GitContext, path: Path) -> str:
 def board_line(ctx: GitContext) -> str:
     """The session-start line naming the cards just filed for skills that cannot be followed,
     "" when none was: the findings were filed before, or there are none."""
-    filed = file_cards(ctx, check(ctx, skills.inventory(ctx.worktree_root)))
+    findings = check(ctx, skills.inventory(ctx.worktree_root))
+    withdraw_answered(ctx, findings)
+    filed = file_cards(ctx, findings)
     if not filed:
         return ""
     return (f"\nfiled {', '.join(filed)}: skills here that cannot be followed as written, each "

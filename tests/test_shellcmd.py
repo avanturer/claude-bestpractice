@@ -167,6 +167,86 @@ class TestAPatternOnALineThisCannotRead(RepoCase):
         """python3 -c "import os; os.system('gh pr merge 5')" $(true)""",
         r"echo \'; gh pr merge 5; \' $(true)",
     )
+    # A program that can run a string elsewhere on the line, in a command the pattern is not
+    # an argument of: the whole line was kept, and these were still refused (#367).
+    SEARCHES_BESIDE_A_RUNNER = (
+        "grep -rn 'gh pr merge' $(git ls-files '*.md') | awk -F: '{print $1}'",
+        "grep -rn 'gh pr merge' $(git ls-files '*.md') | awk '{print}'",
+        "rg 'gh pr merge' $(git ls-files); find . -name '*.sh' -print",
+    )
+    # And what such a command still reads as a merge: a string it runs, or the input of a pipe
+    # into one.
+    MERGES_THROUGH_A_RUNNER = (
+        "echo 'gh pr merge 5' | sh $(true)",
+        "echo 'gh pr merge 5' | env bash $(true)",
+        "echo 'gh pr merge 5' | env -i PATH=/bin sh $(true)",
+        "echo 'gh pr merge 5' | awk '{system($0)}' $(true)",
+        "echo 'gh pr merge 5' | awk '{print | \"sh\"}' $(true)",
+        "printf 'gh pr merge 5' | xargs -I{} sh -c {} $(true)",
+        'bash -c "$(echo \'gh pr merge 5\')" <(true)',
+        "for i in $(seq 2); do sh -c 'gh pr merge 1'; done",
+        "diff <(grep x a) <(sh -c 'gh pr merge 1')",
+        "( sh -c 'gh pr merge 1' ) $(true)",
+        # The runner in another command of the line than the quoted merge: read per command,
+        # each of these was let through unread (independent review of 2.20.0).
+        "echo 'gh pr merge 1' | while read c; do sh -c \"$c\"; done $(true)",
+        "echo 'gh pr merge 1' | { read c; eval \"$c\"; } $(true)",
+        "{ echo 'gh pr merge 1'; } | sh $(true)",
+        "echo 'gh pr merge 1' 2>&1 | sh $(true)",
+        "echo 'gh pr merge 1' | { cat; } | sh $(true)",
+        "x=$(echo 'gh pr merge 1'); sh -c \"$x\" $(true)",
+        "echo 'gh pr merge 1' >> run.sh; sh run.sh $(true)",
+        "'sh' -c 'gh pr merge 1' $(true)",
+        "echo 'gh pr merge 1' | \"sh\" $(true)",
+        "env \"$SHELL\" -c 'gh pr merge 1' $(true)",
+        "env $SHELL -c 'gh pr merge 1' $(true)",
+        "env -S 'gh pr merge 1' $(true)",
+        "env -i -S 'gh pr merge 1' $(true)",
+        "echo 'gh pr merge 1' | awk -f run.awk $(true)",
+        "echo 'gh pr merge 1' | awk '{ while ((\"sh\" | getline line) > 0) print }' $(true)",
+        "env -S\"gh pr merge 1\" $(true)",
+        "echo 'gh pr merge 1' | awk -f run.awk '{print}' $(true)",
+        # Spared by the second cut, which the review of it ran under bash: each merged.
+        "awk -F ':' 'BEGIN{system(\"gh pr merge 7\")}' /dev/null $(true)",
+        "gawk -F ':' 'BEGIN{system(\"gh pr merge 7\")}' /dev/null $(true)",
+        "awk -v 'x=1' 'BEGIN{system(\"gh pr merge 7\")}' /dev/null $(true)",
+        "env X=1 python3.10 -c \"import os; os.system('gh pr merge 7')\" $(true)",
+        "env X=1 mawk 'BEGIN{system(\"gh pr merge 7\")}' /dev/null $(true)",
+        "env -u FOO nawk 'BEGIN{system(\"gh pr merge 7\")}' /dev/null $(true)",
+        "env X=1 sed '1e gh pr merge 7' /etc/hostname $(true)",
+        "env X=1 git -c alias.m='!gh pr merge 7' m $(true)",
+        # Let through on 2.19.3 as well, and runners all the same.
+        "mawk 'BEGIN{system(\"gh pr merge 7\")}' /dev/null $(true)",
+        "python3.10 -c \"import os; os.system('gh pr merge 7')\" $(true)",
+        "source <(echo 'gh pr merge 7')",
+        "find . -name x -exec sh -c 'gh pr merge 1' \\; $(true)",
+    )
+
+    def test_a_program_is_spared_only_where_it_plainly_runs_nothing(self):
+        for line, runs in (
+            ("find . -name x -print", False), ("find . -exec x {} \\;", True),
+            ("find . -execdir x \\;", True), ("find . -ok x \\;", True),
+            ("find . -ex\\ec x \\;", True), ("find . '-exec' x \\;", True),
+            ("env LC_ALL=C sort", True), ("env -S 'a b'", True), ("env A=1 sh", True),
+            ("awk -F: '{print $1}'", False), ("awk -F , '{print $1}'", False),
+            ("awk -F ':' '{print}'", True), ("awk -v x=1 '{print}'", True),
+            ("awk -f p.awk '{print}'", True), ("mawk '{print}'", True), ("nawk '{print}'", True),
+            ("python3.10 x", True), ("source x", True),
+            ("awk '{system($0)}'", True), ("awk '{print | \"sort\"}'", True), ("gawk '{print}'", False),
+            ("'sh' x", True), ("xargs echo", True),
+        ):
+            self.assertEqual(runs, shellcmd.runs_a_string(line), line)
+
+    def test_a_search_beside_a_program_that_runs_strings_is_no_merge(self):
+        for line in self.SEARCHES_BESIDE_A_RUNNER:
+            self.assertEqual([], shellcmd.commands(line), line)
+            self.assertEqual("", pullrequest.merge_line("Bash", line), line)
+            self.assertIsNone(pullrequest.merge_target("Bash", line, {}), line)
+
+    def test_a_string_run_by_its_own_command_or_down_its_pipe_is_still_a_merge(self):
+        for line in self.MERGES_THROUGH_A_RUNNER:
+            self.assertEqual([], shellcmd.commands(line), line)
+            self.assertTrue(pullrequest.merge_line("Bash", line), line)
 
     def test_these_lines_are_ones_the_parser_declines(self):
         """Otherwise the cases below prove nothing about the fallback."""

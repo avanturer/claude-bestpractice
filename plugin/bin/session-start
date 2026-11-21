@@ -631,7 +631,7 @@ def main() -> None:
     loose = migrate.line(ctx)
     body += f"\n{loose}" if loose else ""
     # Empty on every session that is running what is installed, which is all of them
-    # except the ones that just updated and did not restart.
+    # except the ones started before an update that no new chat or `/reload-plugins` followed.
     body += upgrade.stale_line()
     # The plugin brings its own update to disk, in a process nobody waits on, at most every
     # six hours, and says once what the last run brought (decision 0102). From every place

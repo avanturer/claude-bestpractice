@@ -66,17 +66,11 @@ def cmd_status(ctx) -> int:
     if bad:
         print(f"  {bad}")
 
-    newer = upgrade.superseded_by()
-    loaded = upgrade.loaded_version()
-    if loaded:
-        print(f"  this chat was started on {loaded}; its gates and commands run {__version__}. "
-              "Its skills and board pane follow a new chat, or `/reload-plugins` typed by you")
-    elif newer:
-        print(f"  {newer} is installed but NOT running — a new chat, or `/reload-plugins` "
-              "typed by you, picks it up")
-    elif upgrade.orphaned():
-        print("  this copy has been superseded — a new chat, or `/reload-plugins` typed by "
-              "you, picks up the new one")
+    # The board's own line, so the two never name different remedies, and a newer copy in the
+    # CLI's cache is named for a checkout install as the board names it (PR #369).
+    stale = upgrade.stale_line().strip()
+    if stale:
+        print(f"  {stale}")
     # What the plugin's own update last did on this machine (decision 0102).
     print(f"{DIM}{selfupdate.summary()}{OFF}")
 
@@ -229,6 +223,9 @@ def cmd_skills(ctx) -> int:
     founder's own skills that cannot be followed as written, as `file:line` (#364)."""
     heading("SKILLS")
     for said in skilluse.report(ctx):
+        print(f"  {said}")
+    heading("EACH, WHERE IT COMES FROM AND HOW IT WAS READ")
+    for said in skilluse.inventory_lines(ctx):
         print(f"  {said}")
     findings = skillcheck.check(ctx, skills.inventory(ctx.worktree_root))
     heading("CANNOT BE FOLLOWED AS WRITTEN")

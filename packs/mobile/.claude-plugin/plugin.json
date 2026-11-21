@@ -1,6 +1,6 @@
 {
   "name": "mobile",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Curated skills for Expo and React Native apps: upgrading the SDK and keeping an app fast. A pack of claude-bestpractice; `curated` brings every pack.",
   "author": {
     "name": "avanturer"

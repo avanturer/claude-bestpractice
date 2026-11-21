@@ -1314,7 +1314,43 @@ def the_sessions_to_clear(problems: list[str]) -> bool:
 
     return bool(problems) and all(
         delivery.UNCOMMITTED in problem or problem.startswith(evidence.STOPPED_RUN)
-        for problem in problems)
+        or problem.startswith(evidence.NEVER_RUN) for problem in problems)
+
+
+# When a finish last said to merge a pull request whose merge was refused for want of a run.
+WOKEN = "woken_for_merge_at"
+
+
+def _waiting_on_a_run(ctx: GitContext, branch: str) -> dict[str, Any] | None:
+    """The open record of `branch` refused at a merge, or handed off at a finish, since a finish
+    last said to merge it; None for none."""
+    record = _record_of(ctx, branch)
+    if not record or record.get("state") != OPEN or record.get("draft"):
+        return None
+    refused = max(float(record.get(REFUSED) or 0), float(record.get("handed_off_at") or 0))
+    return record if refused and float(record.get(WOKEN) or 0) < refused else None
+
+
+def merge_waiting_on_the_run(ctx: GitContext, branch: str) -> str:
+    """What a finish whose suite just passed says, once, about the pull request of `branch` whose
+    merge was refused, or which was handed off, before it: "" where none waits, the founder's
+    word does not cover it, or anything still stands in its way.
+
+    The run a refused merge waits for is the Stop gate's, after the turn, and a green one woke
+    nobody: the founder's `+merge` stood, and the merge waited for them to write again, which
+    stops the next run if it comes while one runs (#382).
+    """
+    record = _waiting_on_a_run(ctx, branch)
+    number = _as_number((record or {}).get("number"))
+    if record is None or not acceptance(ctx, record, number) or blockers(
+            ctx, str(record.get("base") or "main"), branch):
+        return ""
+    _write(ctx, {**record, WOKEN: time.time()})
+    named = f"#{number}" if number else f"the pull request of {branch}"
+    return (f"claude-bestpractice: the suite passed on {branch}, and nothing stands in the way of "
+            f"merging {named} any longer. It waited on that run, and the "
+            "founder's `+merge` that covers it stands. Merge it now, as a command of its own:\n"
+            f"  gh pr merge {number or ''}".rstrip() + "\nThis is said once.")
 
 
 def merge_refusal(record: dict[str, Any], problems: list[str]) -> str:
@@ -1415,6 +1451,18 @@ def stop_demand(record: dict[str, Any], problems: list[str], accepted: bool = Tr
             "founder in one line and leave it open; this will not be raised again."
         )
     listed = "\n".join(f"  - {p}" for p in problems[:6])
+    if the_sessions_to_clear(problems):
+        # Theirs to clear, not the founder's: sent to the founder, the session asked them about
+        # a run, and their answer stopped the run it waited for (#381, #309).
+        return (
+            f"claude-bestpractice: pull request {named} is open and cannot be merged yet — "
+            f"the final check found {len(problems)} thing(s):\n{listed}\n"
+            "None of them is the founder's to decide: each says what clears it. Clear them, "
+            "and end the turn without putting this to the founder; where their `+merge` "
+            "covers it, the finish after a passing run says to merge.\n"
+            "This will not be raised again; it is now on the board until the pull request is "
+            "merged or closed."
+        )
     return (
         f"claude-bestpractice: pull request {named} is open and cannot be merged — the final "
         f"check found {len(problems)} thing(s):\n{listed}\n"
@@ -1939,6 +1987,199 @@ def _named_head(tool_name: str, command: str, tool_input: dict[str, Any]) -> str
     if _OPENS_TOOL.search(tool_name):
         return str(tool_input.get("head") or "")
     return _create_option(command, "--head", "-H")
+
+
+# ---------------------------------------------------------------------------------------------
+# A stack: pull requests opened into another's branch (#366, #293, #329).
+#
+# GitHub closes a pull request whose base branch is deleted, and never reopens it. A stack is
+# landed by moving the next pull request onto the trunk BEFORE the one below it merges with its
+# branch deleted; `claude-bp-ship --stack` prints that order one step a call, and the merge gate
+# refuses a deletion that would close one.
+
+# `gh pr edit`'s flags that take the next word as their value.
+_EDIT_VALUE_FLAGS = frozenset({
+    "--add-assignee", "--add-label", "--add-project", "--add-reviewer", "--base", "-B",
+    "--body", "-b", "--body-file", "-F", "--milestone", "-m", "--remove-assignee",
+    "--remove-label", "--remove-project", "--remove-reviewer", "--title", "-t", "--repo", "-R"})
+
+
+def retargeted(tool_name: str, command: str,
+               tool_input: dict[str, Any]) -> tuple[int, str, str] | None:
+    """(number, base, branch) a call moves a pull request onto a base with: `gh pr edit <n>
+    --base <b>`, or the GitHub tool's update naming `base`. The pull request is named by
+    number, or by its branch where the call names one (`gh pr edit feat-a --base main`); 0 and
+    "" for the current branch's. None for a call that moves none."""
+    if _CLOSES_TOOL.search(tool_name):
+        return _retargeted_by_the_tool(tool_input)
+    from . import shellcmd
+
+    for argv in shellcmd.runs(command, "gh", "pr", "edit"):
+        number, base, branch = _edit_words(shellcmd.without_redirections(argv[3:]))
+        if base:
+            return number, base, branch
+    return None
+
+
+def _retargeted_by_the_tool(tool_input: dict[str, Any]) -> tuple[int, str, str] | None:
+    base = str(tool_input.get("base") or "")
+    try:
+        number = int(tool_input.get("pullNumber") or 0)
+    except (TypeError, ValueError):
+        number = 0
+    return (number, base, "") if base and number else None
+
+
+def _edit_words(argv: list[str]) -> tuple[int, str, str]:
+    """What a `gh pr edit` names, by number (0 for none) or by branch ("" for none), and the base
+    it moves it onto, `-B main`, `-Bmain`, `--base main` or `--base=main`."""
+    base, selector = "", ""
+    words = iter(argv)
+    for word in words:
+        given = _base_given(word, words)
+        if given is not None:
+            base = given
+        elif word in _EDIT_VALUE_FLAGS:
+            next(words, None)
+        elif not word.startswith("-") and not selector:
+            selector = word
+    number = int(selector) if selector.isdigit() else number_in(selector) if selector else 0
+    return number, base, "" if number or not selector else selector
+
+
+def _base_given(word: str, words) -> str | None:
+    """The base a `gh pr edit` word gives, taking its value from `words` where it is the next
+    one; None for a word that gives none."""
+    if word in ("--base", "-B"):
+        return next(words, "") or ""
+    if word.startswith("--base="):
+        return word.split("=", 1)[1]
+    return word[2:] if word.startswith("-B") and len(word) > 2 else None
+
+
+def retarget(ctx: GitContext, number: int, base: str, branch: str = "") -> bool:
+    """Write that the pull request numbered `number` (the one of `branch` for 0) is now opened
+    into `base`. Whether a record changed: none here records it, or it said so already."""
+    found = _record_numbered(ctx, number) if number else (_record_of(ctx, branch) if branch else None)
+    if not found or found.get("into") == base:
+        return False
+    _write(ctx, {**found, "into": base})
+    return True
+
+
+def stacked_on(ctx: GitContext, branch: str) -> list[dict[str, Any]]:
+    """The open pull requests recorded here as opened into `branch`, lowest number first."""
+    if not branch:
+        return []
+    above = [row for row in _records(ctx).values()
+             if row.get("state") == OPEN and row.get("into") == branch
+             and branch not in (row.get("branch"), row.get(LOCAL))]
+    return sorted(above, key=lambda row: int(row.get("number") or 0))
+
+
+def strands_a_stack(ctx: GitContext, tool_name: str, command: str, number: int | None,
+                    branch: str, trunk: str) -> str:
+    """Why this line would close a pull request of a stack, or "": a merge that deletes its branch
+    (`--delete-branch`, `-d`), or a push that deletes one (`--delete`, `:<branch>`), while a
+    pull request recorded here is opened into that branch. `branch` is the one checked out where
+    the line runs, for a merge that names no number."""
+    if tool_name != "Bash":
+        return ""
+    from . import shellcmd
+
+    from . import gitpolicy
+
+    deleted = _deleted_by_the_merge(ctx, command, number, branch, trunk)
+    # Past `-C`, `-c` and the rest of git's own options, as the push gate reads a push.
+    for argv in shellcmd.commands(command):
+        _pointed, verb, args = gitpolicy.split_git(argv)
+        if verb == "push":
+            deleted += [(name, trunk) for name in _pushed_deletions(args)]
+    for head, onto in deleted:
+        # The trunk itself is the push gate's: a refusal here would name moving onto it.
+        above = stacked_on(ctx, head) if head not in (onto, trunk) else []
+        if above:
+            return _stranded_refusal(head, onto, above)
+    return ""
+
+
+def _deleted_by_the_merge(ctx: GitContext, command: str, number: int | None, branch: str,
+                          trunk: str) -> list[tuple[str, str]]:
+    """(branch, the base it was opened into) a `gh pr merge --delete-branch` deletes, or none."""
+    call = _merge_call(command)
+    if not isinstance(call, list) or not any(map(_deletes_the_branch, _merge_arguments(call)[0])):
+        return []
+    record = _record_numbered(ctx, number) if number else (_record_of(ctx, branch) or {})
+    head = str(record.get("branch") or ("" if number else branch))
+    onto = str(record.get("into") or record.get("base") or trunk)
+    return [(head, onto)] if head else []
+
+
+def _record_numbered(ctx: GitContext, number: int) -> dict[str, Any]:
+    """The record of the pull request numbered `number`, or an empty one."""
+    return next((row for row in _records(ctx).values() if row.get("number") == number), {})
+
+
+def _stranded_refusal(head: str, onto: str, above: list[dict[str, Any]]) -> str:
+    one = len(above) == 1
+    named = ", ".join(f"#{row.get('number')}" if row.get("number") else f"`{row['branch']}`"
+                      for row in above)
+    moves = "\n".join(f"  gh pr edit {row.get('number') or '<number of ' + row['branch'] + '>'} "
+                      f"--base {onto}" for row in above)
+    return (f"claude-bestpractice: this line deletes `{head}`, and {named} here "
+            f"{'is' if one else 'are'} opened into it. GitHub closes a pull request whose base "
+            "branch is deleted and never reopens it, so the stack above would be lost (#293, "
+            f"#329). Move {'it' if one else 'them'} onto `{onto}` first, then run this line "
+            f"again:\n{moves}\n"
+            "  `claude-bp-ship --stack` lands a whole stack in this order, one step a call.")
+
+
+def _deletes_the_branch(flag: str) -> bool:
+    """Is this `gh pr merge` flag `--delete-branch`, or a short group holding `d` before any
+    letter that takes a value: `-d`, `-sd`, `-ds`, never `-td`, whose `d` is the subject."""
+    if flag == "--delete-branch":
+        return True
+    if not flag.startswith("-") or flag.startswith("--"):
+        return False
+    for letter in flag[1:]:
+        if letter == "d":
+            return True
+        if letter in _MERGE_VALUE_LETTERS:
+            return False
+    return False
+
+
+# `git push` options that take the next word as their value.
+_PUSH_VALUE_OPTIONS = frozenset({"-o", "--push-option", "--repo", "--receive-pack", "--exec"})
+
+
+def _push_word(word: str) -> str:
+    """What one word of a `git push` is: an option taking the next word (`value`), one that
+    deletes (`delete`: `--delete`, `-d`, a short group with `d` before any `o`), a `name`
+    (the remote, a refspec), or any other option ("")."""
+    letters = word[1:] if word[:1] == "-" and word[1:2] != "-" else ""
+    if word in _PUSH_VALUE_OPTIONS or (letters.endswith("o") and "d" not in letters):
+        return "value"
+    if word == "--delete" or "d" in letters.partition("o")[0]:
+        return "delete"
+    return "" if word.startswith("-") else "name"
+
+
+def _pushed_deletions(args: list[str]) -> list[str]:
+    """The remote branches a `git push` deletes, from its own arguments: every name after
+    `--delete`, `-d` or a short group holding `d` (`-fd`), past the remote, and every
+    `:<branch>` refspec. An option's value is no name."""
+    words, deleting, names = iter(a for a in args if a), False, []
+    for word in words:
+        kind = _push_word(word)
+        if kind == "value":
+            next(words, None)
+        deleting = deleting or kind == "delete"
+        names += [word] if kind == "name" else []
+    if deleting:
+        return [name.removeprefix("refs/heads/") for name in names[1:]]
+    return [word[1:].removeprefix("refs/heads/") for word in names[1:]
+            if word.startswith(":") and len(word) > 1]
 
 
 def base_of(tool_name: str, command: str, tool_input: dict[str, Any]) -> str:

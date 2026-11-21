@@ -2,7 +2,7 @@
 name: landing-not-slop
 description: Marketing pages that do not read as machine-generated. Use when writing or reviewing a landing, hero, pricing table, feature grid or marketing copy.
 metadata:
-  reviewed: "2026-11-14"
+  reviewed: "2026-11-21"
   recheck-after-days: "120"
 ---
 
@@ -20,6 +20,10 @@ Rows marked † are verdicts about the current year, last checked on the `review
 above. Before applying one, look at the current platform guidelines (Apple's HIG, Material
 Design) and three live products in the space. A style the founder chose on purpose is a
 decision, and a row here does not overrule it.
+
+Where current sources disagree, as they do on bento grids and on dark mode, a pattern is no
+tell by itself: it is a default if unchosen. The question to ask is whether anyone chose it
+for this product, not whether it is in fashion.
 
 ## The visual tells, and what to do instead
 
@@ -43,7 +47,7 @@ decision, and a row here does not overrule it.
 - **Triads.** "Fast, simple, and secure." "Build, ship, and scale." The rule of three is
   the most obvious rhythm in the training data. Break it — two, or four, or one.
 - **The em-dash-heavy voice** with "It's not just X — it's Y." That construction is a
-  tell on its own now.
+  tell on its own now. †
 - **Headlines that describe the category, not the product.** "The modern way to manage
   your finances" describes a category. "See every subscription you forgot about" is a
   product.
@@ -62,8 +66,8 @@ decision, and a row here does not overrule it.
 3. **One primary action.** Not "Get started" beside "Book a demo" beside "Read docs".
    The page has one job.
 4. **Text set in something other than the framework default.** Inter and system-ui at
-   default weights are the visual signature of an unstyled page. Pick a typeface and
-   commit to a scale.
+   default weights, a default if unchosen, are the visual signature of an unstyled page. †
+   Pick a typeface and commit to a scale.
 5. **Objection handling.** Price, what happens to the data, how to leave. Absence of
    these reads as evasion.
 

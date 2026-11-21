@@ -1041,9 +1041,12 @@ def main() -> None:
                 session_id=rec.session_id,
                 subject_paths=[],
             )
-            hookio.block(pullrequest.stop_demand(
-                waiting, blocking, accepted=bool(pullrequest.acceptance(ctx, waiting))
-            ))
+            # What only a run clears is not put to anybody: the run is this Stop's own, below,
+            # and a pass the founder's word covers is said as the merge to make (#381, #382).
+            if not pullrequest.the_sessions_to_clear(blocking):
+                hookio.block(pullrequest.stop_demand(
+                    waiting, blocking, accepted=bool(pullrequest.acceptance(ctx, waiting))
+                ))
         elif lacking is not None:
             # Finished work that never became a pull request. Same budget as the demand
             # above — one interruption, marked before it is raised, so a session that
@@ -1321,6 +1324,15 @@ def main() -> None:
             _allow(ctx, rec, cfg, opener, shell)
 
     if not problems:
+        # A merge the founder's word covers, waiting only on a run this Stop just made pass:
+        # ending the turn was how to get that run, so the block the merge met is answered
+        # by it, and nothing else wakes the session to make the merge (#381, #382).
+        verified = paused is None and not at_work and not let_go and not unverified_reason
+        waiting_merge = (pullrequest.merge_waiting_on_the_run(ctx, ctx.branch)
+                         if verified and cfg.manage_pull_requests else "")
+        if waiting_merge:
+            _bump_blocks(ctx, rec, 0)
+            hookio.block(waiting_merge)
         _refuse_to_end_on_an_unanswered_block(ctx, rec, pending_refusal)
         if paused is not None:
             sys.stderr.write(
