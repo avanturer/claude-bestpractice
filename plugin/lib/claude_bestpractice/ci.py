@@ -248,14 +248,21 @@ if __GREEN_COVERS__ >/dev/null 2>&1; then
     exit 0
 fi
 
-if [ -f Makefile ] && grep -q '^check:' Makefile; then
+# The project's own fast gate where its Makefile names one, `check-fast`: the same checks with
+# the suite across processes. Its serial `make check` is for the release to run once, and run
+# on every push it held each one for twenty to thirty minutes (#383).
+_cbp_target=check
+if [ -f Makefile ] && grep -q '^check-fast:' Makefile; then
+    _cbp_target=check-fast
+fi
+if [ -f Makefile ] && grep -q "^$_cbp_target:" Makefile; then
     _status=0
-    _cbp_run make check || _status=$?
+    _cbp_run make "$_cbp_target" || _status=$?
     if [ "$_status" -eq 0 ]; then
-        __RECORD_GREEN__ 'make check' >/dev/null 2>&1 || true
+        __RECORD_GREEN__ "make $_cbp_target" >/dev/null 2>&1 || true
         exit 0
     fi
-    __RECORD_RUN__ 'make check' >/dev/null 2>&1 || true
+    __RECORD_RUN__ "make $_cbp_target" >/dev/null 2>&1 || true
     exit "$_status"
 fi
 

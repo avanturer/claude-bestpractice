@@ -72,6 +72,33 @@ class TestTheHookStopsAPush(CICase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
+    def test_a_fast_gate_the_makefile_names_runs_in_place_of_the_serial_one(self):
+        """#383: `make check` serial held each push of this repository 20 to 30 minutes, for
+        what `make check-fast` answers in five; the serial run is the release's to make."""
+        self.with_remote()
+        (self.repo / "Makefile").write_text(
+            "check:\n\t@echo slow; exit 1\ncheck-fast:\n\t@echo fast\n")
+        git(["add", "-A"], self.repo)
+        git(["commit", "-qm", "makefile"], self.repo)
+        self.cli("local")
+        proc = subprocess.run(["git", "push", "origin", "main"], capture_output=True, text=True,
+                              cwd=str(self.repo), timeout=180)
+        self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
+        self.assertIn("fast", proc.stdout + proc.stderr)
+        self.assertNotIn("slow", proc.stdout + proc.stderr)
+
+    def test_a_red_fast_gate_still_blocks_the_push(self):
+        self.with_remote()
+        (self.repo / "Makefile").write_text(
+            "check:\n\t@echo ok\ncheck-fast:\n\t@echo red-fast; exit 1\n")
+        git(["add", "-A"], self.repo)
+        git(["commit", "-qm", "makefile"], self.repo)
+        self.cli("local")
+        proc = subprocess.run(["git", "push", "origin", "main"], capture_output=True, text=True,
+                              cwd=str(self.repo), timeout=180)
+        self.assertNotEqual(0, proc.returncode)
+        self.assertIn("red-fast", proc.stdout + proc.stderr)
+
     def test_a_push_that_only_deletes_runs_nothing(self):
         """Reported on 1.73.0: `git push origin --delete <branch>` waited on the whole suite,
         and failed after it once that branch's tree was gone. A deletion carries no code."""

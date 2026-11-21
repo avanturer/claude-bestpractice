@@ -169,6 +169,11 @@ class TestAPatternOnALineThisCannotRead(RepoCase):
     )
     # A program that can run a string elsewhere on the line, in a command the pattern is not
     # an argument of: the whole line was kept, and these were still refused (#367).
+    SEARCHES_OF_SINGLE_WORDS = (
+        "grep -e 'gh' -e pr notes.md $(true)",
+        "find . -name 'merge' $(true)",
+        "ls ./x $(true)",
+    )
     SEARCHES_BESIDE_A_RUNNER = (
         "grep -rn 'gh pr merge' $(git ls-files '*.md') | awk -F: '{print $1}'",
         "grep -rn 'gh pr merge' $(git ls-files '*.md') | awk '{print}'",
@@ -219,6 +224,12 @@ class TestAPatternOnALineThisCannotRead(RepoCase):
         "mawk 'BEGIN{system(\"gh pr merge 7\")}' /dev/null $(true)",
         "python3.10 -c \"import os; os.system('gh pr merge 7')\" $(true)",
         "source <(echo 'gh pr merge 7')",
+        # Words bash joins across quotes and escapes, and `.` as `source` (#384).
+        "gh 'pr' merge 7 $(true)",
+        "gh \"pr\" 'merge' 7 $(true)",
+        "g\\h pr merge 7 $(true)",
+        ". <(echo 'gh pr merge 7')",
+        "x=1; . <(echo 'gh pr merge 7')",
         "find . -name x -exec sh -c 'gh pr merge 1' \\; $(true)",
     )
 
@@ -236,6 +247,11 @@ class TestAPatternOnALineThisCannotRead(RepoCase):
             ("'sh' x", True), ("xargs echo", True),
         ):
             self.assertEqual(runs, shellcmd.runs_a_string(line), line)
+
+    def test_a_search_for_single_words_is_no_merge(self):
+        for line in self.SEARCHES_OF_SINGLE_WORDS:
+            self.assertEqual("", pullrequest.merge_line("Bash", line), line)
+            self.assertIsNone(pullrequest.merge_target("Bash", line, {}), line)
 
     def test_a_search_beside_a_program_that_runs_strings_is_no_merge(self):
         for line in self.SEARCHES_BESIDE_A_RUNNER:
