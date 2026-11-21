@@ -79,6 +79,14 @@ class TestAReportFromNoRepository(OutsideCase):
         self.assertEqual(0, self.report("send").returncode)
         self.assertEqual(1, len(self.issues_filed()))
 
+    def test_one_report_in_both_stores_is_filed_once(self):
+        self.report_from(self.nowhere, "defect", "--gate", "subagent_fanout", SAID)
+        self.assertEqual(0, self.report("defect", "--gate", "subagent_fanout", SAID).returncode)
+        self.assertEqual(1, len(defects.unsent(self.ctx())))
+        self.assertEqual(0, self.report("send").returncode)
+        self.assertEqual(1, len(self.issues_filed()))
+        self.assertEqual([], defects.unsent(self.ctx()))
+
     def test_a_crash_outside_every_repository_is_kept_too(self):
         try:
             raise KeyError("artifact_globs")

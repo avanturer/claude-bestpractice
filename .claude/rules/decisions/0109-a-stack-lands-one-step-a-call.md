@@ -8,8 +8,9 @@ date: 2026-11-21
 **`claude-bp-ship --stack` prints the one command that comes next in landing a stack, and runs
 none**: the next pull request moved onto the trunk, then the lowest merged from its own tree
 with its branch deleted, then each above rebased off its commits (`--onto`, past the commit
-kept in Tier B), pushed with a lease on what GitHub has, and the landed tree removed without
-`--force`. Read off GitHub and git at each call.
+kept in Tier B), pushed with a lease on what GitHub had of it when the rebase was printed, and
+the landed tree removed without `--force`. Read off GitHub and git at each call; a branch
+GitHub moved since, or one rebased by hand, is not pushed.
 
 **A merge with `--delete-branch`, or a push deleting a branch, is refused while a pull request
 recorded here is opened into that branch**, naming `gh pr edit <n> --base <trunk>`. A retarget is

@@ -78,6 +78,18 @@ class StackCase(RepoCase):
                               capture_output=True, text=True, cwd=str(self.repo), env=self.env,
                               timeout=120)
 
+    def land_the_bottom(self) -> None:
+        """Move #2 onto main, print #1's merge, and land it as GitHub does: squashed onto main,
+        its branch deleted."""
+        self.next_command()
+        self.edit(lambda s: s["pulls"][1].update(baseRefName="main"))
+        self.next_command()
+        git(["merge", "-q", "--squash", "feat/a"], self.repo)
+        git(["commit", "-qm", "a (#1)"], self.repo)
+        git(["push", "-q", "origin", "main"], self.repo)
+        self.edit(lambda s: (s["pulls"][0].update(open=False),
+                             s.setdefault("states", {}).update({"1": "MERGED"})))
+
     def run_as_printed(self, command: str) -> int:
         """Run a printed step as a session would, each `&&` part in turn, with no shell."""
         for part in command.split(" && "):
@@ -107,15 +119,7 @@ class TestTheStackIsLandedInOrder(StackCase):
         self.assertEqual("", pullrequest.merge_line("Bash", command))
 
     def test_then_the_one_above_is_rebased_off_its_commits_pushed_and_the_tree_goes(self):
-        self.next_command()
-        self.edit(lambda s: s["pulls"][1].update(baseRefName="main"))
-        self.next_command()
-        # GitHub squashed #1 onto main and deleted feat/a.
-        git(["merge", "-q", "--squash", "feat/a"], self.repo)
-        git(["commit", "-qm", "a (#1)"], self.repo)
-        git(["push", "-q", "origin", "main"], self.repo)
-        self.edit(lambda s: (s["pulls"][0].update(open=False), s.setdefault("states", {}).update({"1": "MERGED"})))
-
+        self.land_the_bottom()
         rebase = self.next_command()
         self.assertIn(f"rebase --onto origin/main {self.a} feat/b", rebase)
         self.assertEqual(0, self.run_as_printed(rebase))
@@ -140,7 +144,67 @@ class TestTheStackIsLandedInOrder(StackCase):
                                               self.repo).splitlines())
 
 
+class TestThePushHoldsWhatTheRebaseSaw(StackCase):
+    def test_a_push_to_the_branch_after_the_rebase_is_not_overwritten(self):
+        self.land_the_bottom()
+        self.assertEqual(0, self.run_as_printed(self.next_command()))
+        # Someone pushed to feat/b on GitHub after the rebase was printed.
+        self.edit(lambda s: s["pulls"][1].update(headRefOid="f" * 40))
+        proc = self.step()
+        self.assertEqual(1, proc.returncode)
+        self.assertIn("moved since it was rebased", proc.stdout)
+        self.assertNotIn("push --force", proc.stdout)
+
+    def test_the_lease_is_the_commit_github_had_at_the_rebase(self):
+        self.land_the_bottom()
+        self.assertEqual(0, self.run_as_printed(self.next_command()))
+        self.assertIn(f"--force-with-lease=feat/b:{self.b}", self.next_command())
+
+    def test_commits_github_has_and_this_clone_lacks_come_in_first(self):
+        self.land_the_bottom()
+        other = self.tmp / "other"
+        git(["clone", "-q", "-b", "feat/b", str(self.origin), str(other)], self.tmp)
+        (other / "c.txt").write_text("c\n")
+        git(["add", "c.txt"], other)
+        git(["-c", "user.email=x@y", "-c", "user.name=x", "commit", "-qm", "c"], other)
+        git(["push", "-q", "origin", "feat/b"], other)
+        tip = git(["rev-parse", "HEAD"], other)
+        self.edit(lambda s: s["pulls"][1].update(headRefOid=tip))
+        command = self.next_command()
+        self.assertIn("merge --ff-only origin/feat/b", command)
+        self.assertEqual(0, self.run_as_printed(command))
+        rebase = self.next_command()
+        self.assertIn(f"rebase --onto origin/main {self.a} feat/b", rebase)
+        self.assertEqual(0, self.run_as_printed(rebase))
+        self.assertIn(f"--force-with-lease=feat/b:{tip}", self.next_command())
+
+    def test_a_branch_rebased_by_hand_is_not_pushed_on_a_guessed_lease(self):
+        self.land_the_bottom()
+        git(["-C", str(self.tree_b), "rebase", "-q", "--onto", "main", self.a, "feat/b"], self.repo)
+        proc = self.step()
+        self.assertEqual(1, proc.returncode)
+        self.assertIn("not by a step of this command", proc.stdout)
+
+
+class TestAPathWithASpaceIsQuoted(StackCase):
+    def test_the_tree_is_named_so_the_command_runs(self):
+        spaced = self.tmp / "with space" / "tree-a"
+        spaced.parent.mkdir()
+        git(["worktree", "move", str(self.tree_a), str(spaced)], self.repo)
+        self.next_command()
+        self.edit(lambda s: s["pulls"][1].update(baseRefName="main"))
+        command = self.next_command()
+        self.assertIn(f"cd '{spaced.resolve()}' && gh pr merge 1", command)
+
+
 class TestWhatStopsTheStack(StackCase):
+    def test_a_bottom_closed_unmerged_blocks_once_and_lets_another_stack_land(self):
+        self.next_command()
+        self.edit(lambda s: (s["pulls"][0].update(open=False),
+                             s.setdefault("states", {}).update({"1": "CLOSED"})))
+        self.assertEqual(1, self.step().returncode)
+        self.assertNotIn("closed, not merged", self.step().stdout)
+
     def test_a_draft_at_the_bottom_is_not_merged(self):
         self.edit(lambda s: s["pulls"][0].update(isDraft=True))
         self.assertEqual("gh pr edit 2 --base main", self.next_command())
@@ -196,6 +260,16 @@ class TestADeletionThatClosesAStacksPullRequestIsRefused(GateCase):
     def test_a_merge_that_keeps_the_branch_is_not_refused_for_it(self):
         self.assertNotIn("gh pr edit 2", self.hook_reason(self.bash("gh pr merge 1 --squash")))
 
+    def test_git_options_before_the_push_are_read_past(self):
+        for line in (f"git -C {self.repo} push origin --delete feat/a",
+                     "git -c push.default=simple push origin :feat/a"):
+            self.assertIn("gh pr edit 2 --base main", self.hook_reason(self.bash(line)), line)
+
+    def test_a_short_flag_group_holding_d_deletes_the_branch(self):
+        for line in ("gh pr merge 1 -sd", "gh pr merge 1 -ds"):
+            self.assertIn("gh pr edit 2 --base main", self.hook_reason(self.bash(line)), line)
+        self.assertFalse(pullrequest._deletes_the_branch("-td"))
+
     def test_deleting_the_trunk_is_left_to_the_trunk_gate(self):
         """`git push origin :main` is refused for writing the trunk, never told to move onto it."""
         self.assertNotIn("Move it onto", self.hook_reason(self.bash("git push origin :main")))
@@ -234,6 +308,13 @@ class TestATypedRemovalKeepsWhatNothingElseHas(GateCase):
         self.assertIn("exports/", self.hook_reason(proc))
         self.assertTrue(self.tree.is_dir())
 
+    def test_a_tree_git_will_not_list_is_kept(self):
+        """`lost_with` None is git refusing to answer, which every reader takes as keep."""
+        (self.tree / ".git").write_text("gitdir: /nowhere/at/all\n")
+        proc = self.bash(f"git -C {self.repo} worktree remove {self.tree}")
+        self.assertEqual("deny", self.hook_decision(proc))
+        self.assertIn("would not list what is ignored", self.hook_reason(proc))
+
     def test_what_regrows_does_not(self):
         (self.tree / "node_modules" / "x").mkdir(parents=True)
         (self.tree / "node_modules" / "x" / "index.js").write_text("cache")
@@ -244,12 +325,22 @@ class TestATypedRemovalKeepsWhatNothingElseHas(GateCase):
 class TestARetargetIsReadAsGhTakesIt(GateCase):
     def test_the_shapes(self):
         for line, expected in (
-            ("gh pr edit 2 --base main", (2, "main")),
-            ("gh pr edit --base main 2", (2, "main")),
-            ("gh pr edit --title 'x 5' -B main https://github.com/o/r/pull/7", (7, "main")),
-            ("gh pr edit --base=release", (0, "release")),
+            ("gh pr edit 2 --base main", (2, "main", "")),
+            ("gh pr edit --base main 2", (2, "main", "")),
+            ("gh pr edit --title 'x 5' -B main https://github.com/o/r/pull/7", (7, "main", "")),
+            ("gh pr edit --base=release", (0, "release", "")),
+            ("gh pr edit 2 -Bmain", (2, "main", "")),
+            ("gh pr edit feat/b --base main", (0, "main", "feat/b")),
         ):
             self.assertEqual(expected, pullrequest.retargeted("Bash", line, {}), line)
         self.assertIsNone(pullrequest.retargeted("Bash", "gh pr edit 2 --title x", {}))
-        self.assertEqual((4, "main"), pullrequest.retargeted(
+        self.assertEqual((4, "main", ""), pullrequest.retargeted(
             "mcp__github__update_pull_request", "", {"pullNumber": 4, "base": "main"}))
+
+    def test_a_retarget_by_branch_moves_that_branchs_record(self):
+        """Named by its branch, it moved the record of the branch checked out instead."""
+        moved = {"session_id": "s1", "hook_event_name": "PostToolUse", "tool_name": "Bash",
+                 "tool_input": {"command": "gh pr edit feat/b --base main"},
+                 "tool_response": {"stdout": "https://github.com/o/r/pull/2"}}
+        self.run_hook("pr-opened", moved)
+        self.assertEqual([], pullrequest.stacked_on(self.ctx(), "feat/a"))

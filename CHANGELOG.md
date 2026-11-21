@@ -15,7 +15,8 @@ neighbours.
   agents count as before.
 - **`claude-bp-report` works outside every repository (#379, decision 0108).** Reports made there,
   by a session or a crashed gate, go to the plugin's data directory. `list`, `send` and every
-  clone's board read them, and a sent row is written beside its report. Neighbour: the founder's
+  clone's board read them as one list, a report in both stores counted and sent once, and a
+  sent row is written beside its report. Neighbour: the founder's
   machine had a `~/.git` holding nothing but this plugin's state from before #187 was fixed, plus
   Claude Code's runtime excludes. Every folder under the home read as a tree, so calls from there
   were placed in the folder itself and judged nothing, and Claude Code took the home for a
@@ -33,12 +34,16 @@ neighbours.
 - **A stack lands one step a call (#366, decision 0109).** `claude-bp-ship --stack` prints the one
   next command and runs none. The order: the next pull request moved onto the trunk, then the
   lowest merged from its tree with `--delete-branch`, then each one above rebased `--onto` the
-  trunk past the landed commit (kept in Tier B) and pushed with a lease on GitHub's commit, then
-  the landed tree removed without `--force`. The merge gate refuses `gh pr merge -d`, or a push
+  trunk past the landed commit (kept in Tier B) and pushed with a lease on what GitHub had of it
+  when the rebase was printed. Commits GitHub has and this clone lacks come in first by
+  fast-forward. A branch moved since, or rebased by hand, is not pushed. Then the landed tree
+  is removed without `--force`, and every printed path is quoted. The merge gate refuses `gh pr merge -d`, or a push
   that deletes a branch, while a pull request recorded here is opened into that branch. The
   refusal names `gh pr edit <n> --base <trunk>`, and `pr-opened` records a retarget once it
-  succeeds. A typed `git worktree remove` of a tree not the session's is refused while it holds
-  ignored files nothing else has, as the plugin's own removals already were (decision 0039).
+  succeeds, by number or by branch. Both deletions are read past `git -C`/`-c` and in a short
+  group like `-sd`. A typed `git worktree remove` of a tree not the session's is refused while
+  it holds ignored files nothing else has, or while git will not list them, as the plugin's own
+  removals already were (decision 0039).
 - **`claude-bp skills` stops naming what is there (#364, decision 0110).** 11 of the 17 findings
   on this machine were false. Scripts in a skill's own `scripts/` were looked for in the
   repository alone, and `../` paths passed a guard that `..` always passes. Most of the rest
@@ -55,10 +60,13 @@ neighbours.
 - **`expo-upgrade` refreshed from upstream (#373), mobile 1.0.1.** Its feedback section now asks
   the user before sending anything to Expo.
 - **A grep beside a program that runs strings is no merge (#367).** On a line with `$(…)`, any
-  `awk` or `env` on the line kept every quoted span, so `grep 'gh pr merge' $(…) | awk …` was
-  refused. Spans are now kept per top-level command, and upstream of a pipe into one that runs a
-  string. `echo '…' | sh`, `awk '{system($0)}'`, `xargs sh -c` and `bash -c "$(…)"` still read
-  as merges.
+  `awk`, `env` or `find` on the line kept every quoted span, so `grep 'gh pr merge' $(…) | awk
+  -F: '{print $1}'` was refused. The line is still read whole, and any runner on it keeps every
+  span (`shellcmd.runs_a_string`). Three programs are spared: `env` that starts a named
+  program which runs nothing and has no `-S`; `awk` whose single-quoted program has no
+  `system(` or pipe and which has no `-f`; and `find` with no `-exec` or `-ok`. A first cut
+  read the line command by command, and `echo '…' | while read c; do sh -c "$c"; done` merged
+  unread. The independent review caught it before release, and 18 such lines are now tests.
 - **From PR #369.** `claude-bp status` prints the board's own stale-copy line, so it names a newer
   copy in the CLI's cache for a checkout install. `claude-bp-report send` no longer says to restart
   (decision 0102). The README names Claude Code 2.1.330 for `validate --strict`. The PR's other

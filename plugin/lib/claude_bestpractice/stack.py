@@ -24,6 +24,7 @@ exactly those commits off the ones above.
 from __future__ import annotations
 
 import json
+import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -202,6 +203,7 @@ class _Landing:
     into: str
     oid: str
     above: list[Pull]
+    plan: dict
 
 
 def _owed(ctx: GitContext, trunk: str, number: int, plan: dict,
@@ -209,7 +211,7 @@ def _owed(ctx: GitContext, trunk: str, number: int, plan: dict,
     """What the landing of pull request `number` still owes, or None once it owes nothing."""
     landing = _Landing(number, str(plan.get("branch") or ""), str(plan.get("into") or trunk),
                        str(plan.get("oid") or ""),
-                       [by_number[n] for n in plan.get("above", []) if n in by_number])
+                       [by_number[n] for n in plan.get("above", []) if n in by_number], plan)
     pull = by_number.get(number)
     if pull is not None:
         return _before_the_merge(ctx, landing, pull, plan)
@@ -225,6 +227,8 @@ def _closed_unmerged(ctx: GitContext, number: int) -> Step | None:
     state = _state_of(ctx, number)
     if not state or state == "MERGED":
         return None
+    # Said once: kept, this plan answered every later call and no other stack could be landed.
+    _keep(ctx, number, None)
     return Step(f"#{number} is {state.lower()}, not merged, so nothing above it is rebased off "
                 f"it: `gh pr view {number}`.", blocked=True)
 
@@ -242,7 +246,7 @@ def _before_the_merge(ctx: GitContext, landing: _Landing, pull: Pull, plan: dict
                     "its work is finished.", blocked=True)
     _keep(ctx, number, {**plan, "oid": pull.oid})
     tree = _trees(ctx).get(branch)
-    where = f"cd {tree} && " if tree is not None else ""
+    where = f"cd {shlex.quote(str(tree))} && " if tree is not None else ""
     return Step(f"every pull request above #{number} is on `{into}`; merge #{number}, from its "
                 "own tree so its checks are the ones judged.",
                 f"{where}gh pr merge {number} {merge_flag(ctx)} --delete-branch")
@@ -255,7 +259,8 @@ def _rebase_owed(ctx: GitContext, landing: _Landing) -> Step | None:
         holds = _holds(ctx, pull.head, oid)
         if holds is None:
             return Step(f"#{landing.number}'s last commit is not in this clone; fetch it to rebase "
-                        "what is above it.", f"git -C {main} fetch origin pull/{landing.number}/head")
+                        "what is above it.",
+                        f"git -C {_q(main)} fetch origin pull/{landing.number}/head")
         if not holds:
             continue
         tree = trees.get(pull.head)
@@ -263,12 +268,34 @@ def _rebase_owed(ctx: GitContext, landing: _Landing) -> Step | None:
             made = main / ".claude" / "worktrees" / pull.head.replace("/", "-")
             return Step(f"#{pull.number} still carries #{landing.number}'s commits, and "
                         f"`{pull.head}` is checked out in no tree here.",
-                        f"git -C {main} worktree add {made} {pull.head}")
-        return Step(f"#{landing.number} landed; #{pull.number} still carries its commits under "
-                    f"the squash. Rebase it onto `{landing.into}`, past them.",
-                    f"git -C {tree} fetch origin {landing.into} && git -C {tree} rebase --onto "
-                    f"origin/{landing.into} {oid} {pull.head}")
+                        f"git -C {_q(main)} worktree add {_q(made)} {pull.head}")
+        return _rebase_step(ctx, landing, pull, tree)
     return None
+
+
+def _q(path: Path) -> str:
+    return shlex.quote(str(path))
+
+
+def _rebase_step(ctx: GitContext, landing: _Landing, pull: Pull, tree: Path) -> Step:
+    """The rebase of `pull` off the landed commits, once this clone has what GitHub has of it.
+
+    GitHub's tip of the branch is written down here as the lease the push after it will hold:
+    read at the push instead, it was whatever GitHub had then, and a lease on that passes over
+    a commit another session pushed in between (independent review of 2.20.0).
+    """
+    if not pull.oid or not _holds(ctx, pull.head, pull.oid):
+        return Step(f"GitHub has commits on `{pull.head}` this clone does not; bring them in "
+                    "before rebasing. A refused fast-forward means the two diverged, which is "
+                    "the session's to reconcile.",
+                    f"git -C {_q(tree)} fetch origin {pull.head} && git -C {_q(tree)} merge "
+                    f"--ff-only origin/{pull.head}")
+    leases = {**landing.plan.get("leases", {}), str(pull.number): pull.oid}
+    _keep(ctx, landing.number, {**landing.plan, "leases": leases})
+    return Step(f"#{landing.number} landed; #{pull.number} still carries its commits under the "
+                f"squash. Rebase it onto `{landing.into}`, past them.",
+                f"git -C {_q(tree)} fetch origin {landing.into} && git -C {_q(tree)} rebase "
+                f"--onto origin/{landing.into} {landing.oid} {pull.head}")
 
 
 def _push_owed(ctx: GitContext, landing: _Landing) -> Step | None:
@@ -277,11 +304,26 @@ def _push_owed(ctx: GitContext, landing: _Landing) -> Step | None:
     for pull in landing.above:
         local = _git(ctx, "rev-parse", "--verify", "--quiet", f"refs/heads/{pull.head}")
         if local and pull.oid and local != pull.oid:
-            tree = trees.get(pull.head) or main
-            return Step(f"#{pull.number} is rebased here and GitHub still has the old commits." +
-                        _checks_note(ctx), f"git -C {tree} push --force-with-lease="
-                        f"{pull.head}:{pull.oid} origin {pull.head}")
+            return _push_step(ctx, landing, pull, trees.get(pull.head) or main)
     return None
+
+
+def _push_step(ctx: GitContext, landing: _Landing, pull: Pull, tree: Path) -> Step:
+    """The push of a rebased pull request, leased on what GitHub had when it was rebased."""
+    lease = str(landing.plan.get("leases", {}).get(str(pull.number)) or "")
+    if not lease:
+        return Step(f"#{pull.number} was rebased here, not by a step of this command, so what "
+                    "GitHub had of it then is not known, and a lease on what it has now would "
+                    "take whatever was pushed since. Push it with a lease on the commit it was "
+                    f"rebased from: `git push --force-with-lease={pull.head}:<that commit>`.",
+                    blocked=True)
+    if lease != pull.oid:
+        return Step(f"GitHub's `{pull.head}` moved since it was rebased here ({lease[:12]} to "
+                    f"{pull.oid[:12]}): someone pushed to it. Bring that in and rebase again; a "
+                    "push now would take it.", blocked=True)
+    return Step(f"#{pull.number} is rebased here and GitHub still has the old commits." +
+                _checks_note(ctx), f"git -C {_q(tree)} push --force-with-lease="
+                f"{pull.head}:{lease} origin {pull.head}")
 
 
 def _tree_owed(ctx: GitContext, landing: _Landing) -> Step | None:
@@ -291,7 +333,7 @@ def _tree_owed(ctx: GitContext, landing: _Landing) -> Step | None:
         return None
     return Step(f"#{landing.number} landed and its tree is still here; removed without "
                 "`--force`, it keeps anything it holds that nothing else has.",
-                f"git -C {main} worktree remove {tree}")
+                f"git -C {_q(main)} worktree remove {_q(tree)}")
 
 
 def _checks_note(ctx: GitContext) -> str:

@@ -356,12 +356,25 @@ def _latest(path: Path) -> list[dict[str, Any]]:
     return list(latest.values())
 
 
+def _one_report(one: dict[str, Any], other: dict[str, Any]) -> dict[str, Any]:
+    """One report kept in both stores, as one: the later sighting, sent if either copy was.
+    Listed twice, one `send` filed it twice (independent review of 2.20.0)."""
+    def at(row: dict[str, Any], key: str) -> float:
+        return float(row.get(key) or 0)
+
+    later = other if at(other, "last_at") >= at(one, "last_at") else one
+    return {**later, "sent_at": max(at(one, "sent_at"), at(other, "sent_at"))}
+
+
 def load(ctx: GitContext | None) -> list[dict[str, Any]]:
     """The latest record per signature, newest first: this clone's, and the ones made outside
     every repository on this machine, which are shown and sent from wherever the founder is."""
     paths = [_store(ctx)] + ([machine_store()] if ctx is not None else [])
-    rows = [row for path in paths for row in _latest(path)]
-    rows.sort(key=lambda r: float(r.get("last_at") or 0), reverse=True)
+    merged: dict[str, dict[str, Any]] = {}
+    for row in (row for path in paths for row in _latest(path)):
+        key = str(row["signature"])
+        merged[key] = _one_report(merged[key], row) if key in merged else row
+    rows = sorted(merged.values(), key=lambda r: float(r.get("last_at") or 0), reverse=True)
     return rows[:MAX_DEFECTS]
 
 

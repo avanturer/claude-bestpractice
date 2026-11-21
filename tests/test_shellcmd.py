@@ -188,7 +188,39 @@ class TestAPatternOnALineThisCannotRead(RepoCase):
         "for i in $(seq 2); do sh -c 'gh pr merge 1'; done",
         "diff <(grep x a) <(sh -c 'gh pr merge 1')",
         "( sh -c 'gh pr merge 1' ) $(true)",
+        # The runner in another command of the line than the quoted merge: read per command,
+        # each of these was let through unread (independent review of 2.20.0).
+        "echo 'gh pr merge 1' | while read c; do sh -c \"$c\"; done $(true)",
+        "echo 'gh pr merge 1' | { read c; eval \"$c\"; } $(true)",
+        "{ echo 'gh pr merge 1'; } | sh $(true)",
+        "echo 'gh pr merge 1' 2>&1 | sh $(true)",
+        "echo 'gh pr merge 1' | { cat; } | sh $(true)",
+        "x=$(echo 'gh pr merge 1'); sh -c \"$x\" $(true)",
+        "echo 'gh pr merge 1' >> run.sh; sh run.sh $(true)",
+        "'sh' -c 'gh pr merge 1' $(true)",
+        "echo 'gh pr merge 1' | \"sh\" $(true)",
+        "env \"$SHELL\" -c 'gh pr merge 1' $(true)",
+        "env $SHELL -c 'gh pr merge 1' $(true)",
+        "env -S 'gh pr merge 1' $(true)",
+        "env -i -S 'gh pr merge 1' $(true)",
+        "echo 'gh pr merge 1' | awk -f run.awk $(true)",
+        "echo 'gh pr merge 1' | awk '{ while ((\"sh\" | getline line) > 0) print }' $(true)",
+        "env -S\"gh pr merge 1\" $(true)",
+        "echo 'gh pr merge 1' | awk -f run.awk '{print}' $(true)",
+        "find . -name x -exec sh -c 'gh pr merge 1' \\; $(true)",
     )
+
+    def test_a_program_is_spared_only_where_it_plainly_runs_nothing(self):
+        for line, runs in (
+            ("find . -name x -print", False), ("find . -exec x {} \\;", True),
+            ("find . -execdir x \\;", True), ("find . -ok x \\;", True),
+            ("env LC_ALL=C sort", False), ("env -S 'a b'", True), ("env -iS a", True),
+            ("env --split-string=x", True), ("env A=1 sh", True), ("env \"$X\"", True),
+            ("awk -F: '{print $1}'", False), ("awk -f p.awk '{print}'", True),
+            ("awk '{system($0)}'", True), ("awk '{print | \"sort\"}'", True), ("gawk '{print}'", False),
+            ("'sh' x", True), ("xargs echo", True),
+        ):
+            self.assertEqual(runs, shellcmd.runs_a_string(line), line)
 
     def test_a_search_beside_a_program_that_runs_strings_is_no_merge(self):
         for line in self.SEARCHES_BESIDE_A_RUNNER:

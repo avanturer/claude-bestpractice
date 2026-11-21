@@ -1956,43 +1956,57 @@ _EDIT_VALUE_FLAGS = frozenset({
     "--remove-label", "--remove-project", "--remove-reviewer", "--title", "-t", "--repo", "-R"})
 
 
-def retargeted(tool_name: str, command: str, tool_input: dict[str, Any]) -> tuple[int, str] | None:
-    """(number, base) a call moves a pull request onto: `gh pr edit <n> --base <b>`, or the GitHub
-    tool's update naming `base`. 0 for the current branch's; None for a call that moves none."""
+def retargeted(tool_name: str, command: str,
+               tool_input: dict[str, Any]) -> tuple[int, str, str] | None:
+    """(number, base, branch) a call moves a pull request onto a base with: `gh pr edit <n>
+    --base <b>`, or the GitHub tool's update naming `base`. The pull request is named by
+    number, or by its branch where the call names one (`gh pr edit feat-a --base main`); 0 and
+    "" for the current branch's. None for a call that moves none."""
     if _CLOSES_TOOL.search(tool_name):
         return _retargeted_by_the_tool(tool_input)
     from . import shellcmd
 
     for argv in shellcmd.runs(command, "gh", "pr", "edit"):
-        number, base = _edit_words(shellcmd.without_redirections(argv[3:]))
+        number, base, branch = _edit_words(shellcmd.without_redirections(argv[3:]))
         if base:
-            return number, base
+            return number, base, branch
     return None
 
 
-def _retargeted_by_the_tool(tool_input: dict[str, Any]) -> tuple[int, str] | None:
+def _retargeted_by_the_tool(tool_input: dict[str, Any]) -> tuple[int, str, str] | None:
     base = str(tool_input.get("base") or "")
     try:
         number = int(tool_input.get("pullNumber") or 0)
     except (TypeError, ValueError):
         number = 0
-    return (number, base) if base and number else None
+    return (number, base, "") if base and number else None
 
 
-def _edit_words(argv: list[str]) -> tuple[int, str]:
-    """The pull request a `gh pr edit` names (0 for none) and the base it moves it onto."""
-    base, number = "", 0
+def _edit_words(argv: list[str]) -> tuple[int, str, str]:
+    """What a `gh pr edit` names, by number (0 for none) or by branch ("" for none), and the base
+    it moves it onto, `-B main`, `-Bmain`, `--base main` or `--base=main`."""
+    base, selector = "", ""
     words = iter(argv)
     for word in words:
-        if word in ("--base", "-B"):
-            base = next(words, "") or ""
-        elif word.startswith("--base="):
-            base = word.split("=", 1)[1]
+        given = _base_given(word, words)
+        if given is not None:
+            base = given
         elif word in _EDIT_VALUE_FLAGS:
             next(words, None)
-        elif not word.startswith("-") and not number:
-            number = int(word) if word.isdigit() else number_in(word)
-    return number, base
+        elif not word.startswith("-") and not selector:
+            selector = word
+    number = int(selector) if selector.isdigit() else number_in(selector) if selector else 0
+    return number, base, "" if number or not selector else selector
+
+
+def _base_given(word: str, words) -> str | None:
+    """The base a `gh pr edit` word gives, taking its value from `words` where it is the next
+    one; None for a word that gives none."""
+    if word in ("--base", "-B"):
+        return next(words, "") or ""
+    if word.startswith("--base="):
+        return word.split("=", 1)[1]
+    return word[2:] if word.startswith("-B") and len(word) > 2 else None
 
 
 def retarget(ctx: GitContext, number: int, base: str, branch: str = "") -> bool:
@@ -2025,9 +2039,14 @@ def strands_a_stack(ctx: GitContext, tool_name: str, command: str, number: int |
         return ""
     from . import shellcmd
 
+    from . import gitpolicy
+
     deleted = _deleted_by_the_merge(ctx, command, number, branch, trunk)
-    for argv in shellcmd.runs(command, "git", "push"):
-        deleted += [(name, trunk) for name in _pushed_deletions(argv)]
+    # Past `-C`, `-c` and the rest of git's own options, as the push gate reads a push.
+    for argv in shellcmd.commands(command):
+        _pointed, verb, args = gitpolicy.split_git(argv)
+        if verb == "push":
+            deleted += [(name, trunk) for name in _pushed_deletions(args)]
     for head, onto in deleted:
         # The trunk itself is the push gate's: a refusal here would name moving onto it.
         above = stacked_on(ctx, head) if head not in (onto, trunk) else []
@@ -2040,7 +2059,7 @@ def _deleted_by_the_merge(ctx: GitContext, command: str, number: int | None, bra
                           trunk: str) -> list[tuple[str, str]]:
     """(branch, the base it was opened into) a `gh pr merge --delete-branch` deletes, or none."""
     call = _merge_call(command)
-    if not isinstance(call, list) or not {"--delete-branch", "-d"} & set(_merge_arguments(call)[0]):
+    if not isinstance(call, list) or not any(map(_deletes_the_branch, _merge_arguments(call)[0])):
         return []
     record = _record_numbered(ctx, number) if number else (_record_of(ctx, branch) or {})
     head = str(record.get("branch") or ("" if number else branch))
@@ -2067,12 +2086,25 @@ def _stranded_refusal(head: str, onto: str, above: list[dict[str, Any]]) -> str:
             "  `claude-bp-ship --stack` lands a whole stack in this order, one step a call.")
 
 
-def _pushed_deletions(argv: list[str]) -> list[str]:
-    """The remote branches a `git push` deletes: every name after `--delete` or `-d`, past
-    the remote, and every `:<branch>` refspec."""
-    from . import gitpolicy
+def _deletes_the_branch(flag: str) -> bool:
+    """Is this `gh pr merge` flag `--delete-branch`, or a short group holding `d` before any
+    letter that takes a value: `-d`, `-sd`, `-ds`, never `-td`, whose `d` is the subject."""
+    if flag == "--delete-branch":
+        return True
+    if not flag.startswith("-") or flag.startswith("--"):
+        return False
+    for letter in flag[1:]:
+        if letter == "d":
+            return True
+        if letter in _MERGE_VALUE_LETTERS:
+            return False
+    return False
 
-    words = [word for word in gitpolicy.split_git(argv)[2] if word]
+
+def _pushed_deletions(args: list[str]) -> list[str]:
+    """The remote branches a `git push` deletes, from its own arguments: every name after
+    `--delete` or `-d`, past the remote, and every `:<branch>` refspec."""
+    words = [word for word in args if word]
     deleting = any(word in ("--delete", "-d") for word in words)
     names = [word for word in words if not word.startswith("-")]
     if deleting:

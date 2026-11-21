@@ -694,10 +694,15 @@ def _sibling_of_repo(ctx, target) -> bool:
     return resolved.parent == root.parent and resolved.name.startswith(f"{root.name}-")
 
 
-def _lost_with_it(tree: Path, lost: list[str]) -> str:
-    """Why a typed removal of `tree` is refused: it holds ignored files nothing else has."""
-    shown = ", ".join(lost[:6]) + (f" and {len(lost) - 6} more" if len(lost) > 6 else "")
+def _lost_with_it(tree: Path, lost: list[str] | None) -> str:
+    """Why a typed removal of `tree` is refused: it holds ignored files nothing else has, or git
+    will not list them (`lost` None)."""
     where = shlex.quote(str(tree))
+    if lost is None:
+        return (f"claude-bestpractice: git would not list what is ignored in {tree}, so whether "
+                "removing it takes files nothing else holds is not known, and the tree is kept. "
+                f"What git says:\n  git -C {where} status --ignored --short")
+    shown = ", ".join(lost[:6]) + (f" and {len(lost) - 6} more" if len(lost) > 6 else "")
     return (f"claude-bestpractice: removing {tree} would take files nothing else holds, which "
             f"`git worktree remove` deletes without a word, `--force` or not: {shown}. Move "
             "what is worth keeping out of the tree, then remove it; what is left is listed by\n"
@@ -2441,8 +2446,9 @@ def main() -> None:
         # session's own tree is asked by `release_now` below.
         for path in removals:
             if path.is_dir() and not worktree.removable_by(ctx, rec.session_id, path):
+                # None is git refusing to list them, which every other reader takes as "keep".
                 lost = worktree.lost_with(ctx, path)
-                if lost:
+                if lost != []:
                     deny(ctx, rec, _lost_with_it(path, lost))
         own = next((path.resolve() for path in removals
                     if worktree.removable_by(ctx, rec.session_id, path)), None)

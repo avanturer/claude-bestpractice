@@ -764,101 +764,59 @@ def outside_quotes(line: str) -> str:
     unreadable, and the pattern being searched for was read as the command (#367). Quoting is
     what tells the two apart, as it is in `commands`.
 
-    A quoted span is kept where it may run: in a command, read at the top level of the line, that
-    names a program running a string (`_RUNS_A_STRING`), or upstream of one in its pipeline,
-    whose input it then is (`echo '…' | sh`). Kept for the whole line, a grep for the words piped
-    into `awk -F: '{print $1}'` or `env LC_ALL=C sort` was still refused as a merge.
+    Unchanged wherever a program on the line can run a string (`runs_a_string`): there the
+    quoted span may be exactly the merge, and the old reading is the safe one. The line is read
+    whole, never command by command: read per command, `echo '…' | while read c; do sh -c
+    "$c"; done` and `x=$(…); sh -c "$x"` merged unread, the runner standing in another command.
     """
-    spans = [found for found in _INERT.finditer(line) if not found.group("escape")]
-    if not spans:
+    if runs_a_string(line):
         return line
-    masked = list(line)
-    for found in spans:
-        masked[found.start():found.end()] = " " * (found.end() - found.start())
-    segments = _top_level_segments("".join(masked))
-    kept = _may_run(line, "".join(masked), segments)
-    out = list(line)
-    for found in spans:
-        at = next((i for i, (start, end, _p) in enumerate(segments) if start <= found.start() < end),
-                  len(segments) - 1)
-        if not kept[at]:
-            out[found.start():found.end()] = " " * (found.end() - found.start())
-    return "".join(out)
+    return _INERT.sub(lambda found: found.group(0) if found.group("escape") else " ", line)
 
 
-def _may_run(line: str, masked: str, segments: list[tuple[int, int, bool]]) -> list[bool]:
-    """Per command of the line: whether its quoted text may run, by its own program or by one
-    down the pipe it feeds, whose input its output is."""
-    running = [_runs_a_string(line[start:end], masked[start:end]) for start, end, _ in segments]
-    kept: list[bool] = []
-    for at in range(len(segments)):
-        later = at
-        while not running[later] and later + 1 < len(segments) and segments[later + 1][2]:
-            later += 1
-        kept.append(running[later])
-    return kept
-
-
-# What ends one command at the top level of a line, as `outside_quotes` reads it.
-_JOINT = re.compile(r"\|\||&&|\|&|[|;&\n]")
-
-
-def _top_level_segments(masked: str) -> list[tuple[int, int, bool]]:
-    """The commands of a line whose quoted text is blanked: (start, end, joined to the one before
-    by a pipe). A substitution, a subshell or a backtick span is read as part of its command."""
-    segments: list[tuple[int, int, bool]] = []
-    start, piped, at = 0, False, 0
-    nesting = _Nesting()
-    while at < len(masked):
-        if masked[at] == "\\":
-            at += 2
-            continue
-        joint = None if nesting.inside(masked[at]) else _JOINT.match(masked, at)
-        if joint:
-            segments.append((start, at, piped))
-            piped = joint.group() in ("|", "|&")
-            at = start = joint.end()
-            continue
-        at += 1
-    segments.append((start, len(masked), piped))
-    return segments
-
-
-class _Nesting:
-    """How deep a walk of a line stands in substitutions, subshells and backtick spans."""
-
-    def __init__(self) -> None:
-        self.depth, self.backtick = 0, False
-
-    def inside(self, char: str) -> bool:
-        """Take one character; whether the walk is inside something, or at the top level."""
-        if char == "`":
-            self.backtick = not self.backtick
-        elif not self.backtick and char == "(":
-            self.depth += 1
-        elif not self.backtick and char == ")" and self.depth:
-            self.depth -= 1
-            return True
-        return self.backtick or self.depth > 0 or char in "`("
-
-
-# `env` running a program it is handed by name, past its own options and assignments.
-_ENV_PROGRAM = re.compile(r"(?<![\w.-])env(?:\s+(?:-\S*|\w+=\S*))*\s+(?P<program>[^\s;|&()]+)")
-# What makes an awk program run a command: `system(…)` or a pipe to or from one.
+# `env` and the program it starts, past its options and assignments; `-S` splits a string
+# into a command line, so an `env` given it runs a string whatever follows.
+_ENV_PROGRAM = re.compile(r"(?<![\w.-])env(?P<options>(?:\s+(?:-\S*|\w+=\S*))*)\s+(?P<program>[^\s;|&()]+)")
+_ENV_SPLITS = re.compile(r"(?:^|\s)(?:-\w*S\S*|--split-string\S*)")
+# `awk`'s options and its program, when the program is written single-quoted on the line.
+_AWK_PROGRAM = re.compile(
+    r"(?<![\w.-])g?awk(?P<options>(?:\s+-[^\s']*(?:\s+[^\s'-][^\s']*)?)*)\s+'(?P<program>[^']*)'")
+# What makes an awk program run a command: `system(…)`, or a pipe to or from one.
 _AWK_RUNS = re.compile(r"system\s*\(|\|")
+_FIND_RUNS = re.compile(r"(?<![\w-])-(?:exec|execdir|ok|okdir)(?![\w-])")
 
 
-def _runs_a_string(text: str, masked: str) -> bool:
-    """Does this one command name a program that can run a string, quoted text left out of the
-    names? `env NAME=value sort` runs `sort`, and an awk program with no `system` and no pipe
-    runs nothing."""
-    for found in _RUNS_A_STRING.finditer(masked):
+def runs_a_string(line: str) -> bool:
+    """Does a program on this line run a string it is handed (`_RUNS_A_STRING`), its name
+    quoted or not? Three are spared where they plainly run none: `env` starting a program
+    named on the line that runs none, `awk` whose single-quoted program has no `system` or
+    pipe and no `-f`, and `find` with no `-exec` or `-ok` on the line."""
+    for found in _RUNS_A_STRING.finditer(line):
         name = found.group()
-        if name == "env":
-            program = _ENV_PROGRAM.match(masked, found.start())
-            if program and not _RUNS_A_STRING.fullmatch(program["program"].rsplit("/", 1)[-1]):
-                continue
-        elif name in ("awk", "gawk") and not _AWK_RUNS.search(text[found.end():]):
+        if name == "env" and _env_runs_none(line, found.start()):
+            continue
+        if name in ("awk", "gawk") and _awk_runs_none(line, found.start()):
+            continue
+        if name == "find" and not _FIND_RUNS.search(line):
             continue
         return True
     return False
+
+
+def _env_runs_none(line: str, at: int) -> bool:
+    started = _ENV_PROGRAM.match(line, at)
+    if started is None or _ENV_SPLITS.search(started["options"]):
+        return False
+    # An option where the program should be is `env`'s own, with no program after it.
+    program = started["program"]
+    if program.startswith("-"):
+        return False
+    return (program[0] not in "$\"'`" and "$" not in program
+            and not _RUNS_A_STRING.fullmatch(program.rsplit("/", 1)[-1]))
+
+
+def _awk_runs_none(line: str, at: int) -> bool:
+    written = _AWK_PROGRAM.match(line, at)
+    if written is None or re.search(r"(?:^|\s)(?:-f|--file)", written["options"]):
+        return False
+    return not _AWK_RUNS.search(written["program"])

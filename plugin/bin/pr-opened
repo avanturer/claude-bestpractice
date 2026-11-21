@@ -141,7 +141,7 @@ def main() -> None:
         # deletion that would close a stack's pull request from one that closes nothing (#366).
         if moved and pullrequest.about_this_repository(ctx, event.tool_name, event.tool_input,
                                                        command):
-            pullrequest.retarget(ctx, moved[0], moved[1], ctx.branch)
+            pullrequest.retarget(ctx, moved[0], moved[1], moved[2] or ctx.branch)
         hookio.emit_silent()
 
     number = pullrequest.number_in(event.raw.get("tool_response"))
