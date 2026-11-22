@@ -2,9 +2,9 @@
 
 ## v2.21.0
 
-Two of the gaps a research report on cheap Claude Code improvements named, checked against the
-code first; the rest it listed were here already, against a decision of the founder's (the
-Haiku floor, decision 0051), or the harness's own (LSP: Claude Code offers the plugin itself).
+The gaps a research report on cheap Claude Code improvements named that held against the code;
+the rest it listed were here already, against a decision of the founder's (the Haiku floor,
+decision 0051), or the harness's own (LSP: Claude Code offers the plugin itself).
 
 - **An edit is read by the project's own linter (decision 0112).** The Stop gate was the only
   check of an edit, once the turn ended, by the full suite. After `Edit`, `Write` or `MultiEdit`,
