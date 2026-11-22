@@ -25,6 +25,10 @@ And the only one that hears what the founder answered in an `AskUserQuestion` di
 of theirs starts a turn there, so `prompt-capture` never hears it, and a `+merge` they picked was
 no word at all (#326). Recorded as theirs, the way that hook records one they type (decision 0094).
 
+And the only one that sees an edit's result: the lines an `Edit`, `Write` or `MultiEdit` wrote
+are put to the project's own linter, and what it finds there reaches the session with the
+result (decision 0112). The edit has happened; this only says what the linter said.
+
 Fails open. A number that did not get learned costs a numbered merge its judgement and, once
 a `+merge` names the chat's pull requests, the word as well: the merge gate then says which
 pull request it could not place and names the merge that works. A hook that raised would
@@ -48,6 +52,7 @@ _upgrade.handover(Path(__file__))
 
 from claude_bestpractice import (  # noqa: E402
     config,
+    editcheck,
     founder,
     gitpolicy,
     hookio,
@@ -63,6 +68,23 @@ def _an_agent_stopped(event: hookio.HookEvent) -> None:
     ctx = hookio.repo(event.place)
     if config.enforcing(ctx)[0]:
         subagents.stopped(ctx, str(event.raw.get("session_id") or ""), event.raw.get("tool_response"))
+    hookio.emit_silent()
+
+
+def _an_edit_was_made(event: hookio.HookEvent) -> None:
+    """Tell the session what the project's linter finds on the lines this edit wrote, or
+    nothing. Judged in the file's own repository, which is the one whose linter governs it,
+    and stood down with the plugin or with `lint_on_edit off`."""
+    response = event.raw.get("tool_response")
+    path = editcheck.edited(event.tool_input, response)
+    if path is None:
+        hookio.emit_silent()
+    ctx = hookio.repo(str(path.parent))
+    if not config.enforcing(ctx)[0] or not config.load(ctx).lint_on_edit:
+        hookio.emit_silent()
+    found = editcheck.said(ctx, path, editcheck.touched(response))
+    if found:
+        hookio.emit_context("PostToolUse", found)
     hookio.emit_silent()
 
 
@@ -99,6 +121,8 @@ def _the_founder_answered(event: hookio.HookEvent) -> None:
 
 def main() -> None:
     event = hookio.read_event()
+    if event.tool_name in editcheck.EDIT_TOOLS:
+        _an_edit_was_made(event)
     if event.tool_name == subagents.STOP_TOOL:
         _an_agent_stopped(event)
     if event.tool_name == founder.QUESTION_TOOL:

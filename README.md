@@ -599,7 +599,14 @@ most `subagent_fanout` (3) agents that search the repository; an agent whose def
 only web tools, such as the plugin's own `bestpractice:web-researcher`, reads no tree and is
 counted apart, up to `research_fanout` (8).
 
-Each is a switch you say: `compress_output off`, `route_search off`, `subagent_min_model off`.
+**An edit is linted where it was written.** After an `Edit`, `Write` or `MultiEdit`, the
+project's own ruff or ESLint — configured in the project and installed there, never fetched —
+is run on the file with `--no-fix`, and what it finds on the lines that edit wrote comes back
+with the edit's result. Nothing is reformatted, and a file with no linter configured costs a
+process and says nothing.
+
+Each is a switch you say: `compress_output off`, `route_search off`, `subagent_min_model off`,
+`lint_on_edit off`.
 
 ### It takes over what fights it
 
