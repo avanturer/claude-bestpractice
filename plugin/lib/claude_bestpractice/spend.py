@@ -236,10 +236,7 @@ def _add(report: Report, history: list[Turn]) -> None:
     report.requests += len(history)
     report.by_agents += len(history) - len(own)
     report.peaks.append(max(turn.context for turn in history))
-    if len(own) > CACHE_WINDOW:
-        report.recent_hits.append(cache_share(own[-CACHE_WINDOW:]))
-    if any(turn.write_5m for turn in history):
-        report.short_lived += 1
+    _judge_the_cache(report, history, own)
     if own:
         report.floors.append(own[0].context)
     for at, turn in enumerate(history):
@@ -253,6 +250,15 @@ def _add(report: Report, history: list[Turn]) -> None:
         report.replayed[ceiling] += spent + apart
         if ceiling:
             report.compactions[ceiling] += count
+
+
+def _judge_the_cache(report: Report, history: list[Turn], own: list[Turn]) -> None:
+    """A conversation's last requests' cache share, once it made enough to judge, and whether
+    it wrote the five-minute cache."""
+    if len(own) > CACHE_WINDOW:
+        report.recent_hits.append(cache_share(own[-CACHE_WINDOW:]))
+    if any(turn.write_5m for turn in history):
+        report.short_lived += 1
 
 
 def cache_share(history: list[Turn]) -> float:

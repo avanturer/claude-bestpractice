@@ -159,22 +159,24 @@ def touched(response: object) -> set[int] | None:
         return None
     lines: set[int] = set()
     for hunk in hunks:
-        if not isinstance(hunk, dict):
-            continue
-        at = int(hunk.get("newStart") or 1)
-        body = hunk.get("lines")
-        if not isinstance(body, list):
-            lines.update(range(at, at + int(hunk.get("newLines") or 0)))
-            continue
-        for line in body:
-            mark = str(line)[:1]
-            if mark == "+":
-                lines.add(at)
-                at += 1
-            elif mark == "-":
-                lines.add(at)
-            elif mark != "\\":
-                at += 1
+        if isinstance(hunk, dict):
+            lines |= _written_in(hunk)
+    return lines
+
+
+def _written_in(hunk: dict) -> set[int]:
+    """The new file's lines one hunk wrote; its whole range where it carries no lines."""
+    at = int(hunk.get("newStart") or 1)
+    body = hunk.get("lines")
+    if not isinstance(body, list):
+        return set(range(at, at + int(hunk.get("newLines") or 0)))
+    lines: set[int] = set()
+    for line in body:
+        mark = str(line)[:1]
+        if mark in ("+", "-"):
+            lines.add(at)
+        if mark not in ("-", "\\"):
+            at += 1
     return lines
 
 

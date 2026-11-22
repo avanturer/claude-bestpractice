@@ -148,6 +148,12 @@ class TouchedLinesCase(unittest.TestCase):
     def test_a_removed_line_marks_the_line_now_in_its_place(self) -> None:
         self.assertEqual({11}, editcheck.touched(a_patch(10, " a", "-b", " c")))
 
+    def test_an_empty_line_in_a_hunk_is_context(self) -> None:
+        self.assertEqual({12}, editcheck.touched(a_patch(10, " a", "", "+c")))
+
+    def test_the_no_newline_marker_is_no_line(self) -> None:
+        self.assertEqual({11}, editcheck.touched(a_patch(10, " a", "+b", "\\ No newline at end of file")))
+
     def test_a_created_file_and_a_missing_patch_are_every_line(self) -> None:
         self.assertIsNone(editcheck.touched({"type": "create", "structuredPatch": []}))
         self.assertIsNone(editcheck.touched({}))
