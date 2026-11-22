@@ -44,7 +44,7 @@ Enforcement is unaffected either way: `evidence-gate` adopts a missing record
 at `branch_point`, never at HEAD, so an unregistered session is over-reported
 rather than let through. What a fork loses is awareness, not the gate.
 
-## PostToolUse: `TaskStop`, `AskUserQuestion` and the pull-request tools
+## PostToolUse: `TaskStop`, `AskUserQuestion`, the edit tools and the pull-request tools
 
 The only event that carries a pull request's NUMBER. PreToolUse records the
 obligation and never sees the response, so every record used to say 0 and the
@@ -66,6 +66,13 @@ agent was sent to do, which the card a session pauses keeps (decision 0082).
 `prompt-capture` never hears it: a `+merge` they picked there is their word (#326,
 decision 0094). Here, not in an entry of its own: the budget is twelve. `pre-tool`
 refuses a call that carries an answer already, and notes each one asked without.
+
+`Edit`, `Write` and `MultiEdit` because only this event holds an edit's patch: the
+project's own linter is asked about the lines it wrote, and what it finds goes to
+the session as `additionalContext` (decision 0112). Here, not in an entry of its
+own, for the same budget. A process per edit, beside the one `pre-tool` already
+starts for it; the hooks module could answer with none, but no Claude Code this
+plugin is tested on shows what a module may add to an edit's result.
 
 ## PostToolUse: `Bash`
 

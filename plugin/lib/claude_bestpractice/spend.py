@@ -46,6 +46,14 @@ KEPT = 25_000
 REWRITTEN_SHARE = 0.5
 SMALLEST_REWRITE = 20_000
 
+# How much of the context sent the cache should serve, over a conversation's last requests.
+# A healthy session reads 95.8% (measured, `docs/ECONOMICS.md`); under this, something keeps
+# rebuilding the prefix: an expired cache, a model or effort switched, a changed prompt.
+CACHE_HEALTHY = 0.90
+# The requests a conversation's cache is judged over. Its first request writes everything, so
+# a conversation is judged only once it has made more than this many.
+CACHE_WINDOW = 10
+
 
 @dataclass
 class Turn:
@@ -89,6 +97,15 @@ class Report:
     rewritten: int = 0
     replayed: dict = field(default_factory=dict)
     compactions: dict = field(default_factory=dict)
+    # Tokens the cache served, and every context token sent, over all requests.
+    cached: int = 0
+    sent: int = 0
+    # Each conversation's share read from the cache over its last `CACHE_WINDOW` requests,
+    # for those that made more than that many.
+    recent_hits: list = field(default_factory=list)
+    # Conversations that wrote the five-minute cache, which an API key or usage credits get
+    # in place of the subscription's hour.
+    short_lived: int = 0
 
 
 def turns(path: Path) -> list[Turn]:
@@ -219,6 +236,7 @@ def _add(report: Report, history: list[Turn]) -> None:
     report.requests += len(history)
     report.by_agents += len(history) - len(own)
     report.peaks.append(max(turn.context for turn in history))
+    _judge_the_cache(report, history, own)
     if own:
         report.floors.append(own[0].context)
     for at, turn in enumerate(history):
@@ -234,8 +252,25 @@ def _add(report: Report, history: list[Turn]) -> None:
             report.compactions[ceiling] += count
 
 
+def _judge_the_cache(report: Report, history: list[Turn], own: list[Turn]) -> None:
+    """A conversation's last requests' cache share, once it made enough to judge, and whether
+    it wrote the five-minute cache."""
+    if len(own) > CACHE_WINDOW:
+        report.recent_hits.append(cache_share(own[-CACHE_WINDOW:]))
+    if any(turn.write_5m for turn in history):
+        report.short_lived += 1
+
+
+def cache_share(history: list[Turn]) -> float:
+    """How much of the context these requests sent the cache served, 0 to 1."""
+    sent = sum(turn.context for turn in history)
+    return sum(turn.read for turn in history) / sent if sent else 0.0
+
+
 def _count_turn(report: Report, turn: Turn, first: bool) -> None:
     report.spend += turn.spend
+    report.cached += turn.read
+    report.sent += turn.context
     for name, value in zip(report.kinds, (
             turn.fresh * FRESH, turn.write_5m * WRITE_5M, turn.write_1h * WRITE_1H,
             turn.read * READ, turn.out * OUT)):
@@ -332,6 +367,7 @@ def render(report: Report, ceiling: tuple[int, str]) -> str:
         f"largest {_k(max(report.peaks))}.",
         f"A prefix written again mid-session (expired cache, compaction): "
         f"{report.rewrites} time(s), {_k(report.rewritten)} tokens.",
+        "", *_cache_lines(report),
         "", "The same conversations, compacted at a ceiling "
         f"(replayed with none: {_share(report.replayed[0], report.spend)} of the spend, "
         "the check on the replay):",
@@ -342,6 +378,24 @@ def render(report: Report, ceiling: tuple[int, str]) -> str:
         "", _ceiling_line(ceiling),
     ]
     return "\n".join(lines)
+
+
+def _cache_lines(report: Report) -> list[str]:
+    """How much the cache served, which conversations it served badly at the end, and
+    which paid for the five-minute cache."""
+    lines = [f"Read from the cache: {_share(report.cached, report.sent).strip()} of the context "
+             f"sent ({CACHE_HEALTHY:.0%} and over is healthy)."]
+    cold = sorted(share for share in report.recent_hits if share < CACHE_HEALTHY)
+    if cold:
+        lines.append(f"Conversations whose last {CACHE_WINDOW} requests read under "
+                     f"{CACHE_HEALTHY:.0%} from the cache: {len(cold)} of {len(report.recent_hits)} "
+                     f"(lowest {cold[0]:.1%}). Something rebuilt the prefix: an expired cache, "
+                     "a model or effort switched mid-session, a changed system prompt.")
+    if report.short_lived:
+        lines.append(f"Written to the five-minute cache: {report.short_lived} conversation(s). "
+                     "An API key or usage credits get it in place of the subscription's hour, "
+                     "and a pause past five minutes writes the whole context again.")
+    return lines
 
 
 def _ceiling_line(ceiling: tuple[int, str]) -> str:

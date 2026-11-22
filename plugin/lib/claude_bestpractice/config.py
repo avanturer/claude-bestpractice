@@ -110,6 +110,10 @@ class Config:
     # whole of it kept on disk where the session can read it (decision 0048). Off hands every
     # output over as Claude Code would.
     compress_output: bool = True
+    # An `Edit`, `Write` or `MultiEdit` is followed by the project's own linter on that file, and
+    # its findings on the lines the edit wrote reach the session with the result (decision
+    # 0112). Off leaves an edit's result as Claude Code made it.
+    lint_on_edit: bool = True
     # WebSearch goes to the plugin's Parallel server first and its Exa server next, and Exa
     # waits for Parallel (decision 0049). Off leaves every search tool as the harness has it.
     route_search: bool = True
@@ -234,6 +238,7 @@ class Config:
             "witness_exclude": self.witness_exclude,
             "witness_cpus": self.witness_cpus,
             "compress_output": self.compress_output,
+            "lint_on_edit": self.lint_on_edit,
             "route_search": self.route_search,
             "subagent_min_model": self.subagent_min_model,
             "isolate_databases": self.isolate_databases,
@@ -366,6 +371,7 @@ _EXPECTED: dict[str, type] = {
     "witness_exclude": list,
     "witness_cpus": int,
     "compress_output": bool,
+    "lint_on_edit": bool,
     "route_search": bool,
     "subagent_min_model": str,
     "isolate_databases": bool,

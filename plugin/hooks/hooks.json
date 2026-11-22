@@ -74,7 +74,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "^(TaskStop|AskUserQuestion)$|.*((create|update|merge)_pull_request|enable_pr_auto_merge)",
+        "matcher": "^(TaskStop|AskUserQuestion|Edit|Write|MultiEdit)$|.*((create|update|merge)_pull_request|enable_pr_auto_merge)",
         "hooks": [
           {
             "type": "command",

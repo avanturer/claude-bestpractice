@@ -1,5 +1,25 @@
 # Changelog
 
+## v2.21.0
+
+The gaps a research report on cheap Claude Code improvements named that held against the code;
+the rest it listed were here already, against a decision of the founder's (the Haiku floor,
+decision 0051), or the harness's own (LSP: Claude Code offers the plugin itself).
+
+- **An edit is read by the project's own linter (decision 0112).** The Stop gate was the only
+  check of an edit, once the turn ended, by the full suite. After `Edit`, `Write` or `MultiEdit`,
+  `pr-opened` now runs the project's ruff (`ruff.toml`, `.ruff.toml`, `[tool.ruff]`) or ESLint
+  (`eslint.config.*`), only as installed in the project or, for ruff, on PATH, with `--no-fix`,
+  and hands back as `additionalContext` what it finds on the lines the edit's `structuredPatch`
+  wrote. Never a formatter, never `npx` or `uv run`; silent where nothing is configured or
+  installed and past ten seconds. On the PostToolUse entry `pr-opened` already has: still twelve
+  entries. `lint_on_edit off` stands it down. Read against ruff 0.16.9 and ESLint 10.1.0.
+- **`claude-bp spend` says how much of the context the cache served.** The share over every
+  request, the conversations whose last ten requests read under 90% (ECONOMICS.md's check,
+  unshipped until now, here rather than in a Stop hook so it costs no context), and the
+  conversations that wrote the five-minute cache, which an API key or usage credits get in place
+  of the subscription's hour. 98.4% on the transcripts of the session that wrote this.
+
 ## v2.20.1
 
 - **A push runs the fast gate (#383).** The pre-push hook ran `make check` wherever the Makefile

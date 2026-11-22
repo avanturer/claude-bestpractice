@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-2.20.1-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.21.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-3017%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -599,7 +599,14 @@ most `subagent_fanout` (3) agents that search the repository; an agent whose def
 only web tools, such as the plugin's own `bestpractice:web-researcher`, reads no tree and is
 counted apart, up to `research_fanout` (8).
 
-Each is a switch you say: `compress_output off`, `route_search off`, `subagent_min_model off`.
+**An edit is linted where it was written.** After an `Edit`, `Write` or `MultiEdit`, the
+project's own ruff or ESLint — configured in the project and installed there, never fetched —
+is run on the file with `--no-fix`, and what it finds on the lines that edit wrote comes back
+with the edit's result. Nothing is reformatted, and a file with no linter configured costs a
+process and says nothing.
+
+Each is a switch you say: `compress_output off`, `route_search off`, `subagent_min_model off`,
+`lint_on_edit off`.
 
 ### It takes over what fights it
 
@@ -662,7 +669,7 @@ depends on no pack, so a pack that fails to load never disables a gate.
 | `claude-bp init` | Derive the knowledge layer from your code |
 | `claude-bp adopt` | Take over events another tool is contesting |
 | `claude-bp sweep` | Remove the trees nobody is in whose work is already in the trunk |
-| `claude-bp spend` | Where this repository's sessions spent their tokens, read off their transcripts, and what a ceiling on the context would have left of it |
+| `claude-bp spend` | Where this repository's sessions spent their tokens, read off their transcripts, how much of the context the cache served (and which conversations it stopped serving), and what a ceiling on the context would have left of it |
 | `claude-bp verify` | Make, where the plugin watches it, the run that clears a red suite record: your own test command where you declared one |
 | `claude-bp database` | Create this worktree's own database, if the server has not got it (needs `psql`; otherwise `worktree_setup`) |
 | `claude-bp set` | Change a gate switch you asked for in your own words |
