@@ -143,6 +143,34 @@ class TestWhatTheReportSays(TranscriptCase):
         self.assertIn("Ceiling in effect here: none", said)
         self.assertIn("autoCompactWindow", said)
 
+    def test_the_cache_share_is_said(self):
+        said = spend.render(spend.measure([self.transcript(growing(60))]), (0, ""))
+        report = spend.measure([self.transcript(growing(60))])
+        self.assertAlmostEqual(report.cached / report.sent, spend.cache_share(
+            spend.turns(self.dir / "session.jsonl")))
+        self.assertIn("Read from the cache: ", said)
+        self.assertNotIn("Conversations whose last", said)
+        self.assertNotIn("five-minute cache:", said)
+
+    def test_a_conversation_whose_cache_went_cold_at_the_end_is_named(self):
+        lines = growing(30) + [line(f"cold{n}", read=1_000, written=400_000, out=10)
+                               for n in range(spend.CACHE_WINDOW)]
+        report = spend.measure([self.transcript(growing(30), "warm.jsonl"),
+                                self.transcript(lines, "cold.jsonl")])
+        self.assertEqual(2, len(report.recent_hits))
+        said = spend.render(report, (0, ""))
+        self.assertIn(f"Conversations whose last {spend.CACHE_WINDOW} requests read under 90% "
+                      "from the cache: 1 of 2 (lowest 0.2%)", said)
+
+    def test_a_conversation_too_short_to_judge_is_not_judged(self):
+        report = spend.measure([self.transcript(growing(spend.CACHE_WINDOW))])
+        self.assertEqual([], report.recent_hits)
+
+    def test_the_five_minute_cache_is_named(self):
+        lines = growing(5) + [line("api", read=90_000, written=10_000, hour=False)]
+        said = spend.render(spend.measure([self.transcript(lines)]), (0, ""))
+        self.assertIn("Written to the five-minute cache: 1 conversation(s).", said)
+
     def test_nothing_found_says_so(self):
         self.assertIn("No requests", spend.render(spend.measure([]), (0, "")))
 

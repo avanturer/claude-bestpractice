@@ -669,7 +669,7 @@ depends on no pack, so a pack that fails to load never disables a gate.
 | `claude-bp init` | Derive the knowledge layer from your code |
 | `claude-bp adopt` | Take over events another tool is contesting |
 | `claude-bp sweep` | Remove the trees nobody is in whose work is already in the trunk |
-| `claude-bp spend` | Where this repository's sessions spent their tokens, read off their transcripts, and what a ceiling on the context would have left of it |
+| `claude-bp spend` | Where this repository's sessions spent their tokens, read off their transcripts, how much of the context the cache served (and which conversations it stopped serving), and what a ceiling on the context would have left of it |
 | `claude-bp verify` | Make, where the plugin watches it, the run that clears a red suite record: your own test command where you declared one |
 | `claude-bp database` | Create this worktree's own database, if the server has not got it (needs `psql`; otherwise `worktree_setup`) |
 | `claude-bp set` | Change a gate switch you asked for in your own words |

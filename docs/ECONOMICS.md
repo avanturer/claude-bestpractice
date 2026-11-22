@@ -51,9 +51,10 @@ definitions, or an MCP server. Corollaries, each a lint or a hook:
   variants that make every toggle a full rebuild.
 - Prefer clearing (free) or rewinding (hits an existing cache entry) over compaction. Never resume
   into a long pre-upgrade session — that is the single most expensive request available.
-- **Ship a cache-health check as a first-class feature:** a Stop hook computing
-  `cache_read / (cache_read + cache_write + input)` over the last ten turns, warning below 90 %.
-  Measured baseline on a real session is 95.8 %.
+- **Ship a cache-health check as a first-class feature:** `cache_read / (cache_read +
+  cache_write + input)` over the last ten turns, warning below 90 %. Measured baseline on a real
+  session is 95.8 %. Shipped in 2.21.0 in `claude-bp spend`, not as a Stop hook: a warning in
+  every turn is always-on context, and the spend report already reads every request.
 
 ### Funding mode is detectable for free
 
