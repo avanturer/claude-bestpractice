@@ -169,10 +169,12 @@ def glob_regex(pattern: str) -> re.Pattern[str]:
 
     `**` crosses directories, `*` and `?` stay inside one, `[...]` is a class, `{a,b}` is
     either. A pattern with no slash still names a path from the root (`MEMORY.md` is the file
-    at the top), as in the documentation's examples.
+    at the top), as in the documentation's examples. A pattern also covers everything under
+    what it names: `plugin/bin` loads beside `plugin/bin/pre-tool`, as Claude Code was seen
+    to do with this repository's decision 0102.
     """
-    alternatives = ["".join(_token_regex(token) for token in _TOKEN.findall(one))
-                    for one in _expand(pattern.strip().lstrip("/"))]
+    alternatives = ["".join(_token_regex(token) for token in _TOKEN.findall(one)) + "(?:/.*)?"
+                    for one in _expand(pattern.strip().lstrip("/").rstrip("/"))]
     return re.compile("(?:" + "|".join(alternatives) + ")")
 
 
@@ -270,6 +272,10 @@ def _mark(ctx: GitContext, harness: str, loop: str, shown: list[str], key: str) 
         return
     store.ensure_dir(store.tier_b(ctx, STATE_DIR))
     with store.guarded_json(_state_path(ctx, harness), default={}) as box:
+        if key == "loaded":
+            # A load reported is the module running for this session: after `/clear` there
+            # is a new session id and no `session.start` to announce it (decision 0113).
+            box[0].setdefault("module", time.time())
         loops = box[0].setdefault(key, {})
         have = set(loops.get(loop, []))
         loops[loop] = sorted(have | set(shown))
@@ -283,14 +289,27 @@ def loaded(ctx: GitContext, harness: str, loop: str, *, text: str = "", path: st
     that as a load would mark a rule present that the loop has never seen.
     """
     found = []
+    flat = " ".join(text.split())
     for rule in rules(ctx):
         whole = str(rule.path)
-        if text and whole in text:
+        if text and (whole in text or _opening(rule) in flat):
             found.append(rule.shown)
         elif path and os.path.realpath(path) == os.path.realpath(whole):
             found.append(rule.shown)
     _mark(ctx, harness, loop, found, "loaded")
     return found
+
+
+def _opening(rule: Rule) -> str:
+    """The first words of a rule's body, frontmatter left out: what an attachment of it carries
+    whatever framing the engine puts around it. Long enough that another rule naming this one
+    does not contain it; "\0" for a rule with no body, which no text contains."""
+    body = _read(rule.path)
+    if body.startswith("---"):
+        parts = body.split("\n---", 1)
+        body = parts[1].split("\n", 1)[1] if len(parts) == 2 and "\n" in parts[1] else ""
+    opening = " ".join(body.split())[:160]
+    return opening if len(opening) >= 40 else "\0"
 
 
 def compacted(ctx: GitContext, harness: str, loop: str) -> None:
@@ -316,7 +335,12 @@ def owed(ctx: GitContext, harness: str, loop: str, *, relative: str = "",
     have = set(state.get("loaded", {}).get(loop, [])) | set(state.get("asked", {}).get(loop, []))
     needed = [rule for rule in rules(ctx)
               if rule.shown not in have and _governs(rule, relative, command)]
-    _mark(ctx, harness, loop, [rule.shown for rule in needed], "asked")
+    try:
+        _mark(ctx, harness, loop, [rule.shown for rule in needed], "asked")
+    except store.LockTimeout:
+        # Not recorded as asked: the next attempt may be refused again, which is the cost of
+        # a record another call holds; the act itself is still asked about.
+        return needed
     return needed
 
 
@@ -372,8 +396,9 @@ def memory_index(ctx: GitContext) -> Path | None:
 
 
 def memory_overflow(ctx: GitContext) -> str:
-    """One line when MEMORY.md is past what Claude Code loads, and "" otherwise."""
-    index = memory_index(ctx)
+    """One line when MEMORY.md is past what Claude Code loads, and "" otherwise, or where auto
+    memory is off and nothing of it loads anyway."""
+    index = memory_index(ctx) if auto_memory_on(ctx) else None
     if index is None:
         return ""
     raw = index.read_bytes() if index.is_file() else b""
@@ -387,7 +412,8 @@ def memory_overflow(ctx: GitContext) -> str:
 
 # --- checking a layer -------------------------------------------------------------------------
 
-_REFERENCE = re.compile(r"(\.claude/rules/[\w./-]+\.md)(?:`)?(?:\s*→\s*«([^»]+)»)?")
+# A project rule named from the root; `~/.claude/rules/x.md` and an absolute path are not one.
+_REFERENCE = re.compile(r"(?<![~\w/.-])(\.claude/rules/[\w./-]+\.md)(?:`)?(?:\s*→\s*«([^»]+)»)?")
 _HEADING = re.compile(r"^#{1,6}\s+(.*)$", re.MULTILINE)
 
 
@@ -400,13 +426,26 @@ def _tracked(ctx: GitContext) -> list[str]:
     return [name for name in out.decode("utf-8", "replace").split("\0") if name]
 
 
+_INSTRUCTION_DIRS = (RULES_DIR + "/", ".claude/skills/", ".claude/commands/", ".claude/agents/")
+
+
+def _an_instruction_file(name: str) -> bool:
+    """`CLAUDE.md` and `CLAUDE.local.md` at any depth, and the markdown of rules, skills,
+    commands and agents: everything an instruction can be moved into."""
+    if Path(name).name in ("CLAUDE.md", "CLAUDE.local.md"):
+        return True
+    return name.endswith(".md") and name.startswith(_INSTRUCTION_DIRS)
+
+
 def _instruction_files(root: Path) -> list[Path]:
-    found = [root / name for name in ("CLAUDE.md", "CLAUDE.local.md") if (root / name).is_file()]
-    for folder in (RULES_DIR, ".claude/skills", ".claude/commands", ".claude/agents"):
-        directory = root / folder
-        if directory.is_dir():
-            found += sorted(p for p in store.files_under(directory) if p.name.endswith(".md"))
-    return found
+    try:
+        out = subprocess.run(["git", "-C", str(root), "ls-files", "-z", "--cached", "--others",
+                              "--exclude-standard"], capture_output=True, check=True,
+                             timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    names = sorted({n for n in out.decode("utf-8", "replace").split("\0") if n})
+    return [root / name for name in names if _an_instruction_file(name) and (root / name).is_file()]
 
 
 def problems(ctx: GitContext) -> list[str]:
@@ -483,9 +522,7 @@ def _files_at(ctx: GitContext, rev: str) -> list[str]:
     except (OSError, subprocess.SubprocessError):
         return []
     names = [n for n in out.stdout.decode("utf-8", "replace").split("\0") if n]
-    keep = ("CLAUDE.md", "CLAUDE.local.md")
-    return [n for n in names if n in keep or (n.endswith(".md") and n.startswith(
-        (RULES_DIR + "/", ".claude/skills/", ".claude/commands/", ".claude/agents/")))]
+    return [n for n in names if _an_instruction_file(n)]
 
 
 def _lines_of(text: str) -> list[tuple[str, str]]:
@@ -507,9 +544,12 @@ def _lines_of(text: str) -> list[tuple[str, str]]:
 
 
 def _scoped_text(text: str, name: str) -> bool:
-    if name.startswith(".claude/skills/") or name.startswith(".claude/commands/") or \
-            name.startswith(".claude/agents/"):
+    """Whether this file's lines load only on some condition: a skill, a command or an agent
+    when used, a rule with `paths:`, a `CLAUDE.md` below the root beside its directory's files."""
+    if name.startswith(_INSTRUCTION_DIRS[1:]):
         return True
+    if Path(name).name in ("CLAUDE.md", "CLAUDE.local.md"):
+        return name not in ("CLAUDE.md", "CLAUDE.local.md", ".claude/CLAUDE.md")
     return bool(field(text, "paths"))
 
 
@@ -518,6 +558,16 @@ class Moves:
     dropped: list[tuple[str, str]]
     scope_changed: list[tuple[str, str, str, bool]]
     lost_heading: list[tuple[str, str, str]]
+
+
+def resolves(ctx: GitContext, rev: str) -> bool:
+    """Whether `rev` names a commit here. A typo must not read as a layer with nothing lost."""
+    try:
+        subprocess.run(["git", "-C", str(ctx.worktree_root), "rev-parse", "--verify", "--quiet",
+                        f"{rev}^{{commit}}"], capture_output=True, check=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return True
 
 
 def compare(ctx: GitContext, since: str) -> Moves:
@@ -561,18 +611,69 @@ def _place(moves: Moves, root: Path, name: str, was_scoped: bool, line: str, hea
         moves.lost_heading.append((name, places[0][0], line))
 
 
+def _config_dir() -> Path:
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+
+
+def _switched_off(value: object) -> bool:
+    return str(value).strip().lower() not in ("", "0", "false", "none")
+
+
+def auto_memory_on(ctx: GitContext) -> bool:
+    """Whether Claude Code loads MEMORY.md here: off by `CLAUDE_CODE_DISABLE_AUTO_MEMORY` in the
+    environment or a settings file's `env`, or by `autoMemoryEnabled: false`. The founder's
+    machine runs with it off, where the index reaches no session on its own."""
+    if _switched_off(os.environ.get("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "")):
+        return False
+    root = ctx.worktree_root
+    for settings in (_config_dir() / "settings.json", root / ".claude" / "settings.json",
+                     root / ".claude" / "settings.local.json"):
+        data = store.read_json(settings, default={})
+        if not isinstance(data, dict):
+            continue
+        env = data.get("env") if isinstance(data.get("env"), dict) else {}
+        if _switched_off(env.get("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "")) or \
+                data.get("autoMemoryEnabled") is False:
+            return False
+    return True
+
+
+def _shown(ctx: GitContext, path: Path) -> str:
+    """A path as a person would type it: from the root, from home, or whole."""
+    for base, prefix in ((ctx.worktree_root, ""), (Path.home(), "~/")):
+        try:
+            return prefix + path.relative_to(base).as_posix()
+        except ValueError:
+            continue
+    return str(path)
+
+
+def _memory_as_loaded(index: Path) -> int:
+    """The bytes of MEMORY.md Claude Code loads: the first 200 lines, at most 25 KB."""
+    head = b"".join(index.read_bytes().splitlines(keepends=True)[:MEMORY_LIMIT_LINES])
+    return min(len(head), MEMORY_LIMIT_BYTES)
+
+
 def cost(ctx: GitContext) -> tuple[int, list[tuple[str, int]]]:
-    """Bytes loaded at every launch, project and user, and the files largest first."""
+    """Bytes loaded at every launch and the files, largest first: `CLAUDE.md` with what it
+    imports, `.claude/CLAUDE.md`, every rule without `paths:` (this plugin's own included),
+    the founder's `~/.claude/CLAUDE.md` and rules, and MEMORY.md as far as it loads."""
     from . import knowledge
 
-    files = [(path.relative_to(ctx.worktree_root).as_posix(), path.stat().st_size)
-             for path in knowledge.at_launch(ctx) if path.is_file()]
-    files += [(rule.shown, rule.path.stat().st_size) for rule in rules(ctx)
-              if rule.shown.startswith("~") and not rule.paths and rule.path.is_file()]
-    index = memory_index(ctx)
+    candidates = [*knowledge.at_launch(ctx), ctx.worktree_root / ".claude" / "CLAUDE.md",
+                  _config_dir() / "CLAUDE.md"]
+    candidates += [rule.path for rule in rules(ctx) if not rule.paths]
+    seen: set[str] = set()
+    files: list[tuple[str, int]] = []
+    for path in candidates:
+        key = os.path.realpath(path)
+        if key in seen or not path.is_file():
+            continue
+        seen.add(key)
+        files.append((_shown(ctx, path), path.stat().st_size))
+    index = memory_index(ctx) if auto_memory_on(ctx) else None
     if index is not None:
-        size = min(index.stat().st_size, MEMORY_LIMIT_BYTES)
-        files.append(("MEMORY.md (auto memory, as loaded)", size))
+        files.append(("MEMORY.md (auto memory, as loaded)", _memory_as_loaded(index)))
     files.sort(key=lambda item: -item[1])
     return sum(size for _name, size in files), files
 

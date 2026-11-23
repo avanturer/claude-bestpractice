@@ -34,6 +34,18 @@ this release closes, so scoping stops trading tokens for missed rules.
   MEMORY.md past 200 lines or 25 KB is named: its tail reaches no session. The board asks for
   `paths:` on a new rule unless every session needs it.
 
+Checked live on the founder's machine (Claude Code 2.1.330, VS Code): a `Read` attaches every
+matching rule as `Contents of /abs/path:` in the main conversation and in an Explore subagent;
+`cat` through Bash attaches none, against the documentation. An independent review then found,
+and this release fixes: a glob naming a directory covered nothing under it (Claude Code loads
+decision 0102's `plugin/bin` beside `plugin/bin/pre-tool`), so `problems` called live rules dead;
+`status` and `rules` crashed on a `CLAUDE.md` import from outside the tree; the gate went silent
+after `/clear` (a new session id, no `session.start`), so a reported load now turns it on;
+`--since` with a revision that names nothing passed; nested `CLAUDE.md` files were not compared;
+`~/.claude/rules/x.md` was read as a project reference; MEMORY.md counted where auto memory is
+off and past its 200-line cut; a refusal named a command's redirect target. A load is also known
+by the rule's opening words, so a framing without the path costs nothing.
+
 ## v2.21.0
 
 The gaps a research report on cheap Claude Code improvements named that held against the code;

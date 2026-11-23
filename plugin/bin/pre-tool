@@ -2325,16 +2325,16 @@ def main() -> None:
         harness = str(event.raw.get("session_id") or "")
         loop = str(event.raw.get("agent_id") or "")
         command = str(ti.get("command", "")) if event.tool_name == "Bash" else ""
-        needed: list = []
+        said = []
         for written in writing_now:
-            needed += [rule for rule in rulescope.owed(ctx, harness, loop, relative=written)
-                       if rule not in needed]
-        if command:
-            needed += [rule for rule in rulescope.owed(ctx, harness, loop, command=command)
-                       if rule not in needed]
-        if needed:
-            subject = f"`{writing_now[0]}`" if writing_now else "this command"
-            deny(ctx, rec, rulescope.refusal(needed, subject))
+            for_path = rulescope.owed(ctx, harness, loop, relative=written)
+            if for_path:
+                said.append(rulescope.refusal(for_path, f"`{written}`"))
+        for_command = rulescope.owed(ctx, harness, loop, command=command) if command else []
+        if for_command:
+            said.append(rulescope.refusal(for_command, "this command"))
+        if said:
+            deny(ctx, rec, "\n".join(said))
 
     if gates["migration_gate"]:
         if event.tool_name == "Bash":

@@ -73,7 +73,8 @@ claude-bp rules --since "$BASE"
 
 It must end with exit 0. It lists:
 - **lines in no instruction file now**: each is a deletion. Show every one to the founder; only
-  after they agree, `--accept-dropped`. A duplicate removed on purpose is one of these.
+  after they agree, `--accept-dropped`. Lines are matched by their text, so a duplicate removed
+  while its twin stays is NOT listed: name each such removal yourself.
 - **now loaded only beside files**: every line that left the always-on layer. ⚑ marks one that
   reads as meant for every session: it needs an invariant line, or it goes back.
 - **moved away from their heading**: move the heading with it.

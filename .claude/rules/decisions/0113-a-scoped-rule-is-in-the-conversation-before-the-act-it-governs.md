@@ -7,10 +7,11 @@ date: 2026-11-23
 ## Decision
 **A write whose path a rule's `paths:` matches, or a command its `commands:` matches, is refused
 once while that rule is not in the loop doing it**, main conversation and each subagent apart.
-The hooks module reports a load: `prompt.attachment` of type `nested_memory`, which names the
-rule's absolute path, and a `Read` of a rule file. `checkpoint` forgets a loop's rules at
-compaction. `commands:` is this plugin's field; Claude Code reads only `paths`. Silent until the
-module says it runs for the session. `rules_in_context off` stands it down.
+The hooks module reports a load: `prompt.attachment` of type `nested_memory` naming the rule's
+absolute path (`Contents of /abs/path:`, seen live) or carrying its opening words, and a `Read`
+of a rule file. `checkpoint` forgets a loop's rules at compaction. A glob covers what is under
+the directory it names, as Claude Code loads them. `commands:` is this plugin's field. Silent
+until the module reports for the session; `rules_in_context off` stands it down.
 
 ## Why
 > что бы модель на нужной задаче сама доставала нужное
@@ -30,5 +31,5 @@ database touches no file. Scoping without closing them trades tokens for missed 
 
 ## Cost accepted
 One refusal per scoped rule per loop where the module's report did not arrive, and after each
-compaction for the rules a loop needs again. Reads of the rule's file in a Code Mode script are
-seen per call (0103); whether Claude Code attaches a rule to such a read is not documented.
+compaction for the rules a loop needs again. `cat` of a file loads no rule on 2.1.330 (live,
+against the documentation); a Code Mode script's reads are seen per call (0103).

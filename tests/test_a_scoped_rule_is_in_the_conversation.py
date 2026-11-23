@@ -107,6 +107,11 @@ class TestReadingTheScope(unittest.TestCase):
                 self.assertIs(expected, rulescope.matches(rule, path))
         dotted = rulescope.Rule(Path("r.md"), "r.md", (".claude/skills/**",), ())
         self.assertTrue(rulescope.matches(dotted, ".claude/skills/x/SKILL.md"))
+        # A directory named covers what is under it, as Claude Code loads decision 0102 (`plugin/bin`)
+        # beside `plugin/bin/pre-tool`.
+        folder = rulescope.Rule(Path("r.md"), "r.md", ("plugin/bin",), ())
+        self.assertTrue(rulescope.matches(folder, "plugin/bin/pre-tool"))
+        self.assertFalse(rulescope.matches(folder, "plugin/binary"))
 
 
 class TestTheGate(ScopeCase):
@@ -141,6 +146,26 @@ class TestTheGate(ScopeCase):
         said = self.mod("rules-loaded", loop="", text=f"Contents of {self.repo}/x.md:\n"
                                                       "see .claude/rules/design.md first")
         self.assertEqual([], said["loaded"])
+
+    def test_the_rules_own_words_count_whatever_the_framing(self) -> None:
+        self.mod("rules-heard")
+        said = self.mod("rules-loaded", loop="", text="# Design\n\n## Один визуал на ВСЕ платформы — "
+                        "железно\n\nEvery screen looks the same on iOS and Android.")
+        self.assertEqual([".claude/rules/design.md"], said["loaded"])
+
+    def test_a_load_reported_after_clear_turns_the_gate_on(self) -> None:
+        # `/clear` gives a new session id and no `session.start` to announce the module.
+        self.mod("rules-loaded", loop="", path=str(self.repo / ".claude/rules/releasing.md"))
+        self.claim_a_task("h1", "mobile/app/new.tsx")
+        self.assertEqual("deny", self.hook_decision(self.write_new("mobile/app/new.tsx")))
+
+    def test_a_command_is_named_as_the_command_not_its_redirect(self) -> None:
+        self.mod("rules-heard")
+        proc = self.call("Bash", {"command": "make mobile-ota > ota.log"})
+        self.assertEqual("deny", self.hook_decision(proc))
+        reason = self.hook_reason(proc)
+        self.assertIn("governs this command", reason)
+        self.assertNotIn("governs `ota.log`", reason)
 
     def test_reading_the_rule_file_counts(self) -> None:
         self.mod("rules-heard")
@@ -206,6 +231,43 @@ class TestCheckingALayer(ScopeCase):
         # A reference wrapped across lines still finds its heading.
         self.assertNotIn("releasing.md: points to", found)
 
+    def test_a_reference_to_the_founders_own_rules_is_not_the_projects(self) -> None:
+        self.write("CLAUDE.md", "Mine: `~/.claude/rules/personal.md`, /abs/.claude/rules/x.md\n")
+        self.commit("refs")
+        self.assertEqual([], [p for p in rulescope.problems(self.ctx()) if "CLAUDE.md" in p])
+
+    def test_a_section_moved_to_a_nested_claude_md_is_not_dropped(self) -> None:
+        self.write("CLAUDE.md", "# Root\n\nBackend answers in under 200 ms.\n")
+        base = self.commit("before")
+        self.write("CLAUDE.md", "# Root\n")
+        self.write("backend/CLAUDE.md", "# Root\n\nBackend answers in under 200 ms.\n")
+        self.commit("after")
+        moves = rulescope.compare(self.ctx(), base)
+        self.assertEqual([], moves.dropped)
+        self.assertIn(("CLAUDE.md", "backend/CLAUDE.md", "Backend answers in under 200 ms.", False),
+                      moves.scope_changed)
+
+    def test_a_revision_that_names_nothing_is_an_error_not_a_pass(self) -> None:
+        cli = [sys.executable, str(BIN / "claude-bp"), "rules", "--since", "mian"]
+        proc = subprocess.run(cli, cwd=self.repo, capture_output=True, text=True, env=self.env())
+        self.assertEqual(2, proc.returncode, proc.stdout)
+        self.assertIn("names no commit", proc.stderr)
+
+    def test_an_import_from_outside_the_tree_is_counted_not_a_crash(self) -> None:
+        (self.tmp / "shared.md").write_text("shared rules\n")
+        self.write("CLAUDE.md", "See @../shared.md\n")
+        self.commit("import")
+        _total, files = rulescope.cost(self.ctx())
+        self.assertTrue(any(name.endswith("shared.md") for name, _size in files), files)
+        proc = subprocess.run([sys.executable, str(BIN / "claude-bp"), "rules"], cwd=self.repo,
+                              capture_output=True, text=True, env=self.env())
+        self.assertNotIn("Traceback", proc.stderr)
+
+    def test_every_rule_loaded_at_launch_is_counted(self) -> None:
+        _total, files = rulescope.cost(self.ctx())
+        self.assertIn(".claude/rules/everywhere.md", [name for name, _size in files])
+        self.assertNotIn(".claude/rules/design.md", [name for name, _size in files])
+
     def test_every_line_is_found_again_or_named(self) -> None:
         self.write(".claude/rules/preferences.md",
                    "# Prefs\n\n## PR flow\n\nNever push to main.\n\n## Screens\n\n"
@@ -256,9 +318,15 @@ class TestCheckingALayer(ScopeCase):
         self.assertEqual("", rulescope.memory_overflow(self.ctx()))
         index.write_text("- a fact with a long description\n" * 900)
         self.assertIn("reaches no session", rulescope.memory_overflow(self.ctx()))
-        total, files = rulescope.cost(self.ctx())
-        self.assertIn(("MEMORY.md (auto memory, as loaded)", rulescope.MEMORY_LIMIT_BYTES), files)
-        self.assertGreater(total, rulescope.MEMORY_LIMIT_BYTES)
+        _total, files = rulescope.cost(self.ctx())
+        # The first 200 lines load, which here is under 25 KB.
+        loaded = len("- a fact with a long description\n") * rulescope.MEMORY_LIMIT_LINES
+        self.assertIn(("MEMORY.md (auto memory, as loaded)", loaded), files)
+        # With auto memory off, as on the founder's machine, none of it loads.
+        (self.home / "settings.json").write_text('{"env": {"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}}')
+        self.assertEqual("", rulescope.memory_overflow(self.ctx()))
+        self.assertNotIn("MEMORY.md (auto memory, as loaded)",
+                         [name for name, _size in rulescope.cost(self.ctx())[1]])
 
     def test_tokens_are_counted_from_bytes(self) -> None:
         self.assertEqual(16_446, rulescope.tokens(58_385))

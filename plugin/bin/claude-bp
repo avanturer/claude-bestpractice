@@ -243,6 +243,11 @@ def cmd_rules(ctx, since: str, accept_dropped: bool, probe: bool, only: str) -> 
     whether every line it had then is still somewhere (decision 0114). Exit 1 on a problem, a
     line in no file any more (unless `--accept-dropped`), or a line moved away from its heading.
     `--probe` asks real headless sessions whether each scoped rule loads."""
+    if since and not rulescope.resolves(ctx, since):
+        print(f"claude-bp rules: `{since}` names no commit here, so nothing can be compared "
+              "against it. `git rev-parse HEAD` before the change gives the one to pass.",
+              file=sys.stderr)
+        return 2
     total, files = rulescope.cost(ctx)
     heading(f"LOADED INTO EVERY TURN: ~{rulescope.tokens(total):,} tokens, {total / 1024:.0f} KB")
     for name, size in files:
