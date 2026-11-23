@@ -34,6 +34,8 @@ const BOARD_PANE = 'sessions'
 const BOARD_EVERY_MS = 60_000
 // A skill's file or a command's: what a session reads to follow one without the Skill tool.
 const SKILL_FILE = /(?:^|[\\/])SKILL\.md$|[\\/]\.claude[\\/]commands[\\/].+\.md$/
+// A rule file, the project's or the founder's: reading one puts it in the conversation.
+const RULE_FILE = /[\\/]\.claude[\\/]rules[\\/].+\.md$/
 
 type BashRecord = {
   stdout?: string
@@ -231,6 +233,9 @@ export const register: Register = (on) => {
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
+    // The gate on scoped rules relies on the reports below, so it waits to hear the module is
+    // running for this session; without it every scoped write would be refused (decision 0113).
+    void ask($, 'rules-heard', {})
     await $.command.register({ name: BOARD_PANE, description: 'What every session on this repository is doing' })
     $.clock.every(BOARD_EVERY_MS, () => showTheBoard($))
     void showTheBoard($)
@@ -271,7 +276,19 @@ export const register: Register = (on) => {
   on('tool.call', { tool: 'Read' }, async ($, e, next) => {
     const ran = await next(e)
     if (succeeded(ran) && SKILL_FILE.test(e.file_path)) void ask($, 'skill-read', { path: e.file_path })
+    if (succeeded(ran) && RULE_FILE.test(e.file_path)) {
+      void ask($, 'rules-loaded', { loop: loopOf(e), path: e.file_path })
+    }
     return ran
+  }).catch(async ($, e, next) => next(e))
+
+  // A scoped rule reaching a loop's request: Claude Code attaches it when that loop reads,
+  // writes or edits a file its `paths:` match. Recorded per loop, so a rule the main
+  // conversation has is still asked for in a subagent that has not (decision 0113).
+  on('prompt.attachment', { type: 'nested_memory' }, async ($, e, next) => {
+    const sent = await next(e)
+    void ask($, 'rules-loaded', { loop: loopOf(e), text: e.text })
+    return sent
   }).catch(async ($, e, next) => next(e))
 
   on('agent.spawn', async ($, e, next) => {

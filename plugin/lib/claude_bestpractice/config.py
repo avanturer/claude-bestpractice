@@ -114,6 +114,10 @@ class Config:
     # its findings on the lines the edit wrote reach the session with the result (decision
     # 0112). Off leaves an edit's result as Claude Code made it.
     lint_on_edit: bool = True
+    # A write a scoped rule's `paths:` matches, or a command its `commands:` matches, is
+    # refused once while that rule is not in the conversation (decision 0113). Off leaves a
+    # scoped rule to load whenever Claude Code loads it.
+    rules_in_context: bool = True
     # WebSearch goes to the plugin's Parallel server first and its Exa server next, and Exa
     # waits for Parallel (decision 0049). Off leaves every search tool as the harness has it.
     route_search: bool = True
@@ -239,6 +243,7 @@ class Config:
             "witness_cpus": self.witness_cpus,
             "compress_output": self.compress_output,
             "lint_on_edit": self.lint_on_edit,
+            "rules_in_context": self.rules_in_context,
             "route_search": self.route_search,
             "subagent_min_model": self.subagent_min_model,
             "isolate_databases": self.isolate_databases,
@@ -372,6 +377,7 @@ _EXPECTED: dict[str, type] = {
     "witness_cpus": int,
     "compress_output": bool,
     "lint_on_edit": bool,
+    "rules_in_context": bool,
     "route_search": bool,
     "subagent_min_model": str,
     "isolate_databases": bool,

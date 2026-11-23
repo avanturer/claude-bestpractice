@@ -35,7 +35,7 @@ from claude_bestpractice import upgrade as _upgrade  # noqa: E402
 
 _upgrade.handover(Path(__file__))
 
-from claude_bestpractice import board, config, hookio, outputs, repomap, skilluse  # noqa: E402
+from claude_bestpractice import board, config, hookio, outputs, repomap, rulescope, skilluse  # noqa: E402
 from claude_bestpractice.gitctx import GitError, resolve  # noqa: E402
 
 
@@ -81,6 +81,16 @@ def _answer(asked: str, request: dict) -> dict:
     if asked == "skill-read" and ctx is not None:
         skilluse.read_directly(ctx, str(request.get("path") or ""))
         return {}
+    # What the gate in `pre-tool` reads (decision 0113): the module is running for this
+    # session, and a scoped rule reached a loop's request or was read as a file.
+    if asked == "rules-heard" and ctx is not None:
+        rulescope.heard(ctx, harness)
+        return {}
+    if asked == "rules-loaded" and ctx is not None:
+        found = rulescope.loaded(ctx, harness, str(request.get("loop") or ""),
+                                 text=str(request.get("text") or ""),
+                                 path=str(request.get("path") or ""))
+        return {"loaded": found}
     if asked == "map" and ctx is not None:
         text = repomap.for_a_task(ctx, str(request.get("task") or ""))
         return {"text": text} if text else {}

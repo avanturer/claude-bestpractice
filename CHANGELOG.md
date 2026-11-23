@@ -1,5 +1,51 @@
 # Changelog
 
+## v2.22.0
+
+Measured on the founder's product repository: about 46,800 tokens of instruction files in every
+turn of every session, two thirds of them about one area of the code each. Claude Code's `paths:`
+scoping would keep them out of the sessions that never go near that area, and leaves three holes
+this release closes, so scoping stops trading tokens for missed rules.
+
+- **A scoped rule is in the conversation before the act it governs (decision 0113).** A write
+  whose path a rule's `paths:` match, or a Bash command its `commands:` match (this plugin's
+  field; Claude Code ignores it), is refused once while that rule is not in the loop doing it:
+  the main conversation and each subagent apart. The hooks module reports a load from
+  `prompt.attachment` of type `nested_memory` (the rule's absolute path in its framing) and from
+  a `Read` of a rule file; `checkpoint` forgets a loop's rules at compaction. Once per rule per
+  loop, so a report that never arrives costs one refusal; silent until the module says it runs
+  for the session. No hook entry added: still twelve. Type-checked against Claude Code 2.1.330's
+  declarations. `rules_in_context off` stands it down.
+- **`claude-bp rules`, and the founder's `/bestpractice:scope-rules` (decision 0114).** The
+  command lists what loads into every turn (the project's files, `~/.claude/rules`, MEMORY.md as
+  far as it loads), every scoped rule, and what is wrong: a glob matching no tracked file (the
+  founder's `memory.md` points at the memory folder, outside the project, so it never loads), a
+  scoped rule over the 40,000 characters Claude Code keeps, `commands:` without `paths:`, a
+  broken `→ «heading»` reference. `--since <commit>` names every line in no instruction file any
+  more, every line that left the always-on layer (⚑ where it reads as meant for every session)
+  and every line moved away from its heading, and fails until the founder agrees to the drops;
+  `--probe` has headless sessions read one file per rule and finds the rule in their transcripts.
+  The skill is the procedure an agent follows to scope a layer and those two checks, started only
+  by the founder (`disable-model-invocation`: no context until then). Decision 0007 still holds
+  for everything the plugin does unasked.
+- **`status` counts what the layer really costs.** Tokens from bytes at 3.55 a token, measured
+  against `/context` on mixed Russian and English rules; a third of a character undercounted
+  Cyrillic by about a third. The founder's own rules and MEMORY.md as loaded are counted, and
+  MEMORY.md past 200 lines or 25 KB is named: its tail reaches no session. The board asks for
+  `paths:` on a new rule unless every session needs it.
+
+Checked live on the founder's machine (Claude Code 2.1.330, VS Code): a `Read` attaches every
+matching rule as `Contents of /abs/path:` in the main conversation and in an Explore subagent;
+`cat` through Bash attaches none, against the documentation. An independent review then found,
+and this release fixes: a glob naming a directory covered nothing under it (Claude Code loads
+decision 0102's `plugin/bin` beside `plugin/bin/pre-tool`), so `problems` called live rules dead;
+`status` and `rules` crashed on a `CLAUDE.md` import from outside the tree; the gate went silent
+after `/clear` (a new session id, no `session.start`), so a reported load now turns it on;
+`--since` with a revision that names nothing passed; nested `CLAUDE.md` files were not compared;
+`~/.claude/rules/x.md` was read as a project reference; MEMORY.md counted where auto memory is
+off and past its 200-line cut; a refusal named a command's redirect target. A load is also known
+by the rule's opening words, so a framing without the path costs nothing.
+
 ## v2.21.0
 
 The gaps a research report on cheap Claude Code improvements named that held against the code;

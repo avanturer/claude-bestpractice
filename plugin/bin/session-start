@@ -415,7 +415,8 @@ def _knowledge_line(ctx: GitContext) -> str:
         return (
             f"\nknowledge layer: {len(rules)} instruction file(s) already here, {cost} bytes "
             "loaded into every turn, not in this plugin's shape. READ them before writing "
-            "any rule of your own, and put a new one where the existing ones are. "
+            "any rule of your own, and put a new one where the existing ones are, with "
+            "`paths:` naming the files it is about unless every session needs it. "
             "`claude-bp init` would add a second layer beside them; the founder decides that."
         )
     return (
