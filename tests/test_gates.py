@@ -2022,7 +2022,7 @@ class TestAdoptDoesNotWriteADeadProductNameIntoYourSettings(GateCase):
         path = self.repo / ".claude" / "settings.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({"hooks": {
-            "SessionStart": [{"hooks": [{"type": "command", "command": "./theirs.sh"}]}],
+            "Stop": [{"hooks": [{"type": "command", "command": "./theirs.sh"}]}],
             "PostToolUse": [{"hooks": [{"type": "command", "command": "./log.sh"}]}],
         }}))
 
@@ -2042,6 +2042,24 @@ class TestAdoptDoesNotWriteADeadProductNameIntoYourSettings(GateCase):
         conflicts.quarantine_loose_hooks(self.ctx())
         self.assertEqual(["PostToolUse"], list(self.settings()["hooks"].keys()))
 
+    def test_a_projects_own_context_hook_is_not_offered_for_quarantine(self):
+        """A SessionStart hook adds context beside ours and decides nothing: the founder's memory
+        hook was offered to `adopt`, which would have left every session with no memory."""
+        import json
+
+        from claude_bestpractice import conflicts
+
+        path = self.repo / ".claude" / "settings.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"hooks": {
+            "SessionStart": [{"hooks": [{"type": "command", "command": "./memory-context.sh"}]}],
+            "PreCompact": [{"hooks": [{"type": "command", "command": "./keep.sh"}]}],
+        }}))
+        found = conflicts.loose_hooks(self.ctx())
+        self.assertEqual({"report"}, {conflict.action for conflict in found})
+        conflicts.quarantine_loose_hooks(self.ctx())
+        self.assertEqual(["SessionStart", "PreCompact"], list(self.settings()["hooks"].keys()))
+
 
 class TestAdoptLeavesAFileItTakesNothingFrom(RepoCase):
     """`claude-bp adopt` counted what it parked across both settings files.
@@ -2051,7 +2069,7 @@ class TestAdoptLeavesAFileItTakesNothingFrom(RepoCase):
     file personal tokens live in, and `adopt --restore` left it at 0644.
     """
 
-    THEIRS = {"SessionStart": [{"hooks": [{"type": "command", "command": "./theirs.sh"}]}]}
+    THEIRS = {"Stop": [{"hooks": [{"type": "command", "command": "./theirs.sh"}]}]}
     LOCAL = ('{"env": {"TOKEN": "s3cret"}, "hooks": {"PostToolUse": [{"matcher": "Write", '
              '"hooks": [{"type": "command", "command": "prettier"}]}]}}\n')
 

@@ -267,6 +267,10 @@ def cmd_rules(ctx, since: str, accept_dropped: bool, probe: bool, only: str) -> 
     if records:
         print(f"  and {len(records)} decision record(s), each beside the files it names")
     failed = False
+    doubled = rulescope.duplicate_servers(ctx)
+    heading("MCP SERVERS CONNECTED MORE THAN ONCE")
+    for said in doubled or ["none"]:
+        print(f"  {said}")
     found = rulescope.problems(ctx)
     heading("PROBLEMS")
     for problem in found or ["none"]:
@@ -408,6 +412,7 @@ def _instruction_cost(ctx, theirs: list) -> list[str]:
     overflow = rulescope.memory_overflow(ctx)
     if overflow:
         lines.append(overflow)
+    lines += rulescope.duplicate_servers(ctx)
     if rulescope.tokens(total) > SCOPE_RULES_AT:
         lines.append("`claude-bp rules` names what each rule costs and what is wrong with the "
                      "scoping; the founder's `/bestpractice:scope-rules` moves what only some "

@@ -211,9 +211,16 @@ def _references(argv: list[str], project: _Project, folder: Path | None = None) 
     return []
 
 
+# A path a step writes as a pattern for the reader to fill in: `docs/articles/NNN-тема/images.py`,
+# `release/X.Y.Z`, `<slug>/SKILL.md`, `{name}.md`. There is no such file by design, and naming it
+# as missing sent the founder's `articles` skill to the board as broken (2.22.0 audit).
+_TEMPLATED = re.compile(r"NNN|XXX|YYYY|X\.Y\.Z|<[^>/]+>|\{[^}/]+\}|…")
+
+
 def _script_missing(words: list[str], project: _Project, folder: Path | None = None) -> list[str]:
     script = next((word for word in words if not word.startswith("-")), "")
-    if _PATH.match(script) and "$" not in script and not _found(script, project, folder):
+    if _PATH.match(script) and "$" not in script and not _TEMPLATED.search(script) \
+            and not _found(script, project, folder):
         return [f"runs `{script}`, which is not in the repository{_beside(folder)}"]
     return []
 
@@ -246,7 +253,8 @@ def _prose(line: str, project: _Project, folder: Path | None = None) -> list[str
     found: list[str] = []
     for span in _INLINE.findall(line):
         candidate = span.strip()
-        if _PATH.match(candidate) and _gone(candidate, project, folder):
+        if _PATH.match(candidate) and not _TEMPLATED.search(candidate) and \
+                _gone(candidate, project, folder):
             found.append(f"names `{candidate}`, which is not in the repository{_beside(folder)}")
     return found
 

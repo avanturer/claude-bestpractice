@@ -54,8 +54,13 @@ _COMPETING_MARKERS: list[tuple[str, str, str]] = [
     ("claude-flow", "orchestration", "runs a competing session orchestrator"),
 ]
 
-# Events where two independent handlers produce two independent outcomes for one action.
-_CONTESTED_EVENTS = {"SessionStart", "Stop", "PreToolUse", "PreCompact", "SubagentStart"}
+# Events where two independent handlers produce two independent outcomes for one action: a Stop
+# gate and another disagreeing whether the turn may end, two PreToolUse decisions with no
+# precedence between them. SessionStart, SubagentStart and PreCompact are not among them: each
+# hook's context or instructions are added beside the others', and nothing is decided. Counted
+# as contested since 1.0.0, a project's own memory hook was offered for quarantine by `adopt`,
+# which would have left the founder's sessions with no memory (2.22.0 audit).
+_CONTESTED_EVENTS = {"Stop", "PreToolUse"}
 
 
 @dataclass

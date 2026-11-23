@@ -322,16 +322,25 @@ def left_behind(home: Path | None = None) -> list[Account]:
 
 
 def _plugins(root: Path, home: Path) -> list[Listed]:
-    """The skills and commands of each plugin the settings enable, from the copy Claude Code
-    unpacked last: `<plugins>/cache/<marketplace>/<plugin>/<version>/`."""
-    cache = Path(os.environ.get("CLAUDE_CODE_PLUGIN_CACHE_DIR") or home / ".claude" / "plugins")
+    """The skills and commands of each plugin the settings enable."""
     found: list[Listed] = []
+    for plugin_id, copy in plugin_copies(root, home):
+        name = plugin_id.partition("@")[0]
+        found += _skills_in(copy / "skills", f"{name}:", PLUGIN, plugin_id)
+        found += _commands_in(copy / "commands", f"{name}:", PLUGIN, plugin_id)
+    return found
+
+
+def plugin_copies(root: Path, home: Path) -> list[tuple[str, Path]]:
+    """(`<plugin>@<marketplace>`, the copy Claude Code unpacked last) for each plugin the settings
+    enable: `<plugins>/cache/<marketplace>/<plugin>/<version>/`."""
+    cache = Path(os.environ.get("CLAUDE_CODE_PLUGIN_CACHE_DIR") or home / ".claude" / "plugins")
+    found = []
     for plugin_id in enabled_plugins(root, home):
         name, _, marketplace = plugin_id.partition("@")
         copy = _unpacked(cache / "cache" / marketplace / name)
         if copy is not None:
-            found += _skills_in(copy / "skills", f"{name}:", PLUGIN, plugin_id)
-            found += _commands_in(copy / "commands", f"{name}:", PLUGIN, plugin_id)
+            found.append((plugin_id, copy))
     return found
 
 

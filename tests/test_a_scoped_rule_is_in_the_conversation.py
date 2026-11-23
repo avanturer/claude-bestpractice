@@ -328,6 +328,29 @@ class TestCheckingALayer(ScopeCase):
         self.assertNotIn("MEMORY.md (auto memory, as loaded)",
                          [name for name, _size in rulescope.cost(self.ctx())[1]])
 
+    def test_one_service_connected_twice_is_named(self) -> None:
+        cache = self.tmp / "plugins"
+        copy = cache / "cache" / "market" / "bestpractice" / "2.22.1"
+        copy.mkdir(parents=True)
+        (copy / ".mcp.json").write_text(json.dumps({"mcpServers": {
+            "parallel": {"type": "http", "url": "https://search.parallel.ai/mcp"},
+            "exa": {"type": "http", "url": "https://mcp.exa.ai/mcp"}}}))
+        self.write(".claude/settings.json", json.dumps(
+            {"enabledPlugins": {"bestpractice@market": True}}))
+        self.write(".mcp.json", json.dumps({"mcpServers": {
+            "exa": {"type": "http", "url": "https://mcp.exa.ai/mcp"}}}))
+        (self.home / ".claude.json").write_text(json.dumps({"mcpServers": {
+            "parallel": {"type": "http", "url": "https://mcp.parallel.ai/mcp?login"}}}))
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_PLUGIN_CACHE_DIR": str(cache)}):
+            said = rulescope.duplicate_servers(self.ctx())
+            # The same URL twice is one connection: Claude Code merges them.
+            self.assertEqual(1, len(said), said)
+            self.assertIn("parallel.ai is connected 2 times", said[0])
+            self.assertIn("`plugin:bestpractice:parallel` (plugin)", said[0])
+            (self.home / "settings.json").write_text(json.dumps(
+                {"deniedMcpServers": [{"serverName": "plugin:bestpractice:parallel"}]}))
+            self.assertEqual([], rulescope.duplicate_servers(self.ctx()))
+
     def test_tokens_are_counted_from_bytes(self) -> None:
         self.assertEqual(16_446, rulescope.tokens(58_385))
 

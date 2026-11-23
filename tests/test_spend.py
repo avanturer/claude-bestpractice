@@ -209,7 +209,8 @@ class TestWhereItLooks(RepoCase):
 
     def test_the_ceiling_is_read_where_claude_code_reads_it(self):
         home = self.home()
-        with mock.patch.dict(os.environ, {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": ""}):
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "",
+                                          "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": ""}):
             self.assertEqual((0, ""), spend.ceiling_in_effect(self.ctx(), home))
             (home / ".claude" / "settings.json").write_text(
                 json.dumps({"autoCompactWindow": 400000}), encoding="utf-8")
@@ -221,6 +222,22 @@ class TestWhereItLooks(RepoCase):
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "200000"}):
             self.assertEqual((200_000, "CLAUDE_CODE_AUTO_COMPACT_WINDOW"),
                              spend.ceiling_in_effect(self.ctx(), home))
+
+    def test_a_percentage_override_is_the_share_of_the_window(self):
+        """The founder runs a million-token window at 60%: compaction at 600k, which `spend`
+        reported as the million."""
+        home = self.home()
+        (home / ".claude" / "settings.json").write_text(
+            json.dumps({"env": {"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "60"}}), encoding="utf-8")
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
+                                          "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": ""}):
+            size, where = spend.ceiling_in_effect(self.ctx(), home)
+        self.assertEqual(600_000, size)
+        self.assertIn("60%", where)
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "",
+                                          "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "40"}):
+            # No window set: the share is of the model's own.
+            self.assertEqual(400_000, spend.ceiling_in_effect(self.ctx(), home)[0])
 
     def test_the_command_prints_the_report(self):
         home = self.home()

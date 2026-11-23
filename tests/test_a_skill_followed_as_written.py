@@ -104,6 +104,23 @@ class TestWhatCannotBeFollowedIsNamed(SkillCheckCase):
         self.assertTrue(where[0].startswith(".claude/skills/stack/SKILL.md:6 stack:"), where)
 
 
+class TestAPathWrittenAsAPatternIsNotMissing(SkillCheckCase):
+    """`docs/articles/NNN-тема/images.py` is a pattern for the reader to fill in; each article has
+    its own. The founder's `articles` skill was named broken for it (2.22.0 audit)."""
+
+    def test_a_templated_path_is_not_a_finding(self):
+        self.write("docs/articles/001-polka/images.py", "print(1)\n")
+        self.skill("articles", "---\nname: articles\ndescription: Use when writing\n---\n\n"
+                               "```bash\npython docs/articles/NNN-тема/images.py\n```\n\n"
+                               "Read `docs/articles/<slug>/README.md` and `release/X.Y.Z`.\n")
+        self.assertEqual([], self.findings())
+
+    def test_a_real_missing_script_is_still_named(self):
+        self.skill("articles", "---\nname: articles\ndescription: Use when writing\n---\n\n"
+                               "```bash\npython docs/articles/001-gone/images.py\n```\n")
+        self.assertEqual(1, len(self.findings()))
+
+
 class TestASoundSkillPasses(SkillCheckCase):
     def test_nothing_is_said_about_it(self):
         self.skill("release", SOUND)
