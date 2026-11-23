@@ -2069,7 +2069,7 @@ class TestAdoptLeavesAFileItTakesNothingFrom(RepoCase):
     file personal tokens live in, and `adopt --restore` left it at 0644.
     """
 
-    THEIRS = {"SessionStart": [{"hooks": [{"type": "command", "command": "./theirs.sh"}]}]}
+    THEIRS = {"Stop": [{"hooks": [{"type": "command", "command": "./theirs.sh"}]}]}
     LOCAL = ('{"env": {"TOKEN": "s3cret"}, "hooks": {"PostToolUse": [{"matcher": "Write", '
              '"hooks": [{"type": "command", "command": "prettier"}]}]}}\n')
 
