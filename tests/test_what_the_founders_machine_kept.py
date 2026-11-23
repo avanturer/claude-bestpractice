@@ -66,7 +66,7 @@ class TestWhatGrewWithoutLimit(RepoCase):
         path = store.tier_b(ctx, drafts.INBOX_FILE)
         path.parent.mkdir(parents=True, exist_ok=True)
         row = {"marker": "always", "quote": "never push to main " + "x" * 200, "branch": "main",
-               "session_id": "s1", "created_at": 1.0, "subject_paths": [], "seen": 1}
+               "session_id": "s1", "created_at": time.time(), "subject_paths": [], "seen": 1}
         with path.open("w", encoding="utf-8") as handle:
             for n in range(1_400):
                 handle.write(json.dumps({**row, "seen": n + 1}) + "\n")

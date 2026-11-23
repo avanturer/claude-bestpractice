@@ -748,3 +748,86 @@ def probe(ctx: GitContext, only: str = "", claude: str = "claude") -> list[tuple
         if verdict.endswith("is not on PATH"):
             return out
     return out
+
+
+# --- one service, connected more than once ----------------------------------------------------
+
+def _claude_json() -> dict:
+    config = os.environ.get("CLAUDE_CONFIG_DIR")
+    data = store.read_json(Path(config) / ".claude.json" if config else Path.home() / ".claude.json",
+                           default={})
+    return data if isinstance(data, dict) else {}
+
+
+def _servers_in(block: object, prefix: str, scope: str) -> list[tuple[str, str, str]]:
+    """(name as `/mcp` shows it, what it connects to, scope) for each server in an `mcpServers`."""
+    out = []
+    for name, spec in (block.items() if isinstance(block, dict) else ()):
+        if not isinstance(spec, dict):
+            continue
+        target = str(spec.get("url") or " ".join([str(spec.get("command") or ""),
+                                                   *map(str, spec.get("args") or [])])).strip()
+        if target:
+            out.append((prefix + str(name), target, scope))
+    return out
+
+
+def _denied(ctx: GitContext) -> set[str]:
+    names: set[str] = set()
+    for settings in (_config_dir() / "settings.json", ctx.worktree_root / ".claude" / "settings.json",
+                     ctx.worktree_root / ".claude" / "settings.local.json"):
+        data = store.read_json(settings, default={})
+        entries = data.get("deniedMcpServers") if isinstance(data, dict) else None
+        names |= {str(entry.get("serverName")) for entry in (entries or [])
+                  if isinstance(entry, dict) and entry.get("serverName")}
+    return names
+
+
+def mcp_servers(ctx: GitContext) -> list[tuple[str, str, str]]:
+    """Every MCP server a session here connects to that this machine's files name: the founder's
+    (`~/.claude.json`), this project's local entry there, `.mcp.json`, and each enabled plugin's.
+    Denied ones are left out; claude.ai connectors arrive at runtime and are not on disk."""
+    from . import skills
+
+    data = _claude_json()
+    found = _servers_in(data.get("mcpServers"), "", "user")
+    project = (data.get("projects") or {}).get(str(ctx.worktree_root)) if isinstance(
+        data.get("projects"), dict) else None
+    found += _servers_in((project or {}).get("mcpServers"), "", "local")
+    shared = store.read_json(ctx.worktree_root / ".mcp.json", default={})
+    found += _servers_in(shared.get("mcpServers") if isinstance(shared, dict) else None, "",
+                         "project")
+    for plugin_id, copy in skills.plugin_copies(ctx.worktree_root, Path.home()):
+        declared = store.read_json(copy / ".mcp.json", default={})
+        name = plugin_id.partition("@")[0]
+        found += _servers_in(declared.get("mcpServers") if isinstance(declared, dict) else None,
+                             f"plugin:{name}:", "plugin")
+    denied = _denied(ctx)
+    return [server for server in found if server[0] not in denied]
+
+
+def _service(target: str) -> str:
+    """What a server connects to, as one service: a URL's domain without its subdomain
+    (`search.parallel.ai` and `mcp.parallel.ai` are both Parallel), a command as written."""
+    host = re.match(r"https?://([^/:?#]+)", target)
+    if not host:
+        return target
+    labels = host.group(1).lower().split(".")
+    return ".".join(labels[-2:])
+
+
+def duplicate_servers(ctx: GitContext) -> list[str]:
+    """One line per service connected more than once: each copy brings its tools, and its
+    instructions, into every session. Two entries with the same URL are one connection, as
+    Claude Code merges them; two URLs of one service are two."""
+    groups: dict[str, dict[str, tuple[str, str, str]]] = {}
+    for server in mcp_servers(ctx):
+        groups.setdefault(_service(server[1]), {}).setdefault(server[1], server)
+    out = []
+    for service, by_target in sorted(groups.items()):
+        if len(by_target) < 2:
+            continue
+        named = ", ".join(f"`{name}` ({scope})" for name, _t, scope in by_target.values())
+        out.append(f"{service} is connected {len(by_target)} times: {named}. Keep one; "
+                   "`deniedMcpServers` in ~/.claude/settings.json turns the others off by name.")
+    return out

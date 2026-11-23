@@ -1238,7 +1238,8 @@ class TestTwoStoresThatFilledWithRepeats(RepoCase):
         for quote in quotes:
             store.append_jsonl(path, {"marker": "constraint", "quote": quote,
                                       "branch": "main", "session_id": "s1",
-                                      "created_at": 1.0, "subject_paths": []})
+                                      # Today: a draft past `DRAFT_TTL_DAYS` no longer waits.
+                                      "created_at": time.time(), "subject_paths": []})
         return path
 
     def defects_holding(self, *gates: str) -> Path:

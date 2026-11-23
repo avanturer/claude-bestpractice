@@ -315,28 +315,61 @@ def _since(path: Path, since: float) -> bool:
         return False
 
 
+# The window a percentage override is taken of where no window is set: the model's own.
+MODEL_WINDOW = 1_000_000
+
+
 def ceiling_in_effect(ctx: GitContext, home: Path | None = None) -> tuple[int, str]:
     """The context ceiling a session started here runs under, and where it is set. (0, "")
     for none, which is the model's own: near 967,000 on a model with a million-token window.
 
-    Read where Claude Code reads it, the nearest first: the environment, this tree's local
-    and committed settings, then the founder's own. A window saved for one model with
-    `/autocompact` is not read: it holds for that model alone.
+    The window is read where Claude Code reads it, the nearest first: the environment, this
+    tree's local and committed settings, then the founder's own. A window saved for one model
+    with `/autocompact` is not read: it holds for that model alone.
+    `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` then compacts at that share of it: the founder's 60 of a
+    million was reported as a million, when their sessions compact at 600k.
     """
+    settings = [ctx.worktree_root / ".claude" / "settings.local.json",
+                ctx.worktree_root / ".claude" / "settings.json",
+                (home or Path.home()) / ".claude" / "settings.json"]
+    size, where = _window(settings)
+    share = _share_override(settings)
+    if share:
+        return (size or MODEL_WINDOW) * share // 100, \
+            f"{where or 'the model window'} at {share}% (CLAUDE_AUTOCOMPACT_PCT_OVERRIDE)"
+    return size, where
+
+
+def _settings_of(path: Path) -> dict:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _window(settings: list[Path]) -> tuple[int, str]:
     spoken = _tokens(os.environ.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW"))
     if spoken:
         return spoken, "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
-    for path in (ctx.worktree_root / ".claude" / "settings.local.json",
-                 ctx.worktree_root / ".claude" / "settings.json",
-                 (home or Path.home()) / ".claude" / "settings.json"):
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8-sig"))
-        except (OSError, ValueError):
-            continue
-        found = _tokens(raw.get("autoCompactWindow")) if isinstance(raw, dict) else 0
+    for path in settings:
+        found = _tokens(_settings_of(path).get("autoCompactWindow"))
         if found:
             return found, str(path)
     return 0, ""
+
+
+def _share_override(settings: list[Path]) -> int:
+    """`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` from the environment or a settings file's `env`, 1-99;
+    0 where none is set. It only lowers the threshold, so 100 and over change nothing."""
+    values = [os.environ.get("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE")]
+    values += [(_settings_of(path).get("env") or {}).get("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE")
+               if isinstance(_settings_of(path).get("env"), dict) else None for path in settings]
+    for value in values:
+        text = str(value or "").strip()
+        if text.isdigit() and 0 < int(text) < 100:
+            return int(text)
+    return 0
 
 
 def _tokens(value: object) -> int:

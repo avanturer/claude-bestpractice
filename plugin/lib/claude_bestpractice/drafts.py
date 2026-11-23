@@ -360,14 +360,23 @@ def _size(path: Path) -> int:
         return 0
 
 
+# A draft nobody accepted or discarded in this long goes. The founder's product repository held
+# 320 waiting drafts in November 2026, none touched: a queue that only grows is one nobody reads,
+# and its length is the one number `status` showed about it. Its words are still in the
+# transcript it was drafted from.
+DRAFT_TTL_DAYS = 30
+
+
 def pending(ctx: GitContext) -> list[dict]:
-    """Drafts not yet accepted or discarded, newest first, one row per draft.
+    """Drafts not yet accepted or discarded, newest first, one row per draft; none older than
+    `DRAFT_TTL_DAYS`, which the next collapse drops from disk.
 
     Collapsed on read as well as on write, because the rows already on disk were written
     by a version that did neither.
     """
     resolved: set[str] = set()
     newest: dict[str, dict] = {}
+    cutoff = time.time() - DRAFT_TTL_DAYS * 86_400
     for entry in store.read_jsonl(store.tier_b(ctx, INBOX_FILE)):
         if not isinstance(entry, dict):
             continue
@@ -376,7 +385,8 @@ def pending(ctx: GitContext) -> list[dict]:
             resolved.add(key)
             continue
         newest[key] = entry
-    out = [item for key, item in newest.items() if key not in resolved]
+    out = [item for key, item in newest.items() if key not in resolved
+           and not 0 < float(item.get("created_at") or 0) < cutoff]
     out.sort(key=lambda i: float(i.get("created_at", 0)), reverse=True)
     return out
 

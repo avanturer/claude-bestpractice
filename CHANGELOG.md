@@ -15,6 +15,17 @@ Found auditing the founder's product repository live, after 2.22.0.
   the founder's `articles` skill broken for `docs/articles/NNN-тема/images.py`, a pattern each
   article fills in. `NNN`, `XXX`, `YYYY`, `X.Y.Z`, `<slug>`, `{name}` and `…` in a path now read
   as a template; a real path that is gone is still named.
+- **One service connected more than once is named.** `claude-bp rules` and `status` read every
+  MCP server this machine's files give a session (`~/.claude.json`, this project's local entry,
+  `.mcp.json`, each enabled plugin's) and say when one service is connected under two names:
+  the founder had Parallel three times (their logged-in server, the project's and this plugin's),
+  each bringing its tools into every session. The same URL twice is one connection, as Claude
+  Code merges them; `deniedMcpServers` names are left out, and the line says how to keep one.
+- **`spend` reads the percentage override.** `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` compacts at that
+  share of the window: the founder's 60 of a million was printed as a million, at 600k in fact.
+- **A decision draft nobody read for 30 days goes.** 320 waited untouched on the founder's product
+  repository; `pending` no longer counts a draft older than `DRAFT_TTL_DAYS`, and the next
+  collapse drops it from disk. Its words are still in the transcript it came from.
 
 ## v2.22.0
 

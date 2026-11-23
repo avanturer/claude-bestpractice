@@ -563,25 +563,46 @@ class TestTheSameCorrectionIsCountedNotRefiled(RepoCase):
     the founder means.
     """
 
-    def draft(self, quote: str = "никогда не мерджи без моего слова", at: float = 1.0):
-        return drafts.Draft("constraint", quote, "main", "s1", at, [])
+    # Today, since a draft past `DRAFT_TTL_DAYS` is no longer waiting.
+    NOW = time.time()
+
+    def draft(self, quote: str = "никогда не мерджи без моего слова", at: float = 0.0):
+        return drafts.Draft("constraint", quote, "main", "s1", at or self.NOW, [])
 
     def test_filing_it_twice_leaves_one_draft(self):
         ctx = self.ctx()
         self.assertEqual(1, drafts.record(ctx, [self.draft()]))
-        self.assertEqual(0, drafts.record(ctx, [self.draft(at=2.0)]),
+        self.assertEqual(0, drafts.record(ctx, [self.draft(at=self.NOW + 1)]),
                          "the same sentence was filed as a second draft")
 
         waiting = drafts.pending(ctx)
         self.assertEqual(1, len(waiting))
         self.assertEqual(2, waiting[0]["seen"])
-        self.assertEqual(1.0, waiting[0]["created_at"], "the first sighting's time was lost")
+        self.assertEqual(self.NOW, waiting[0]["created_at"], "the first sighting's time was lost")
 
     def test_a_different_correction_is_still_its_own_draft(self):
         ctx = self.ctx()
         drafts.record(ctx, [self.draft()])
         self.assertEqual(1, drafts.record(ctx, [self.draft("никогда не трогай прод")]))
         self.assertEqual(2, len(drafts.pending(ctx)))
+
+
+class TestADraftNobodyReadExpires(RepoCase):
+    """320 drafts waited untouched on the founder's product repository (2.22.1): a queue that
+    only grows is one nobody reads."""
+
+    def test_a_draft_older_than_the_limit_no_longer_waits(self):
+        ctx = self.ctx()
+        old = time.time() - (drafts.DRAFT_TTL_DAYS + 1) * 86_400
+        drafts.record(ctx, [drafts.Draft("constraint", "старое правило", "main", "s1", old, []),
+                            drafts.Draft("constraint", "свежее правило", "main", "s1",
+                                         time.time(), [])])
+        self.assertEqual(["свежее правило"], [d["quote"] for d in drafts.pending(ctx)])
+
+    def test_a_row_with_no_date_is_kept(self):
+        ctx = self.ctx()
+        drafts.record(ctx, [drafts.Draft("constraint", "без даты", "main", "s1", 0, [])])
+        self.assertEqual(1, len(drafts.pending(ctx)))
 
 
 class TestWhatNobodyTypedIsDropped(RepoCase):
