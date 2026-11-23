@@ -225,6 +225,17 @@ class TestCheckingALayer(ScopeCase):
         self.assertIn((".claude/rules/preferences.md", ".claude/rules/visual-qa.md",
                        "Text is never cut off on a screen."), moves.lost_heading)
 
+    def test_a_file_that_gains_paths_is_a_scope_change_for_every_line(self) -> None:
+        self.write(".claude/rules/alerts.md", "# Alerts\n\nNever page Rodion at night.\n")
+        base = self.commit("before")
+        self.write(".claude/rules/alerts.md",
+                   "---\npaths: [\"mobile/**\"]\n---\n# Alerts\n\nNever page Rodion at night.\n")
+        self.commit("after")
+        moves = rulescope.compare(self.ctx(), base)
+        self.assertIn((".claude/rules/alerts.md", ".claude/rules/alerts.md",
+                       "Never page Rodion at night.", True), moves.scope_changed)
+        self.assertEqual([], moves.dropped)
+
     def test_the_command_fails_on_a_dropped_line_until_the_founder_agrees(self) -> None:
         base = git(["rev-parse", "HEAD"], self.repo)
         self.write(".claude/rules/everywhere.md", "# Everywhere\n")

@@ -551,10 +551,12 @@ def _place(moves: Moves, root: Path, name: str, was_scoped: bool, line: str, hea
     if not places:
         moves.dropped.append((name, line))
         return
+    if not was_scoped and all(scoped for _n, _h, scoped in places):
+        # The same file counts: a rule that gained `paths:` keeps every line where it was,
+        # and every one of them stopped loading at launch.
+        moves.scope_changed.append((name, places[0][0], line, bool(_EVERYWHERE.search(line))))
     if any(place == name for place, _h, _s in places):
         return
-    if not was_scoped and all(scoped for _n, _h, scoped in places):
-        moves.scope_changed.append((name, places[0][0], line, bool(_EVERYWHERE.search(line))))
     if heading and not any(heading in _read(root / place) for place, _h, _s in places):
         moves.lost_heading.append((name, places[0][0], line))
 
