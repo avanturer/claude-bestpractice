@@ -271,6 +271,27 @@ class TestANumberNoHookHeard(LogCase):
             pullrequest.learn_missing_number(ctx, "feat/x")
         self.assertEqual(3, self.asked())
 
+    def test_a_record_github_lists_nothing_for_is_not_reported_as_open(self):
+        """The push before `gh pr create` was refused by its hook, the record stayed, and the Stop
+        gate told the founder a pull request that did not exist "is open and cannot be merged"
+        (2.22.2). Nothing on GitHub: nothing to report; the record keeps waiting for a number."""
+        ctx = self.ctx()
+        pullrequest.opened(ctx, "feat/x", "main", "s1")
+        self.github_has([])
+        self.assertTrue(pullrequest.not_on_github_yet(ctx, pullrequest._records(ctx)["feat/x"]))
+        self.assertEqual(pullrequest.OPEN, pullrequest._records(ctx)["feat/x"]["state"])
+
+    def test_one_github_lists_or_cannot_be_asked_about_is_still_reported(self):
+        ctx = self.ctx()
+        pullrequest.opened(ctx, "feat/x", "main", "s1")
+        self.github_has([self.MINE])
+        self.assertFalse(pullrequest.not_on_github_yet(ctx, pullrequest._records(ctx)["feat/x"]))
+        # A record with its number is GitHub's already: nothing is asked.
+        self.assertFalse(pullrequest.not_on_github_yet(ctx, {"branch": "feat/x", "number": 7}))
+        # GitHub unreachable is not "none there".
+        with mock.patch.object(pullrequest, "on_github", return_value=None):
+            self.assertFalse(pullrequest.not_on_github_yet(ctx, {"branch": "feat/x"}))
+
     def test_one_against_another_base_is_not_this_one(self):
         ctx = self.ctx()
         pullrequest.opened(ctx, "feat/x", "main", "s1")
