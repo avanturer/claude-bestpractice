@@ -1,5 +1,21 @@
 # Changelog
 
+## v2.22.1
+
+Found auditing the founder's product repository live, after 2.22.0.
+
+- **A project's own SessionStart hook is not a conflict.** `status` named the founder's
+  `memory-context.sh` and `session-context.sh` as contesting an event this plugin owns and made
+  `claude-bp adopt` its next action, which would have quarantined the hook that is the only way
+  memory reaches a session on a machine with auto memory off. SessionStart, SubagentStart and
+  PreCompact add each hook's context or instructions beside the others' and decide nothing; only
+  Stop and PreToolUse, where two verdicts meet, are contested now. The others are reported as
+  running alongside.
+- **A path written as a pattern is not a missing file.** `claude-bp skills` and the board named
+  the founder's `articles` skill broken for `docs/articles/NNN-тема/images.py`, a pattern each
+  article fills in. `NNN`, `XXX`, `YYYY`, `X.Y.Z`, `<slug>`, `{name}` and `…` in a path now read
+  as a template; a real path that is gone is still named.
+
 ## v2.22.0
 
 Measured on the founder's product repository: about 46,800 tokens of instruction files in every
