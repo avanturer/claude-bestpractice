@@ -33,7 +33,7 @@ import json  # noqa: E402
 import re  # noqa: E402
 import shlex  # noqa: E402
 
-from claude_bestpractice import ci, config, evidence, founder, gitpolicy, hookio, inbox, plan, pullrequest, redact, search, servers, sessions, shellcmd, stage, store, subagents, vouch, worktree  # noqa: E402
+from claude_bestpractice import ci, config, evidence, founder, gitpolicy, hookio, inbox, plan, pullrequest, redact, rulescope, search, servers, sessions, shellcmd, stage, store, subagents, vouch, worktree  # noqa: E402
 from claude_bestpractice.gitctx import GitError, resolve  # noqa: E402
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
@@ -2315,6 +2315,26 @@ def main() -> None:
         conflicted = gitpolicy.conflict_complaint(proposed_content(event))
         if conflicted:
             deny(ctx, rec, f"claude-bestpractice: {conflicted}")
+
+    # A scoped rule is in the conversation before the act it governs (decision 0113): a new
+    # file is written before its rule loads, a plan made from a subagent's summary carries
+    # none, and a release or a production command touches no file a rule could load beside.
+    # Per loop, because a subagent's rules are its own; once per rule, so a load the hooks
+    # module failed to report costs one refusal. Silent where the module is not running.
+    if cfg.rules_in_context and (event.tool_name in WRITE_TOOLS or event.tool_name == "Bash"):
+        harness = str(event.raw.get("session_id") or "")
+        loop = str(event.raw.get("agent_id") or "")
+        command = str(ti.get("command", "")) if event.tool_name == "Bash" else ""
+        needed: list = []
+        for written in writing_now:
+            needed += [rule for rule in rulescope.owed(ctx, harness, loop, relative=written)
+                       if rule not in needed]
+        if command:
+            needed += [rule for rule in rulescope.owed(ctx, harness, loop, command=command)
+                       if rule not in needed]
+        if needed:
+            subject = f"`{writing_now[0]}`" if writing_now else "this command"
+            deny(ctx, rec, rulescope.refusal(needed, subject))
 
     if gates["migration_gate"]:
         if event.tool_name == "Bash":

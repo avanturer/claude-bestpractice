@@ -53,7 +53,7 @@ from claude_bestpractice import upgrade as _upgrade  # noqa: E402
 
 _upgrade.handover(Path(__file__))
 
-from claude_bestpractice import founder, hookio, provenance, redact, sessions, store  # noqa: E402
+from claude_bestpractice import founder, hookio, provenance, redact, rulescope, sessions, store  # noqa: E402
 from claude_bestpractice.gitctx import changed_files, resolve  # noqa: E402
 
 MAX_TURN_CHARS = 300
@@ -200,6 +200,10 @@ def _what_the_summary_keeps(ctx, rec) -> str:
 def main() -> None:
     event = hookio.read_event()
     ctx = hookio.repo(event.cwd or os.getcwd())
+    # First, so nothing below can skip it: the compaction summarises this loop's scoped rules
+    # away, and the gate asks for them again before the next act they govern (decision 0113).
+    rulescope.compacted(ctx, str(event.raw.get("session_id") or ""),
+                        str(event.raw.get("agent_id") or ""))
     rec = sessions.get(ctx, event.session_id)
 
     turns = read_user_turns(event.transcript_path)

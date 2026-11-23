@@ -26,12 +26,16 @@ from claude_bestpractice import upgrade as _upgrade  # noqa: E402
 _upgrade.handover(Path(__file__))
 
 from claude_bestpractice import __version__, board, ci, conflicts, defects, delivery, drafts, hookio, knowledge, onboard, pullrequest  # noqa: E402
-from claude_bestpractice import config, inbox, plan, policy, provenance, selfupdate, sessions, skillcheck, skills, skilluse, spend, stage, upgrade, vouch  # noqa: E402
+from claude_bestpractice import config, inbox, plan, policy, provenance, rulescope, selfupdate, sessions, skillcheck, skills, skilluse, spend, stage, upgrade, vouch  # noqa: E402
 from claude_bestpractice.gitctx import resolve_for_cli  # noqa: E402
 
 BOLD = "\033[1m" if sys.stdout.isatty() else ""
 DIM = "\033[2m" if sys.stdout.isatty() else ""
 OFF = "\033[0m" if sys.stdout.isatty() else ""
+
+
+# Past this many always-on tokens of the founder's own, `status` points at the scoping skill.
+SCOPE_RULES_AT = 8_000
 
 
 def heading(text: str) -> None:
@@ -234,6 +238,56 @@ def cmd_skills(ctx) -> int:
     return 1 if findings else 0
 
 
+def cmd_rules(ctx, since: str, accept_dropped: bool, probe: bool, only: str) -> int:
+    """What the instruction layer costs, what is wrong with how it is scoped, and with `--since`
+    whether every line it had then is still somewhere (decision 0114). Exit 1 on a problem, a
+    line in no file any more (unless `--accept-dropped`), or a line moved away from its heading.
+    `--probe` asks real headless sessions whether each scoped rule loads."""
+    total, files = rulescope.cost(ctx)
+    heading(f"LOADED INTO EVERY TURN: ~{rulescope.tokens(total):,} tokens, {total / 1024:.0f} KB")
+    for name, size in files:
+        print(f"  ~{rulescope.tokens(size):>6,}  {name}")
+    overflow = rulescope.memory_overflow(ctx)
+    if overflow:
+        print(f"  {overflow}")
+    scoped = [rule for rule in rulescope.rules(ctx) if rule.paths or rule.commands]
+    records = [rule for rule in scoped if "/decisions/" in rule.shown]
+    heading(f"SCOPED: {len(scoped)} rule(s)")
+    for rule in scoped:
+        if rule in records:
+            continue
+        when = ", ".join(rule.paths) + (f"; commands: {', '.join(rule.commands)}"
+                                        if rule.commands else "")
+        print(f"  {rule.shown}  ({when})")
+    if records:
+        print(f"  and {len(records)} decision record(s), each beside the files it names")
+    failed = False
+    found = rulescope.problems(ctx)
+    heading("PROBLEMS")
+    for problem in found or ["none"]:
+        print(f"  {problem}")
+    failed = failed or bool(found)
+    if since:
+        moves = rulescope.compare(ctx, since)
+        heading(f"SINCE {since}: LINES IN NO INSTRUCTION FILE NOW ({len(moves.dropped)})")
+        for name, line in moves.dropped:
+            print(f"  {name}: {line}")
+        heading(f"NOW LOADED ONLY BESIDE FILES OR AS A SKILL ({len(moves.scope_changed)}); "
+                "⚑ reads as meant for every session")
+        for was, now, line, everywhere in moves.scope_changed:
+            print(f"  {'⚑ ' if everywhere else ''}{was} -> {now}: {line}")
+        heading(f"MOVED AWAY FROM THEIR HEADING ({len(moves.lost_heading)})")
+        for was, now, line in moves.lost_heading:
+            print(f"  {was} -> {now}: {line}")
+        failed = failed or bool(moves.lost_heading) or (bool(moves.dropped) and not accept_dropped)
+    if probe:
+        heading("LIVE: A HEADLESS SESSION READS ONE FILE PER RULE")
+        for shown, target, verdict in rulescope.probe(ctx, only):
+            print(f"  {verdict:>10}  {shown}" + (f"  (read {target})" if target else ""))
+            failed = failed or verdict != "loaded"
+    return 1 if failed else 0
+
+
 def cmd_init(ctx, force: bool) -> int:
     written = onboard.write(ctx, force=force)
     print(f"{BOLD}claude-bp init{OFF}  {ctx.worktree_root}")
@@ -330,22 +384,29 @@ def cmd_adopt(ctx, dry_run: bool, restore: bool) -> int:
 
 
 def _instruction_cost(ctx, theirs: list) -> list[str]:
-    """What the founder's instruction files cost: what loads into every turn, largest first,
-    and what loads only beside the files it names. A rough token count, three characters to
-    a token, because a real tokeniser is a dependency and this one errs on the side of more."""
-    from claude_bestpractice import knowledge
+    """What the founder's instruction layer costs on every turn: the project's files, the
+    founder's own rules (`~/.claude/rules/`, loaded in every project) and the part of
+    MEMORY.md Claude Code loads, largest first; and what loads only beside its files.
 
-    launch = sorted(knowledge.at_launch(ctx), key=lambda path: -path.stat().st_size)
+    Tokens from bytes, at the rate measured on the founder's mixed Russian and English rules
+    (`rulescope.BYTES_PER_TOKEN`): a character count read Cyrillic as half its cost."""
+    total, files = rulescope.cost(ctx)
+    largest = ", ".join(f"{name} {size / 1024:.0f} KB" for name, size in files[:3])
+    lines = [f"{len(files)} instruction file(s) load into every turn: "
+             f"~{rulescope.tokens(total):,} tokens, {total / 1024:.0f} KB"
+             + (f" (largest: {largest})" if largest else "")]
     scoped = [path for path in theirs if knowledge.path_scoped(path)]
-    chars = sum(len(path.read_text(encoding="utf-8", errors="replace")) for path in launch)
-    largest = ", ".join(f"{path.name} {path.stat().st_size / 1024:.0f} KB" for path in launch[:3])
-    lines = [f"{len(launch)} instruction file(s) load into every turn: ~{chars // 3:,} tokens, "
-             f"{knowledge.instruction_bytes(ctx) / 1024:.0f} KB" + (f" (largest: {largest})"
-                                                                if largest else "")]
     if scoped:
         size = f"{sum(path.stat().st_size for path in scoped) / 1024:.0f}"
         lines.append(f"{len(scoped)} more, {size} KB, load only beside the files their "
                      "`paths:` name")
+    overflow = rulescope.memory_overflow(ctx)
+    if overflow:
+        lines.append(overflow)
+    if rulescope.tokens(total) > SCOPE_RULES_AT:
+        lines.append("`claude-bp rules` names what each rule costs and what is wrong with the "
+                     "scoping; the founder's `/bestpractice:scope-rules` moves what only some "
+                     "files need to load beside them, every line kept")
     return lines
 
 
@@ -709,6 +770,15 @@ def main() -> int:
         "database", help="create this worktree's own database if the server has not got it")
     sub.add_parser(
         "skills", help="every skill a session here can load, and what in them cannot be followed")
+    scoping = sub.add_parser(
+        "rules", help="what each instruction file costs, and whether its scoping holds")
+    scoping.add_argument("--since", default="",
+                         help="a commit: name every line the layer had then that is gone or moved")
+    scoping.add_argument("--accept-dropped", action="store_true",
+                         help="the founder has seen the lines in no file any more, and agrees")
+    scoping.add_argument("--probe", action="store_true",
+                         help="ask headless sessions whether each scoped rule really loads")
+    scoping.add_argument("--rule", default="", help="probe only the rules whose path has this")
     spent = sub.add_parser(
         "spend", help="where this repository's sessions spent their tokens, from their transcripts")
     spent.add_argument("--days", type=float, default=14,
@@ -749,6 +819,8 @@ def main() -> int:
         return cmd_database(ctx)
     if args.command == "skills":
         return cmd_skills(ctx)
+    if args.command == "rules":
+        return cmd_rules(ctx, args.since, args.accept_dropped, args.probe, args.rule)
     if args.command == "set":
         return cmd_set(ctx, args.key, args.value)
     if args.command == "policy":

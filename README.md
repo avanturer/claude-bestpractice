@@ -4,7 +4,7 @@
 
 **Memory, coordination and enforcement for building products with several Claude Code sessions at once.**
 
-[![version](https://img.shields.io/badge/version-2.21.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
+[![version](https://img.shields.io/badge/version-2.22.0-black)](https://github.com/avanturer/claude-bestpractice/releases)
 [![tests](https://img.shields.io/badge/tests-3017%20passing-2ea44f)](#verified)
 [![doctor](https://img.shields.io/badge/doctor-36%20checks-2ea44f)](#verified)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
@@ -605,8 +605,18 @@ is run on the file with `--no-fix`, and what it finds on the lines that edit wro
 with the edit's result. Nothing is reformatted, and a file with no linter configured costs a
 process and says nothing.
 
+**A scoped rule is in the conversation before the act it governs.** A rule with `paths:` loads
+only beside the files it names, which is what keeps a large instruction layer out of sessions that
+never go near its subject. Three acts get past that: a new file written before its rule loads, a
+plan made from a subagent's summary, and a command that touches no file (a release, a deploy). A
+write a rule's `paths:` match, or a command its `commands:` match (this plugin's field), is
+refused once while the rule is not in that conversation or subagent, naming the file to read.
+`claude-bp rules` says what each instruction file costs and what is wrong with the scoping, and
+`/bestpractice:scope-rules`, which only you start, moves what only some files need out of every
+turn, every line kept, and proves it with `claude-bp rules --since` and `--probe`.
+
 Each is a switch you say: `compress_output off`, `route_search off`, `subagent_min_model off`,
-`lint_on_edit off`.
+`lint_on_edit off`, `rules_in_context off`.
 
 ### It takes over what fights it
 
@@ -666,6 +676,7 @@ depends on no pack, so a pack that fails to load never disables a gate.
 |---|---|
 | `claude-bp status` | Sessions, plan, knowledge, memory health, every skill a session can load and how often each was read, conflicts, next action |
 | `claude-bp skills` | Every skill a session here can load, and each line of yours that cannot be followed as written, as `file:line` |
+| `claude-bp rules` | What each instruction file costs per turn (yours, `~/.claude/rules`, MEMORY.md as loaded), what is wrong with how they are scoped; `--since <commit>` names every line gone or moved, `--probe` asks headless sessions whether each scoped rule loads |
 | `claude-bp init` | Derive the knowledge layer from your code |
 | `claude-bp adopt` | Take over events another tool is contesting |
 | `claude-bp sweep` | Remove the trees nobody is in whose work is already in the trunk |
