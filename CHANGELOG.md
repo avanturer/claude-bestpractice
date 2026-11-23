@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.22.2
+
+- **A pull request that has not reached GitHub is not reported as open.** `git push && gh pr
+  create` whose push its hook refused left a record with no number, and the Stop gate told the
+  founder that a pull request which did not exist "is open and cannot be merged", with an order
+  to stop. Where a record has no number and GitHub, asked, lists no open pull request for the
+  branch, the gate now says nothing of it; the record keeps waiting for its number, as it must
+  for a `gh pr create` still running in the background. GitHub unreachable is not taken as none.
+
 ## v2.22.1
 
 Found auditing the founder's product repository live, after 2.22.0.

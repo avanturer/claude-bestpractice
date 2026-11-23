@@ -1025,6 +1025,9 @@ def main() -> None:
         # how an open draft opened elsewhere stopped being "no pull request" (#239).
         lacking = pullrequest.missing(ctx, event.session_id)
         waiting = pullrequest.unhanded(ctx, ctx.branch)
+        # Nothing on GitHub yet: no pull request to merge, and none to report as blocked.
+        if waiting is not None and pullrequest.not_on_github_yet(ctx, waiting):
+            waiting = None
         if waiting is not None or lacking is not None:
             # Whether the founder's word covers it decides what the demand says, and a word
             # they sent while the session worked reached no hook: read it back first (#251).

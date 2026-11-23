@@ -422,6 +422,18 @@ def learn_missing_number(ctx: GitContext, branch: str) -> int:
     return 0
 
 
+def not_on_github_yet(ctx: GitContext, record: dict[str, Any]) -> bool:
+    """A record with no number that GitHub, asked, lists no open pull request for: nothing has
+    reached GitHub to merge or to report on. The opening failed (the `git push` before it was
+    refused by its hook) or is still running in the background; either way the record waits
+    for its number and the Stop gate says nothing of it. Said as "open and cannot be merged",
+    a founder was told about a pull request that did not exist (2.22.2).
+    """
+    if _as_number(record.get("number")):
+        return False
+    return on_github(ctx, str(record.get("branch") or "")) == []
+
+
 def _number_against(listed: list[dict[str, Any]], base: str) -> int:
     """The number of the pull request GitHub listed against `base`, any base where none is
     on record; 0 when it listed none."""
